@@ -663,6 +663,14 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
     })
 }
 
+fn ungroup_launch_component_v1(mut expression: &Expr) -> &Expr {
+    // Declarative macro literal fragments can carry invisible delimiters.
+    while let Expr::Group(group) = expression {
+        expression = &group.expr;
+    }
+    expression
+}
+
 fn parse_grid_dimensions_v1(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<[u32; 3]> {
     let array = meta.value()?.parse::<ExprArray>()?;
     if array.elems.len() != 3 {
@@ -673,7 +681,7 @@ fn parse_grid_dimensions_v1(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Resul
     }
     let mut result = [0_u32; 3];
     for (index, expression) in array.elems.iter().enumerate() {
-        let Expr::Lit(literal) = expression else {
+        let Expr::Lit(literal) = ungroup_launch_component_v1(expression) else {
             return Err(syn::Error::new_spanned(
                 expression,
                 "grid dimensions must be integer literals",
@@ -706,7 +714,7 @@ fn parse_workgroup_dimensions_v1(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::
     }
     let mut result = [0_u32; 3];
     for (index, expression) in array.elems.iter().enumerate() {
-        let Expr::Lit(literal) = expression else {
+        let Expr::Lit(literal) = ungroup_launch_component_v1(expression) else {
             return Err(syn::Error::new_spanned(
                 expression,
                 "workgroup dimensions must be integer literals",
@@ -1845,11 +1853,21 @@ fn validate_exact_vecadd_argument(
     Ok(())
 }
 
+fn transparent_type_v1(mut ty: &Type) -> &Type {
+    loop {
+        ty = match ty {
+            Type::Group(group) => &group.elem,
+            Type::Paren(paren) => &paren.elem,
+            _ => return ty,
+        };
+    }
+}
+
 fn is_unit_return(output: &ReturnType) -> bool {
     match output {
         ReturnType::Default => true,
         ReturnType::Type(_, output) => {
-            matches!(output.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
+            matches!(transparent_type_v1(output), Type::Tuple(tuple) if tuple.elems.is_empty())
         }
     }
 }
@@ -1858,7 +1876,7 @@ fn is_kernel_result_return(output: &ReturnType) -> bool {
     let ReturnType::Type(_, output) = output else {
         return false;
     };
-    let Type::Path(path) = output.as_ref() else {
+    let Type::Path(path) = transparent_type_v1(output) else {
         return false;
     };
     if path.qself.is_some() {
@@ -1873,10 +1891,12 @@ fn is_kernel_result_return(output: &ReturnType) -> bool {
     match &segment.arguments {
         syn::PathArguments::None => true,
         syn::PathArguments::AngleBracketed(arguments) if arguments.args.len() == 1 => {
-            matches!(
-                arguments.args.first(),
-                Some(syn::GenericArgument::Type(Type::Tuple(tuple))) if tuple.elems.is_empty()
-            )
+            match arguments.args.first() {
+                Some(syn::GenericArgument::Type(ty)) => {
+                    matches!(transparent_type_v1(ty), Type::Tuple(tuple) if tuple.elems.is_empty())
+                }
+                _ => false,
+            }
         }
         _ => false,
     }
@@ -2767,6 +2787,7 @@ fn parse_general_typed_argument_v1(
 }
 
 fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumentKindV1, ()> {
+    let ty = transparent_type_v1(ty);
     if let Some(scalar) = parse_general_typed_scalar_v1(ty) {
         return Ok(GeneralTypedArgumentKindV1::Scalar(scalar));
     }
@@ -2774,7 +2795,7 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         if reference.lifetime.is_some() || reference.mutability.is_some() {
             return Err(());
         }
-        let Type::Slice(slice) = reference.elem.as_ref() else {
+        let Type::Slice(slice) = transparent_type_v1(&reference.elem) else {
             return Err(());
         };
         return parse_general_typed_scalar_v1(&slice.elem)
@@ -2902,6 +2923,7 @@ enum GeneralTypedPointerPathV1 {
 }
 
 fn parse_general_typed_scalar_v1(ty: &Type) -> Option<GeneralTypedScalarV1> {
+    let ty = transparent_type_v1(ty);
     let Type::Path(path) = ty else {
         return None;
     };
@@ -2928,6 +2950,7 @@ fn parse_general_typed_scalar_v1(ty: &Type) -> Option<GeneralTypedScalarV1> {
 }
 
 fn is_index_1d_v1(ty: &Type) -> bool {
+    let ty = transparent_type_v1(ty);
     let Type::Path(path) = ty else {
         return false;
     };
@@ -2948,6 +2971,7 @@ fn is_index_1d_v1(ty: &Type) -> bool {
 }
 
 fn parse_disjoint_index_space_v1(ty: &Type) -> Option<RustDisjointIndexSpaceV1> {
+    let ty = transparent_type_v1(ty);
     if is_index_1d_v1(ty) {
         return Some(RustDisjointIndexSpaceV1::Index1D);
     }
@@ -4969,6 +4993,8 @@ mod tests {
         );
     }
 
+    include!("launch_literal_tests.rs");
+
     #[test]
     fn launch_parser_rejects_malformed_duplicate_and_conflicting_bounds() {
         let rejected = [
@@ -5618,6 +5644,153 @@ mod tests {
             },
         ] {
             assert!(model_general_typed_signature_v1(&invalid, &options, [0x76; 32]).is_err());
+        }
+    }
+
+    #[test]
+    fn general_typed_transparent_argument_groups_preserve_exact_contracts() {
+        let scalar = invisible_type_group_v1(quote!((u64)));
+        let base = invisible_type_group_v1(quote!((Index1D)));
+        let qualified_base = invisible_type_group_v1(quote!((fe2o3_device::Index1D)));
+        assert!(matches!(
+            syn::parse2::<Type>(scalar.clone()).unwrap(),
+            Type::Group(_)
+        ));
+
+        for plain in [
+            quote!(u64),
+            quote!(&[u64]),
+            quote!(fe2o3_device::DeviceGlobalMutPtr<u64>),
+            quote!((u32, u64)),
+            quote!([u64; 2]),
+        ] {
+            let wrapped = invisible_type_group_v1(quote!((#plain)));
+            assert_transparent_argument_contract_v1(plain, wrapped);
+        }
+        let slice = invisible_type_group_v1(quote!(([#scalar])));
+        assert_transparent_argument_contract_v1(quote!(&[u64]), quote!(&#slice));
+
+        for (plain_mapping, wrapped_mapping) in [
+            (quote!(Index1D), quote!(#base)),
+            (quote!(fe2o3_device::Index1D), quote!(#qualified_base)),
+            (quote!(GridExclusive), quote!(GridExclusive)),
+            (quote!(Shifted<Index1D, 7>), quote!(Shifted<#base, 7>)),
+            (quote!(Blocked<Index1D, 4, 2>), quote!(Blocked<#base, 4, 2>)),
+            (
+                quote!(Tiled2D<Index1D, 4, 2, 4, 2>),
+                quote!(Tiled2D<#base, 4, 2, 4, 2>),
+            ),
+            (
+                quote!(fe2o3_device::Tiled2D<fe2o3_device::Index1D, 4, 2, 4, 2>),
+                quote!(fe2o3_device::Tiled2D<#qualified_base, 4, 2, 4, 2>),
+            ),
+            (
+                quote!(RowStriped2D<Index1D, 4, 2>),
+                quote!(RowStriped2D<#base, 4, 2>),
+            ),
+        ] {
+            let wrapped_mapping = invisible_type_group_v1(quote!((#wrapped_mapping)));
+            for owner in [
+                quote!(DisjointSlice),
+                quote!(fe2o3_device::WriteOnlyDisjointSlice),
+            ] {
+                assert_transparent_argument_contract_v1(
+                    quote!(#owner<u64, #plain_mapping>),
+                    invisible_type_group_v1(quote!((#owner<#scalar, #wrapped_mapping>))),
+                );
+            }
+        }
+    }
+
+    fn invisible_type_group_v1(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        proc_macro2::TokenStream::from(proc_macro2::TokenTree::Group(proc_macro2::Group::new(
+            proc_macro2::Delimiter::None,
+            tokens,
+        )))
+    }
+
+    fn assert_transparent_argument_contract_v1(
+        plain: proc_macro2::TokenStream,
+        wrapped: proc_macro2::TokenStream,
+    ) {
+        let plain: ItemFn = syn::parse2(quote!(pub fn transparent(value: #plain) {})).unwrap();
+        let wrapped: ItemFn = syn::parse2(quote!(pub fn transparent(value: #wrapped) {})).unwrap();
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        assert_eq!(
+            model_general_typed_signature_v1(&plain, &options, [0x79; 32]).unwrap(),
+            model_general_typed_signature_v1(&wrapped, &options, [0x79; 32]).unwrap(),
+        );
+        validate_typed_kernel_profile_v1(&wrapped, &options).unwrap();
+    }
+
+    #[test]
+    fn general_typed_transparent_return_groups_preserve_exact_contracts() {
+        let unit = invisible_type_group_v1(quote!((())));
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        for (plain, wrapped) in [
+            (quote!(()), quote!(#unit)),
+            (quote!(KernelResult), quote!((KernelResult))),
+            (quote!(KernelResult<()>), quote!(KernelResult<#unit>)),
+            (
+                quote!(fe2o3_device::KernelResult<()>),
+                quote!(fe2o3_device::KernelResult<#unit>),
+            ),
+        ] {
+            let wrapped = invisible_type_group_v1(quote!((#wrapped)));
+            let plain: ItemFn =
+                syn::parse2(quote!(pub fn transparent(value: u64) -> #plain {})).unwrap();
+            let wrapped: ItemFn =
+                syn::parse2(quote!(pub fn transparent(value: u64) -> #wrapped {})).unwrap();
+            assert_eq!(
+                model_general_typed_signature_v1(&plain, &options, [0x79; 32]).unwrap(),
+                model_general_typed_signature_v1(&wrapped, &options, [0x79; 32]).unwrap(),
+            );
+            validate_typed_kernel_profile_v1(&wrapped, &options).unwrap();
+        }
+        for invalid in [quote!(u64), quote!(KernelResult<u64>)] {
+            let invalid = invisible_type_group_v1(quote!((#invalid)));
+            let input: ItemFn =
+                syn::parse2(quote!(pub fn transparent(value: u64) -> #invalid {})).unwrap();
+            assert!(model_general_typed_signature_v1(&input, &options, [0x79; 32]).is_err());
+        }
+    }
+
+    #[test]
+    fn general_typed_transparent_groups_do_not_relax_signature_restrictions() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let assert_rejected = |ty| {
+            let ty = invisible_type_group_v1(quote!((#ty)));
+            let input: ItemFn = syn::parse2(quote!(pub fn transparent(value: #ty) {})).unwrap();
+            assert!(
+                model_general_typed_signature_v1(&input, &options, [0x79; 32]).is_err(),
+                "unexpectedly accepted {ty}",
+            );
+        };
+        for invalid in [
+            quote!(&mut [u64]),
+            quote!(&'static [u64]),
+            quote!(*mut u64),
+            quote!(fe2o3_device::DeviceGlobalConstPtr<u64>),
+        ] {
+            assert_rejected(invalid);
+        }
+        let invalid_scalar = invisible_type_group_v1(quote!((bool)));
+        assert_rejected(quote!(DisjointSlice<#invalid_scalar>));
+        let invalid_base = invisible_type_group_v1(quote!((GridExclusive)));
+        for invalid in [
+            quote!(UnknownMapping),
+            quote!(Blocked<#invalid_base, 4, 2>),
+            quote!(Blocked<Index1D, 0, 2>),
+            quote!(Tiled2D<Index1D, 4, 0, 4, 2>),
+            quote!(Tiled2D<Index1D, 4, 1, 4, 2>),
+            quote!(Tiled2D<Index1D, 18446744073709551615, 2, 18446744073709551615, 2>),
+            quote!(Tiled2D<Index1D, 4, { 1 + 1 }, 4, 2>),
+            quote!(RowStriped2D<#invalid_base, 4, 2>),
+            quote!(RowStriped2D<Index1D, 4, 0>),
+        ] {
+            let invalid = invisible_type_group_v1(quote!((#invalid)));
+            assert_rejected(quote!(DisjointSlice<u64, #invalid>));
+            assert_rejected(quote!(fe2o3_device::WriteOnlyDisjointSlice<u64, #invalid>));
         }
     }
 

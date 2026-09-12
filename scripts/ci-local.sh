@@ -1299,6 +1299,12 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed -- \
         --ignored --exact
+  run_step rocm-production-write-only-witness-mappings \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        write_only_witness_mappings_retain_exact_ranked_predicates -- \
+        --ignored --exact
   run_step rocm-production-barrier-cfg \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

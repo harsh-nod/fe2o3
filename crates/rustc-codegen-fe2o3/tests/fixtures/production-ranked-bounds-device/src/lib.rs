@@ -727,16 +727,23 @@ pub fn write_only_blocked_dynamic_grid(
     }
 }
 
-#[kernel(
-    typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
-)]
 #[cfg(feature = "write_only_tiled")]
-pub fn write_only_tiled(mut output: WriteOnlyDisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>) {
-    if let Some(tile) = thread::index_1d().checked_tiled_2d::<64, 16, 16, 4>() {
-        let _ = output.write_tiled_2d(&tile, 3, 16, 16, 16, 1.0);
-    }
+macro_rules! forwarded_tiled_fixture {
+    ($mapping:ty, $lanes:literal, $grid:literal) => {
+        #[kernel(
+            typed,
+            launch(required = [$lanes, 1, 1], max = [$lanes, 1, 1], max_grid = [$grid, 1, 1]),
+        )]
+        pub fn write_only_tiled(mut output: WriteOnlyDisjointSlice<f32, $mapping>) {
+            if let Some(tile) = thread::index_1d().checked_tiled_2d::<64, 16, 16, 4>() {
+                let _ = output.write_tiled_2d(&tile, 3, 16, 16, 16, 1.0);
+            }
+        }
+    };
 }
+
+#[cfg(feature = "write_only_tiled")]
+forwarded_tiled_fixture!(Tiled2D<Index1D, 64, 16, 16, 4>, 64, 1);
 
 #[kernel(
     typed,

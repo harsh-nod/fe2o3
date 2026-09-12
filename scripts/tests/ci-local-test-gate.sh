@@ -1186,6 +1186,7 @@ for production_step in \
   rocm-production-general-attention \
   rocm-production-transaction \
   rocm-production-ranked-bounds \
+  rocm-production-write-only-witness-mappings \
   rocm-production-barrier-cfg \
   rocm-production-simulation-bundle-gfx942 \
   rocm-production-simulation-bundle-gfx950 \
@@ -1201,6 +1202,10 @@ for production_step in \
     exit 1
   fi
 done
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 write_only_witness_mappings_retain_exact_ranked_predicates -- --ignored --exact' \
+  "$(step_command rocm-production-write-only-witness-mappings)" \
+  'ROCm compile omitted the exact write-only witness source regression'
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"
