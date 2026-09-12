@@ -1,0 +1,26 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "started_at": "2026-09-12T18:28:24.511Z",
+  "finished_at": "2026-09-12T18:28:27.429Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "fmt",
+    "-p",
+    "fe2o3-kfd"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-oracles-format.log",
+  "source": "/home/harsh/.codex-tmp/r109-oracles-format-source.json",
+  "source_unchanged": false,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 3.213402281,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

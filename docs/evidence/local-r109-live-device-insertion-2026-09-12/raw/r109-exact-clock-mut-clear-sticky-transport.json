@@ -1,0 +1,69 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "source_map_sha256": "e57b8d36096f88584802cfcdb1dfc4d3650835157d122f21edbe8ffa6da69cf6",
+  "manifest_sha256": "79004ad66cb7429a86b37ae1430ad18a7b681319ef4276881bd21d7e0c0f10a1",
+  "started_at": "2026-09-12T19:20:01.842Z",
+  "finished_at": "2026-09-12T19:20:38.733Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-exact-clock-mut-clear-sticky-transport.log",
+  "source": "/home/harsh/.codex-tmp/r109-exact-clock-mut-clear-sticky-transport-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 38.316454278,
+  "verification_elapsed_seconds": 0.311241821,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r109-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r109-exact-clock-restoration-globalize-ordinary-error.json",
+      "sha256": "d8ade445d9c5b6aa4a2f01ea0c658e74eccbd1080a33c8d1c62f19483770ab3a",
+      "field": "verified_at",
+      "utc_ms": 1789240800634
+    },
+    "start": {
+      "floor_ms": 1789240800634,
+      "samples": [
+        {
+          "utc_ms": 1789240801842,
+          "monotonic_ns": "37642979720233"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789240838733,
+      "monotonic_ns": "37681296174511"
+    },
+    "source_verified": {
+      "utc_ms": 1789240839044,
+      "monotonic_ns": "37681607416332"
+    },
+    "error": null
+  }
+}

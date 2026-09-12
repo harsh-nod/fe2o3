@@ -1,0 +1,31 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "started_at": "2026-09-12T18:20:46.424Z",
+  "finished_at": "2026-09-12T18:23:52.215Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "device_insertion_"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-prefix-composition.log",
+  "source": "/home/harsh/.codex-tmp/r109-prefix-composition-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 195.016630826,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

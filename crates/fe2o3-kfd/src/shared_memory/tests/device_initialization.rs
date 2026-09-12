@@ -5,7 +5,7 @@ use crate::shared_memory::device_initialization::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct NativeSnapshot {
+pub(super) struct NativeSnapshot {
     identity: (u64, u64, DeviceKeyV1, VmKeyV1, Gfx942DeviceMemoryLayoutV1),
     gpu_va: u64,
     mmap_offset: u64,
@@ -16,7 +16,7 @@ struct NativeSnapshot {
     mapping: Option<(u64, Vec<u8>, usize, bool, bool, usize)>,
 }
 
-fn snapshot(record: &DeviceMemoryRecord<FakeBackend>) -> NativeSnapshot {
+pub(super) fn snapshot(record: &DeviceMemoryRecord<FakeBackend>) -> NativeSnapshot {
     NativeSnapshot {
         identity: (
             record.id,
@@ -54,7 +54,7 @@ enum SourceSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RootSnapshot {
+pub(crate) struct RootSnapshot {
     source: SourceSnapshot,
     lease: Option<(LeaseIdentity, Option<Gfx942DeviceContentDescriptorV1>)>,
     stage: Stage,
@@ -64,7 +64,7 @@ struct RootSnapshot {
     failed: bool,
 }
 
-fn root_snapshot(root: &init::DeviceInitializationCustodyV1) -> RootSnapshot {
+pub(super) fn root_snapshot(root: &init::DeviceInitializationCustodyV1) -> RootSnapshot {
     let source = match root.source.as_ref().unwrap() {
         init::InitializationSourceV1::Unvalidated(bytes, content) => {
             SourceSnapshot::Unvalidated(bytes.as_ptr() as usize, bytes.to_vec(), *content)
@@ -113,6 +113,91 @@ fn root_snapshot(root: &init::DeviceInitializationCustodyV1) -> RootSnapshot {
         input_admitted: root.input_admitted,
         progress: root.progress,
         failed: root.failed,
+    }
+}
+
+impl RootSnapshot {
+    pub(crate) fn assert_source(
+        &self,
+        pointer: usize,
+        bytes: &[u8],
+        content: Gfx942DeviceContentDescriptorV1,
+    ) {
+        assert_eq!(
+            matches!(self.source, SourceSnapshot::Validated(..)),
+            self.stage != Stage::Source,
+            "exact source validation variant"
+        );
+        if let SourceSnapshot::Validated(_, _, len, _) = &self.source {
+            assert_eq!(*len, bytes.len() as u64);
+            assert_eq!(*len, content.byte_len());
+        }
+        match &self.source {
+            SourceSnapshot::Unvalidated(actual, data, descriptor)
+            | SourceSnapshot::Validated(actual, data, _, descriptor) => {
+                assert_eq!(*actual, pointer, "original insertion source allocation");
+                assert_eq!(data, bytes);
+                assert_eq!(*descriptor, content);
+            }
+            SourceSnapshot::Repeated(..) => {
+                panic!("owned-byte insertion cannot replace its source")
+            }
+        }
+        if self.stage == Stage::Complete {
+            assert_eq!(
+                self.lease.as_ref().and_then(|(_, content)| *content),
+                Some(content),
+                "Complete retains exact initialized content until extraction"
+            );
+        }
+    }
+
+    pub(crate) fn with_failure_for_test(&self) -> Self {
+        let mut result = self.clone();
+        result.failed = true;
+        result
+    }
+
+    pub(crate) fn stage_name(&self) -> String {
+        format!("{:?}", self.stage)
+    }
+
+    pub(crate) fn failed(&self) -> bool {
+        self.failed
+    }
+
+    pub(crate) fn native_started(&self) -> bool {
+        self.native_started
+    }
+
+    pub(crate) fn lease(
+        &self,
+    ) -> Option<(
+        Gfx942DeviceMemoryIdentityV1,
+        Gfx942DeviceMemoryLayoutV1,
+        bool,
+    )> {
+        self.lease
+            .map(|((id, generation, device, vm, layout), content)| {
+                (
+                    Gfx942DeviceMemoryIdentityV1 {
+                        id,
+                        generation,
+                        device,
+                        vm,
+                    },
+                    layout,
+                    content.is_some(),
+                )
+            })
+    }
+
+    pub(crate) fn progress(&self) -> (bool, Option<bool>, Option<u32>) {
+        (
+            self.progress.attempted,
+            self.progress.returned_success,
+            self.progress.returned_map_prefix,
+        )
     }
 }
 

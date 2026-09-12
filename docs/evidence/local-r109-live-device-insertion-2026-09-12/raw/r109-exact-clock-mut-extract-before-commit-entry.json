@@ -1,0 +1,69 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "source_map_sha256": "3542d2196c38f438c02a754960c4fa330b418f7d29d2b13ccbfc4f145d3f4ec5",
+  "manifest_sha256": "79004ad66cb7429a86b37ae1430ad18a7b681319ef4276881bd21d7e0c0f10a1",
+  "started_at": "2026-09-12T19:20:42.200Z",
+  "finished_at": "2026-09-12T19:21:18.626Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_complete_stays_rooted_until_commit_ledger_access",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-exact-clock-mut-extract-before-commit-entry.log",
+  "source": "/home/harsh/.codex-tmp/r109-exact-clock-mut-extract-before-commit-entry-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 37.884778397,
+  "verification_elapsed_seconds": 0.2831693,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r109-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r109-exact-clock-restoration-clear-sticky-transport.json",
+      "sha256": "e2b240f0accb59dfc02492752f5c200394c23cdef5dd52831be1558ca43842c4",
+      "field": "verified_at",
+      "utc_ms": 1789240841135
+    },
+    "start": {
+      "floor_ms": 1789240841135,
+      "samples": [
+        {
+          "utc_ms": 1789240842200,
+          "monotonic_ns": "37684763715928"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789240878626,
+      "monotonic_ns": "37722648494325"
+    },
+    "source_verified": {
+      "utc_ms": 1789240878909,
+      "monotonic_ns": "37722931663625"
+    },
+    "error": null
+  }
+}

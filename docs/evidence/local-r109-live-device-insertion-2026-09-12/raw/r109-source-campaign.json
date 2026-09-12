@@ -1,0 +1,25 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "started_at": "2026-09-12T18:42:36.721Z",
+  "finished_at": "2026-09-12T19:02:43.912Z",
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/r109-source-gate.py",
+    "r109-final"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-source-campaign.log",
+  "source": "/home/harsh/.codex-tmp/r109-source-campaign-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 1263.450369462,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

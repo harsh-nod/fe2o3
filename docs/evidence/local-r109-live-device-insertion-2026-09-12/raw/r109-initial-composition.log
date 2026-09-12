@@ -1,0 +1,46 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0432]: unresolved import `crate::shared_memory::DeviceInitializationSnapshotV1`
+  --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs:10:59
+   |
+10 | use crate::shared_memory::{DeviceInitializationCustodyV1, DeviceInitializationSnapshotV1};
+   |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0433]: cannot find type `KfdAllocMemoryFlags` in this scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs:369:13
+    |
+369 |             KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+    |             ^^^^^^^^^^^^^^^^^^^ use of undeclared type `KfdAllocMemoryFlags`
+    |
+    = note: struct `crate::memory_linux::tests::KfdAllocMemoryFlags` exists but is inaccessible
+help: consider importing this struct
+    |
+  4 + use fe2o3_kfd_uapi::KfdAllocMemoryFlags;
+    |
+
+error[E0603]: module `device_initialization` is private
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6491:23
+     |
+6491 | pub(crate) use tests::device_initialization::RootSnapshot as DeviceInitializationSnapshotV1;
+     |                       ^^^^^^^^^^^^^^^^^^^^^ private module
+     |
+note: the module `device_initialization` is defined here
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6512:5
+     |
+6512 |     mod device_initialization;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: module `live_insertion` is private
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6493:23
+     |
+6493 | pub(crate) use tests::live_insertion::DeviceInsertionMemorySnapshotV1;
+     |                       ^^^^^^^^^^^^^^ private module
+     |
+note: the module `live_insertion` is defined here
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6516:5
+     |
+6516 |     mod live_insertion;
+     |     ^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0432, E0433, E0603.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `fe2o3-kfd` (lib test) due to 4 previous errors

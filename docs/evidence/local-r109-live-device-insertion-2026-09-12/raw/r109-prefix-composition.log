@@ -1,0 +1,17 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.04s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 8 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_invalid_ordinal_and_reservation_reject_before_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_completed_output_survives_each_failed_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_operation_panic_wins_secondary_retake_error_or_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_opening_failure_never_initializes_or_retakes ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_success_without_complete_cannot_commit_metadata ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_native_and_currentness_failures_retain_exact_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_native_and_currentness_failures_retain_exact_prefixes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 163.68s
+

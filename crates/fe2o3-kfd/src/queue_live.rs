@@ -258,6 +258,8 @@ use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent
 #[path = "queue_live/pristine_abort.rs"]
 mod pristine_abort;
 use pristine_abort::UnpublishedDispatchStateV1;
+#[path = "queue_live/data_insertion.rs"]
+pub(in crate::queue) mod data_insertion;
 #[path = "queue_live/rebind.rs"]
 pub(in crate::queue) mod rebind;
 #[cfg(test)]
@@ -4429,8 +4431,14 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         alignment: u64,
         content: Gfx942DeviceContentDescriptorV1,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.session
-            .insert_initialized_fixed_dispatch_data(data_index, bytes, alignment, content)
+        let settled = self.session.initialize_device_data_settled_v1(
+            Some(data_index),
+            bytes,
+            alignment,
+            content,
+        );
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn overwrite_detached_initialized_host_visible_fixed_dispatch_data(

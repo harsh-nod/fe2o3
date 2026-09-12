@@ -1,0 +1,275 @@
+{
+  "recorded_at": "2026-09-12T18:42:30.795Z",
+  "publication_parent": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "accepted_runtime_checkpoint": "9171bd68d920681e524d8eda5a29053a8fd8ae88",
+  "recorded_phase": "Before frozen/full/auxiliary/mutation gates; preliminary failures preserved. No native or load qualification.",
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "cargo 1.96.0-nightly (888f67534 2026-03-30)\nrelease: 1.96.0-nightly\ncommit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51\ncommit-date: 2026-03-30\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]\n"
+    },
+    {
+      "command": [
+        "rustc",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "rustc 1.96.0-nightly (55e86c996 2026-04-02)\nbinary: rustc\ncommit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9\ncommit-date: 2026-04-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2\n"
+    },
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "output": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "output": "v22.22.1\n"
+    },
+    {
+      "command": [
+        "git",
+        "--version"
+      ],
+      "output": "git version 2.43.0\n"
+    },
+    {
+      "command": [
+        "uname",
+        "-srmo"
+      ],
+      "output": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "cargo",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3"
+    },
+    {
+      "name": "rustc",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950"
+    }
+  ],
+  "runners": [
+    {
+      "name": "r109-run.js",
+      "sha256": "43990467b2e6f3c57a994b1face828ffb8b3fb70be504278bf59945f90730a5d"
+    },
+    {
+      "name": "r109-source-gate.py",
+      "sha256": "4c9587253479e37c278746e96089891138f90ede460f0eb4e26d729c6a704806"
+    },
+    {
+      "name": "r109-auxiliary-gates.py",
+      "sha256": "d0300cce7b39379fc56920b5db8b24cbb4c93d29ae8c430e243c73b2f0ba47ef"
+    },
+    {
+      "name": "r109-freeze.js",
+      "sha256": "9040bbb54c8bc296e724d0d58545424495706ff0f0864cc7527e1fb5dd395dc3"
+    }
+  ],
+  "environment_overrides": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "test_deadlines_changed": false,
+  "hardware_qualification": false,
+  "solver_rerun": false,
+  "ambient_stack": {
+    "RUST_MIN_STACK": null,
+    "command": [
+      "bash",
+      "-c",
+      "ulimit -s"
+    ],
+    "output": "8192\n"
+  },
+  "prior_artifacts": [
+    {
+      "name": "r109-composition-format-source.json",
+      "sha256": "c6dd3f0402d980142f957fd1d37c79870c6f2d1891018b3e4bf007d5bd9e3f24"
+    },
+    {
+      "name": "r109-composition-format.json",
+      "sha256": "0098069377fd31bd44e4241f581c3ada916c84e698e48128724092cb9a2fa31f"
+    },
+    {
+      "name": "r109-composition-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-expanded-composition-source.json",
+      "sha256": "4683116221fd707782e0735d7cac57fa1e9b76116dbfceeea7b83d20a5b576f7"
+    },
+    {
+      "name": "r109-expanded-composition.json",
+      "sha256": "c17be0e48ef492ef1ebd9e5b0b858f54b06496752b723f8ccfdec5429eb75d22"
+    },
+    {
+      "name": "r109-expanded-composition.log",
+      "sha256": "072ac014ff940b86fd662a3bafc7ad24b3cbd557bcb7e93809a8f1052567440e"
+    },
+    {
+      "name": "r109-forwarders-format-source.json",
+      "sha256": "e1e7ce5e96d50127e4fbc77383a5342924f9c0b92f9d48fc08d26e2a3b3c749a"
+    },
+    {
+      "name": "r109-forwarders-format.json",
+      "sha256": "1dbba90fba4131026abc7c78e0a8c8e951b06f452486aa2f6d56b983322fa115"
+    },
+    {
+      "name": "r109-forwarders-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-holes-format-source.json",
+      "sha256": "b6581d48a4760efb7f38faa07c8031bbea80a3ca49a4dffb97012623222a7f79"
+    },
+    {
+      "name": "r109-holes-format.json",
+      "sha256": "7ec002e6d5a44e89821c48b0748d414fecdbfb96684c43e1c40d81c79d62c77b"
+    },
+    {
+      "name": "r109-holes-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-initial-clippy-source.json",
+      "sha256": "e1e7ce5e96d50127e4fbc77383a5342924f9c0b92f9d48fc08d26e2a3b3c749a"
+    },
+    {
+      "name": "r109-initial-clippy.json",
+      "sha256": "96b1a38798399a0fb7ca5a7941bf41dc4a2a241eff084eb6a5e598a6f5285d62"
+    },
+    {
+      "name": "r109-initial-clippy.log",
+      "sha256": "859113db3f9ac4dbbcb453cc2474a3e6e30f0aae034723dcebe3fd3a95a76459"
+    },
+    {
+      "name": "r109-initial-composition-source.json",
+      "sha256": "ff8480694d80252554a9e7c919ff734cf3dc7f8425f174522b0c136fd0902492"
+    },
+    {
+      "name": "r109-initial-composition.json",
+      "sha256": "0925cb9e22ebff498e6ac95ff8bdaed6f4f2e146fa07928fb45fa9289ebab3cc"
+    },
+    {
+      "name": "r109-initial-composition.log",
+      "sha256": "1c6f364c73107f042ea5c4c54111be4e75a2b2c2e3fa70d74078971cdbfb8947"
+    },
+    {
+      "name": "r109-initial-format-source.json",
+      "sha256": "251ce39ce4aa33bdabf8a7be88b1be62e5f3c8b14151d7f92cfc38a429122fed"
+    },
+    {
+      "name": "r109-initial-format.json",
+      "sha256": "ed76dd7c79ff8dac303ce927feaa4d402be51f77410c8d02dcdaad45ebe6aeb9"
+    },
+    {
+      "name": "r109-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-initial-initializer-source.json",
+      "sha256": "4e178f092a8702e59f95d8b6cd26571af44e52b9f64e7cb27df62e71fdd5b959"
+    },
+    {
+      "name": "r109-initial-initializer.json",
+      "sha256": "a93358d0cb5154ac95b2ddeb5730207fbfb9a1ddea0eca965c59eea6a037edd1"
+    },
+    {
+      "name": "r109-initial-initializer.log",
+      "sha256": "641e7fde844455aec32c8c0edb77ec19f0f9b28fd29587175b95fe7a24a5dd1d"
+    },
+    {
+      "name": "r109-oracles-build-source.json",
+      "sha256": "9b9f88c10698168c954faa6b9001937336b02be10a0ef25d17c2aaaf3f328a24"
+    },
+    {
+      "name": "r109-oracles-build.json",
+      "sha256": "c4d0d2abd3f64b2854e4ee7d952b270c3b410fcd093ee1c76846e3178623bf30"
+    },
+    {
+      "name": "r109-oracles-build.log",
+      "sha256": "1f137d9dde9947c56cece0312039d02153cd2c1d4fed87bcecf66f1047a53943"
+    },
+    {
+      "name": "r109-oracles-format-source.json",
+      "sha256": "922823a76273be68eb84b6666c0feddebc2a34cd34ee140b8e149f91d6e0b721"
+    },
+    {
+      "name": "r109-oracles-format.json",
+      "sha256": "ec17c1194a7fec64dc775af093fae0f24e64fe4f1d13a1356bcbad6d9b4dc45d"
+    },
+    {
+      "name": "r109-oracles-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-prefix-composition-source.json",
+      "sha256": "e7f0c5f07172799cba1c8bcc286eb37c004f9d533b67c3fb321c065f9c01a677"
+    },
+    {
+      "name": "r109-prefix-composition.json",
+      "sha256": "22e5f41ccc8800e4dff62270ed8135d76f601d6fe324385e7abff5f31a1568d3"
+    },
+    {
+      "name": "r109-prefix-composition.log",
+      "sha256": "4e2c368aa3a51041b010ca022379fdc3f31f2d2b2b03a900ef78929d2f0a36ad"
+    },
+    {
+      "name": "r109-prefix-format-source.json",
+      "sha256": "b31c3138184323bf0f9c2cda28fea51c999fd4fe2a7cff4545b557c4066afddf"
+    },
+    {
+      "name": "r109-prefix-format.json",
+      "sha256": "feb8ef82bc33c277dcd606a413768c76c5f7a48729c2b97e66edc9f786dd0517"
+    },
+    {
+      "name": "r109-prefix-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-review-format-source.json",
+      "sha256": "16164d9f0f2ff76a8ee12e7740107d6c9aa94697dcb7e3a57c9a242aad4efaa0"
+    },
+    {
+      "name": "r109-review-format.json",
+      "sha256": "2abc3e94de596d075b84db07b4db7e499d962624c86a4803bfdc1737e8c95e13"
+    },
+    {
+      "name": "r109-review-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r109-reviewed-composition-source.json",
+      "sha256": "47b0cce3223ce3a4297d19056b06aa405d0bf3c5274f1266089b32691b219f65"
+    },
+    {
+      "name": "r109-reviewed-composition.json",
+      "sha256": "4fa2faf2c5b70579f15068bfdccb62343836aa549cc59079d1eef00d81c7342d"
+    },
+    {
+      "name": "r109-reviewed-composition.log",
+      "sha256": "e29910c1420ab57b7641814aea7ad1feaa68a20b4e8655fa675650037eda5af4"
+    }
+  ]
+}

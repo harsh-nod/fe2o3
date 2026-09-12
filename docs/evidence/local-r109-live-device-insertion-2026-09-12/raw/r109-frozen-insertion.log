@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 14 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_complete_stays_rooted_until_commit_ledger_access ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_invalid_ordinal_and_reservation_reject_before_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_completed_output_survives_each_failed_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_operation_panic_wins_secondary_retake_error_or_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_opening_failure_never_initializes_or_retakes ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_success_without_complete_cannot_commit_metadata ... ok
+test queue::live::rebind_tests::insertion::device_insertion_concrete_bound_dispatch_precedes_full_and_malformed_ledger ... ok
+test queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error ... ok
+test queue::live::rebind_tests::insertion::device_insertion_concrete_preflight_keeps_error_precedence_and_healthy_parent ... ok
+test queue::live::rebind_tests::insertion::device_insertion_production_routing_roots_reserves_settles_commits_then_extracts ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_native_and_currentness_failures_retain_exact_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_uses_a_genuine_release_hole_and_explicit_index_overrides_it ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_native_and_currentness_failures_retain_exact_prefixes ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 238.26s
+

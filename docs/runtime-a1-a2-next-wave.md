@@ -1,5 +1,15 @@
 # A1/A2 Next-Wave Dispatch
 
+R109 locally accepts [N3-L1 initialized-device live insertion](runtime-live-device-insertion-custody-v1.md),
+with [retained evidence](evidence/local-r109-live-device-insertion-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary gates and eleven compiled behavioral
+negatives pass. GNU/musl each pass 2,619 tests with five ignored across 48
+harnesses; frozen/restored insertion, initializer and model-loan suites pass
+14/14, 11/11 and 4/4. All 5,673 source identities match. Preliminary failures
+and the original exact-path checker rejection remain preserved. This accepts
+the named scripted-engine and concrete-facade CPU boundaries, not native
+execution, authenticated formal refinement or performance.
+
 R108 locally accepts [V1 Context writer issuance](runtime-context-version-journal-v1.md#r108-issuance-acceptance),
 with [retained evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
 Seventeen source gates, ten auxiliary gates and twelve clock-qualified compiled
@@ -22,15 +32,15 @@ abort remain preserved. The corrected slot is preallocated once per engine,
 not per initializer; the same runtime test now passes. No new solver, native or
 performance acceptance is added.
 
-Immediate packets are **Native N3-L1 initialized-device insertion**, independent
+Immediate packets are **Native N3-L2 coherent initialized insertion**, independent
 **Admission C1 identity** and **Resources V2 membership/Begin**, with Primary
 owning integration and qualification. V1's constructor, existing-ID registration,
 exact Reserved lookup and pre-effect abort are now locally accepted. The refreshed
 [current assignments](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch)
-split Native into device/coherent/uninitialized insertion and advance Resources
+advance Native from device to coherent/uninitialized insertion and Resources
 to whole-roster membership. Three read-only dispatch reviews are complete;
 the implementation queue is not an unattended background job. The
-[N3-L handoff](runtime-device-initialization-custody-v1.md#next-live-integration)
+[N3-L1 contract](runtime-live-device-insertion-custody-v1.md)
 keeps completed owners through retake and commits before extraction. Coherent
 insertion still needs its own external composite root. V3 settlement, V4 proofs
 and V5 production integration remain separate packets. The R106 and earlier

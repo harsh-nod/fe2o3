@@ -14,9 +14,9 @@ native admission and returned GPU-map progress. The public standalone entry
 uses the same complete-entry helper as the CPU/shared-sequence fixture.
 
 The in-place core borrows this root and never moves it into the engine's
-terminal slot. A later live-lane owner can therefore keep it through its own
-retake/commit sequence. N3-L must implement and qualify that composition; the
-lower initializer alone does not close live insertion or replacement.
+terminal slot. R109's [live device-insertion owner](runtime-live-device-insertion-custody-v1.md)
+now retains it through retake/commit at the named local test boundaries. The
+lower R107 acceptance alone does not close live insertion or replacement.
 
 The standalone wrapper retains admitted errors and panics in the original
 engine, quarantines it and preserves the original error or panic payload.
@@ -99,22 +99,21 @@ runner-controlled settings do not retroactively establish those limits.
 
 ## Next Live Integration
 
-The first N3-L slice is `initialize_fixed_dispatch_data` and
+R109 locally accepts the first N3-L slice, `initialize_fixed_dispatch_data` and
 `insert_initialized_fixed_dispatch_data` in `queue_live/fixed_dispatch.rs`.
-Keep a shared outer insertion owner outside `with_live_queue_memory_model`;
-expose the existing in-place initializer through a narrow shared-memory adapter
-and return only unit across the model-loan callback. Source and incomplete or
-completed output must survive failed retake, and output extraction follows the
-identity/count commit rather than preceding it.
+Its shared `queue_live/data_insertion.rs` sequencer keeps the owning root outside
+`with_live_queue_memory_model`, uses a narrow shared-memory adapter and returns
+only unit across the callback. Source and incomplete or completed output survive
+failed retake; extraction follows the identity/count commit. See its separate
+[contract and limits](runtime-live-device-insertion-custody-v1.md).
 
-Reserve `detached_data_identities` capacity before effects; the current
-post-retake `Vec::insert` can allocate. Preserve the existing distinction between
-append, remembered-hole replacement and explicit middle insertion, which shifts
-occupied entries. Reuse existing loan settlement and facade-deferred parent
-transport so auxiliary restoration precedes whole-parent transport. Avoid
-another large inline session field.
+The device sequencer reserves `detached_data_identities` capacity before effects
+and preserves append, remembered-hole replacement and explicit middle insertion.
+Existing loan settlement and facade-deferred transport ensure auxiliary
+restoration precedes whole-parent transport. No large inline session field or
+per-call root heap allocation was added.
 
-Coherent and uninitialized insertion are later slices. R106's coherent
+N3-L2 coherent and N3-L3 uninitialized insertion remain open. R106's coherent
 initializer retains internal transitions but does not expose a composite
 external owning root for the complete live retake sequence. Neither its public
 wrapper nor this device-only contract closes that separate gap. N4 release and

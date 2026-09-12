@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.28s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded' (1710777) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs:800:17:
+assertion failed: matches!(settled.result,
+    Ok(Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::DataLeaseCount
+    { requested: 17, maximum: 16 }))))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1021 filtered out; finished in 1.78s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

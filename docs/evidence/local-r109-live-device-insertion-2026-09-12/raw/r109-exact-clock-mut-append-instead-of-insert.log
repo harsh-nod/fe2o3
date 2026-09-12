@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.94s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order' (1724957) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs:588:13:
+assertion `left == right` failed
+  left: ([DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 1, id: 1, generation: 1 }), DeviceUninitialized(Gfx942DeviceMemoryIdentityV1 { id: 2, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), HostVisibleUninitialized(SharedGttAllocationIdentityV1 { session_id: 1, id: 2, generation: 1 }), DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 5, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } })], 5, None)
+ right: ([DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 5, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 1, id: 1, generation: 1 }), DeviceUninitialized(Gfx942DeviceMemoryIdentityV1 { id: 2, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), HostVisibleUninitialized(SharedGttAllocationIdentityV1 { session_id: 1, id: 2, generation: 1 })], 5, None)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1021 filtered out; finished in 1.85s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

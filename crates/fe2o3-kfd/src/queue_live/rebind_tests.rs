@@ -11,6 +11,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 #[path = "rebind_tests/preparation.rs"]
 pub(super) mod preparation;
 
+#[path = "rebind_tests/insertion.rs"]
+mod insertion;
+
 #[test]
 fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation() {
     let source = include_str!("rebind.rs");

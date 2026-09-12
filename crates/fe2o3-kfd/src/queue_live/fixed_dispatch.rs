@@ -4338,24 +4338,11 @@ impl ComputeAqlQueueSessionV1 {
         alignment: u64,
         content: Gfx942DeviceContentDescriptorV1,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        let result = self.with_live_queue_memory_model(|memory| {
-            memory
-                .initialize_gfx942_device_memory(bytes, alignment, content)
-                .map_err(Into::into)
-        });
-        match result {
-            Ok(memory) => {
-                let data = Gfx942FixedDispatchDataV1::initialized(memory);
-                self.record_new_detached_data(&data);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
+        let settled = self.initialize_device_data_settled_v1(None, bytes, alignment, content);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
+        settled.into_result()
     }
 
     /// Allocates and inserts one initialized device-local extent at an exact
@@ -4371,25 +4358,12 @@ impl ComputeAqlQueueSessionV1 {
         alignment: u64,
         content: Gfx942DeviceContentDescriptorV1,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        self.require_new_detached_data_index(data_index)?;
-        let result = self.with_live_queue_memory_model(|memory| {
-            memory
-                .initialize_gfx942_device_memory(bytes, alignment, content)
-                .map_err(Into::into)
-        });
-        match result {
-            Ok(memory) => {
-                let data = Gfx942FixedDispatchDataV1::initialized(memory);
-                self.record_new_detached_data_at(&data, data_index);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
+        let settled =
+            self.initialize_device_data_settled_v1(Some(data_index), bytes, alignment, content);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
+        settled.into_result()
     }
 
     /// Validates an exact detached-data insertion without allocating, mapping,

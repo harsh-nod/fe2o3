@@ -463,6 +463,15 @@ impl PreparationMemoryFixtureV1 {
         session_id: u64,
         disposal_calls: [usize; 3],
     ) {
+        self.primary_assert_accounts_with_device_disposal_v1(session_id, disposal_calls, &[]);
+    }
+
+    pub(crate) fn primary_assert_accounts_with_device_disposal_v1(
+        &self,
+        session_id: u64,
+        disposal_calls: [usize; 3],
+        released: &[Gfx942DeviceMemoryIdentityV1],
+    ) {
         self.assert_disposed_controls_v1();
         let f = &self.fixture;
         let e = &f.engine;
@@ -479,7 +488,21 @@ impl PreparationMemoryFixtureV1 {
             assert!(record.reservation.is_some() && record.handle.is_some());
             assert!(record.mapping.as_ref().unwrap().active);
         }
+        let mut released_records = 0;
         for record in &e.device_memory {
+            let identity = Gfx942DeviceMemoryIdentityV1 {
+                id: record.id,
+                generation: record.generation,
+                device: record.device,
+                vm: record.vm,
+            };
+            if released.contains(&identity) {
+                assert_eq!(released.iter().filter(|&&id| id == identity).count(), 1);
+                assert!(record.is_fully_released());
+                assert!(record.backing_charge.is_none());
+                released_records += 1;
+                continue;
+            }
             if let Some(account) = &e.device_backing_account {
                 assert!(record.backing_charge.as_ref().unwrap().matches(
                     account,
@@ -493,6 +516,7 @@ impl PreparationMemoryFixtureV1 {
             }
             assert!(!record.free_attempted);
         }
+        assert_eq!(released_records, released.len());
         let b = &e.backend;
         if let Some(pending) = &e.pending_allocation {
             assert_eq!(e.phase, SharedMemorySessionPhaseV1::Quarantined);

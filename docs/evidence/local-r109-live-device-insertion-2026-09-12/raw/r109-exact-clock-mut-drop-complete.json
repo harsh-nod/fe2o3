@@ -1,0 +1,69 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "source_map_sha256": "54ae24ecb0aff0f15ad8fb8b294ba898712ab35702d41ce7ce39338e37c05453",
+  "manifest_sha256": "79004ad66cb7429a86b37ae1430ad18a7b681319ef4276881bd21d7e0c0f10a1",
+  "started_at": "2026-09-12T19:17:33.527Z",
+  "finished_at": "2026-09-12T19:18:07.337Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_completed_output_survives_each_failed_retake",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-exact-clock-mut-drop-complete.log",
+  "source": "/home/harsh/.codex-tmp/r109-exact-clock-mut-drop-complete-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 35.252578036,
+  "verification_elapsed_seconds": 0.291844967,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r109-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r109-exact-clock-restoration-ignore-retake-error.json",
+      "sha256": "0368fa65269e1ff999cef921b505697ca0f5b8c203f3a4713a2255a3ae407c70",
+      "field": "verified_at",
+      "utc_ms": 1789240652573
+    },
+    "start": {
+      "floor_ms": 1789240652573,
+      "samples": [
+        {
+          "utc_ms": 1789240653527,
+          "monotonic_ns": "37487550731785"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789240687337,
+      "monotonic_ns": "37522803309821"
+    },
+    "source_verified": {
+      "utc_ms": 1789240687629,
+      "monotonic_ns": "37523095154788"
+    },
+    "error": null
+  }
+}

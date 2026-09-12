@@ -1,0 +1,184 @@
+[
+  {
+    "name": "omit-reservation",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded",
+    "edits": [
+      [
+        "context.reserve()?;",
+        "if false { context.reserve()?; }"
+      ]
+    ],
+    "expected": [
+      "identity capacity reserved before native effects",
+      "assertion failed: !settled.transport"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 774
+  },
+  {
+    "name": "admit-seventeenth",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_real_capacity_growth_and_fifteen_to_sixteen_are_pre_effect_bounded",
+    "edits": [
+      [
+        "if *ledger.count >= super::super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {",
+        "if false && *ledger.count >= super::super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {"
+      ]
+    ],
+    "expected": [
+      "assertion failed: matches!(settled.result,",
+      "requested: 17",
+      "maximum: 16"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 800
+  },
+  {
+    "name": "ignore-retake-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_completed_output_survives_each_failed_retake",
+    "edits": [
+      [
+        "context.prepare(&mut root, alignment)?;",
+        "let _ = context.prepare(&mut root, alignment);"
+      ]
+    ],
+    "expected": [
+      "assertion failed: settled.transport"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 662
+  },
+  {
+    "name": "drop-complete",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_completed_output_survives_each_failed_retake",
+    "edits": [
+      [
+        "        } else {\n            engine.terminal_device_initialization.retain(self);\n        }\n    }\n\n    fn retain_failure",
+        "        } else {\n            core::mem::drop(self);\n        }\n    }\n\n    fn retain_failure"
+      ]
+    ],
+    "expected": [
+      "called `Option::unwrap()` on a `None` value"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 715
+  },
+  {
+    "name": "complete-still-usable",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_completed_output_survives_each_failed_retake",
+    "edits": [
+      [
+        "        self.failed = true;\n        engine.phase = SharedMemorySessionPhaseV1::Quarantined;",
+        "        self.failed = false;\n        engine.phase = SharedMemorySessionPhaseV1::Quarantined;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "failed: false",
+      "failed: true"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 716
+  },
+  {
+    "name": "omit-error-transport",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error",
+    "edits": [
+      [
+        "let transport = result.is_err() || entered && !matches!(result, Ok(Ok(_)));",
+        "let transport = result.is_err() || entered && false;"
+      ]
+    ],
+    "expected": [
+      "assertion failed: *selected.terminal_transport"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs",
+    "oracle_line": 92
+  },
+  {
+    "name": "globalize-ordinary-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error",
+    "edits": [
+      [
+        "if panicked {\n            poison_process_global_after_dispatch_terminal_v1();",
+        "if panicked || true {\n            poison_process_global_after_dispatch_terminal_v1();"
+      ]
+    ],
+    "expected": [
+      "assertion failed: !take_dispatch_terminal_process_gate_record_v1()"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs",
+    "oracle_line": 150
+  },
+  {
+    "name": "clear-sticky-transport",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error",
+    "edits": [
+      [
+        "*self.terminal_transport |= settled.transport;\n        settled.into_result()\n    }\n\n    pub fn overwrite_detached_initialized_host_visible_fixed_dispatch_data(",
+        "*self.terminal_transport = settled.transport;\n        settled.into_result()\n    }\n\n    pub fn overwrite_detached_initialized_host_visible_fixed_dispatch_data("
+      ]
+    ],
+    "expected": [
+      "assertion failed: *selected.terminal_transport"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs",
+    "oracle_line": 106
+  },
+  {
+    "name": "extract-before-commit-entry",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_complete_stays_rooted_until_commit_ledger_access",
+    "edits": [
+      [
+        "        let ledger = context.ledger();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, index);\n        *ledger.count = next_count;\n        let memory = root\n            .take_complete()\n            .expect(\"borrowed Complete remains rooted through ledger commit\");",
+        "        let memory = root\n            .take_complete()\n            .expect(\"borrowed Complete remains rooted through ledger commit\");\n        let ledger = context.ledger();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, index);\n        *ledger.count = next_count;"
+      ]
+    ],
+    "expected": [
+      "insertion commit ledger access",
+      "Complete retains exact initialized content until extraction"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_initialization.rs",
+    "oracle_line": 147
+  },
+  {
+    "name": "append-instead-of-insert",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_constructed_primary_and_auxiliary_preserve_success_identity_and_order",
+    "edits": [
+      [
+        "insert_detached_identity_at(ledger.identities, ledger.next, identity, index);",
+        "let _ = index;\n        let end = ledger.identities.len();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, end);"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 588
+  },
+  {
+    "name": "ignore-release-hole",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::device_insertion_uses_a_genuine_release_hole_and_explicit_index_overrides_it",
+    "edits": [
+      [
+        "data_index.unwrap_or_else(|| ledger.next.unwrap_or(ledger.identities.len()))",
+        "data_index.unwrap_or(ledger.identities.len())"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs",
+    "oracle_line": 1210
+  }
+]

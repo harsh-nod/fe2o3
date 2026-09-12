@@ -279,21 +279,48 @@ impl DeviceInitializationCustodyV1 {
         Ok(())
     }
 
+    pub(super) fn completed(&self) -> Result<&Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
+        if self.failed || self.stage != DeviceInitializationStageV1::Complete {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        match &self.lease {
+            InitializationLeaseV1::Complete(output) => Ok(output),
+            _ => Err(MemorySessionError::InvalidDeviceMemoryAuthority),
+        }
+    }
+
     pub(super) fn take_complete(
         &mut self,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        if self.failed
-            || self.stage != DeviceInitializationStageV1::Complete
-            || !matches!(self.lease, InitializationLeaseV1::Complete(_))
-        {
-            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
-        }
+        self.completed()?;
         let InitializationLeaseV1::Complete(output) =
             std::mem::replace(&mut self.lease, InitializationLeaseV1::None)
         else {
             unreachable!("checked complete initialization");
         };
         Ok(output)
+    }
+
+    pub(super) fn requires_live_retention(&self) -> bool {
+        self.admitted()
+    }
+
+    pub(super) fn retain_live_failure<B: MemoryBackend>(
+        mut self,
+        engine: &mut SharedMemoryEngine<B>,
+    ) {
+        if !self.admitted() {
+            return;
+        }
+        self.failed = true;
+        engine.phase = SharedMemorySessionPhaseV1::Quarantined;
+        if engine.terminal_device_initialization.is_some() {
+            // Impossible after exclusive in-place admission; preserve both
+            // owners and the original failure if that invariant is violated.
+            core::mem::forget(self);
+        } else {
+            engine.terminal_device_initialization.retain(self);
+        }
     }
 
     fn retain_failure<B: MemoryBackend>(self, engine: &mut SharedMemoryEngine<B>) {

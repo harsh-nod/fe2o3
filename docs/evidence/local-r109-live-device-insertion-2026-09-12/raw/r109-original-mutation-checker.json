@@ -1,0 +1,24 @@
+{
+  "source_head": "17d0be5476a4f71c473a619903c62aa316a96fc7",
+  "started_at": "2026-09-12T19:10:12.893Z",
+  "finished_at": "2026-09-12T19:10:12.941Z",
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r109-clock-check-mutation.js",
+    "omit-reservation"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r109-original-mutation-checker.log",
+  "source": "/home/harsh/.codex-tmp/r109-original-mutation-checker-source.json",
+  "source_unchanged": true,
+  "returncode": 1,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 0.315892954,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

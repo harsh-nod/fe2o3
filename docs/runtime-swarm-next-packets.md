@@ -1,14 +1,17 @@
 # Runtime Swarm: Remaining Packets
 
-Reviewed on 2026-09-12 against accepted commit
-`9171bd68d920681e524d8eda5a29053a8fd8ae88` and the uncommitted R109 candidate.
+Reviewed on 2026-09-12 through R109's locally accepted source/test campaign,
+above accepted R108 `9171bd68d920681e524d8eda5a29053a8fd8ae88` and planning-only
+publication parent `17d0be5476a4f71c473a619903c62aa316a96fc7`.
 [Issue #182](https://github.com/harsh-nod/fe2o3/issues/182) remains open; its GitHub
 API `updatedAt` is `2026-09-12T10:51:18Z`. A1/A2 are not complete.
 
 R107 accepted device-initialization custody at its named CPU/test boundary.
 R108 accepted the bounded writer-issuance model, not a production Context
-journal. R109 live insertion has source changes but no accepted build/test
-campaign. This dispatch adds no implementation or qualification claim.
+journal. R109 accepts initialized-device live insertion at its named
+CPU/shared-sequencer and concrete-facade boundaries, with
+[retained evidence](evidence/local-r109-live-device-insertion-2026-09-12/README.md).
+It does not add native, authenticated formal or performance qualification.
 The [full work orders](runtime-a1-a2-swarm-current.md) retain detailed contracts
 and historical evidence; this document is the short current assignment map.
 
@@ -22,7 +25,7 @@ bounded source/test changes; there are three worker slots plus Primary.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | Finish R109 / N3-L1 live insertion; independent N4-R cleanup review | `fe2o3-kfd/src/queue_live/data_insertion.rs`, `fixed_dispatch.rs`, shared-memory initializer and constructed-engine tests |
+| Native: `native_replacement_handoff` | N3-L2 coherent initialized insertion; independent N4-R cleanup review | Reuse `fe2o3-kfd/src/queue_live/data_insertion.rs` settlement and R106 shared-memory custody, with constructed-engine tests |
 | Admission: `submission_identity_handoff` | C1 submission-identity test matrix | New `fe2o3-runtime/src/context/tests/submission_identity_tests.rs`; Primary owns Context wiring and the missing mock cancel-entry counter |
 | Resources: `r102_evidence_review` | V2 allocation membership and Begin | Existing `fe2o3-runtime-model/src/context_version_journal.rs` and separate membership tests; retain V1 regressions |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |
@@ -35,18 +38,18 @@ must be extended, not replaced.
 
 | Packet | Remaining Work | Dependency And Exit |
 | --- | --- | --- |
-| N3-L1 / R109 | Initialized-device append, explicit insertion and remembered-hole replacement | R107 is accepted. Use the same constructed engine through initialization and model loan/retake; retain completed output on closing failure; commit reserved metadata before extraction. Test 15-to-16 capacity, invalid/full/reservation rejection, exact poison precedence and auxiliary restoration before parent transport. |
-| N3-L2 | Coherent initialized insertion | Reuse L1 settlement and R106 copy custody. Retain the external composite owner through allocate/copy/map/retake without a second copy implementation. |
+| N3-L1 / R109 | Locally accepted: initialized-device append, explicit insertion and remembered-hole replacement | Fourteen new test functions and eleven compiled negatives; original-engine scripted composition and concrete missing-engine facade coverage are separate. Native success and formal refinement remain unqualified. |
+| N3-L2 | Coherent initialized insertion | Reuse L1 settlement and R106 copy custody. Retain completed coherent output through retake/commit without a second copy implementation. Preserve required-hole replacement, explicit insertion and owned/borrowed source entrypoints. |
 | N3-L3 | Uninitialized device/coherent insertion | Reuse L1 settlement and borrowed allocation/map cores. Retain incomplete prefixes; successful allocation must remain explicitly uninitialized. L2-first is scheduling, not a semantic prerequisite. |
 | N4-R | Lower control release/unmap/returning cleanup | Independently ready. Root the owner before validation; first/middle/last error or panic retains untouched owners. Confirmed disposal and failed model projection must not produce retry or duplicate refund. |
 | N4-L | Live detach and data/control release | Needs applicable N4-R contracts. Retain returned owners through retake; failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
 | N4-QA / N4-QP | Auxiliary destruction, then full/returning destruction | Needs applicable lower/live cleanup contracts. Keep the taken lane and parent through every prefix; cover attached/detached return modes. Slot reuse requires confirmed full disposal; QA-first is scheduling. |
 | N5 | Nonpublishing generated DATA-ADOPT | Needs required N3/N4 custody paths. Bind original bytes to exact lane/resources without publication; cover initial, auxiliary and reused lanes, partial failure, Stop/drain and exact abort/disposal. |
 
-R109's first integration steps are to restore the displaced session `cfg` and
-`must_use` attributes in `shared_memory.rs`, add the explicit
-`queue_live/data_insertion.rs` module path, and then compile and add the missing
-composition tests. Neither wiring defect is repaired by this planning commit.
+R109 repaired the displaced session attributes and module-path wiring and added
+the constructed-engine composition tests. Its preliminary compile failure,
+incorrect ordinary-error poison oracle and rejected first mutation checker are
+preserved with the accepted evidence, not erased or counted as passing runs.
 Later-slot insertion tests may relocate a real auxiliary owner behind a vacancy;
 the current two-compute-lane limit does not permit claiming a second constructed
 auxiliary. CPU fixtures are not live Linux/KFD qualification.
@@ -55,7 +58,7 @@ auxiliary. CPU fixtures are not live Linux/KFD qualification.
 
 | Packet | Remaining Work | Dependency And Exit |
 | --- | --- | --- |
-| C1 | Submission identity across eight existing ingresses | Ready now: five coordinates give forty rejection cells plus valid controls. Genuine cached completion, released backend-ID reuse and destroyed-stream semantics; rejection preserves supplied handles, owners and callbacks before any backend entry. |
+| C1 | Submission identity across eight existing ingresses | Ready now: five coordinates give forty pending plus forty retained-success rejection cells with valid controls. Genuine cached completion, released backend-ID reuse and destroyed-stream semantics; rejection preserves supplied handles, owners and callbacks before any backend entry. |
 | C2 | Generated descriptor identity | Independently ready. Cover each roster coordinate in both match directions, source identity after transfer, and later artifact/currentness substitution. Descriptions do not grant native authority. |
 | C3 | Reply and retained-owner lifecycle gaps | Independently ready on existing lifecycle fixtures. Two-owner isolation, Stop before disposal, A-success/B-failure/C-retained retirement, latest-waker and panicking-wake behavior; repeated progress cannot retry failed retirement. |
 | I2, joint Native | Actual generated ISSUE | N5 + C1/C2/preissue-C3; specify the Resources mutation hook first. Bind one submission/permit to actual lane, queue, publication and allocation incarnations. Never retry uncertain publication. First non-reusing ISSUE does not require V7/V8. |
@@ -89,9 +92,30 @@ nonwrapping identities. Canonicalization is separate O(n log n) preparation;
 Begin targets O(k) work on k canonical destinations. Full invariant scans belong
 in test auditors, not the production transition.
 
+## Next-Packet Handoffs
+
+- Native N3-L2 keeps the successful mapped coherent owner outside the loan;
+  R106 already retains failed lower prefixes. Do not overwrite that earlier
+  custody or add a second allocation/copy/map sequence. Preserve empty-source
+  validation after loan entry and deferred facade transport. Test failed retake,
+  exact accounting, required-hole rejection and explicit-index insertion before
+  extending the same settlement contract to N3-L3.
+- Admission C1 substitutes Context brand, logical ID, backend ID, stream and
+  device across poll, wait, query, callback registration, release, event, cancel
+  and drain. Use real completion/event paths and real backend-ID reuse; record
+  poll/wait/cancel entry counters. Keep existing destroyed-stream, terminal,
+  deadline and graph-reservation precedence. Consuming release returns the
+  exact supplied invalid handle.
+- Resources V2 uses an independent map/set reference and a test-only full arena
+  auditor. Validate references, device/range, capacity and epoch arithmetic for
+  the entire canonical roster before changing state or scratch. Distinguish
+  Reserved count from occupied writers. Empty-Pending and final-epoch contracts
+  must be explicit; model references do not grant production authority or prove
+  that the supplied roster contains every kernel write.
+
 ## Qualification And Integration Order
 
-1. Advance N3-L1, C1 and V2 independently; N4-R, C2/C3 and M1/M2/M3 design work
+1. Advance N3-L2, C1 and V2 independently; N4-R, C2/C3 and M1/M2/M3 design work
    need not wait for those packets. Primary serializes shared edits and builds.
 2. Join required N3/N4 into N5; join N5 and C1/C2/C3 into I2, then C4/C5/C6.
    V7/V8 gate cross-run reuse, not the first non-reusing generated launch.
@@ -111,8 +135,8 @@ checks, decisive compiled negatives, exact source restoration and independent
 evidence review. Preserve failed attempts and immutable accepted archives.
 Keep CPU/source, authenticated formal, native and performance status separate.
 MI300X scheduling stays Primary-owned with task-owned staging/processes and
-cleanup; disruptive fault tests require an isolated window. This dispatch ran
-no builds, solver, SSH or GPU jobs.
+cleanup; disruptive fault tests require an isolated window. R109 ran local
+source/test campaigns, not solver, SSH or GPU jobs.
 
 ## Later Rotations And External Owners
 

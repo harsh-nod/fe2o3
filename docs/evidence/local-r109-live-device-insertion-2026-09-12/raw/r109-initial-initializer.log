@@ -1,0 +1,21 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.46s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 11 tests
+test shared_memory::tests::device_initialization::device_initializer_existing_lease_preflight_retains_genuine_native_input ... ok
+test shared_memory::tests::device_initialization::device_initializer_capacity_rejection_keeps_source_host_only_and_allows_later_retry ... ok
+test shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction ... ok
+test shared_memory::tests::device_initialization::device_initializer_lower_entry_rejects_foreign_coordinates_and_account_before_effects ... ok
+test shared_memory::tests::device_initialization::device_initializer_complete_entry_preserves_exact_success_and_readback_policy ... ok
+test shared_memory::tests::device_initialization::device_initializer_gpu_prefixes_and_readback_rejection_never_produce_output ... ok
+test shared_memory::tests::device_initialization::device_initializer_preflight_rejects_before_native_effects_despite_prior_activity ... ok
+test shared_memory::tests::device_initialization::device_initializer_terminal_storage_is_preallocated_and_cannot_overwrite_custody ... ok
+test shared_memory::tests::device_initialization::device_initializer_malformed_allocations_retain_source_without_fabricated_lease ... ok
+test shared_memory::tests::device_initialization::device_initializer_currentness_matrix_retains_only_admitted_owners ... ok
+test shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 997 filtered out; finished in 0.04s
+

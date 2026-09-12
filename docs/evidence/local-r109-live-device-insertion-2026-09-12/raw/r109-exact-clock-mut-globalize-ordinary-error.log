@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.72s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error ... FAILED
+
+failures:
+
+---- queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error stdout ----
+
+thread 'queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error' (1718152) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs:150:13:
+assertion failed: !take_dispatch_terminal_process_gate_record_v1()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::rebind_tests::insertion::device_insertion_concrete_facade_restores_before_transport_even_after_swallowed_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1021 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`
