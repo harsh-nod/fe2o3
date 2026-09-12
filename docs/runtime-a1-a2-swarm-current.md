@@ -1,15 +1,26 @@
 # Current Runtime Swarm Work Orders
 
-Latest checkpoint: R106 locally accepts [N3-C coherent initialization custody](runtime-borrowed-coherent-initialization-v1.md#owning-copy-extension),
-with [retained evidence](evidence/local-r106-coherent-initialization-custody-2026-09-12/README.md).
-Native next takes N3-D device initialization, Admission C1 and Resources V1.
+Latest checkpoint: R107 locally accepts [N3-D device initialization custody](runtime-device-initialization-custody-v1.md),
+with [retained evidence](evidence/local-r107-device-initialization-custody-2026-09-12/README.md).
+Native next takes N3-L live insertion, Admission C1 and Resources V1.
 Primary owns their integration and qualification. The
 [R105-candidate breakdown](runtime-swarm-dispatch-r105-candidate.md) remains the
 detailed dependency map, but its pending-acceptance status is historical.
 This accepts the named CPU/shared-sequence matrix, not native, authenticated
 formal or performance qualification.
 
-Execution refresh: 2026-09-12, against accepted R106
+R107 passes seventeen source gates and ten auxiliary checks;
+GNU/musl each pass 2,594 tests with five ignored. Frozen/restored initializer,
+borrowed and transition suites pass 11/11, 8/8 and 30/30. Nine compiled negatives
+reject at their exact oracles and all 5,667 source identities are restored.
+Its original inline-root GNU failure and isolated stack-abort reproduction are
+preserved separately. A fallibly preallocated terminal slot replaces inline
+engine storage; the same runtime test now passes without a runner stack override.
+Original ambient stack limits were not recorded. No new formal, native or
+performance acceptance is claimed. See the
+[next live integration boundary](runtime-device-initialization-custody-v1.md#next-live-integration).
+
+The detailed dispatch below was refreshed on 2026-09-12 against accepted R106
 `ad6f71304ddb0f41cc102f9e6ecabd7ed7840efe`. Scope: finish A1/A2, then advance the remaining
 [issue #182 milestones](https://github.com/harsh-nod/fe2o3/issues/182).
 The issue was checked through the GitHub API and remains open; its reported
@@ -53,10 +64,10 @@ native leaves, not successful Linux initialization or protected execution.
 
 | Worker | First packet | Concrete exit requirement |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N3-D: device initialization in `shared_memory.rs` and authenticated-source helpers; independent N4-R cleanup review | Root the original source and lease through validation, CPU map/write/full verification/unmap and GPU map. Preserve PUBLIC flags and repeated-byte no-second-readback semantics. Coordinate edits to the file shared with R106. |
+| Native: `native_replacement_handoff` | N3-L: initialized-device live insertion; independent N4-R cleanup review | Keep the R107 in-place root outside the model loan, reserve identity capacity before effects, retain Complete through retake and commit before extraction. Preserve auxiliary restoration before parent transport. |
 | Admission: `submission_identity_handoff` | C1: CO-2A in new `context/tests/submission_identity_tests.rs` | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. Primary owns module wiring and the missing test-backend cancel counter. |
 | Resources: `r102_evidence_review` | V1: VER-1A.2a in new `runtime-model/src/context_version_journal.rs` | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. Primary owns exports. This is model-only, not a production journal. |
-| Primary | I1: integrate N3-D, C1 and V1 with qualification gates | Retain failed attempts, run full/focused/auxiliary and compiled-negative checks, restore exact source and review evidence before signed publication to both repositories. Keep local source, model/proof, native and performance acceptance separate. |
+| Primary | I1: integrate N3-L, C1 and V1 with qualification gates | Retain failed attempts, run full/focused/auxiliary and compiled-negative checks, restore exact source and review evidence before signed publication to both repositories. Keep local source, model/proof, native and performance acceptance separate. |
 
 ### Next Implementation Batches
 
@@ -64,20 +75,21 @@ The three worker slots are Native, Admission and Resources; Primary is the
 fourth slot. Workers supply read-only source/test reviews by default. Primary
 owns all edits, shared wiring, test campaigns and publication. The batches below
 are assigned work orders, not claims that code is implemented or that workers
-continue running after their review returns. This refresh changes documentation
-only and adds no test, proof, hardware or performance acceptance.
+continue running after their review returns. R107's named local acceptance is
+recorded above; it does not close the following implementation or qualification packets.
 
 | Owner | Next bounded implementation batch | Required local exit |
 | --- | --- | --- |
-| Native | N3-D: one owning device initializer, borrowing the source/lease through validation, allocation, CPU initialization and final GPU map | Both accounting modes; exact original source, lease, mapping and charge; PUBLIC profile; full arbitrary-source verification; repeated-byte zero readbacks; immediate quarantine and no retry after an admitted failure |
+| Native | N3-L: initialized-device append and explicit insertion in `queue_live/fixed_dispatch.rs`, with one outer insertion owner | Exact input/output custody through model retake and metadata commit, no post-effect identity-vector growth, append/hole/middle semantics, and primary/later-auxiliary failure coverage |
 | Admission | C1: existing Context identity gates, starting with five coordinates across eight ingresses, then genuine cache and backend-ID reuse | Rejected handles/records/callbacks unchanged; no backend entry; consuming release returns the supplied handle; destroyed-stream and terminal/deadline/graph precedence preserved |
 | Resources | V1: constructor, existing-ID registration, exact Reserved lookup and explicit pre-effect abort only | Preallocated W-slot arena/free stack; constant-work operations without later allocation; full-key slot reuse rejection; failures leave state and watermark unchanged |
 | Primary | I1: integrate one reviewed batch at a time; separately prepare Q1/Q2/Q3 acceptance contracts | Immutable candidate source, focused/full/auxiliary checks, decisive compiled negatives, exact restoration and independent evidence review before signed pushes to both topic remotes |
 
-N3-D's next patch belongs in a private
+R107's N3-D implementation lives in the private
 `crates/fe2o3-kfd/src/shared_memory/device_initialization.rs`, with Primary-owned
-`shared_memory.rs` wiring. Use an inline owning root and one bounded terminal
-slot, not another per-initialization heap allocation. Keep its in-place core
+`shared_memory.rs` wiring. The owning root uses a fallibly preallocated terminal
+slot in the engine after the original inline-storage stack regression. This adds
+one pre-effect allocation per engine, not per initializer or failure. Keep its in-place core
 usable by N3-L's eventual outer owner. A per-call native-attempt marker belongs
 immediately before `reserve_va`; old engine activity or quarantine is not proof
 that this call crossed that boundary. Invalid source/layout/capacity inputs are
@@ -91,8 +103,8 @@ anchor with spare capacity, both configured and unconfigured budgets, and exact
 account/device/VM/lease/native-argument comparisons. Device initialization leaves
 the original queue foundation unchanged. Cover all six currentness boundaries,
 allocation/map/access/readback/unmap errors and panics, and final GPU-map
-prefixes. Existing backend counters do not record all mapping arguments; add
-narrow observations before claiming exact routing. For admitted or otherwise
+prefixes. R107 adds narrow mapping-argument observations before fault injection;
+these do not qualify actual Linux routing. For admitted or otherwise
 terminal failures, clear injected faults only after asserting quarantine, then
 prove no additional native work or debit. Separately retain a pre-effect retry
 control: the unconfigured first-currentness panic and healthy validation/capacity
@@ -176,8 +188,8 @@ The refreshed bounded handoffs add these implementation constraints:
 
 | Wave | Native | Admission | Resources | Primary |
 | --- | --- | --- | --- | --- |
-| Ready now | N3-D implementation handoff; N4-R lower-cleanup review | C1 next; C2/C3 independently ready | V1 next; M1 domain design and M3 host-image ceiling independently ready | Integrate the next reviewed packet, one immutable-source campaign at a time |
-| After local prerequisites | N3-L after N3-C/D; N4-L after N4-R; auxiliary/full destruction after cleanup contracts | C2/C3 in the next review slots; their order is scheduling only | V2 membership, V3 settlement/cost, V4 proofs, then V5 production journal | Integrate reviewed packets without conflicting shared edits |
+| Ready now | N3-L initialized-device insertion; N4-R lower-cleanup review | C1 next; C2/C3 independently ready | V1 next; M1 domain design and M3 host-image ceiling independently ready | Integrate the next reviewed packet, one immutable-source campaign at a time |
+| After local prerequisites | Coherent/uninitialized N3-L custody; N4-L after N4-R; auxiliary/full destruction after cleanup contracts | C2/C3 in the next review slots; their order is scheduling only | V2 membership, V3 settlement/cost, V4 proofs, then V5 production journal | Integrate reviewed packets without conflicting shared edits |
 | Integration | N5 nonpublishing DATA-ADOPT, then joint I2 ISSUE | I2, C4 COMPLETE, C5 generated API and C6 generated GRAPH/DRAIN | V6 initial hooks, V7 complete mutation/recovery, V8 cross-run leases; M2/native residency | Original-engine composition, incremental correspondence and retained-memory closure |
 | Qualification | Native depth, budget, overlap and teardown matrix | Wake/cancel/drain and complete-output oracles | Exact versions, bounded retained resources and terminal charges | Q1 proofs, Q2 hardware/fault qualification, Q3 matched HIP/HSA benchmarks |
 
@@ -205,8 +217,8 @@ sequence; it is not a prerequisite where the packets are explicitly independent.
 | Resources with Native | M1: aggregate domains/headroom; M2: native backing/control/slot admission; M3: host/native cache residency; M4: total retained-memory bound | Reuse existing accounts, budgets and caches. Domain design and host-image ceiling are independently ready; native residency and compound pre-effect admission depend on backing/control integration. Include terminal retention without double charging. |
 | Primary with all lanes | Q1: incremental adapter correspondence; Q2: timing/depth/overlap/fault qualification; Q3: matched HIP/HSA performance | Keep CPU/source, authenticated formal, live KFD and performance acceptance separate. Investigate R103's unaccepted default-concurrency musl watchdog failures without weakening deadlines. |
 
-R104 supplies N1, R105 supplies N2 and R106 supplies N3-C's named local acceptance.
-The remaining critical integration path is **N3-D -> N3-L**, alongside **N4-R ->
+R104 supplies N1, R105 supplies N2, R106 supplies N3-C and R107 supplies N3-D's
+named local acceptance. The remaining critical integration path is **N3-L**, alongside **N4-R ->
 N4-L/QA/QP**, then **N5 DATA-ADOPT -> I2 ISSUE ->
 C4 COMPLETE -> C5 generated API -> C6 GRAPH/DRAIN**. I2 also needs C1/C2 and the preissue
 C3 contract/oracle, but not evidence of its own publication receipt in advance.
@@ -254,6 +266,16 @@ by Primary using task-owned resources and cleanup; disruptive tests require an
 isolated window. No hardware work is launched by this dispatch refresh.
 
 ## Accepted Checkpoints
+
+R107 locally accepts **N3-D device initialization custody**, with
+[retained evidence](evidence/local-r107-device-initialization-custody-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and nine compiled negatives pass.
+GNU/musl each pass 2,594 tests with five ignored; frozen/restored initializer,
+borrowed and transition suites pass 11/11, 8/8 and 30/30. All 5,667 source
+identities match. Original inline-candidate GNU/stack failures and preliminary
+attempts remain preserved. This is CPU/shared-sequence acceptance plus the named
+runtime stack regression, not native, authenticated formal or performance
+qualification. Next: **N3-L live insertion + C1 identity + V1 issuance**.
 
 R106 locally accepts **N3-C coherent initialization custody**, with
 [retained evidence](evidence/local-r106-coherent-initialization-custody-2026-09-12/README.md).

@@ -1,0 +1,33 @@
+{
+  "source_head": "5ba89a0e642cf02effc8e462e33be93b19aec1c2",
+  "started_at": "2026-09-12T15:49:40.970Z",
+  "finished_at": "2026-09-12T15:50:36.641Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "kfd_backend::qualification_drain_capture::tests::caller_authority_and_missing_history_cannot_enter_copy_only_observation",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r107-slot-stack.log",
+  "source": "/home/harsh/.codex-tmp/r107-slot-stack-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 58.861745669,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

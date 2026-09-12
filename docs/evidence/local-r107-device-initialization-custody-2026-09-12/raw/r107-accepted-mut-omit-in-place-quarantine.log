@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.86s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction ... FAILED
+
+failures:
+
+---- shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction stdout ----
+
+thread 'shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction' (1229575) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6586:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction' (1229575) panicked at crates/fe2o3-kfd/src/shared_memory/tests/device_initialization.rs:860:17:
+assertion `left == right` failed
+  left: Active
+ right: Quarantined
+
+
+failures:
+    shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1007 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

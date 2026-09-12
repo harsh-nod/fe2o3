@@ -1,0 +1,12 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-protocol)
+    Checking fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco-finalize)
+    Checking fe2o3-compiler-closure-capability v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-closure-capability)
+    Checking fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-verifier)
+    Checking fe2o3-compiler-execution-client v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-client)
+    Checking fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-protocol)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.48s

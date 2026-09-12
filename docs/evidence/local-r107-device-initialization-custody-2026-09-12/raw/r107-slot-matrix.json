@@ -1,0 +1,31 @@
+{
+  "source_head": "5ba89a0e642cf02effc8e462e33be93b19aec1c2",
+  "started_at": "2026-09-12T15:50:45.342Z",
+  "finished_at": "2026-09-12T15:51:30.786Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::device_initialization"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r107-slot-matrix.log",
+  "source": "/home/harsh/.codex-tmp/r107-slot-matrix-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 46.947481277,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

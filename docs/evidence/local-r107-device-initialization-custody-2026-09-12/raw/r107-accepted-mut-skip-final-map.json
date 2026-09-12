@@ -1,0 +1,33 @@
+{
+  "source_head": "5ba89a0e642cf02effc8e462e33be93b19aec1c2",
+  "started_at": "2026-09-12T16:12:58.603Z",
+  "finished_at": "2026-09-12T16:13:29.020Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::device_initialization::device_initializer_complete_entry_preserves_exact_success_and_readback_policy",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r107-accepted-mut-skip-final-map.log",
+  "source": "/home/harsh/.codex-tmp/r107-accepted-mut-skip-final-map-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 32.031850599,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

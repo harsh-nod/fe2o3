@@ -1,0 +1,302 @@
+{
+  "recorded_at": "2026-09-12T15:52:58.449Z",
+  "recorded_phase": "Fresh preallocated-slot cohort before accepted frozen/full/auxiliary/mutation campaigns; after preliminary tests and the preserved inline-candidate GNU/stack failures. No host-load qualification.",
+  "publication_parent": "5ba89a0e642cf02effc8e462e33be93b19aec1c2",
+  "accepted_runtime_checkpoint": "ad6f71304ddb0f41cc102f9e6ecabd7ed7840efe",
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "cargo 1.96.0-nightly (888f67534 2026-03-30)\nrelease: 1.96.0-nightly\ncommit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51\ncommit-date: 2026-03-30\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]\n"
+    },
+    {
+      "command": [
+        "rustc",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "rustc 1.96.0-nightly (55e86c996 2026-04-02)\nbinary: rustc\ncommit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9\ncommit-date: 2026-04-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2\n"
+    },
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "output": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "output": "v22.22.1\n"
+    },
+    {
+      "command": [
+        "git",
+        "--version"
+      ],
+      "output": "git version 2.43.0\n"
+    },
+    {
+      "command": [
+        "uname",
+        "-srmo"
+      ],
+      "output": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "cargo",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3"
+    },
+    {
+      "name": "rustc",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950"
+    }
+  ],
+  "runners": [
+    {
+      "name": "r107-run.js",
+      "sha256": "9e0e58de45de2736d673c556855f2d623b1c42af98e00a91153e1f617f1e6554"
+    },
+    {
+      "name": "r107-accepted-source-gate.py",
+      "sha256": "16510b726e1b60a3e82e0957c0b3e0645f3ea2843ad6b0c2166ab15264129fe4"
+    },
+    {
+      "name": "r107-accepted-auxiliary-gates.py",
+      "sha256": "b13c2c933ba6e1142f69a7b800a3a3e68c4c56d1e209b1230f77ef6f21f64c28"
+    },
+    {
+      "name": "r107-accepted-freeze.js",
+      "sha256": "cdb05c6c1417c16bbf8b9023494f92a97c3450729d395ba7fe6b05e7f9325913"
+    }
+  ],
+  "environment_overrides": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "test_deadlines_changed": false,
+  "hardware_qualification": false,
+  "solver_rerun": false,
+  "prior_artifacts": [
+    {
+      "name": "r107-assert-frozen.js",
+      "sha256": "413b5ab6c35b3971b011fa78ddedfa2cf72f71904facd29b203c131cadee5630"
+    },
+    {
+      "name": "r107-auxiliary-gates.py",
+      "sha256": "dfcd62e63e5e86503f4483cf1c64bcb7807b8fe0603b82192791665e6a9ef5ac"
+    },
+    {
+      "name": "r107-check-mutation.js",
+      "sha256": "c0eb89c856ea8573a4c6b205c58f671d016c9b86643fdc849b7aaf8b57f73f3a"
+    },
+    {
+      "name": "r107-environment.json",
+      "sha256": "9f654582e624d2bb6cc71ecc39366fa0b531f2eb7674b65e99659483e4d09ad9"
+    },
+    {
+      "name": "r107-final-gnu-tests.log",
+      "sha256": "ddaf6ce951befe99f249e560a654e2f433d8466f400df94971ef88299563635c"
+    },
+    {
+      "name": "r107-final-source-gate.json",
+      "sha256": "a16e7d0cfcec472134d0a2dc9391c63d777753aa4eec6917f0d961ec4e600b74"
+    },
+    {
+      "name": "r107-final-source-inputs.json",
+      "sha256": "5534ade5f9a3ae65e0affc2cdd98234f12eed4cf4a4d64ae4a4b21784d107e2f"
+    },
+    {
+      "name": "r107-freeze.js",
+      "sha256": "34e9e77fca0bb31569eeb21f05e5a87ca5af0760e3c93ab2da1835ae6372bdc5"
+    },
+    {
+      "name": "r107-frozen-matrix-source.json",
+      "sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd"
+    },
+    {
+      "name": "r107-frozen-matrix.json",
+      "sha256": "5cce1bba813e1462abeb1278d87721d2be43ad858b89b5b620eea6f721cf253f"
+    },
+    {
+      "name": "r107-frozen-matrix.log",
+      "sha256": "f01246b832675406de72b48385bd4186d8cfdd4d8a70b67700b1f47afdaa6a78"
+    },
+    {
+      "name": "r107-frozen-source.json",
+      "sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd"
+    },
+    {
+      "name": "r107-initial-kfd-source.json",
+      "sha256": "33ae9c213f8651f157e1f0e30f89678ee0e633674c9ea6e9619ea45cd6783efc"
+    },
+    {
+      "name": "r107-initial-kfd.json",
+      "sha256": "80b3c8d97d6a635feb8f3a146f7aa6c5f0efac37ffe01bfd2409b01bf7e51207"
+    },
+    {
+      "name": "r107-initial-kfd.log",
+      "sha256": "cd290674b9f4db1867d2ca00fe1d73a048daebc401f86bb30698ea54351ba655"
+    },
+    {
+      "name": "r107-issue-status.json",
+      "sha256": "3130267651de48c89aa0dbcdba6667207ecfc76a832c30d46574ee422874710a"
+    },
+    {
+      "name": "r107-matrix-initial-source.json",
+      "sha256": "6b184fb7b141416a2066aa57194bba8603ee9a969199ca0818a968f0f9d4eed3"
+    },
+    {
+      "name": "r107-matrix-initial.json",
+      "sha256": "94538c6247900e292edfc291d4480edd636cac0d424f404bd4730f493f9357f8"
+    },
+    {
+      "name": "r107-matrix-initial.log",
+      "sha256": "71a67d29e9a4d92fb3044010cd871321cc997ec1342adf19cccf183f7cd7d117"
+    },
+    {
+      "name": "r107-matrix-second-source.json",
+      "sha256": "c10b7eb3a1998bd2871f50f9943420bef91c840b4e5ab5c2808abf33bef0cfb4"
+    },
+    {
+      "name": "r107-matrix-second.json",
+      "sha256": "354e121cbffadfda3855d2a6cd4932b7a0386f5ef67c04dd40c66562302ed106"
+    },
+    {
+      "name": "r107-matrix-second.log",
+      "sha256": "8ca62be145f8b6578899d096b3cfaec8b1ec8ff0d438603f591cabc00c159c8e"
+    },
+    {
+      "name": "r107-mutation-patch.js",
+      "sha256": "a68e6b1c68f0a8f311befb73394fbbf805b94c9741fa692c872cf2bcac2fa5c5"
+    },
+    {
+      "name": "r107-mutation-tool-pins.json",
+      "sha256": "596e2f3fd668c8f876e19f99b38f82e1ed0eff65a70ec75f4654e1082e641cb7"
+    },
+    {
+      "name": "r107-mutations.json",
+      "sha256": "ed138b3c3065a6e4dceae1b7898eaec00d5daaa058cbf5288bbbce519949e2d5"
+    },
+    {
+      "name": "r107-preflight-clippy-source.json",
+      "sha256": "c8a0642527a12799a967b1aaf15fb7bc88422271f70f1526da46ab9ae1467c77"
+    },
+    {
+      "name": "r107-preflight-clippy.json",
+      "sha256": "ed5c3fa8f6db792b62fba9a60971bfa2ffec4a50d7981c121f2509df5548e20e"
+    },
+    {
+      "name": "r107-preflight-clippy.log",
+      "sha256": "0026ad90d0483833b18a3f12e67bd3da3f29121d6e30bf22a96a45078d6cc9f9"
+    },
+    {
+      "name": "r107-preliminary-mutation-tool-pins.json",
+      "sha256": "3068e17e3ffd6528a75d7d92616c88d728c295ff76282284d8e77353aa0e4211"
+    },
+    {
+      "name": "r107-preliminary-mutations.json",
+      "sha256": "4420807607f8e01c56be284d6749cc2a144ea744f15f3f147ece6f60721552ef"
+    },
+    {
+      "name": "r107-retain-local.js",
+      "sha256": "d0ddb972221b21fc295cbd62fc2df51b964dfab676002bcc938e4eb1eb530ae8"
+    },
+    {
+      "name": "r107-routing-source.json",
+      "sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd"
+    },
+    {
+      "name": "r107-routing.json",
+      "sha256": "6a69f01d9ec0d0885809af38e1f13ab95547d9da750880ceb96413b9d0d9a675"
+    },
+    {
+      "name": "r107-routing.log",
+      "sha256": "a392d32f21b7dcf74d2d1004412cfc5aecd7d1420503b02e0e651bdc661cf749"
+    },
+    {
+      "name": "r107-run.js",
+      "sha256": "9e0e58de45de2736d673c556855f2d623b1c42af98e00a91153e1f617f1e6554"
+    },
+    {
+      "name": "r107-slot-clippy-source.json",
+      "sha256": "27445966e89cba84ee7194463934fe61be47bd108f4b422c7c480d781b6cbe31"
+    },
+    {
+      "name": "r107-slot-clippy.json",
+      "sha256": "9695ad3ece49de78058de4db5c7369d5c6261f6907440ad318d965136604e31e"
+    },
+    {
+      "name": "r107-slot-clippy.log",
+      "sha256": "bee74a5e3eb6f805aceaceb61708106d9f123288a9a0584d046f1d0875f56e6c"
+    },
+    {
+      "name": "r107-slot-format-source.json",
+      "sha256": "8644deec11b67b315f864a24e933a9e81f93a59d468408482a0cdb4cd9d49343"
+    },
+    {
+      "name": "r107-slot-format.json",
+      "sha256": "516dd800705042123ddb149723899e3c2b3d4cc8f6c0d00ef6d078af19a428a2"
+    },
+    {
+      "name": "r107-slot-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r107-slot-matrix-source.json",
+      "sha256": "27445966e89cba84ee7194463934fe61be47bd108f4b422c7c480d781b6cbe31"
+    },
+    {
+      "name": "r107-slot-matrix.json",
+      "sha256": "ce381936dc2a580986b4a28610ca113a06ae0823f682546cb8131268c23d7f34"
+    },
+    {
+      "name": "r107-slot-matrix.log",
+      "sha256": "5dc3d763412910f0bf159f7dfdec8b51c05e0ba82e1eb6db02fd009930faa0d2"
+    },
+    {
+      "name": "r107-slot-stack-source.json",
+      "sha256": "27445966e89cba84ee7194463934fe61be47bd108f4b422c7c480d781b6cbe31"
+    },
+    {
+      "name": "r107-slot-stack.json",
+      "sha256": "b8a9350ead61b560050698f3a5783166cc1f16f624bdfb44692c5c80c43555c5"
+    },
+    {
+      "name": "r107-slot-stack.log",
+      "sha256": "23e885a9baf4f3ac2a40bc20c2e38af40cbc340861ac76ae5bd64a137c46b40e"
+    },
+    {
+      "name": "r107-source-gate.py",
+      "sha256": "43c33d9b4d210135472be7aa28e9eed0af3515421ba9e3567c836b3f4089c67f"
+    },
+    {
+      "name": "r107-stack-repro-source.json",
+      "sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd"
+    },
+    {
+      "name": "r107-stack-repro.json",
+      "sha256": "0725763ee42d9f72a32d259580a99aeffaa46dc083c105f720beaa0beb2b565b"
+    },
+    {
+      "name": "r107-stack-repro.log",
+      "sha256": "fcb34abe61effeb3e93f506e03d5dc8c98dfe8a481d909c8c32a16304e567cae"
+    }
+  ]
+}

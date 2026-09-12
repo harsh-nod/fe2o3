@@ -1,0 +1,9 @@
+{
+  "recorded_at": "2026-09-12T15:35:31.807Z",
+  "pins": {
+    "r107-mutations.json": "4420807607f8e01c56be284d6749cc2a144ea744f15f3f147ece6f60721552ef",
+    "r107-mutation-patch.js": "a68e6b1c68f0a8f311befb73394fbbf805b94c9741fa692c872cf2bcac2fa5c5",
+    "r107-check-mutation.js": "c0eb89c856ea8573a4c6b205c58f671d016c9b86643fdc849b7aaf8b57f73f3a",
+    "r107-assert-frozen.js": "413b5ab6c35b3971b011fa78ddedfa2cf72f71904facd29b203c131cadee5630"
+  }
+}

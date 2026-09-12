@@ -114,6 +114,11 @@ pub(super) struct DeviceBackingAccountV1 {
 }
 
 impl DeviceBackingAccountV1 {
+    #[cfg(test)]
+    pub(super) fn domain_identity_for_test(&self) -> usize {
+        Arc::as_ptr(&self.domain) as usize
+    }
+
     pub(super) fn new(
         session_id: u64,
         device: DeviceKeyV1,

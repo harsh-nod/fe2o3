@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 8 tests
+test queue::live::tests::borrowed_initialization_queue_wiring_keeps_guards_retake_and_identity_order ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_copies_complete_source_and_preserves_one_padded_debit ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_all_currentness_boundaries_preserve_existing_prefix_and_debits ... ok
+test queue::live::tests::borrowed_initialization_queue_rejects_before_native_model_loan ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_empty_and_each_budget_reject_before_native_entry ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_failures_retain_backing_without_initialized_authority_or_retry ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_panics_preserve_original_payload_and_quarantined_charge ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_live_facade_uses_model_aware_sequence_without_encoded_copy ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1000 filtered out; finished in 0.00s
+

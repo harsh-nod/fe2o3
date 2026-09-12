@@ -1,0 +1,69 @@
+{
+  "observed_at": "2026-09-12T15:59:40.517Z",
+  "executed": false,
+  "rows": [
+    {
+      "name": "drop-terminal-owner",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "f91c231fabe252ebf0646596adf168c87e04db838d9fd4de5f75a9e8838fced1",
+      "test": "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source"
+    },
+    {
+      "name": "drop-source",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "fab8e5f3eea290a14965af054ea2bf8c7af5d12e1635ba3c76b7c984abd0c731",
+      "test": "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source"
+    },
+    {
+      "name": "omit-native-admission",
+      "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+      "original_sha256": "4503e548a2da576655f8593f057589062793d41044a8066e6fdc1e51a0e5ad1c",
+      "mutated_sha256": "c2664a1f183cb223e317f5969c69be7182fa5aea7181d71f87cafe5560fd81dc",
+      "test": "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source"
+    },
+    {
+      "name": "late-input-admission",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "a071e9998e051431e8286a2aa110a754def743b874d2a0a46425522db96b647e",
+      "test": "shared_memory::tests::device_initialization::device_initializer_existing_lease_preflight_retains_genuine_native_input"
+    },
+    {
+      "name": "omit-gpu-prefix",
+      "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+      "original_sha256": "4503e548a2da576655f8593f057589062793d41044a8066e6fdc1e51a0e5ad1c",
+      "mutated_sha256": "444de59b2e88d3abbe1e392b8bf406cbb7f55766584f96e475c21cd3b923083a",
+      "test": "shared_memory::tests::device_initialization::device_initializer_gpu_prefixes_and_readback_rejection_never_produce_output"
+    },
+    {
+      "name": "skip-final-map",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "27148ed8662673b379ee4a28115a534fa9f81cf4bb7821c15107c4d71d6f668a",
+      "test": "shared_memory::tests::device_initialization::device_initializer_complete_entry_preserves_exact_success_and_readback_policy"
+    },
+    {
+      "name": "omit-in-place-quarantine",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "2d6e865eb0c4a7e1c6ab37ef7cdf2f81e57bccb0664268a56888d7a1b514cb98",
+      "test": "shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction"
+    },
+    {
+      "name": "omit-slot-vacancy",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "b39e974be31ff6731e4c7dd587ad0107dbe101ebe2cb2ff129c7536137b160c8",
+      "test": "shared_memory::tests::device_initialization::device_initializer_terminal_storage_is_preallocated_and_cannot_overwrite_custody"
+    },
+    {
+      "name": "omit-slot-reservation",
+      "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+      "original_sha256": "a5f96dd9998af46d0b3aafed68f7e56754f738b926c0a57b261385e181a4c4e2",
+      "mutated_sha256": "fb292d9bffb21385f5d8bab2e96ca93af0c444f86d271caa7881794825ec4904",
+      "test": "shared_memory::tests::device_initialization::device_initializer_terminal_storage_is_preallocated_and_cannot_overwrite_custody"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+[
+  {
+    "name": "drop-terminal-owner",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source",
+    "oracle": "An admitted failure must retain its original source and lease root.",
+    "expected": ["called `Option::unwrap()` on a `None` value"],
+    "edits": [["engine.terminal_device_initialization = Some(self);", "let _ = self;"]]
+  },
+  {
+    "name": "drop-source",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source",
+    "oracle": "Terminal state must keep the exact authenticated source, not merely the lease.",
+    "expected": ["called `Option::unwrap()` on a `None` value"],
+    "edits": [
+      ["fn retain_failure<B: MemoryBackend>(self, engine:", "fn retain_failure<B: MemoryBackend>(mut self, engine:"],
+      ["engine.terminal_device_initialization = Some(self);", "self.source = None;\n            engine.terminal_device_initialization = Some(self);"]
+    ]
+  },
+  {
+    "name": "omit-native-admission",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source",
+    "oracle": "An ambiguous VA attempt requires custody even before a record or lease returns.",
+    "expected": ["called `Option::unwrap()` on a `None` value"],
+    "edits": [["*native_started = true;", "*native_started = false;"]]
+  },
+  {
+    "name": "late-input-admission",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_existing_lease_preflight_retains_genuine_native_input",
+    "oracle": "A genuine existing lease must survive rejection of malformed source metadata.",
+    "expected": ["left: Active", "right: Quarantined"],
+    "edits": [[
+      "        if let InitializationLeaseV1::Unmapped(lease) = &self.lease {\n            validate_unmapped_owner(engine, lease)?;\n            self.input_admitted = true;\n        }\n        let (expected_len, content) = self.source_metadata()?;",
+      "        let (expected_len, content) = self.source_metadata()?;\n        if let InitializationLeaseV1::Unmapped(lease) = &self.lease {\n            validate_unmapped_owner(engine, lease)?;\n            self.input_admitted = true;\n        }"
+    ]]
+  },
+  {
+    "name": "omit-gpu-prefix",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_gpu_prefixes_and_readback_rejection_never_produce_output",
+    "oracle": "Retain the exact returned GPU-map prefix, including zero and overshoot.",
+    "expected": ["left: None", "right: Some(0)"],
+    "edits": [[
+      "        let outcome = self.backend.map_gpu(handle, 0);\n        progress.returned_success = Some(outcome.result.is_ok());\n        progress.returned_map_prefix = Some(outcome.value);",
+      "        let outcome = self.backend.map_gpu(handle, 0);\n        progress.returned_success = Some(outcome.result.is_ok());\n        progress.returned_map_prefix = None;"
+    ]]
+  },
+  {
+    "name": "skip-final-map",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_complete_entry_preserves_exact_success_and_readback_policy",
+    "oracle": "Successful initialization requires the real final map and both currentness checks before retagging.",
+    "expected": ["assertion `left == right` failed"],
+    "edits": [["engine.map_device_memory_borrowed(lease, &mut self.progress)?;", "let _ = lease;"]]
+  },
+  {
+    "name": "omit-in-place-quarantine",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction",
+    "oracle": "An external owner must see immediate quarantine on native unwind without relying on standalone settlement.",
+    "expected": ["left: Active", "right: Quarantined"],
+    "edits": [[
+      "            if self.admitted() {\n                engine.phase = SharedMemorySessionPhaseV1::Quarantined;\n            }",
+      "            let _ = &engine.phase;"
+    ]]
+  }
+]

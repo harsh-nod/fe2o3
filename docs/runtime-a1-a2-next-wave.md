@@ -1,5 +1,23 @@
 # A1/A2 Next-Wave Dispatch
 
+R107 locally accepts [N3-D device initialization custody](runtime-device-initialization-custody-v1.md),
+with [retained evidence](evidence/local-r107-device-initialization-custody-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and nine compiled negatives pass;
+GNU/musl each pass 2,594 tests with five ignored. Frozen/restored initializer,
+borrowed and transition suites pass 11/11, 8/8 and 30/30; all 5,667 source
+identities match. The original inline-candidate GNU failure and isolated stack
+abort remain preserved. The corrected slot is preallocated once per engine,
+not per initializer; the same runtime test now passes. No new solver, native or
+performance acceptance is added.
+
+Immediate packets are **Native N3-L initialized-device insertion**, independent
+**Admission C1 identity** and **Resources V1 issuance**, with Primary owning
+integration and qualification. The
+[N3-L handoff](runtime-device-initialization-custody-v1.md#next-live-integration)
+keeps completed owners through retake and commits before extraction. Coherent
+insertion still needs its own external composite root. The R106 and earlier
+dispatch text below remains historical.
+
 R106 locally accepts [N3-C coherent initialization custody](runtime-borrowed-coherent-initialization-v1.md#owning-copy-extension),
 with [retained evidence](evidence/local-r106-coherent-initialization-custody-2026-09-12/README.md).
 Seventeen source gates, ten auxiliary checks and seven compiled negatives pass;

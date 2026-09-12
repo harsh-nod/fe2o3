@@ -1,0 +1,252 @@
+{
+  "publication_parent": "5ba89a0e642cf02effc8e462e33be93b19aec1c2",
+  "accepted_runtime_checkpoint": "ad6f71304ddb0f41cc102f9e6ecabd7ed7840efe",
+  "scope": "Device initializer source/lease custody through allocation, CPU initialization and final GPU map; CPU/shared-sequence acceptance only",
+  "source_identities": 5667,
+  "changed_source_files": [
+    "crates/fe2o3-kfd/src/shared_memory.rs",
+    "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "crates/fe2o3-kfd/src/shared_memory/resource_accounting.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/device_initialization.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 9,
+  "mutation_tool_pins": {
+    "r107-accepted-mutations.json": "954db03e398cd41946f2f1fb1696d94f5c8741904e330cf5adfb5c764f136a76",
+    "r107-accepted-mutation-patch.js": "7c863d16fc309e18e08f2e72dec4abf060564ab7ea23038d5340de4d9dc938ba",
+    "r107-accepted-check-mutation.js": "0c90e8656beee173abeb3a346a668270e10724ac5f00208a494e539b0c9d6575",
+    "r107-accepted-assert-frozen.js": "97a017691c85e09aac9605bce3aab40743ae1ac23095c81b37451b8f119eca82"
+  },
+  "mutation_oracle_test_lines": {
+    "drop-terminal-owner": 295,
+    "drop-source": 171,
+    "omit-native-admission": 295,
+    "late-input-admission": 779,
+    "omit-gpu-prefix": 669,
+    "skip-final-map": 432,
+    "omit-in-place-quarantine": 860,
+    "omit-slot-vacancy": 1137,
+    "omit-slot-reservation": 1102
+  },
+  "new_test_functions": [
+    "shared_memory::tests::device_initialization::device_initializer_capacity_rejection_keeps_source_host_only_and_allows_later_retry",
+    "shared_memory::tests::device_initialization::device_initializer_complete_entry_preserves_exact_success_and_readback_policy",
+    "shared_memory::tests::device_initialization::device_initializer_currentness_matrix_retains_only_admitted_owners",
+    "shared_memory::tests::device_initialization::device_initializer_existing_lease_preflight_retains_genuine_native_input",
+    "shared_memory::tests::device_initialization::device_initializer_gpu_prefixes_and_readback_rejection_never_produce_output",
+    "shared_memory::tests::device_initialization::device_initializer_in_place_core_keeps_external_custody_until_extraction",
+    "shared_memory::tests::device_initialization::device_initializer_lower_entry_rejects_foreign_coordinates_and_account_before_effects",
+    "shared_memory::tests::device_initialization::device_initializer_malformed_allocations_retain_source_without_fabricated_lease",
+    "shared_memory::tests::device_initialization::device_initializer_native_error_and_panic_prefixes_preserve_original_source",
+    "shared_memory::tests::device_initialization::device_initializer_preflight_rejects_before_native_effects_despite_prior_activity",
+    "shared_memory::tests::device_initialization::device_initializer_terminal_storage_is_preallocated_and_cannot_overwrite_custody"
+  ],
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2594,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2594,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 30,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "focused_tests": {
+    "frozen_matrix": 11,
+    "restored_matrix": 11,
+    "frozen_borrowed": 8,
+    "restored_borrowed": 8,
+    "frozen_transitions": 30,
+    "restored_transitions": 30
+  },
+  "historical_attempts": [
+    {
+      "name": "r107-initial-kfd",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "33ae9c213f8651f157e1f0e30f89678ee0e633674c9ea6e9619ea45cd6783efc",
+      "source_identities": 5666
+    },
+    {
+      "name": "r107-matrix-initial",
+      "returncode": 101,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "6b184fb7b141416a2066aa57194bba8603ee9a969199ca0818a968f0f9d4eed3",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-matrix-second",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "c10b7eb3a1998bd2871f50f9943420bef91c840b4e5ab5c2808abf33bef0cfb4",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-preflight-clippy",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "c8a0642527a12799a967b1aaf15fb7bc88422271f70f1526da46ab9ae1467c77",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-routing",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-frozen-matrix",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-final",
+      "returncode": 101,
+      "attempted_gates": 1,
+      "unstarted_gates": 16,
+      "accepted_campaign": false,
+      "failure": "runtime harness stack-overflow abort"
+    },
+    {
+      "name": "r107-stack-repro",
+      "returncode": 101,
+      "accepted_campaign": false,
+      "failure": "same named runtime test stack-overflow abort",
+      "source_snapshot_sha256": "bda35755abd624be4f99909dc9cce88839d441d73de93a353822ffd0757626dd",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-slot-stack",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "27445966e89cba84ee7194463934fe61be47bd108f4b422c7c480d781b6cbe31",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-slot-matrix",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "27445966e89cba84ee7194463934fe61be47bd108f4b422c7c480d781b6cbe31",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-slot-clippy",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "source_snapshot_sha256": "27445966e89cba84ee7194463934fe61be47bd108f4b422c7c480d781b6cbe31",
+      "source_identities": 5667
+    },
+    {
+      "name": "r107-slot-format",
+      "returncode": 0,
+      "accepted_campaign": false,
+      "expected_source_reformat": true,
+      "source_snapshot_sha256": "8644deec11b67b315f864a24e933a9e81f93a59d468408482a0cdb4cd9d49343",
+      "source_identities": 5667
+    }
+  ],
+  "initial_formatter_output_retained": false,
+  "stack_regression": {
+    "original_failure": "r107-stack-repro",
+    "accepted_pass": "r107-accepted-stack",
+    "command_unchanged": true,
+    "runner_controlled_environment_unchanged": true,
+    "explicit_runner_stack_override": false,
+    "original_ambient_stack_limits_recorded": false
+  },
+  "terminal_storage": "one fallibly preallocated slot per engine; no retention-time growth; not global allocator-count or total-memory qualification",
+  "preliminary_catalog_executed": false,
+  "configured_capacity_case": "combined byte and record saturation",
+  "no_new_formal_source": true,
+  "proof_inventory_only": true,
+  "solver_rerun": false,
+  "original_engine_composition_qualified": false,
+  "live_kfd": false,
+  "performance_measurement": false
+}

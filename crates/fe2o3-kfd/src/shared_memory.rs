@@ -2,6 +2,7 @@
 
 mod allocation;
 mod coherent_initialization;
+mod device_initialization;
 mod dispatch_retention;
 mod transitions;
 
@@ -1198,6 +1199,7 @@ struct SharedMemoryEngine<B: MemoryBackend> {
     allocations: Vec<SharedAllocationRecord<B>>,
     pending_allocation: Option<allocation::PendingSharedAllocationV1<B>>,
     terminal_transition: Option<transitions::TerminalTransitionV1>,
+    terminal_device_initialization: device_initialization::TerminalInitializationSlotV1,
     allocation_record_slots: HashMap<u64, usize>,
     next_id: u64,
     retained_gpu_va_bytes: u64,
@@ -1268,6 +1270,8 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .map_err(|_| MemorySessionError::DeviceMemoryAllocationCapacity {
                 maximum: MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1,
             })?;
+        let terminal_device_initialization =
+            device_initialization::TerminalInitializationSlotV1::new()?;
         let mut allocation_record_slots = HashMap::new();
         allocation_record_slots
             .try_reserve(MAX_SHARED_GTT_ALLOCATIONS_V1)
@@ -1301,6 +1305,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             allocations,
             pending_allocation: None,
             terminal_transition: None,
+            terminal_device_initialization,
             allocation_record_slots,
             next_id: 1,
             retained_gpu_va_bytes: 0,
@@ -1519,6 +1524,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 requested_bytes,
                 alignment,
                 flags,
+                &mut false,
             )
         })
     }
@@ -1530,6 +1536,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         requested_bytes: u64,
         alignment: u64,
         flags: KfdAllocMemoryFlags,
+        native_started: &mut bool,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
         self.require_active()?;
         if vm.device != device {
@@ -1574,6 +1581,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         // A VA attempt can be ambiguous before there is a native record to retain it.
         self.device_backing_activity_started = true;
         let backing_charge = backing_reservation.map(|reservation| reservation.retain());
+        *native_started = true;
         let reservation = match self.backend.reserve_va(reservation_bytes) {
             Ok(reservation) => reservation,
             Err(error) => return self.quarantine(error),
@@ -1693,86 +1701,51 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         })
     }
 
+    #[cfg(test)]
     fn initialize_public_device_memory(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
         source: ValidatedInitializationSourceV1,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let expected_len = source.byte_len();
-        let expected_len_usize = source.bytes().len();
-        let content = source.content();
-        if lease.layout.uapi_flags != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC
-            || content.byte_len() != expected_len
-            || u64::try_from(expected_len_usize) != Ok(expected_len)
-            || expected_len != lease.layout.requested_bytes
-        {
-            return self.quarantine(MemorySessionError::DeviceContentMismatch);
-        }
-        let (bytes, content) = source.into_parts();
-        let authenticated_source = &*bytes;
-        self.initialize_public_device_memory_after_preflight(
-            lease,
-            expected_len_usize,
-            content,
-            |mapped| copy_public_device_mapping(mapped, authenticated_source),
-            Some(authenticated_source),
+        device_initialization::finish_v1(
+            self,
+            device_initialization::DeviceInitializationCustodyV1::from_validated(lease, source),
+            None,
         )
     }
 
+    #[cfg(test)]
     fn initialize_public_device_memory_repeated_byte(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
         initialization: Gfx942RepeatedByteContentV1,
-        expected_len: usize,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let content = initialization.content();
-        if lease.layout.uapi_flags != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC
-            || content.byte_len() != lease.layout.requested_bytes
-            || u64::try_from(expected_len) != Ok(content.byte_len())
-        {
-            return self.quarantine(MemorySessionError::DeviceContentMismatch);
-        }
-        self.initialize_public_device_memory_after_preflight(
-            lease,
-            expected_len,
-            content,
-            |mapped| fill_public_device_mapping(mapped, initialization.repeated_byte()),
+        device_initialization::finish_v1(
+            self,
+            device_initialization::DeviceInitializationCustodyV1::from_repeated_lease(
+                lease,
+                initialization,
+            ),
             None,
         )
     }
 
     fn initialize_public_device_memory_after_preflight(
         &mut self,
-        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
         expected_len: usize,
-        content: Gfx942DeviceContentDescriptorV1,
         write: impl FnOnce(&mut [u8]) -> Result<(), MemorySessionError>,
         verification_source: Option<&[u8]>,
-    ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        self.with_device_backing_unwind_quarantine(|engine| {
-            engine.initialize_public_device_memory_after_preflight_inner(
-                lease,
-                expected_len,
-                content,
-                write,
-                verification_source,
-            )
-        })
-    }
-
-    fn initialize_public_device_memory_after_preflight_inner(
-        &mut self,
-        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
-        expected_len: usize,
-        content: Gfx942DeviceContentDescriptorV1,
-        write: impl FnOnce(&mut [u8]) -> Result<(), MemorySessionError>,
-        verification_source: Option<&[u8]>,
-    ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
+        stage: &mut device_initialization::DeviceInitializationStageV1,
+    ) -> Result<(), MemorySessionError> {
+        use device_initialization::DeviceInitializationStageV1 as Stage;
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Unmapped)?;
+        *stage = Stage::CpuCurrentness;
         self.check_currentness()?;
         let mapping_bytes = usize::try_from(self.device_memory[index].layout.backing_bytes)
             .map_err(|_| MemorySessionError::SizeOverflow)?;
         let mmap_offset = self.device_memory[index].mmap_offset;
+        *stage = Stage::CpuMap;
         let mapping_result = {
             let (backend, records) = (&mut self.backend, &mut self.device_memory);
             let reservation = records[index]
@@ -1786,6 +1759,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             Err(error) => return self.quarantine(error),
         };
         self.device_memory[index].mapping = Some(mapping);
+        *stage = Stage::CpuPrepare;
         let prepare_result = {
             let (backend, records) = (&mut self.backend, &mut self.device_memory);
             let mapping = records[index]
@@ -1797,6 +1771,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         if let Err(error) = prepare_result {
             return self.quarantine(error);
         }
+        *stage = Stage::CpuWrite;
         let write_result = {
             let record = &mut self.device_memory[index];
             let mapping = record
@@ -1809,6 +1784,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             return self.quarantine(error);
         }
         let verification_result = if let Some(source) = verification_source {
+            *stage = Stage::CpuVerify;
             let record = &self.device_memory[index];
             let mapping = record
                 .mapping
@@ -1823,6 +1799,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         if let Err(error) = verification_result {
             return self.quarantine(error);
         }
+        *stage = Stage::CpuUnmap;
         let unmap_result = {
             let (backend, records) = (&mut self.backend, &mut self.device_memory);
             let mapping = records[index]
@@ -1835,9 +1812,9 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             return self.quarantine(error);
         }
         self.device_memory[index].mapping = None;
+        *stage = Stage::CpuClosingCurrentness;
         self.check_currentness()?;
-        let lease = self.map_device_memory(lease)?;
-        Ok(Gfx942InitializedDeviceMemoryV1 { lease, content })
+        Ok(())
     }
 
     fn with_unmapped_public_device_memory<R>(
@@ -2079,7 +2056,19 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
-        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
+        self.map_device_memory_borrowed(
+            &lease,
+            &mut transitions::NativeTransitionProgressV1::default(),
+        )?;
+        Ok(lease.retag())
+    }
+
+    fn map_device_memory_borrowed(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Unmapped)?;
         if self.device_memory[index].mapping.is_some() {
             return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
         }
@@ -2088,7 +2077,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .handle
             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        progress.attempted = true;
         let outcome = self.backend.map_gpu(handle, 0);
+        progress.returned_success = Some(outcome.result.is_ok());
+        progress.returned_map_prefix = Some(outcome.value);
         if outcome.value > 1 {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "device-memory MAP_MEMORY_TO_GPU cumulative n_success",
@@ -2104,7 +2096,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
         self.check_currentness()?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Mapped;
-        Ok(lease.retag())
+        Ok(())
     }
 
     #[allow(clippy::result_large_err)]
@@ -4076,26 +4068,31 @@ impl ValidatedInitializationSourceV1 {
     const fn content(&self) -> Gfx942DeviceContentDescriptorV1 {
         self.content
     }
-
-    fn into_parts(self) -> (Box<[u8]>, Gfx942DeviceContentDescriptorV1) {
-        (self.bytes, self.content)
-    }
 }
 
+#[cfg(test)]
 fn validate_initialization_source(
     bytes: Box<[u8]>,
     content: Gfx942DeviceContentDescriptorV1,
 ) -> Result<ValidatedInitializationSourceV1, MemorySessionError> {
-    let byte_len = u64::try_from(bytes.len()).map_err(|_| MemorySessionError::SizeOverflow)?;
-    let sha256: [u8; 32] = Sha256::digest(&bytes).into();
-    if byte_len == 0 || content.byte_len() != byte_len || content.sha256() != sha256 {
-        return Err(MemorySessionError::DeviceContentMismatch);
-    }
+    let byte_len = validate_initialization_source_bytes(&bytes, content)?;
     Ok(ValidatedInitializationSourceV1 {
         bytes,
         byte_len,
         content,
     })
+}
+
+fn validate_initialization_source_bytes(
+    bytes: &[u8],
+    content: Gfx942DeviceContentDescriptorV1,
+) -> Result<u64, MemorySessionError> {
+    let byte_len = u64::try_from(bytes.len()).map_err(|_| MemorySessionError::SizeOverflow)?;
+    let sha256: [u8; 32] = Sha256::digest(bytes).into();
+    if byte_len == 0 || content.byte_len() != byte_len || content.sha256() != sha256 {
+        return Err(MemorySessionError::DeviceContentMismatch);
+    }
+    Ok(byte_len)
 }
 
 pub(crate) fn device_memory_layout(
@@ -4850,16 +4847,14 @@ impl SharedGttMemorySessionV1 {
         alignment: u64,
         content: Gfx942DeviceContentDescriptorV1,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let source = validate_initialization_source(bytes, content)?;
-        let requested_bytes = source.byte_len();
-        let lease = self.engine.allocate_device_memory_with_flags(
+        device_initialization::initialize_bytes_v1(
+            &mut self.engine,
             self.model_device.model_key(),
             self.vm,
-            requested_bytes,
+            bytes,
             alignment,
-            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
-        )?;
-        self.engine.initialize_public_device_memory(lease, source)
+            content,
+        )
     }
 
     /// Allocates CPU-visible device-local storage, fills its complete logical
@@ -4877,20 +4872,12 @@ impl SharedGttMemorySessionV1 {
         initialization: Gfx942RepeatedByteContentV1,
         alignment: u64,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let requested_bytes = initialization.content().byte_len();
-        let expected_len =
-            usize::try_from(requested_bytes).map_err(|_| MemorySessionError::SizeOverflow)?;
-        let lease = self.engine.allocate_device_memory_with_flags(
+        device_initialization::initialize_repeated_v1(
+            &mut self.engine,
             self.model_device.model_key(),
             self.vm,
-            requested_bytes,
-            alignment,
-            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
-        )?;
-        self.engine.initialize_public_device_memory_repeated_byte(
-            lease,
             initialization,
-            expected_len,
+            alignment,
         )
     }
 
@@ -6450,6 +6437,7 @@ pub(crate) use tests::queue_construction::{
 mod tests {
     mod allocation;
     mod device_backing;
+    mod device_initialization;
     mod device_pool;
     mod dispatch_retention;
     mod host_backing;
@@ -6525,7 +6513,9 @@ mod tests {
         reserve_va_calls: usize,
         alloc_calls: usize,
         map_cpu_calls: usize,
+        map_cpu_inputs: Vec<((u64, usize), u64, usize)>,
         map_gpu_calls: usize,
+        map_gpu_inputs: Vec<(u64, u32)>,
         unmap_gpu_calls: usize,
         multi_map_script: Vec<(u32, bool)>,
         multi_unmap_script: Vec<(u32, bool)>,
@@ -6570,7 +6560,9 @@ mod tests {
                 reserve_va_calls: 0,
                 alloc_calls: 0,
                 map_cpu_calls: 0,
+                map_cpu_inputs: Vec::new(),
                 map_gpu_calls: 0,
+                map_gpu_inputs: Vec::new(),
                 unmap_gpu_calls: 0,
                 multi_map_script: Vec::new(),
                 multi_unmap_script: Vec::new(),
@@ -6775,10 +6767,11 @@ mod tests {
         fn map_cpu(
             &mut self,
             reservation: &mut Self::Reservation,
-            _mmap_offset: u64,
+            mmap_offset: u64,
             bytes: usize,
         ) -> Result<Self::Mapping, MemorySessionError> {
             self.map_cpu_calls += 1;
+            self.map_cpu_inputs.push((*reservation, mmap_offset, bytes));
             self.operations.push("map_cpu");
             self.check("map_cpu")?;
             Ok(FakeMapping {
@@ -6816,8 +6809,9 @@ mod tests {
             mapping.writable = false;
             Ok(())
         }
-        fn map_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
+        fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
             self.map_gpu_calls += 1;
+            self.map_gpu_inputs.push((handle, old_success));
             self.operations.push("map_gpu");
             KernelOutcome {
                 value: self.map_progress,
@@ -9854,11 +9848,7 @@ mod tests {
                 .unwrap();
             engine.backend.corrupt_readback = true;
             let initialized = engine
-                .initialize_public_device_memory_repeated_byte(
-                    lease,
-                    initialization,
-                    byte_len as usize,
-                )
+                .initialize_public_device_memory_repeated_byte(lease, initialization)
                 .unwrap();
 
             assert_eq!(initialized.content(), initialization.content());
@@ -9898,7 +9888,6 @@ mod tests {
         let mut engine = acquired();
         let (device, vm) = device_vm(7);
         let byte_len = 4097_u64;
-        let initialization = repeated_content(byte_len, 0x5a);
         let lease = engine
             .allocate_device_memory_with_flags(
                 device,
@@ -9910,11 +9899,11 @@ mod tests {
             .unwrap();
 
         let result = engine.initialize_public_device_memory_after_preflight(
-            lease,
+            &lease,
             byte_len as usize,
-            initialization.content(),
             |_| Err(MemorySessionError::DeviceInitializationWriteFailed),
             None,
+            &mut crate::shared_memory::device_initialization::DeviceInitializationStageV1::Admission,
         );
 
         assert!(matches!(
@@ -9932,7 +9921,6 @@ mod tests {
         let mut engine = acquired();
         let (device, vm) = device_vm(7);
         let bytes = vec![0x5a; 4097];
-        let descriptor = content(&bytes);
         let lease = engine
             .allocate_device_memory_with_flags(
                 device,
@@ -9944,14 +9932,14 @@ mod tests {
             .unwrap();
 
         let result = engine.initialize_public_device_memory_after_preflight(
-            lease,
+            &lease,
             bytes.len(),
-            descriptor,
             |mapped| {
                 mapped[..bytes.len() - 1].copy_from_slice(&bytes[..bytes.len() - 1]);
                 Ok(())
             },
             Some(&bytes),
+            &mut crate::shared_memory::device_initialization::DeviceInitializationStageV1::Admission,
         );
 
         assert!(matches!(
@@ -10108,26 +10096,54 @@ mod tests {
     fn arbitrary_source_has_one_preflight_hash_and_parallel_exact_readback() {
         let source = include_str!("shared_memory.rs");
         let validation = source
-            .split("fn validate_initialization_source(")
+            .split("fn validate_initialization_source_bytes(")
             .nth(1)
             .unwrap()
             .split("fn device_memory_layout(")
             .next()
             .unwrap();
-        assert!(
-            validation.contains("bytes: Box<[u8]>") || validation.contains("bytes: Box<[u8]>,")
-        );
-        assert_eq!(validation.matches("Sha256::digest(&bytes)").count(), 1);
+        assert!(validation.contains("bytes: &[u8]"));
+        assert_eq!(validation.matches("Sha256::digest(bytes)").count(), 1);
 
-        let initialization = source
-            .split("fn initialize_public_device_memory(")
+        let custody = include_str!("shared_memory/device_initialization.rs");
+        let metadata = custody
+            .split("fn source_metadata(")
             .nth(1)
             .unwrap()
-            .split("fn initialize_public_device_memory_repeated_byte(")
+            .split("fn admitted(")
             .next()
             .unwrap();
-        assert!(initialization.contains("source: ValidatedInitializationSourceV1"));
+        assert!(
+            metadata
+                .find("validate_initialization_source_bytes(bytes, *content)?")
+                .unwrap()
+                < metadata.find("self.source.take()").unwrap()
+        );
+        assert!(metadata.contains("ValidatedInitializationSourceV1 {"));
+        let initialization = custody
+            .split("fn prepare_inner<")
+            .nth(1)
+            .unwrap()
+            .split("fn take_complete(")
+            .next()
+            .unwrap();
+        assert!(
+            initialization.find("self.source_metadata()?").unwrap()
+                < initialization
+                    .find("engine.allocate_device_memory_with_flags_inner(")
+                    .unwrap()
+        );
         assert!(!initialization.contains("Sha256::digest"));
+        assert!(initialization.contains("copy_public_device_mapping(mapped, source.bytes())"));
+        assert!(initialization.contains("Some(source.bytes())"));
+        assert!(
+            initialization
+                .find(".initialize_public_device_memory_after_preflight(")
+                .unwrap()
+                < initialization
+                    .find("engine.map_device_memory_borrowed(lease, &mut self.progress)?")
+                    .unwrap()
+        );
 
         let mapped_preflight = source
             .split("fn initialize_public_device_memory_after_preflight(")
@@ -10166,8 +10182,24 @@ mod tests {
             .split("pub fn initialize_gfx942_device_memory_repeated_byte(")
             .next()
             .unwrap();
-        assert!(public_entry.contains("validate_initialization_source(bytes, content)?"));
-        assert!(public_entry.contains("initialize_public_device_memory(lease, source)"));
+        assert!(public_entry.contains("device_initialization::initialize_bytes_v1("));
+        let bytes_entry = custody
+            .split("fn initialize_bytes_v1<")
+            .nth(1)
+            .unwrap()
+            .split("fn initialize_repeated_v1<")
+            .next()
+            .unwrap();
+        assert!(bytes_entry.contains("finish_v1("));
+        assert!(bytes_entry.contains("InitializationSourceV1::Unvalidated(bytes, content)"));
+        let finish = custody
+            .split("fn finish_v1<")
+            .nth(1)
+            .unwrap()
+            .split("fn initialize_bytes_v1<")
+            .next()
+            .unwrap();
+        assert!(finish.contains("custody.prepare_in_place(engine, request)?"));
     }
 
     #[test]

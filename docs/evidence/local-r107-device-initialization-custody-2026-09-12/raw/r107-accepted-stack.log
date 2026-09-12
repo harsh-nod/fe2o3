@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test kfd_backend::qualification_drain_capture::tests::caller_authority_and_missing_history_cannot_enter_copy_only_observation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.01s
+

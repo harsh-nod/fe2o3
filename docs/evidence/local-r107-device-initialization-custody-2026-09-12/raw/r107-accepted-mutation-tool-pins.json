@@ -1,0 +1,9 @@
+{
+  "recorded_at": "2026-09-12T15:53:22.081Z",
+  "pins": {
+    "r107-accepted-mutations.json": "954db03e398cd41946f2f1fb1696d94f5c8741904e330cf5adfb5c764f136a76",
+    "r107-accepted-mutation-patch.js": "7c863d16fc309e18e08f2e72dec4abf060564ab7ea23038d5340de4d9dc938ba",
+    "r107-accepted-check-mutation.js": "0c90e8656beee173abeb3a346a668270e10724ac5f00208a494e539b0c9d6575",
+    "r107-accepted-assert-frozen.js": "97a017691c85e09aac9605bce3aab40743ae1ac23095c81b37451b8f119eca82"
+  }
+}

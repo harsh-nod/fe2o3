@@ -1,0 +1,29 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0599]: the method `clone` exists for enum `Option<resource_accounting::DeviceBackingAccountV1>`, but its trait bounds were not satisfied
+   --> crates/fe2o3-kfd/src/shared_memory/tests/device_initialization.rs:136:60
+    |
+136 |         let account = memory.engine.device_backing_account.clone();
+    |                                                            ^^^^^ method cannot be called due to unsatisfied trait bounds
+    |
+   ::: crates/fe2o3-kfd/src/shared_memory/resource_accounting.rs:110:1
+    |
+110 | pub(super) struct DeviceBackingAccountV1 {
+    | ---------------------------------------- doesn't satisfy `resource_accounting::DeviceBackingAccountV1: Clone`
+    |
+   ::: /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:600:1
+    |
+600 | pub enum Option<T> {
+    | ------------------ doesn't satisfy `_: Clone`
+    |
+    = note: the following trait bounds were not satisfied:
+            `resource_accounting::DeviceBackingAccountV1: Clone`
+            which is required by `Option<resource_accounting::DeviceBackingAccountV1>: Clone`
+help: consider annotating `resource_accounting::DeviceBackingAccountV1` with `#[derive(Clone)]`
+   --> crates/fe2o3-kfd/src/shared_memory/resource_accounting.rs:110:1
+    |
+110 + #[derive(Clone)]
+111 | pub(super) struct DeviceBackingAccountV1 {
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

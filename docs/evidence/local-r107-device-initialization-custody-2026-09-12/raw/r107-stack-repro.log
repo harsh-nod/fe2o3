@@ -1,0 +1,13 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.86s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+
+thread 'kfd_backend::qualification_drain_capture::tests::caller_authority_and_missing_history_cannot_enter_copy_only_observation' (1146452) has overflowed its stack
+fatal runtime error: stack overflow, aborting
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`
+
+Caused by:
+  process didn't exit successfully: `/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-d209755ce6df5405 'kfd_backend::qualification_drain_capture::tests::caller_authority_and_missing_history_cannot_enter_copy_only_observation' --exact` (signal: 6, SIGABRT: process abort signal)
