@@ -1,5 +1,11 @@
 # A1/A2 Next-Wave Dispatch
 
+The [R105-candidate swarm breakdown](runtime-swarm-dispatch-r105-candidate.md)
+is the latest immediate dispatch: N2 is implemented but unaccepted, followed by
+N3-C coherent initialization, independent C1 Context identity and V1 issuance.
+It separates fixture integration from the required Worker V3 production join.
+The R104 acceptance and earlier planning history below remain unchanged.
+
 The renewed three-worker review is recorded on the
 [current board](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch).
 R104 locally accepts [ordinary live-rebind custody](runtime-ordinary-rebind-custody-v1.md),

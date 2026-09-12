@@ -1,5 +1,12 @@
 # Current Runtime Swarm Work Orders
 
+Latest dispatch: the [R105-candidate swarm breakdown](runtime-swarm-dispatch-r105-candidate.md)
+supersedes immediate assignment/status rows below. N2 pristine rebind is now
+implemented but unaccepted under frozen validation; Native next takes N3-C,
+Admission C1 and Resources V1. It also makes the Worker V3 production-authority
+join explicit. R104 remains the accepted runtime checkpoint; this refresh is
+planning only and does not promote the candidate or historical evidence.
+
 Execution refresh: 2026-09-12. Scope: finish A1/A2, then advance the remaining
 [issue #182 milestones](https://github.com/harsh-nod/fe2o3/issues/182).
 The issue was checked through the GitHub API and remains open; its reported
