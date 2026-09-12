@@ -9,7 +9,8 @@ detailed dependency map, but its pending-acceptance status is historical.
 This accepts the named CPU/shared-sequence matrix, not native, authenticated
 formal or performance qualification.
 
-Execution refresh: 2026-09-12. Scope: finish A1/A2, then advance the remaining
+Execution refresh: 2026-09-12, against accepted R106
+`ad6f71304ddb0f41cc102f9e6ecabd7ed7840efe`. Scope: finish A1/A2, then advance the remaining
 [issue #182 milestones](https://github.com/harsh-nod/fe2o3/issues/182).
 The issue was checked through the GitHub API and remains open; its reported
 `updatedAt` is `2026-09-12T10:51:18Z`.
@@ -37,7 +38,8 @@ Primary owns implementation, integration, tests, proof registration and signed
 publication. The first three packets are independent; shared module wiring and
 all builds remain serialized. Each worker returns a bounded source/test
 handoff, not an unreviewed concurrent edit to Context or the queue owner.
-All three source-grounded dispatch reviews are complete. Workers checked
+All three source-grounded dispatch reviews were rerun against accepted R106
+for the renewed breakdown request and are complete. Workers checked
 disjoint Native, Admission and Resources packets, made no edits and ran no
 builds or hardware jobs. The implementation packets below
 are queued work, not unattended background implementation jobs.
@@ -55,6 +57,100 @@ native leaves, not successful Linux initialization or protected execution.
 | Admission: `submission_identity_handoff` | C1: CO-2A in new `context/tests/submission_identity_tests.rs` | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. Primary owns module wiring and the missing test-backend cancel counter. |
 | Resources: `r102_evidence_review` | V1: VER-1A.2a in new `runtime-model/src/context_version_journal.rs` | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. Primary owns exports. This is model-only, not a production journal. |
 | Primary | I1: integrate N3-D, C1 and V1 with qualification gates | Retain failed attempts, run full/focused/auxiliary and compiled-negative checks, restore exact source and review evidence before signed publication to both repositories. Keep local source, model/proof, native and performance acceptance separate. |
+
+### Next Implementation Batches
+
+The three worker slots are Native, Admission and Resources; Primary is the
+fourth slot. Workers supply read-only source/test reviews by default. Primary
+owns all edits, shared wiring, test campaigns and publication. The batches below
+are assigned work orders, not claims that code is implemented or that workers
+continue running after their review returns. This refresh changes documentation
+only and adds no test, proof, hardware or performance acceptance.
+
+| Owner | Next bounded implementation batch | Required local exit |
+| --- | --- | --- |
+| Native | N3-D: one owning device initializer, borrowing the source/lease through validation, allocation, CPU initialization and final GPU map | Both accounting modes; exact original source, lease, mapping and charge; PUBLIC profile; full arbitrary-source verification; repeated-byte zero readbacks; immediate quarantine and no retry after an admitted failure |
+| Admission | C1: existing Context identity gates, starting with five coordinates across eight ingresses, then genuine cache and backend-ID reuse | Rejected handles/records/callbacks unchanged; no backend entry; consuming release returns the supplied handle; destroyed-stream and terminal/deadline/graph precedence preserved |
+| Resources | V1: constructor, existing-ID registration, exact Reserved lookup and explicit pre-effect abort only | Preallocated W-slot arena/free stack; constant-work operations without later allocation; full-key slot reuse rejection; failures leave state and watermark unchanged |
+| Primary | I1: integrate one reviewed batch at a time; separately prepare Q1/Q2/Q3 acceptance contracts | Immutable candidate source, focused/full/auxiliary checks, decisive compiled negatives, exact restoration and independent evidence review before signed pushes to both topic remotes |
+
+N3-D's next patch belongs in a private
+`crates/fe2o3-kfd/src/shared_memory/device_initialization.rs`, with Primary-owned
+`shared_memory.rs` wiring. Use an inline owning root and one bounded terminal
+slot, not another per-initialization heap allocation. Keep its in-place core
+usable by N3-L's eventual outer owner. A per-call native-attempt marker belongs
+immediately before `reserve_va`; old engine activity or quarantine is not proof
+that this call crossed that boundary. Invalid source/layout/capacity inputs are
+host-only rejections and need not be retained forever. Preserve first-currentness
+behavior separately; an ambiguous reservation attempt requires retention even
+before a device record exists. Do not fabricate an unreturned lease.
+
+The N3-D fixture must call the same complete-entry helper as production, not
+manually reconstruct validation/allocation ordering. Use an unrelated live
+anchor with spare capacity, both configured and unconfigured budgets, and exact
+account/device/VM/lease/native-argument comparisons. Device initialization leaves
+the original queue foundation unchanged. Cover all six currentness boundaries,
+allocation/map/access/readback/unmap errors and panics, and final GPU-map
+prefixes. Existing backend counters do not record all mapping arguments; add
+narrow observations before claiming exact routing. For admitted or otherwise
+terminal failures, clear injected faults only after asserting quarantine, then
+prove no additional native work or debit. Separately retain a pre-effect retry
+control: the unconfigured first-currentness panic and healthy validation/capacity
+rejections must not acquire new terminal state merely from initializer custody.
+
+C1's new `crates/fe2o3-runtime/src/context/tests/submission_identity_tests.rs`
+starts with forty coordinate/ingress rejection cells plus valid controls. Reuse
+existing validators and genuine completed/released submissions; do not reset
+records to manufacture cached states. Primary supplies module wiring and the
+missing test-backend cancel-entry counter. These are planned cases, not a new
+passing-test count.
+
+V1's new `crates/fe2o3-runtime-model/src/context_version_journal.rs` remains
+`no_std` with `alloc`, no unsafe code or I/O. Preserve the frozen construction-only
+policy, zero watermark and independent explicit A/W capacities. Register 41,
+then 44, and still resolve 41; reject unregistered 42, replay after abort/reuse,
+foreign coordinates and invalid integer limits. Dropped references retain
+capacity. This batch does not implement Begin, settlement, a production Context
+journal or another ID allocator.
+
+### Dependency Checks
+
+| Work | Ready independently | Actual integration prerequisite |
+| --- | --- | --- |
+| N4-R lower cleanup | Contract/source review and then its bounded implementation | N4-L live cleanup and N4-QA/QP teardown consume the lower cleanup contracts; they need not wait for C1 or V1 |
+| C2 descriptor identity; C3 reply custody | Both test packets are ready now; C1-first is scheduling only | Joint I2 consumes C1/C2 and the preissue C3 contract/oracles |
+| V4 journal proofs | Start with stable V1 definitions, extend as V2/V3 land | Complete proof acceptance covers membership/settlement too; inventory checks are not solver evidence |
+| V5 production journal | Adapter implementation can start once V1-V3 contracts are stable | Production verification needs authenticated model proofs plus correspondence for the actual commit, not just an unused hook |
+| M1 domains; M2 cost inventory; M3 host-image ceiling | Domain design, backing/control cost work and the isolated host-image ceiling can start now | Aggregate claims need integrated domains; native residency needs backing/control ownership; total M4 closure includes concrete journals and leases |
+| I2 non-reusing generated ISSUE | Freeze the mutation-hook contract before integration | N5 DATA-ADOPT plus C1/C2/C3; full V7/V8 reuse is not a prerequisite |
+| C6 generated GRAPH/DRAIN | Extend existing ordinary graph/drain contracts | Real generated ISSUE/COMPLETE is required; C5-first is the planned API order, not a separate semantic prerequisite |
+| Cross-run input reuse | Contract/model work can proceed with the journal lane | Complete V7 mutation coverage/ordered writers/recovery and V8 exact input leases before enabling reuse |
+
+At this source checkpoint, the proposed C1/C2/C3 test files and V1 model remain
+absent. Existing ordinary typed async launch, graph/drain, identity validators,
+resource credits and native budgets must be extended, not replaced.
+
+### Primary Qualification Packets
+
+| Packet | Concrete next work | Completion boundary |
+| --- | --- | --- |
+| Q1: adapter correspondence | Map each production transition to its shared model definition and owned resource projection; register property-specific proofs/negatives as each adapter lands | Authenticated source/tool/runner/transcript identities and explicit external contracts; abstract proof success alone cannot close native ownership |
+| Q2: native resource qualifier | Add the missing N1/N2/cache-budget example, runner and checker using the existing budget configuration APIs; qualify exact charges, pressure, teardown and currentness prefixes | Actual original-engine Linux/KFD observations, configured limits and retained failures; existing R66/drain runs do not exercise these optional budgets |
+| Q2 reliability follow-up | Reproduce R103's default-concurrency musl watchdog failures under recorded load/concurrency | Preserve original failures; distinguish scheduler delay from runtime behavior without weakening deadlines or treating filtered reruns as full-suite acceptance |
+| Q3: matched performance | Freeze comparable kernels, complete-output oracles, residency/copy semantics, sizes, in-flight depth, warmup and thresholds before tuning KFD/HIP/HSA producers | Report workload-scoped latency, throughput, bandwidth, CPU/memory and tails with raw repetitions; device timelines establish physical overlap, not host queue depth |
+
+Worker V3/compiler ownership is a separate production gate, not a fourth
+background worker. The generated preparation path still supplies no production
+adoption hooks, and the host admission module ships no concrete semantic-to-machine
+refinement backend or owned proof artifacts. Primary coordinates that dependency
+with the owning teams; a fabricated receipt or passing fixture cannot enable
+protected execution. Later A3-A7 and the external issue handoffs below retain
+their own acceptance criteria.
+
+MI300X scheduling stays Primary-owned: check availability, use task-owned staging
+and processes, archive results, and remove only those resources. Disruptive fault
+tests need an isolated window. No SSH, GPU job or solver run is part of this
+dispatch refresh.
 
 The refreshed bounded handoffs add these implementation constraints:
 
