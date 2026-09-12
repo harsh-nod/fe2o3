@@ -10,13 +10,26 @@ campaign's 60 ms chronology rejection is preserved, not silently accepted.
 This adds CPU/shared-sequence acceptance only, not native, new formal or
 performance qualification.
 
-The latest assignments are **Native N3-C coherent initialization**, independent
-**Admission C1 Context identity** and **Resources V1 writer issuance** on the
+R106/N3-C coherent initialization is implemented but **unaccepted**. Ten
+same-foundation initializer tests, eight borrowed-initialization regressions
+and strict Clippy pass preliminarily. Full frozen/focused/auxiliary gates,
+compiled negatives, exact restoration, evidence review and runtime publication
+remain pending. This documentation-only refresh does not publish that candidate.
+
+The renewed assignments are **Primary R106 acceptance**, **Native N3-D device
+initialization and N4-R lower-cleanup review**, independent **Admission C1 Context
+identity** and **Resources V1 writer issuance** on the
 [current board](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch).
-Three read-only workers completed bounded implementation/test handoffs; Primary
-owns edits, integration, serialized gates and signed publication. N3-C must
-include `shared_memory/transitions.rs` and same-foundation initializer tests.
-Q2 retains the missing native N1/N2/cache budget qualifier/example/checker.
+Three read-only workers completed source-grounded dispatch reviews; Primary
+owns edits, integration, serialized gates and signed publication. C2 descriptor
+identity, C3 reply/custody tests, M1 domain design and M3 host-image ceilings are
+also independently ready. The same three worker slots rotate through them.
+
+The critical path is N3-C/D -> N3-L, alongside N4 lower/live/returning cleanup,
+then N5 DATA-ADOPT -> I2 ISSUE -> C4 COMPLETE -> C5 generated API -> C6 generated
+GRAPH/DRAIN. I2 also needs C1/C2/C3 and the specified mutation hook. Cross-run
+reuse additionally needs complete V7/V8. Q2 retains the missing native
+N1/N2/cache budget qualifier/example/checker.
 The [R105-candidate breakdown](runtime-swarm-dispatch-r105-candidate.md) remains
 the dependency map, with its pending-acceptance wording now historical. It
 separates fixture integration from the required Worker V3 production join.
