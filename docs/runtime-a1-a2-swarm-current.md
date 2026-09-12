@@ -1,5 +1,12 @@
 # Current Runtime Swarm Work Orders
 
+For the latest concise assignments, dependencies and exit tests, use
+[Runtime Swarm: Remaining Packets](runtime-swarm-next-packets.md).
+Three read-only reviews checked accepted R108 and the dirty R109 candidate on
+2026-09-12. R109/N3-L1 remains uncompiled and unvalidated; its source is preserved
+unchanged by this planning refresh. The next implementation steps include its
+session-attribute/module-path fixes and constructed-engine composition tests.
+
 Latest checkpoint: R108 locally accepts [V1 Context writer issuance](runtime-context-version-journal-v1.md#r108-issuance-acceptance),
 with [retained evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
 Native next takes N3-L1 live insertion, Admission C1 and Resources V2 membership.
