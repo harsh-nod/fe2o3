@@ -1,0 +1,81 @@
+node:assert:150
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: linux-helpers exact passing roster
++ actual - expected
+... Skipped lines
+
+  [
+    'queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime',
+    'queue_linux::tests::checked_creation_finish_disarms_once_after_runtime_admission',
+    'queue_linux::tests::destroy_event_setter_owns_the_wire_record_not_reference_bytes',
+    'queue_linux::tests::payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup',
+...
+    'queue_linux::tests::shadow_plan_is_exact_and_hostile_geometry_fails_closed',
+-   'queue_linux::tests::teardown_arm_attempt_after_admission_check_linearizes_after_lease',
+    'queue_linux::tests::terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success',
+    'queue_linux::tests::terminal_teardown_arm_clears_only_after_confirmed_success',
+    'queue_linux::tests::terminal_unpublished_cleanup_failure_aborts_instead_of_losing_custody',
+    'queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication',
+    'queue_linux::tests::timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state',
+
+    at Object.<anonymous> (/home/harsh/.codex-tmp/r108-retain-local.js:98:14)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [
+    'queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime',
+    'queue_linux::tests::checked_creation_finish_disarms_once_after_runtime_admission',
+    'queue_linux::tests::destroy_event_setter_owns_the_wire_record_not_reference_bytes',
+    'queue_linux::tests::payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup',
+    'queue_linux::tests::payload_release_failure_after_event_destroy_is_process_terminal',
+    'queue_linux::tests::process_runtime_context_multiplexes_independent_queue_leases',
+    'queue_linux::tests::process_runtime_context_rejects_cross_process_and_poisoned_joins',
+    'queue_linux::tests::queue_exception_observation_cannot_be_reused',
+    'queue_linux::tests::runtime_queue_event_order_is_linear_and_hostile_reordering_fails',
+    'queue_linux::tests::shadow_plan_is_exact_and_hostile_geometry_fails_closed',
+    'queue_linux::tests::terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success',
+    'queue_linux::tests::terminal_teardown_arm_clears_only_after_confirmed_success',
+    'queue_linux::tests::terminal_unpublished_cleanup_failure_aborts_instead_of_losing_custody',
+    'queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication',
+    'queue_linux::tests::timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state',
+    'queue_linux::tests::unpublished_custody_cleanup_failure_is_process_terminal',
+    'queue_linux::tests::unpublished_custody_unmaps_payload_on_early_return',
+    'queue_linux::tests::unpublished_payload_is_unmapped_when_final_admission_fails',
+    'queue_linux::tests::wait_and_payload_must_agree_and_unknown_reasons_are_rejected'
+  ],
+  expected: [
+    'queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime',
+    'queue_linux::tests::checked_creation_finish_disarms_once_after_runtime_admission',
+    'queue_linux::tests::destroy_event_setter_owns_the_wire_record_not_reference_bytes',
+    'queue_linux::tests::payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup',
+    'queue_linux::tests::payload_release_failure_after_event_destroy_is_process_terminal',
+    'queue_linux::tests::process_runtime_context_multiplexes_independent_queue_leases',
+    'queue_linux::tests::process_runtime_context_rejects_cross_process_and_poisoned_joins',
+    'queue_linux::tests::queue_exception_observation_cannot_be_reused',
+    'queue_linux::tests::runtime_queue_event_order_is_linear_and_hostile_reordering_fails',
+    'queue_linux::tests::shadow_plan_is_exact_and_hostile_geometry_fails_closed',
+    'queue_linux::tests::teardown_arm_attempt_after_admission_check_linearizes_after_lease',
+    'queue_linux::tests::terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success',
+    'queue_linux::tests::terminal_teardown_arm_clears_only_after_confirmed_success',
+    'queue_linux::tests::terminal_unpublished_cleanup_failure_aborts_instead_of_losing_custody',
+    'queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication',
+    'queue_linux::tests::timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state',
+    'queue_linux::tests::unpublished_custody_cleanup_failure_is_process_terminal',
+    'queue_linux::tests::unpublished_custody_unmaps_payload_on_early_return',
+    'queue_linux::tests::unpublished_payload_is_unmapped_when_final_admission_fails',
+    'queue_linux::tests::wait_and_payload_must_agree_and_unknown_reasons_are_rejected'
+  ],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

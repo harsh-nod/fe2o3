@@ -1,0 +1,68 @@
+{
+  "source_head": "f767fad35d24f585e8ecb95558bce97a9d543cfe",
+  "source_map_sha256": "00ad70fa242bd61b68b1571e04401718205cb7acdc2f88b1decdd054b7442dbd",
+  "manifest_sha256": "9546d244a3e286f9ab6bf9273dce44b6ecccc904561f451f9bf2c15934f1b043",
+  "started_at": "2026-09-12T17:41:09.351Z",
+  "finished_at": "2026-09-12T17:41:27.348Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--lib",
+    "context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r108-clock-mut-slot-only.log",
+  "source": "/home/harsh/.codex-tmp/r108-clock-mut-slot-only-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 17.996819178,
+  "verification_elapsed_seconds": 0.241855652,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r108-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r108-clock-restoration-capacity-watermark.json",
+      "sha256": "07ee57bed560718d278bfc1859764eb7faa2959a78c00ff1a53207c6e7812824",
+      "field": "verified_at",
+      "utc_ms": 1789234868199
+    },
+    "start": {
+      "floor_ms": 1789234868199,
+      "samples": [
+        {
+          "utc_ms": 1789234869351,
+          "monotonic_ns": "31426835442574"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789234887348,
+      "monotonic_ns": "31444832261752"
+    },
+    "source_verified": {
+      "utc_ms": 1789234887590,
+      "monotonic_ns": "31445074117404"
+    },
+    "error": null
+  }
+}

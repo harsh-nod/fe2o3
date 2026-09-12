@@ -1,0 +1,167 @@
+{
+  "recorded_at": "2026-09-12T16:45:39.772Z",
+  "publication_parent": "f767fad35d24f585e8ecb95558bce97a9d543cfe",
+  "accepted_runtime_checkpoint": "589c6f6fd90048643a57cc4d0e250cb9698550a6",
+  "recorded_phase": "Before frozen/full/auxiliary/mutation gates; after retained preliminary formatting, tests and lint. No host-load or native qualification.",
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "cargo 1.96.0-nightly (888f67534 2026-03-30)\nrelease: 1.96.0-nightly\ncommit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51\ncommit-date: 2026-03-30\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]\n"
+    },
+    {
+      "command": [
+        "rustc",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "rustc 1.96.0-nightly (55e86c996 2026-04-02)\nbinary: rustc\ncommit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9\ncommit-date: 2026-04-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2\n"
+    },
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "output": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "output": "v22.22.1\n"
+    },
+    {
+      "command": [
+        "git",
+        "--version"
+      ],
+      "output": "git version 2.43.0\n"
+    },
+    {
+      "command": [
+        "uname",
+        "-srmo"
+      ],
+      "output": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "cargo",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3"
+    },
+    {
+      "name": "rustc",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950"
+    }
+  ],
+  "runners": [
+    {
+      "name": "r108-run.js",
+      "sha256": "2e5152c43e827991aea938f5b67de9785e91612089690947ac18f9abc4afaa31"
+    },
+    {
+      "name": "r108-source-gate.py",
+      "sha256": "bc9a0bd16b86af3fd44075473fe8a6c70a1b3a69bcfada1297d2839042664c1e"
+    },
+    {
+      "name": "r108-auxiliary-gates.py",
+      "sha256": "bf519fe742667529976b1e9d20daf4935a33e0bfd6397dc99424c30175f51b5a"
+    },
+    {
+      "name": "r108-freeze.js",
+      "sha256": "cf6e90c1ac81040db238eff39105deac612523395eb371be8cfe218552920bed"
+    }
+  ],
+  "environment_overrides": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "test_deadlines_changed": false,
+  "hardware_qualification": false,
+  "solver_rerun": false,
+  "ambient_stack": {
+    "RUST_MIN_STACK": null,
+    "command": [
+      "bash",
+      "-c",
+      "ulimit -s"
+    ],
+    "output": "8192\n"
+  },
+  "prior_artifacts": [
+    {
+      "name": "r108-boundary-format-source.json",
+      "sha256": "7c97ca48e39338c3bd966e28b832b5f855704434fb93e760bc2580ec15a8aa16"
+    },
+    {
+      "name": "r108-boundary-format.json",
+      "sha256": "9cfba24799d711a1ba2b0667f9336db0ca7cb872944d726a429b3004b814270d"
+    },
+    {
+      "name": "r108-boundary-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r108-initial-clippy-source.json",
+      "sha256": "2a496137572971a37d77936bd5e2ddcc5fd65febbcc31199c0e7a30acd3ab314"
+    },
+    {
+      "name": "r108-initial-clippy.json",
+      "sha256": "a0b4914791b519efb0080f978d01e9250dc746f49783a80982974b226e437b64"
+    },
+    {
+      "name": "r108-initial-clippy.log",
+      "sha256": "b91edfc786c085ecf087fdd94363244d052ff53aece3c4ad9269977fe879841c"
+    },
+    {
+      "name": "r108-initial-format-source.json",
+      "sha256": "d8c350f17c7bf130c93b48e229548e106762ebfea019db3489a048ec169685c4"
+    },
+    {
+      "name": "r108-initial-format.json",
+      "sha256": "6ab234375a5eee25db85073783a5347de08a03d73e1e8b57a9f14d12f5537168"
+    },
+    {
+      "name": "r108-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r108-initial-model-source.json",
+      "sha256": "2a496137572971a37d77936bd5e2ddcc5fd65febbcc31199c0e7a30acd3ab314"
+    },
+    {
+      "name": "r108-initial-model.json",
+      "sha256": "114f3cf96dfa0e7897fa5e01575721add005f1b937df37496dce303f621e8a3c"
+    },
+    {
+      "name": "r108-initial-model.log",
+      "sha256": "b6c54c3843a43232455a4d8f361a49f47231de153e63cc478bd315e7f9c85285"
+    },
+    {
+      "name": "r108-unmasked-format-source.json",
+      "sha256": "aa6c8127e9ee093bbea3fb494c1cf6b8b2a0e2d1180e5158af45086fc88881e4"
+    },
+    {
+      "name": "r108-unmasked-format.json",
+      "sha256": "a5190f4ff69c3de9ce8f421833f54444a5766ed5305db73462e07f339947b843"
+    },
+    {
+      "name": "r108-unmasked-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

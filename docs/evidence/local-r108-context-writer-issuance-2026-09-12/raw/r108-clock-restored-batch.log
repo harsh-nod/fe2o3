@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 6 tests
+test r70_resource_batch::tests::complete_owner_interval_and_record_roster_must_fit ... ok
+test r70_resource_batch::tests::aggregate_boundary_product_matches_wider_integer_oracle ... ok
+test r70_resource_batch::tests::complete_roster_preserves_every_member_and_owner_interval ... ok
+test r70_resource_batch::tests::final_member_and_final_dimension_are_not_omitted ... ok
+test r70_resource_batch::tests::individually_valid_members_cannot_wrap_the_aggregate ... ok
+test r70_resource_batch::tests::member_count_has_explicit_empty_and_upper_bound_rejections ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 728 filtered out; finished in 0.01s
+

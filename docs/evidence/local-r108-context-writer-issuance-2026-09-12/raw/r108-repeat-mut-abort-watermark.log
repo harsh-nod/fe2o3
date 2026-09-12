@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.16s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys ... FAILED
+
+failures:
+
+---- context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys stdout ----
+
+thread 'context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys' (1401095) panicked at crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:176:5:
+assertion `left == right` failed
+  left: 43
+ right: 44
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`

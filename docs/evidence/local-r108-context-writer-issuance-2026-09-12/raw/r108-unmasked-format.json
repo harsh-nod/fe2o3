@@ -1,0 +1,25 @@
+{
+  "source_head": "f767fad35d24f585e8ecb95558bce97a9d543cfe",
+  "started_at": "2026-09-12T16:44:33.804Z",
+  "finished_at": "2026-09-12T16:44:58.133Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "fmt",
+    "--all"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r108-unmasked-format.log",
+  "source": "/home/harsh/.codex-tmp/r108-unmasked-format-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 26.075838018,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

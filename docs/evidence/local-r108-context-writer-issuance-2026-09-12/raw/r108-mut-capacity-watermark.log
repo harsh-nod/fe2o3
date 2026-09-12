@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.17s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark ... FAILED
+
+failures:
+
+---- context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark stdout ----
+
+thread 'context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark' (1377709) panicked at crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:85:5:
+assertion `left == right` failed
+  left: Snapshot { context: 7, capacities: (17, 1), watermark: 44, reserved: [Some(ContextWriterKeyV1 { context_generation: 7, local: 41, kind: Synchronous })], free: [], storage: ((99886433732992, 1), (99886433726400, 1)) }
+ right: Snapshot { context: 7, capacities: (17, 1), watermark: 41, reserved: [Some(ContextWriterKeyV1 { context_generation: 7, local: 41, kind: Synchronous })], free: [], storage: ((99886433732992, 1), (99886433726400, 1)) }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`

@@ -1,5 +1,17 @@
 # A1/A2 Next-Wave Dispatch
 
+R108 locally accepts [V1 Context writer issuance](runtime-context-version-journal-v1.md#r108-issuance-acceptance),
+with [retained evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary gates and twelve clock-qualified compiled
+negatives pass. GNU/musl each pass 2,605 tests with five ignored across 48
+harnesses; frozen/fresh-restored model, credit and batch suites pass 11/11, 3/3
+and 6/6. All 5,669 source identities are restored. Both rejected mutation cohorts
+and the original auxiliary roster rejection remain preserved. The tested
+evidence-clock contract uses actual UTC observations and bounded monotonic waits,
+not rewritten timestamps or weakened test deadlines. This is model-only local
+acceptance, not a production journal, authenticated proof, native or performance
+result.
+
 R107 locally accepts [N3-D device initialization custody](runtime-device-initialization-custody-v1.md),
 with [retained evidence](evidence/local-r107-device-initialization-custody-2026-09-12/README.md).
 Seventeen source gates, ten auxiliary checks and nine compiled negatives pass;
@@ -10,17 +22,18 @@ abort remain preserved. The corrected slot is preallocated once per engine,
 not per initializer; the same runtime test now passes. No new solver, native or
 performance acceptance is added.
 
-Immediate packets are **Native N3-L initialized-device insertion**, independent
-**Admission C1 identity** and **Resources V1 issuance**, with Primary owning
-integration and qualification. V1 is now an uncommitted R108 model candidate,
-formatted but not compiled, tested or accepted. The refreshed
+Immediate packets are **Native N3-L1 initialized-device insertion**, independent
+**Admission C1 identity** and **Resources V2 membership/Begin**, with Primary
+owning integration and qualification. V1's constructor, existing-ID registration,
+exact Reserved lookup and pre-effect abort are now locally accepted. The refreshed
 [current assignments](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch)
-split Native into device/coherent/uninitialized insertion and retain the V1
-review gaps before qualification. Three read-only dispatch reviews are complete;
+split Native into device/coherent/uninitialized insertion and advance Resources
+to whole-roster membership. Three read-only dispatch reviews are complete;
 the implementation queue is not an unattended background job. The
 [N3-L handoff](runtime-device-initialization-custody-v1.md#next-live-integration)
 keeps completed owners through retake and commits before extraction. Coherent
-insertion still needs its own external composite root. The R106 and earlier
+insertion still needs its own external composite root. V3 settlement, V4 proofs
+and V5 production integration remain separate packets. The R106 and earlier
 dispatch text below remains historical.
 
 R106 locally accepts [N3-C coherent initialization custody](runtime-borrowed-coherent-initialization-v1.md#owning-copy-extension),

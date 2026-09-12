@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-09-12T16:47:07.612Z",
+  "pins": {
+    "r108-mutations.json": "85073f0e5a39fdae6bd3851a4446d06f6f3770ae313c978558825225d7e32497",
+    "r108-prepare-mutations.js": "65432b639adef05044c97ee56b5e4906c4318c106b6208c6a932b82704addad7",
+    "r108-mutation-patch.js": "9f226fcfbc9ad73e5c078768194878bc24463d72b052c89e84c53c01ef7ec11a",
+    "r108-check-mutation.js": "c319dd241d96f2003ccc8a84c2e2ea3b622c0f0978507a5ad445cb3a989a89ca",
+    "r108-assert-frozen.js": "fb52685c0608675215fa04896582ed025bac5af835d7c4418759118521c0d4c4"
+  }
+}

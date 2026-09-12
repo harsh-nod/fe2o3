@@ -1,0 +1,19 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.14s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 11 tests
+test context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max ... ok
+test context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys ... ok
+test context_version_journal::tests::existing_ids_preserve_gaps_and_older_reserved_lookup_and_abort ... ok
+test context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution ... ok
+test context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark ... ok
+test context_version_journal::tests::internal_slot_and_capacity_invariants_reject_before_mutation ... ok
+test context_version_journal::tests::runtime_identity_and_operation_routing_contract_is_explicit ... ok
+test context_version_journal::tests::constructor_has_explicit_independent_bounds_and_zero_watermark ... ok
+test context_version_journal::tests::short_traces_match_independent_active_writer_map ... ok
+test context_version_journal::tests::rejection_work_is_bounded_in_full_journals ... ok
+test context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 3.31s
+

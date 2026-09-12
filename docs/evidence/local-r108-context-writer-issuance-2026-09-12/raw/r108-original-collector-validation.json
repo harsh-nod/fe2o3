@@ -1,0 +1,24 @@
+{
+  "source_head": "f767fad35d24f585e8ecb95558bce97a9d543cfe",
+  "started_at": "2026-09-12T17:13:19.833Z",
+  "finished_at": "2026-09-12T17:13:20.615Z",
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r108-retain-local.js",
+    "--check"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r108-original-collector-validation.log",
+  "source": "/home/harsh/.codex-tmp/r108-original-collector-validation-source.json",
+  "source_unchanged": true,
+  "returncode": 1,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 1.07427483,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

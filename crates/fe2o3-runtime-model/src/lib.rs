@@ -19,6 +19,7 @@ extern crate std;
 
 mod async_queue;
 mod closed_execution;
+mod context_version_journal;
 mod device_identity;
 mod device_local;
 mod device_projection;
@@ -83,6 +84,7 @@ mod typed_async;
 
 pub use async_queue::*;
 pub use closed_execution::*;
+pub use context_version_journal::*;
 pub use device_identity::*;
 pub use device_local::*;
 pub use device_projection::*;

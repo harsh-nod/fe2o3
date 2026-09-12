@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 3 tests
+test r67_resource_credits::tests::record_transitions_reject_stale_owner_and_quarantine_refunds ... ok
+test r67_resource_credits::tests::vector_admission_and_release_check_every_dimension_before_returning ... ok
+test r67_resource_credits::tests::vector_boundary_arithmetic_matches_wide_model ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 731 filtered out; finished in 0.00s
+

@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.23s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max ... FAILED
+
+failures:
+
+---- context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max stdout ----
+
+thread 'context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max' (1380599) panicked at crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:84:5:
+assertion `left == right` failed
+  left: Ok(ContextWriterReferenceV1 { slot: 0, key: ContextWriterKeyV1 { context_generation: 18446744073709551614, local: 18446744073709551615, kind: Submission } })
+ right: Err(InvalidWriterId)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`

@@ -2,23 +2,59 @@
 
 ## Status And Scope
 
-VER-1A.1 contract/inventory against signed R97
-`1b53ef417d0f4184e2b4e6024b37271b5f719832`. No Context-wide journal, new
-executable model, formal theorem or cross-run lease implementation is claimed.
+R108 locally accepts VER-1A.2a's bounded writer-issuance model, with
+[retained source/test evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
+No production Context-wide journal, new formal theorem or cross-run lease
+implementation is claimed.
 Existing R65 graph versions remain graph-local history. This journal records
 mutation lineage, not initialized contents, native currentness, disposal
 authority or successful kernel semantics.
 
-R98 accepts this [contract/inventory only](evidence/local-r98-completion-contract-2026-09-11/README.md).
-The next Resources deliverable is VER-1A.2's executable model and property
-proofs. It remains model-only until the bounded Context journal consumes it
-in VER-1A.3.
+R98 accepted the [contract/inventory only](evidence/local-r98-completion-contract-2026-09-11/README.md)
+against signed R97 `1b53ef417d0f4184e2b4e6024b37271b5f719832`.
+Resources next implements V2/.2b allocation membership and Begin, followed by
+V3 settlement and V4 authenticated proofs. The model remains separate from the
+actual bounded Context journal and its correspondence in V5/VER-1A.3.
 
 VER-1A first provides an explicitly opt-in bounded profile. It must not silently
 restrict existing ordinary-runtime behavior. Complete VER-1B hook coverage,
 bounded ordered writers and recovery are required before enabling persistent
 reuse across the ordinary surface. These are requirements, not optional
 optimizations to be dropped when the initial journal passes tests.
+
+### R108 Issuance Acceptance
+
+The `no_std`/`alloc` model preallocates W Reserved-writer slots and a free stack;
+A remains independently bounded configuration until V2. It consumes inert
+projections of existing Context IDs, not runtime authority or a second allocator.
+Successful registration advances a monotonic watermark; exact full-key lookup
+and pre-effect abort still accept an older live reservation. Abort and rejected
+registration never roll the watermark back. Discarding a Copy reference does
+not free its retained slot. Production tickets must instead be privately issued
+and move-only, with authentic Context extraction and construction-only opt-in.
+
+Eleven tests cover independent bounds, integer edges, gaps/replays, substitution,
+capacity retention, exact rejection snapshots and independently exposed internal
+capacity guards. A separate BTreeMap oracle checks 13,122 nine-action/depth-four
+traces (52,488 steps), for W=1 and W=3. This is a finite domain, not all traces.
+Counted successful registration/lookup/abort use 4/1/3 indexed primitives;
+empty, half-full and nearly-full controls also preserve Vec pointers/capacities.
+The counters and textual guard are not a general complexity proof or allocator
+measurement. Constructor allocation failure is source-reviewed, not injected.
+
+Seventeen source gates, ten auxiliary gates, exact frozen/restored 11/3/6
+suites and twelve clock-qualified compiled negatives pass. GNU and musl each
+pass 2,605 tests with five ignored across 48 harnesses. All 5,669 source identities
+are restored. Earlier rejected evidence and the corrected evidence-clock contract
+are retained; no test deadline was relaxed. No solver or hardware run is added.
+
+V2 must preserve `reserved_writer_count` as a Reserved-only count when Pending
+and Unknown records are introduced. V4 must establish exact free/vacant and
+membership partitions, unique local IDs across kinds, the maximum-ever-registered
+watermark rather than maximum-live ID, unrelated-slot framing and nonwrapping
+bounds. Rust Vec indexing, allocation-free commit, authentic identity extraction
+and production ownership correspondence require their own evidence. Neither the
+model nor proof inventory supplies those conclusions automatically.
 
 ### R103 Planning Freeze
 

@@ -1,0 +1,219 @@
+[
+  {
+    "name": "lookup-watermark",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::existing_ids_preserve_gaps_and_older_reserved_lookup_and_abort",
+    "oracle": "Older Reserved identity survives newer registrations",
+    "oracle_line": 153,
+    "edits": [
+      [
+        "key == reference.key && key.context_generation == self.context_generation",
+        "key == reference.key && key.context_generation == self.context_generation && key.local == self.registration_watermark"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:153:",
+      "left: Err(InvalidReference)",
+      "local: 41"
+    ]
+  },
+  {
+    "name": "abort-watermark",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys",
+    "oracle": "Abort preserves the maximum ever registered",
+    "oracle_line": 176,
+    "edits": [
+      [
+        "self.push_free(reference.slot);",
+        "self.push_free(reference.slot); self.registration_watermark = reference.key.local - 1;"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:176:",
+      "left: 43",
+      "right: 44"
+    ]
+  },
+  {
+    "name": "capacity-watermark",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark",
+    "oracle": "Full-capacity rejection preserves the entire snapshot",
+    "oracle_line": 85,
+    "edits": [
+      [
+        "let slot = self\n            .next_free()",
+        "self.registration_watermark = key.local;\n        let slot = self\n            .next_free()"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:85:",
+      "Snapshot",
+      "watermark: 44",
+      "watermark: 41"
+    ]
+  },
+  {
+    "name": "slot-only",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution",
+    "oracle": "Stale reference cannot resolve a reused slot",
+    "oracle_line": 91,
+    "edits": [
+      [
+        "key == reference.key && key.context_generation == self.context_generation",
+        "key.context_generation == self.context_generation"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:91:",
+      "left: Ok(",
+      "local: 47",
+      "right: Err(InvalidReference)"
+    ]
+  },
+  {
+    "name": "omit-kind",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution",
+    "oracle": "Writer kind is part of exact identity",
+    "oracle_line": 91,
+    "edits": [
+      [
+        "key == reference.key && key.context_generation == self.context_generation",
+        "key.context_generation == reference.key.context_generation && key.local == reference.key.local && key.context_generation == self.context_generation"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:91:",
+      "left: Ok(",
+      "local: 47",
+      "right: Err(InvalidReference)"
+    ]
+  },
+  {
+    "name": "retain-free-slot",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark",
+    "oracle": "Registration consumes its exact free slot",
+    "oracle_line": 70,
+    "edits": [
+      [
+        "let _ = self.free.pop();",
+        "let _ = self.free.last();"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:70:",
+      "occupied slot on free stack"
+    ]
+  },
+  {
+    "name": "reject-max-minus-one",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max",
+    "oracle": "Existing checked-add allocator can issue MAX-1",
+    "oracle_line": 277,
+    "edits": [
+      [
+        "value != 0 && value != u64::MAX",
+        "value != 0 && value < u64::MAX - 1"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:277:",
+      "called `Result::unwrap()` on an `Err` value: InvalidContextGeneration"
+    ]
+  },
+  {
+    "name": "admit-max",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max",
+    "oracle": "MAX cannot be registered as an issued identity",
+    "oracle_line": 84,
+    "edits": [
+      [
+        "value != 0 && value != u64::MAX",
+        "value != 0"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:84:",
+      "left: Ok(",
+      "local: 18446744073709551615",
+      "right: Err(InvalidWriterId)"
+    ]
+  },
+  {
+    "name": "linear-lookup",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow",
+    "oracle": "Dynamic lookup uses exactly one counted primitive",
+    "oracle_line": 324,
+    "edits": [
+      [
+        "match self.read_slot(reference.slot).copied().flatten() {",
+        "for slot in 0..self.writer_capacity { let _ = self.read_slot(slot); }\n        match self.read_slot(reference.slot).copied().flatten() {"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:324:",
+      "left: 2",
+      "right: 1"
+    ]
+  },
+  {
+    "name": "registration-growth",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow",
+    "oracle": "Storage capacity and pointers remain constructor-fixed",
+    "oracle_line": 328,
+    "edits": [
+      [
+        "self.pop_free();",
+        "self.reserved.reserve_exact(self.reserved.capacity() + 1); self.pop_free();"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:328:",
+      "assertion `left == right` failed"
+    ]
+  },
+  {
+    "name": "omit-writer-capacity",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::internal_slot_and_capacity_invariants_reject_before_mutation",
+    "oracle": "Logical-capacity guard rejects despite spare backing capacity",
+    "oracle_line": 407,
+    "edits": [
+      [
+        "if self.free.len() >= self.writer_capacity || self.free.len() >= self.free.capacity() {",
+        "if self.free.len() >= self.free.capacity() {"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:407:",
+      "left: Ok(())",
+      "right: Err(InvalidState)"
+    ]
+  },
+  {
+    "name": "omit-storage-capacity",
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "test": "context_version_journal::tests::internal_slot_and_capacity_invariants_reject_before_mutation",
+    "oracle": "Storage-capacity guard prevents an allocating abort",
+    "oracle_line": 407,
+    "edits": [
+      [
+        "if self.free.len() >= self.writer_capacity || self.free.len() >= self.free.capacity() {",
+        "if self.free.len() >= self.writer_capacity {"
+      ]
+    ],
+    "expected": [
+      "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:407:",
+      "left: Ok(())",
+      "right: Err(InvalidState)"
+    ]
+  }
+]

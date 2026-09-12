@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.46s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution ... FAILED
+
+failures:
+
+---- context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution stdout ----
+
+thread 'context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution' (1469336) panicked at crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:91:5:
+assertion `left == right` failed
+  left: Ok(ContextWriterKeyV1 { context_generation: 7, local: 47, kind: Synchronous })
+ right: Err(InvalidReference)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`

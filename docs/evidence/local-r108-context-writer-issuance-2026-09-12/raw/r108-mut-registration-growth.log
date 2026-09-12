@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.79s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow ... FAILED
+
+failures:
+
+---- context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow stdout ----
+
+thread 'context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow' (1381966) panicked at crates/fe2o3-runtime-model/src/context_version_journal/tests.rs:328:17:
+assertion `left == right` failed
+  left: ((110318026966560, 3), (110318026960816, 1))
+ right: ((110318026967408, 1), (110318026960816, 1))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`
