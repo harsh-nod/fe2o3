@@ -22,8 +22,10 @@ accepts the named 254-run shared-sequence matrix, 69 frozen/restored constructio
 tests, seventeen source gates, ten auxiliary checks and six compiled behavioral
 negatives. GNU/musl each pass 2,555 tests with five ignored in the fresh
 four-thread harness campaign; the earlier musl watchdog failures remain
-unaccepted. Live rebind, insertion, detach, release, returning destroy and
-DATA-ADOPT remain separate packets. No new
+unaccepted. R104 separately accepts
+[ordinary live-rebind custody](runtime-ordinary-rebind-custody-v1.md).
+Pristine rebind, insertion, detach, release, returning destroy and
+DATA-ADOPT remain open packets. No new
 solver result, actual predecessor destruction, live KFD, native incarnation
 succession or performance qualification is claimed here.
 

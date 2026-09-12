@@ -1,0 +1,19 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0308]: `match` arms have incompatible types
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:450:18
+    |
+417 | /         match case {
+418 | |             0 => session.poison_terminal(),
+419 | |             1 => {
+420 | |                 let loan = fixture
+...   |
+449 | |             6 => session.observation.ring_bytes = 0,
+    | |                  ---------------------------------- this and all prior arms are found to be of type `()`
+450 | |             7 => session.completion_owner.bind_barrier_probe().unwrap(),
+    | |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `()`, found `BoundBarrierProbeV1`
+451 | |             _ => unreachable!(),
+452 | |         }
+    | |_________- `match` arms have incompatible types
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

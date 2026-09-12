@@ -1,0 +1,211 @@
+{
+  "publication_parent": "5cdeedd8290fac0bf01ca53b01cc12e828a2e20e",
+  "tested_source_checkpoint": "0bb5d1d35c89336f40e2ee311240e66f659fc323",
+  "accepted_runtime_checkpoint": "61a1479348ec3b744a8881108e059f540f324364",
+  "scope": "Ordinary live-rebind input/preparation custody and deferred parent retention; CPU/shared-sequence acceptance only",
+  "source_identities": 5662,
+  "changed_source_files": [
+    "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/primary_construction.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 6,
+  "new_test_functions": [
+    "queue::live::rebind_tests::ordinary_rebind_caught_internal_preflight_panic_still_transports",
+    "queue::live::rebind_tests::ordinary_rebind_healthy_preflight_retains_parent_without_new_poison",
+    "queue::live::rebind_tests::ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation",
+    "queue::live::rebind_tests::ordinary_rebind_public_direct_wrapper_transports_terminal_parent",
+    "queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport",
+    "queue::live::rebind_tests::preparation::ordinary_rebind_all_preparation_stages_retain_original_prefixes",
+    "queue::live::rebind_tests::preparation::ordinary_rebind_generation_and_suppressed_failure_never_install_invalid_owner",
+    "queue::live::rebind_tests::preparation::ordinary_rebind_opening_and_validation_faults_keep_original_owners",
+    "queue::live::rebind_tests::preparation::ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class",
+    "queue::live::rebind_tests::preparation::ordinary_rebind_real_loan_operation_retake_matrix_preserves_custody"
+  ],
+  "dynamic_scenarios": {
+    "preflight": 8,
+    "operation_retake": 18,
+    "opening_validation": 5,
+    "generation_suppression": 6,
+    "preparation_stages": 62,
+    "healthy_facade": 2,
+    "terminal_facade": 8,
+    "caught_internal_panic": 2,
+    "public_direct": 1,
+    "total": 112
+  },
+  "dynamic_test_functions": 9,
+  "textual_source_guards": 1,
+  "preparation_helper_outcomes": {
+    "runs": 91,
+    "successful_installs": 3,
+    "returned_errors": 45,
+    "caught_panics": 43
+  },
+  "facade_outcomes": {
+    "scenarios": 13,
+    "healthy_rejections": 2,
+    "terminal_transports": 11
+  },
+  "focused_tests": {
+    "frozen_rebind": 10,
+    "restored_rebind": 10,
+    "frozen_construction": 69,
+    "restored_construction": 69
+  },
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2565,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2565,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "python_tests": {
+    "benchmark_harnesses": 151,
+    "dependency_policy": 8
+  },
+  "historical_attempts": [
+    {
+      "name": "r104-focused-01",
+      "category": "compile-failure",
+      "returncode": 101,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r104-focused-02",
+      "category": "compile-failure",
+      "returncode": 101,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r104-focused-03",
+      "category": "incorrect-probe-poison-test-oracle",
+      "returncode": 101,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r104-focused-04",
+      "category": "preliminary-pass",
+      "returncode": 0,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r104-focused-05",
+      "category": "compile-failure",
+      "returncode": 101,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r104-focused-06",
+      "category": "frozen-source-preliminary-pass",
+      "returncode": 0,
+      "accepted_campaign": false
+    }
+  ],
+  "preliminary_clippy": "r104-clippy-01",
+  "environment_record": "raw/r104-environment.json",
+  "issue_status_record": "raw/r104-issue-status.json",
+  "environment_record_timing": "After full/auxiliary campaigns; before behavioral mutations. Not a retrospective host-load observation.",
+  "metadata_stderr_retained": false,
+  "initial_formatter_diagnostic_retained": false,
+  "no_new_formal_source": true,
+  "proof_inventory_only": true,
+  "solver_rerun": false,
+  "original_engine_composition_qualified": false,
+  "later_auxiliary_vector_slots_qualified": false,
+  "live_kfd": false,
+  "performance_measurement": false
+}

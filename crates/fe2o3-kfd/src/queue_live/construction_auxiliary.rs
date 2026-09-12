@@ -66,7 +66,7 @@ impl<T> core::ops::DerefMut for QueueOwnerSlotV1<T> {
 }
 
 impl ComputeAqlQueueSessionV1 {
-    fn take_for_terminal_auxiliary_construction_v1(&mut self) -> Self {
+    pub(super) fn take_for_terminal_auxiliary_construction_v1(&mut self) -> Self {
         self.poison_terminal();
         let shell = Self {
             engine: None,

@@ -49,7 +49,6 @@ use super::dispatch_binding::{
     PristineDispatchAbortV1, PristineDispatchContinuationV1, ReturnedDispatchDataV1,
     TypedKernargImageV1, persistent_fixed_dispatch_control_identity_v1, prepare_dispatch_resources,
     prepare_persistent_fixed_dispatch_resources_v1,
-    prepare_public_fixed_dispatch_resources_after_detach,
     prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
     prepare_three_binding_persistent_fixed_dispatch_resources_v1,
     three_binding_persistent_fixed_dispatch_control_identity_v1, unwrap_completed,
@@ -259,6 +258,11 @@ use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent
 #[path = "queue_live/pristine_abort.rs"]
 mod pristine_abort;
 use pristine_abort::UnpublishedDispatchStateV1;
+#[path = "queue_live/rebind.rs"]
+pub(in crate::queue) mod rebind;
+#[cfg(test)]
+#[path = "queue_live/rebind_tests.rs"]
+mod rebind_tests;
 #[path = "queue_live/sdma_logical_mux.rs"]
 mod sdma_logical_mux;
 #[path = "queue_live/sdma_multi_queue.rs"]
@@ -4367,6 +4371,7 @@ fn preflight_auxiliary_compute_lane_destroy_v1(
 pub struct ComputeAqlQueueLaneDispatchV1<'a> {
     session: &'a mut ComputeAqlQueueSessionV1,
     lane: ComputeAqlQueueLaneV1,
+    terminal_transport: &'a mut bool,
 }
 
 impl ComputeAqlQueueLaneDispatchV1<'_> {
@@ -4402,7 +4407,11 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.session.bind_fixed_dispatch(programs, packets, data)
+        let settled = self
+            .session
+            .bind_fixed_dispatch_settled_v1(programs, packets, data);
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn preflight_fixed_dispatch_data_insertion(
@@ -5129,6 +5138,15 @@ impl ComputeAqlQueueSessionV1 {
         lane: ComputeAqlQueueLaneV1,
         operation: impl FnOnce(&mut ComputeAqlQueueLaneDispatchV1<'_>) -> R,
     ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        self.with_compute_lane_custody_v1(lane, operation, core::mem::forget)
+    }
+
+    fn with_compute_lane_custody_v1<R>(
+        &mut self,
+        lane: ComputeAqlQueueLaneV1,
+        operation: impl FnOnce(&mut ComputeAqlQueueLaneDispatchV1<'_>) -> R,
+        retain: impl FnOnce(Box<Option<Self>>),
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -5137,20 +5155,25 @@ impl ComputeAqlQueueSessionV1 {
             &self.auxiliary_compute_lanes,
             lane,
         )?;
+        let mut terminal_transport = false;
         let AdmittedComputeLaneV1::Auxiliary(index) = admitted else {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 operation(&mut ComputeAqlQueueLaneDispatchV1 {
                     session: self,
                     lane,
+                    terminal_transport: &mut terminal_transport,
                 })
             }));
+            if result.is_err() {
+                self.poison_terminal();
+                poison_process_global_after_lane_unwind_v1();
+            }
+            if terminal_transport {
+                self.retain_terminal_rebind_parent_v1(retain);
+            }
             return match result {
                 Ok(result) => Ok(result),
-                Err(payload) => {
-                    self.poison_terminal();
-                    poison_process_global_after_lane_unwind_v1();
-                    std::panic::resume_unwind(payload)
-                }
+                Err(payload) => std::panic::resume_unwind(payload),
             };
         };
         if self.has_any_persistent_compute_attachment_v1() {
@@ -5165,17 +5188,21 @@ impl ComputeAqlQueueSessionV1 {
             operation(&mut ComputeAqlQueueLaneDispatchV1 {
                 session: self,
                 lane,
+                terminal_transport: &mut terminal_transport,
             })
         }));
         self.swap_primary_compute_lane(&mut selected);
         self.auxiliary_compute_lanes[index].state = Some(selected);
+        if result.is_err() {
+            self.poison_terminal();
+            poison_process_global_after_lane_unwind_v1();
+        }
+        if terminal_transport {
+            self.retain_terminal_rebind_parent_v1(retain);
+        }
         match result {
             Ok(result) => Ok(result),
-            Err(payload) => {
-                self.poison_terminal();
-                poison_process_global_after_lane_unwind_v1();
-                std::panic::resume_unwind(payload)
-            }
+            Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 
@@ -20377,8 +20404,21 @@ mod tests {
             .split("pub fn allocate_uninitialized_fixed_dispatch_data")
             .next()
             .unwrap();
-        assert!(ordinary_rebind.contains("validate_live_queue_dispatch_memory"));
+        assert!(ordinary_rebind.contains("bind_fixed_dispatch_settled_v1"));
         assert!(!ordinary_rebind.contains("validate_persistent_replay_dispatch_memory"));
+        let rebind = include_str!("queue_live/rebind.rs");
+        assert!(rebind.contains("Self::validate_persistent_bind_preparation_v1"));
+        assert!(!rebind.contains("validate_persistent_replay_dispatch_memory"));
+        let validation = include_str!("queue_live/fixed_dispatch.rs")
+            .split("fn validate_persistent_bind_preparation_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) const fn has_any_persistent_compute_attachment_v1")
+            .next()
+            .unwrap();
+        assert!(validation.contains("preparation.completed()?"));
+        assert!(validation.contains("validate_live_queue_dispatch_memory"));
+        assert!(!validation.contains("validate_persistent_replay_dispatch_memory"));
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -11,17 +11,17 @@ This document supersedes the immediate assignment rows in the
 
 ## Renewed Swarm Dispatch
 
-Accepted runtime baseline: signed R103
-`61a1479348ec3b744a8881108e059f540f324364`, present on both topic remotes at
-this refresh. The working tree also contains an **uncommitted R104 ordinary
-live-rebind candidate undergoing validation**. Its ten focused tests and all
-seventeen source gates have passed locally; GNU/musl each pass 2,565 tests with
-five ignored, and all 5,662 non-documentation source identities are unchanged.
-Full acceptance, including auxiliary checks, compiled mutations, exact
-restoration and reviewed evidence, remains pending.
-This planning checkpoint neither publishes that candidate nor advances its
-acceptance. R103's evidence remains CPU/shared-sequence
-acceptance, not live KFD, new solver refinement or matched performance.
+R104 locally accepts [ordinary live-rebind custody](runtime-ordinary-rebind-custody-v1.md),
+with [retained evidence](evidence/local-r104-ordinary-rebind-custody-2026-09-12/README.md),
+above signed planning parent `5cdeedd8290fac0bf01ca53b01cc12e828a2e20e` and
+accepted R103 `61a1479348ec3b744a8881108e059f540f324364`.
+All seventeen source gates, ten auxiliary checks and six compiled behavioral
+negatives pass. GNU/musl each pass 2,565 tests with five ignored;
+frozen/restored rebind and construction suites pass 10/10 and 69/69.
+All 5,662 non-documentation source identities are unchanged and exactly restored.
+This is CPU/shared-sequence acceptance, not original-engine composition,
+live KFD, new solver refinement or matched performance. N2 pristine rebind is
+the next Native implementation packet.
 
 The renewed user request is split across three read-only review workers below.
 Primary owns implementation, integration, tests, proof registration and signed
@@ -34,10 +34,10 @@ are queued work, not unattended background implementation jobs.
 
 | Worker | First packet | Concrete exit requirement |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N1: finish R104 ordinary rebind acceptance in `queue_live/rebind.rs` and `rebind_tests*` | Review the passing source campaign; finish auxiliary gates, six decisive behavioral mutations and exact restoration. Preserve rooted inputs, validation-before-installation, panic precedence, monotonic transport and lane restoration. Actual original-engine composition remains a separate open qualification boundary. |
+| Native: `native_replacement_handoff` | N2: pristine rebind in `queue_live/rebind.rs`, `queue_live/pristine_abort.rs` and the lower pristine forwarder | Extend the existing root with continuation/preparation custody before the loan; preserve exact next-generation provenance and entered-pristine process poisoning. Reuse R104 settlement and facade transport. Opening failure retains the unconsumed continuation; consumed authority cannot become retry authority. |
 | Admission: `submission_identity_handoff` | C1: CO-2A in new `context/tests/submission_identity_tests.rs` | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. Primary owns module wiring and the missing test-backend cancel counter. |
 | Resources: `r102_evidence_review` | V1: VER-1A.2a in new `runtime-model/src/context_version_journal.rs` | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. Primary owns exports. This is model-only, not a production journal. |
-| Primary | I1: integrate accepted packets and maintain qualification gates | Review shared changes, retain failed attempts, run exact-source checks, and publish accepted work to both repositories. Do not promote the R104 draft or a model-only result to runtime acceptance. |
+| Primary | I1: integrate accepted packets and maintain qualification gates | Review shared changes, retain failed attempts, run exact-source checks, and publish accepted work to both repositories. Keep local source, model/proof, native and performance acceptance separate. |
 
 ### Ordered Backlogs
 
@@ -47,7 +47,7 @@ sequence; it is not a prerequisite where the packets are explicitly independent.
 
 | Lane | Ordered packets after the first assignment | Source boundary / acceptance |
 | --- | --- | --- |
-| Native | N2: pristine rebind -> N3: data insertion/replacement | Existing `queue_live/pristine_abort.rs`, `fixed_dispatch.rs` and lower initializers. Retain incomplete prefixes and preserve continuation versus recycled provenance; reserve identity capacity before effects. |
+| Native | N3: data insertion/replacement | Existing `fixed_dispatch.rs` and lower initializers. Retain incomplete prefixes and returned owners; reserve identity capacity before effects and commit metadata only after retake. |
 | Native | N4a: detach/release -> N4b: auxiliary/full returning destroy | Existing dispatch release and queue teardown paths. Retain untouched data, controls and the original parent through cleanup failure. Do not resurrect disposed authority; permit slot reuse only after confirmed full disposal. |
 | Native | N5: DATA-ADOPT -> joint I2: ISSUE | Existing generated preparation, shell and backend owners. Adoption binds original bytes without publication; ISSUE binds one logical submission and one permit to real resources without retrying uncertain publication. |
 | Admission | C2: CO-2B descriptor identity; C3: CO-3A reply/custody gaps | Both are independently ready now using existing authorization validators and R80/R83 lifecycle fixtures. No second validator, reply, decoder or dummy native completion adapter; neither waits for N5. |
@@ -57,14 +57,15 @@ sequence; it is not a prerequisite where the packets are explicitly independent.
 | Resources with Native | M1: aggregate domains/headroom; M2: native backing/control/slot admission; M3: host/native cache residency; M4: total retained-memory bound | Reuse existing accounts, budgets and caches. Domain design and host-image ceiling are independently ready; native residency and compound pre-effect admission depend on backing/control integration. Include terminal retention without double charging. |
 | Primary with all lanes | Q1: incremental adapter correspondence; Q2: timing/depth/overlap/fault qualification; Q3: matched HIP/HSA performance | Keep CPU/source, authenticated formal, live KFD and performance acceptance separate. Investigate R103's unaccepted default-concurrency musl watchdog failures without weakening deadlines. |
 
-The critical integration path is **N1-N4 -> N5 DATA-ADOPT -> I2 ISSUE ->
+R104 supplies N1's named local acceptance. The remaining critical integration
+path is **N2-N4 -> N5 DATA-ADOPT -> I2 ISSUE ->
 C4 COMPLETE -> C5 generated API -> C6 GRAPH/DRAIN**. I2 also needs C1/C2 and the preissue
 C3 contract/oracle, but not evidence of its own publication receipt in advance.
 The first non-reusing ISSUE needs a specified mutation hook, not completed
 cross-run leases. Cross-run reuse does require V7/V8. Model proofs and adapter
 correspondence proceed incrementally, not only at the final hardware gate.
 
-N1's candidate now includes the validation call-chain guard, process-wide poison
+Accepted N1 includes the validation call-chain guard, process-wide poison
 classification checks and callback-panic/retention ordering after restoration.
 Its ten focused test functions contain 112 dynamic scenarios and one textual
 routing guard, not 112 successful binds. Actual original engine/account/platform
@@ -98,6 +99,18 @@ isolated window. No hardware work is launched by this dispatch refresh.
 
 ## Accepted Checkpoints
 
+R104 locally accepts **NATIVE-2C ordinary live-rebind custody** above signed
+planning parent `5cdeedd8290fac0bf01ca53b01cc12e828a2e20e`, with
+[retained evidence](evidence/local-r104-ordinary-rebind-custody-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and six compiled behavioral
+negatives pass. GNU/musl each pass 2,565 tests with five ignored;
+frozen/restored rebind and construction suites pass 10/10 and 69/69.
+All 5,662 source identities match, including exact restoration after each
+mutation. Nine dynamic tests cover 112 scenarios; a tenth guards source routing.
+Original-engine composition, later auxiliary vector slots, pristine prefixes,
+native execution, formal correspondence and performance remain open.
+Next: **N2 pristine rebind + CO-2A Context identity + VER-1A.2a issuance**.
+
 R103 locally accepts **NATIVE-2C replacement-input custody** above signed R102
 `50c4eb075013fde0a984a003c0b5b90eae562847`, with
 [retained evidence](evidence/local-r103-replacement-input-custody-2026-09-12/README.md).
@@ -107,8 +120,8 @@ pass 2,555 tests with five ignored, using four Rust test-harness threads and fou
 Cargo build jobs for the fresh campaign. All 5,659 source hashes match. The
 earlier musl campaign's two watchdog failures remain unaccepted; their cause is
 not proved. This is CPU/shared-sequence acceptance, not new formal, live KFD or
-performance qualification. The next Native packet is **live-lane restoration
-and rebind custody**;
+performance qualification. At R103, the next Native packet was **live-lane
+restoration and rebind custody**;
 **CO-2A Context identity** and **VER-1A.2a issuance** are independent.
 
 R102 locally accepts **NATIVE-2B.5B-3C**, the named roster/destination-slot
@@ -290,8 +303,8 @@ open.
 
 | Order | Lead | Bounded deliverable | Dependency / acceptance |
 | --- | --- | --- | --- |
-| Locally accepted Native packet | Primary + Native review | 2C: replacement-input custody | R103 roots consumed inputs and predecessor metadata before validation/planning; CPU/shared-sequence acceptance only |
-| Next Native packets | Native | 2C live-lane restoration/rebind, insertion and release, then DATA-ADOPT | Restore selected lanes before terminal transport; retain returned prefixes and require exact disposal |
+| Locally accepted Native packets | Primary + Native review | 2C: replacement inputs and ordinary live rebind | R103 roots replacement inputs; R104 retains ordinary preparation through settlement and restores lanes before terminal transport. CPU/shared-sequence acceptance only |
+| Next Native packets | Native | 2C pristine rebind, insertion and release, then DATA-ADOPT | Retain continuation and incomplete prefixes; preserve exact provenance and require confirmed disposal |
 | First Admission packet | Admission | CO-2A: Context submission-identity tests | Existing validators; eight ingresses, stale/reused IDs and preserved precedence |
 | Next Admission packets | Admission | CO-2B descriptor identity and CO-3A private reply/custody composition | Existing source matching and R80/R83 lifecycle; no invented completion adapter |
 | First Resources packets | Resources | VER-1A.2a-d: issuance, membership, settlement/cost, authenticated proofs | Reviewed contract; model-only until .3 has a production consumer |
@@ -305,7 +318,7 @@ turns are complete; queued implementation packets are not running unattended.
 Later A3-A7 and compiler/Worker/release handoffs remain below, outside A1/A2.
 
 At the user's renewed swarm request, three existing workers independently
-reviewed the current source, R102/R103 scope and the remaining roadmap. They
+reviewed the current source, R104's local scope and the remaining roadmap. They
 returned the bounded work orders below. Their read-only review turns
 are complete. The implementation queues below are assignments, not unattended
 background jobs. Primary owns
@@ -314,24 +327,24 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | R104 candidate review complete; source acceptance still pending | Pristine rebind -> insertion/release/teardown -> generated data adoption -> native publication handoff |
-| Admission: `submission_identity_handoff` | R103 identity/oracle review complete; CO-2A handoff ready | CO-2B descriptive identity and CO-3 reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
-| Resources: `r102_evidence_review` | R103 evidence review complete; VER-1A.2a issuance handoff ready | Membership -> settlement/cost -> proofs -> production journal -> complete mutation hooks/ordered writers/recovery -> cross-run leases |
+| Native: `native_replacement_handoff` | N2 pristine rebind handoff ready above locally accepted R104 | Insertion/release/teardown -> generated data adoption -> native publication handoff |
+| Admission: `submission_identity_handoff` | CO-2A identity/oracle handoff ready | CO-2B descriptive identity and CO-3 reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
+| Resources: `r102_evidence_review` | VER-1A.2a issuance handoff ready | Membership -> settlement/cost -> proofs -> production journal -> complete mutation hooks/ordered writers/recovery -> cross-run leases |
 | Primary | Integrate 2C, CO-2A and VER-1A.2 without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
 
 ### Immediate Handoffs
 
 | Lane | First deliverable | Source boundary and cross-review |
 | --- | --- | --- |
-| Native | 2C live-lane restoration and rebind custody after R103 acceptance | `queue_live.rs`, `fixed_dispatch.rs`, then `pristine_abort.rs`. Restore the selected primary/auxiliary lane before terminal transport. Root preparation before the loan and preserve pristine versus recycled provenance through operation/retake errors and panics. |
+| Native | N2 pristine rebind custody after R104 local acceptance | Extend `queue_live/rebind.rs`; replace consuming rebind orchestration/forwarding in the two `pristine_abort.rs` modules. Root continuation/preparation before the loan, preserve exact next generation and entered-pristine poison policy, and reuse settled commit/facade transport. Abort/control disposal is unchanged. |
 | Admission | CO-2A five-case submission-identity matrix using the existing Context validators | New `context/tests/submission_identity_tests.rs`; Primary wires `context.rs`. Resources checks stale/reused identity; Native checks rejection before backend entry. No replacement validator or native receipt. |
 | Resources | VER-1A.2a executable issuance model, then .2b-d membership/settlement/proofs | New `runtime-model/src/context_version_journal.rs`; use the frozen activation/watermark policy and explicit A/W capacities. Reuse Context IDs, bounded Reserved slots and monotonic issuance. Production consumption follows in .3; Primary owns exports and authenticated pins. |
 | Primary | Integrate one reviewed packet at a time and record its exact acceptance scope | Shared Context/backend/queue edits, builds, proof runs, hardware and publication remain serialized. |
 
 R98 supplies `completion_contract.rs` and the reviewed journal contract;
-`context/versions.rs` and its executable model remain absent. R103 locally
-accepts the replacement-input packet above R102. The next wave is
-**2C live-lane restoration/rebind + CO-2A + VER-1A.2a**. CO-2B descriptor
+`context/versions.rs` and its executable model remain absent. R104 locally
+accepts ordinary live rebind after R103 replacement-input custody. The next wave is
+**N2 pristine rebind + CO-2A + VER-1A.2a**. CO-2B descriptor
 coverage and the CO-3 gap audit can use the next available review slot without
 waiting for native adoption. Resources implements the model before the journal.
 The .5B-3A/B/C designs are independently reviewable, but their integration shares
@@ -343,8 +356,8 @@ at a time.
 
 | Wave | Native | Admission | Resources |
 | --- | --- | --- | --- |
-| Ready now | 2C live-lane restoration/rebind | CO-2A Context identity is already independent; reviewed CO-2B and CO-3A handoffs | VER-1A.2a issuance model is already independent |
-| After each lane's first gate | Pristine rebind, then 2C insertion/detach/release/returning destroy and DATA-ADOPT | CO-2B descriptor matrix and CO-3A lifecycle composition | .2b membership -> .2c settlement/cost -> .2d proof acceptance -> .3 bounded journal |
+| Ready now | N2 pristine rebind | CO-2A Context identity is already independent; reviewed CO-2B and CO-3A handoffs | VER-1A.2a issuance model is already independent |
+| After each lane's first gate | N3 insertion, N4 detach/release/returning destroy, then N5 DATA-ADOPT | CO-2B descriptor matrix and CO-3A lifecycle composition | .2b membership -> .2c settlement/cost -> .2d proof acceptance -> .3 bounded journal |
 | Integration | 2C replacement/insertion, then nonpublishing DATA-ADOPT | ISSUE with Native, then CO-4/COMPLETE and typed API | .4/.5 initial mutation hooks, then complete VER-1B with ordered writers and recovery |
 | A1/A2 closure | Native depth, memory pressure and overlap qualification | Generated GRAPH/DRAIN and end-to-end typed execution | VER-2 cross-run leases, aggregate accounting and residency closure |
 
@@ -551,7 +564,7 @@ accounting refunds. Reuse existing preparation, allocation and release sequences
 | Order | Production boundary | Bounded change and acceptance |
 | --- | --- | --- |
 | Replacement input: R103 locally accepted | `Gfx942RecycledDispatchResourcesV1::recreate_compute_aql_queue_with_fixed_dispatch` in `queue_live.rs` | Original memory/programs/packets/data/predecessor metadata are rooted before validation/planning. The generation-aware in-place R89 forwarder is implemented. The named matrix covers invalid ring/program/generation, planning/preparation Err/panic and late construction rejection. This does not qualify preceding destruction or all invalid geometry contracts. |
-| Live rebind | `bind_fixed_dispatch` in `queue_live/fixed_dispatch.rs` | Root R89 preparation before its consuming callback; retain the successful result across closing retake and validation. Commit the new dispatch and clear detached identities only after success. Test operation success/Err/panic crossed with retake Err/panic, without duplicate preparation. |
+| Ordinary live rebind: R104 locally accepted | `bind_fixed_dispatch` in `queue_live/fixed_dispatch.rs`, settlement in `queue_live/rebind.rs` | The [ordinary rebind contract](runtime-ordinary-rebind-custody-v1.md) roots original inputs and R89 preparation before the loan; retains completed preparation across retake/validation; commits only after checked extraction; and defers monotonic terminal transport until lane restoration. Original-engine composition remains separately open. |
 | Pristine rebind | `queue_live/pristine_abort.rs` | Preserve R82 continuation/provenance and settlement, but retain preparation prefixes in place rather than only its successful return. A pristine continuation never grants recycled-generation authority. |
 | Insertion/replacement | Detached data methods in `queue_live/fixed_dispatch.rs` | Reserve identity-vector capacity before effects; retain returned typed owners outside the loan callback; commit ordinal/count after retake. Exercise occupied/reserved ordinals, capacity failure and closing rejection. Lower coherent/device initializers also need in-place prefix retention wherever callback-internal custody is claimed. |
 | Detach/release/returning destroy | `fixed_dispatch.rs`, `queue_dispatch_binding.rs` and `queue_live.rs` release paths, including `destroy_auxiliary_compute_lane_v1` | Root untouched data, remaining controls and original session/accounts around fallible cleanup. Auxiliary removal must retain the taken lane and every teardown prefix on Err/panic; a reusable vacancy requires confirmed full disposal. Test first/middle/last disposal failure and successful disposal followed by failed retake; do not resurrect disposed authority or charges. |
@@ -581,43 +594,55 @@ pending operation together. Test identical primary/auxiliary failures and exact
 primary restoration before terminal transport. The replacement-input packet is
 independent of this live-lane change.
 
-The next ordinary-rebind packet can reuse `model_loan.rs` unchanged. Keep the
-completed owner inside preparation through retake and post-retake validation,
-then perform the existing nonfallible dispatch/ledger commit. A private,
-monotonic terminal-transport request on the borrowed lane facade can defer
-whole-session transport until lane restoration; honor it even if a callback
-swallows the bind error or returns an unrelated value. Retain preparation
-before resuming panic. The direct session wrapper can transport immediately.
-Nonterminal preflight rejection must not terminalize a healthy session.
+R104 reuses `model_loan.rs` unchanged. The completed owner stays inside
+preparation through retake and post-retake validation, followed by checked
+extraction and the existing nonfallible dispatch/ledger commit. Its private,
+monotonic facade request defers whole-parent transport until restoration, even
+when a callback swallows a bind error or catches its panic. Callback-panic
+poisoning precedes transport. The direct wrapper transports immediately;
+healthy preflight rejection does not newly terminalize the parent.
 
-Ordinary rebind needs an `after_detach_in_place` forwarder, not R103's
-recycled-only forwarder. Preserve helper-level `after_detached(0)` behavior,
-but do not count it as native succession: actual recycled detach rejects zero.
-Pristine rebind retains its separate continuation-based route. Cover primary
-and auxiliary opening/preparation/retake/validation error-panic matrices,
-swallowed terminal errors, exact lane restoration and unchanged failure
-ledgers. Operation panic wins over closing failure; absent an operation panic,
-retake error/panic retains the existing precedence. These are reviewed work
-orders, not implemented live-rebind acceptance.
+The ordinary in-place forwarder passes `after_detached` directly to preparation,
+not through R103's recycled-only forwarder. Helper-level zero behavior is
+preserved; actual recycled detach rejects zero. Operation panic wins over
+closing failure; absent an operation panic, retake error/panic retains its
+existing precedence. Returned ordinary errors do not acquire blanket process
+poisoning. Existing loan/pristine helpers retain their additional poison policy.
 
-N1's remaining acceptance checklist is:
+N1's [local acceptance](evidence/local-r104-ordinary-rebind-custody-2026-09-12/README.md)
+contains seventeen source gates, ten auxiliary checks and six compiled dynamic
+negatives: dropped input root, skipped validation, extracted failed Complete,
+overwritten transport request, omitted lane restoration and globalized returned
+error. Every source identity was restored after each mutation. Frozen/restored
+rebind suites pass 10/10; construction suites pass 69/69. Original-engine
+composition, later auxiliary vector slots beyond the first, native incarnation
+succession, new formal correspondence and performance remain unqualified.
 
-1. Review the passing seventeen-gate frozen-source campaign and complete the
-   applicable auxiliary checks without changing the candidate source. Retain
-   failed attempts separately; the local campaign is not a published packet.
-2. Run six compiled behavioral negatives: drop the input root, skip validation,
-   extract failed Complete preparation, overwrite the transport request, omit
-   post-callback lane restoration, and global-poison a returned error. Each must
-   fail its intended dynamic oracle, not merely the textual routing guard.
-3. Restore every source identity and rerun ordinary-rebind and construction
-   suites. Review the exact source, command roster, counts and evidence before
-   signing and publishing the runtime packet to both repositories.
-4. Keep original-engine composition, nonzero auxiliary-slot restoration, native
-   incarnation succession, new formal correspondence and performance explicitly
-   open where the named candidate fixtures do not cover them.
+N2's next implementation handoff is:
 
-N2/N3/N4 lower-helper reviews can proceed before N1 acceptance. Shared live-lane
-edits integrate serially after it. Split N3's lower initializer-prefix custody
+1. Extend `LiveRebindRootV1` with `Option<PristineDispatchContinuationV1>` and
+   an entered-pristine marker. After unchanged successful pristine preflight,
+   root the continuation and preparation before opening the common loan.
+2. Replace the consuming pristine forwarder with an in-place preparation call
+   using borrowed programs and `continuation.resume()` directly, without `?`.
+   Generation rejection must enter failed-Generation custody. Opening failure
+   retains the unconsumed continuation; entered preparation consumes it once.
+3. Preserve the continuation's exact next generation and mint a fresh recipe
+   occurrence, not predecessor-plus-one or recycled authority. Never restore a
+   consumed continuation for retry. Reuse R104 validation, commit and facade
+   transport; remove the redundant old rebind settlement, not abort/disposal.
+4. Preserve entered-pristine local/process-terminal errors without changing
+   ordinary or preflight policy. Migrate failure assertions from the old
+   installed `session.dispatch` to exact retained preparation ownership.
+5. Cover real continuation generations 1/7/8/last, fresh occurrences, opening
+   rejection/panic/exhaustion, operation crossed with retake faults, every
+   preparation stage, failed Complete, validation and swallowed primary/auxiliary
+   failures. Preserve R104 ordinary and R82 pristine regressions; add decisive
+   compiled negatives and exact-source restoration. Native composition remains
+   separate qualification.
+
+N3/N4 lower-helper reviews are independent; shared live-lane edits integrate
+serially after N2. Split N3's lower initializer-prefix custody
 from its live insertion integration; returned-value retention alone does not
 cover an initializer's incomplete internal prefix.
 
@@ -895,6 +920,23 @@ policy: no arbitrary import of earlier unregistered IDs and no watermark reset
 after issuance. Match the existing checked-add-before-return allocators: Context
 generation/local ID `u64::MAX - 1` is issuable; `u64::MAX` is not. The model is
 intended for eventual .3 consumption; no production journal consumer exists yet.
+
+The model stays `no_std` with `alloc`, no unsafe code and no I/O. Use inert
+Context-generation/local-ID/writer-kind projections, not imports of runtime
+types: runtime already depends on runtime-model. Authentic private extraction,
+move-only production tickets and construction-only runtime activation belong
+to .3. Primary wires `runtime-model/src/lib.rs`; .2a must not add a runtime
+activation API or `context/versions.rs`.
+
+For .2a, test independent A/W boundaries; Context/local zero and maximum values;
+registration 41 then 44 with both still retrievable; unregistered 42 rejection;
+foreign Context/kind/slot and stale-reference rejection; abort followed by slot
+reuse; and dropped-reference capacity retention. Rejection preserves a complete
+state snapshot. A full test-only partition/unique-key auditor and fixed-work
+counters check invariants without adding arena scans to operations. Compiled
+negatives should reject a lookup watermark check, abort watermark rollback,
+omitted exact-key comparison and watermark mutation before capacity rejection.
+These are planned executable checks, not completed tests or authenticated proof.
 
 Use independent configured allocation/writer bounds A/W within Context's
 1,048,576-entry limit. W includes Reserved/Pending/Unknown headers, including

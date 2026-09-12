@@ -1,0 +1,33 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.93s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport ... FAILED
+
+failures:
+
+---- queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport stdout ----
+
+thread 'queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport' (625842) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:271:42:
+called `Result::unwrap()` on an `Err` value: DispatchBinding(Poisoned)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport' (625842) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:276:34:
+caller after terminal bind
+
+thread 'queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport' (625842) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:286:25:
+assertion `left == right` failed
+  left: QueueKeyV1 { vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(7), generation: DeviceGenerationV1(11) }, id: VmIdV1(13) }, id: QueueInstanceIdV1(411), generation: QueueGenerationV1(8) }
+ right: QueueKeyV1 { vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(7), generation: DeviceGenerationV1(11) }, id: VmIdV1(13) }, id: QueueInstanceIdV1(410), generation: QueueGenerationV1(7) }
+
+thread 'queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport' (625842) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:362:36:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+
+failures:
+    queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 978 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

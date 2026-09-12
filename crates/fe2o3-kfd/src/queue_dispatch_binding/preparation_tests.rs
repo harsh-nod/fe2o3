@@ -345,6 +345,15 @@ impl PrimaryPreparationSnapshotV1 {
         self.data = inputs(data);
     }
 
+    pub(crate) fn capture_data_vector_v1(
+        &mut self,
+        data: &[Gfx942FixedDispatchDataV1],
+        capacity: usize,
+    ) {
+        self.capture_data(data);
+        self.data_vector = Some((data.as_ptr() as usize, capacity));
+    }
+
     pub(crate) fn assert_data(&self, data: &[Gfx942FixedDispatchDataV1]) {
         assert_eq!(inputs(data), self.data);
     }

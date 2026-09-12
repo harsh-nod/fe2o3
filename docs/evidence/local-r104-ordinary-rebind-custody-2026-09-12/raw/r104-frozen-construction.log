@@ -1,0 +1,82 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 69 tests
+test queue::live::construction::tests::borrowed_view_rejects_every_mapping_and_publication_substitution ... ok
+test queue::live::construction::tests::resource_prefix_success_transfers_exact_roster_once_without_native_calls ... ok
+test queue::live::construction::tests::ring_handoffs_preserve_each_profile_and_transfer_once ... ok
+test queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_production_glue_uses_shared_phases_and_original_target_after_retake ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake ... ok
+test queue::live::construction::tests::resource_prefix_rejections_preserve_all_present_owners_and_identity_order ... ok
+test queue::live::construction::tests::ring_admitted_map_failures_match_exact_r88_custody_and_keep_existing_charges ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_success_installs_only_new_lane_and_leaves_parent_ledgers_unchanged ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_terminal_transfer_preserves_exact_ledgers_after_caller_drop ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_vacancy_success_moves_once_without_vector_growth ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_returned_completion_survives_composed_operation_and_retake_matrix ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_control_failures_retain_pending_and_in_session_custody ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_control_projection_failures_preserve_actual_tokens_and_model has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_allocation_failures_keep_pending_or_returned_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_allocation_failures_keep_pending_or_returned_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_map_seal_write_failures_keep_exact_prefix ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_recovery_failures_keep_exact_outputs_before_owner_assembly ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_currentness_boundaries_retain_exact_history_and_phase_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_capacity_preflight_leaves_original_parent_and_native_calls_unchanged ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_retained_roster_collisions_keep_exact_unassembled_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_control_projection_failures_preserve_actual_tokens_and_model ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_data_callback_failure_reclaims_without_returned_data_or_controls ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_opening_and_loan_failures_never_enter_preparation_or_reclaim ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_slot_reuse_and_destination_rejections_keep_exact_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_late_failures_retain_both_queues_without_installation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::external_missing_or_foreign_authority_never_consumes_present_caller_slots ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::external_runtime_handoff_retains_exact_caller_slots_until_closing_currentness ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::late_create_recovery_preserves_exact_engine_outputs_and_unassembled_owners ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::observation_panics_keep_dependency_and_returned_doorbell_before_assembly_updates ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::platform_success_and_shadow_settlement_keep_original_bindings_and_phase ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_native_allocation_failures_retain_exact_pending_or_returned_output ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_projection_failures_keep_exact_tokens_and_uncommitted_model ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_seal_map_and_materialization_faults_preserve_original_session_tokens ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_stage_failures_preserve_original_inputs_and_every_control_prefix ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_control_and_platform_preflight_failures_keep_exact_returned_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_generic_return_keeps_borrowed_non_send_and_actual_charged_owner_through_finalization ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_create_uncertainty_retains_all_published_owners_without_cleanup ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_early_validation_and_planning_retain_inputs_before_any_native_work ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_recipe_retains_original_program_and_packet_rosters ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_native_preparation_failures_preserve_pending_and_returned_owners ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_preparation_stage_failures_preserve_inputs_generation_and_control_prefixes ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_public_entry_roots_inputs_before_the_shared_construction_sequence ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_success_preserves_exact_predecessor_and_last_issuable_generation ... ok
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_control_and_platform_preflight_failures_keep_exact_returned_prefixes ... ok
+test queue::live::construction_primary::integration_tests::projection_cases::primary_control_projection_failures_retain_actual_input_or_output_without_model_commit has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::projection_cases::primary_control_projection_failures_retain_actual_input_or_output_without_model_commit ... ok
+test queue::live::construction_primary::tests::captured_preparation_survives_later_rejection_and_panic_without_reinvocation ... ok
+test queue::live::construction_primary::tests::construction_token_preflight_preserves_foreign_closed_and_occupied_inputs ... ok
+test queue::live::construction_primary::tests::construction_token_success_installs_exact_output_and_clears_marker_once ... ok
+test queue::live::construction_primary::tests::constructor_error_keeps_public_auto_traits_without_native_custody ... ok
+test queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts ... ok
+test queue::live::construction_primary::tests::rooted_settlement_does_not_destroy_secondary_panicking_payload ... ok
+test queue::live::construction_primary::tests::rooted_settlement_preserves_original_owner_and_first_panic_through_cleanup ... ok
+test queue::live::construction_primary::tests::rooted_success_transfers_non_send_borrowed_preparation_without_cleanup ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts ... ok
+
+test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 910 filtered out; finished in 252.21s
+

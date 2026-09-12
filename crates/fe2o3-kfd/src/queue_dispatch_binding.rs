@@ -3832,19 +3832,17 @@ pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle_in_place<con
     )
 }
 
-pub(super) fn prepare_public_fixed_dispatch_resources_after_detach<const N: usize>(
-    memory: &mut SharedGttMemorySessionV1,
-    programs: Vec<ValidatedKernelEnvelope<'_>>,
-    packets: [Gfx942FixedDispatchPacketV1; N],
-    data: Vec<Gfx942FixedDispatchDataV1>,
+pub(super) fn prepare_public_fixed_dispatch_resources_after_detach_in_place<const N: usize>(
+    memory: &mut impl preparation::PreparationMemoryV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    custody: &mut FixedDispatchPreparationCustodyV1<N>,
     predecessor_generation: u64,
-) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
-    prepare_public_fixed_dispatch_resources_with_generation(
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    custody.prepare_in_place(
         memory,
         programs,
-        packets,
-        data,
-        DispatchGenerationOwnerV1::after_detached(predecessor_generation)?,
+        DispatchGenerationOwnerV1::after_detached(predecessor_generation),
+        PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }
 
@@ -4907,6 +4905,10 @@ pub(super) use tests::actual_persistent_control_test_program;
 
 #[cfg(test)]
 impl DispatchResourceOwnerV1 {
+    pub(super) fn primary_fixture_next_generation_v1(&self) -> u64 {
+        self.generation.next_generation
+    }
+
     pub(super) fn primary_fixture_identities_v1(
         &self,
     ) -> Vec<crate::shared_memory::SharedGttAllocationIdentityV1> {

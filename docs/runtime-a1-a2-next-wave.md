@@ -2,14 +2,16 @@
 
 The renewed three-worker review is recorded on the
 [current board](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch).
-R104 ordinary rebind is an uncommitted candidate with ten focused tests and all
-seventeen source gates passing locally, not an accepted runtime packet. Auxiliary
-checks, compiled mutations, exact restoration and evidence acceptance remain.
-Native owns its remaining acceptance handoff, then pristine rebind and cleanup;
+R104 locally accepts [ordinary live-rebind custody](runtime-ordinary-rebind-custody-v1.md),
+with [retained evidence](evidence/local-r104-ordinary-rebind-custody-2026-09-12/README.md).
+All seventeen source gates, ten auxiliary checks and six compiled behavioral
+negatives pass; GNU/musl each pass 2,565 tests with five ignored. Frozen/restored
+rebind and construction suites pass 10/10 and 69/69; all 5,662 source identities
+match. Native next takes N2 pristine rebind, then insertion and cleanup;
 Admission starts CO-2A identity coverage; Resources starts the model-only
 VER-1A.2a issuance transition. The three read-only reviews are complete; Primary
 owns edits, serialized validation and publication. No new native, formal or
-performance result is claimed by this planning refresh.
+performance result is claimed. Original-engine composition remains unqualified.
 
 R103 locally accepts **2C replacement-input custody**, with
 [retained evidence](evidence/local-r103-replacement-input-custody-2026-09-12/README.md).
@@ -18,7 +20,7 @@ and ten auxiliary checks pass, and six compiled behavioral negatives reject.
 GNU/musl each pass 2,555 tests with five ignored under the fresh four-thread
 harness configuration; all 5,659 source hashes match. The earlier failed musl
 attempt is retained and unaccepted. No new formal, live KFD or performance
-qualification is added. The next reviewed packets are **2C live-lane restoration and
+qualification is added. At R103, the next reviewed packets were **2C live-lane restoration and
 rebind**, **CO-2A Context identity**, and **VER-1A.2a issuance model**. The latter
 two are independent of R103. Primary owns edits and serialized validation;
 the three worker review turns are complete, not unattended implementation jobs.
@@ -77,8 +79,8 @@ functions cover 369 shared-driver runs plus a separate primary-only capacity
 fixture. This adds no live KFD, new formal refinement or performance result;
 historical acceptance below applies to its named source only.
 
-The renewed three-agent breakdown advances Native from accepted R103
-replacement-input custody to **2C live-lane restoration/rebind**, then insertion/release and
+The renewed three-agent breakdown advances Native from locally accepted R104
+ordinary rebind to **N2 pristine rebind**, then insertion/release and
 DATA-ADOPT after their separate gates.
 Admission next takes Context identity coverage; Resources takes the executable
 journal model/proofs, including exact NoEffect settlement without attempt-epoch
@@ -245,10 +247,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `native_replacement_handoff` | 2C live-lane restoration/rebind after R103 acceptance | Insertion/release; DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses | Restore selected lanes before terminal transport, root preparation before loan, and retain partial/completed owners across operation/retake error or panic. Preserve pristine/recycled provenance. CPU/local helpers do not qualify native incarnation succession. |
+| Native: `native_replacement_handoff` | N2 pristine rebind after R104 local acceptance | Insertion/release; DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses | Extend R104's root with continuation/preparation custody before the loan; preserve exact next generation and entered-pristine process poisoning. Reuse settlement, validation and deferred facade transport. CPU/local helpers do not qualify native incarnation succession. |
 | Admission: `submission_identity_handoff` | CO-2A Context submission identity, then CO-2B descriptive identity and preissue CO-3 fixtures | ISSUE/native identity -> CO-4/COMPLETE -> API -> generated graph/drain | Five-case matrix covers all observation/release ingress, actual cached completion paths and genuine backend-ID reuse without unrelated-owner changes. Reuse existing validators, reply and decoder. |
 | Resources: `r102_evidence_review` | VER-1A.2a issuance -> .2b-d membership/settlement/proofs -> .3 journal -> .4/.5 initial hooks | Complete VER-1B, ordered writers/recovery; VER-2 leases; aggregate domains; backing/control/code budgets; MEM-5 | Follow the frozen activation/watermark and explicit-capacity policy. Atomic whole-roster admission/settlement, exact writers, nonwrapping attempt epochs and exact NoEffect lineage. Cross-run leases wait for complete coverage. |
-| Primary | Preserve R103 acceptance and serialize the three next packets | Shared-source integration, executable refinement, signed hardware qualification and matched performance | Preserve existing ownership; accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
+| Primary | Preserve R104 local acceptance and serialize the three next packets | Shared-source integration, executable refinement, signed hardware qualification and matched performance | Preserve existing ownership; accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's

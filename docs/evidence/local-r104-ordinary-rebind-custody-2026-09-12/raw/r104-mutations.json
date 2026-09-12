@@ -1,0 +1,50 @@
+[
+  {
+    "name": "drop-input-root",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::rebind_tests::preparation::ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class",
+    "edits": [["        if failed {\n            retain(root);\n        }", "        if failed {\n            drop(root);\n        }"]],
+    "expected": ["rebind_tests/preparation.rs:570:", "called `Option::unwrap()` on a `None` value"],
+    "property": "Failed preflight transfers the original input root into retained custody."
+  },
+  {
+    "name": "skip-validation",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::rebind_tests::preparation::ordinary_rebind_opening_and_validation_faults_keep_original_owners",
+    "edits": [["Some(preparation) => validate(session, preparation),", "Some(_) => Ok(()),"]],
+    "expected": ["rebind_tests/preparation.rs:223:", "left: [1, 1, 1, 0]", "right: [1, 1, 1, 1]"],
+    "property": "Completed preparation receives the required borrowed validation before installation."
+  },
+  {
+    "name": "extract-failed-complete",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs",
+    "test": "queue::live::rebind_tests::preparation::ordinary_rebind_generation_and_suppressed_failure_never_install_invalid_owner",
+    "edits": [["if self.stage != PreparationStageV1::Complete || self.failed || self.completed.is_none() {", "if self.stage != PreparationStageV1::Complete || self.completed.is_none() {"]],
+    "expected": ["rebind_tests/preparation.rs:238:", "left: false", "right: true"],
+    "property": "Checked extraction rejects failed Complete preparation even after suppressed failure and bypassed validation."
+  },
+  {
+    "name": "overwrite-transport",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport",
+    "edits": [["*self.terminal_transport |= settled.transport;", "*self.terminal_transport = settled.transport;"]],
+    "expected": ["rebind_tests.rs:375:", "left: 0", "right: 1"],
+    "property": "A later already-terminal rejection cannot clear the first bind's pending parent transport."
+  },
+  {
+    "name": "omit-lane-restoration",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport",
+    "edits": [["        }));\n        self.swap_primary_compute_lane(&mut selected);\n        self.auxiliary_compute_lanes[index].state = Some(selected);", "        }));\n        self.auxiliary_compute_lanes[index].state = Some(selected);"]],
+    "expected": ["rebind_tests.rs:286:", "assertion `left == right` failed"],
+    "property": "The original primary and selected auxiliary lane are restored before terminal parent retention."
+  },
+  {
+    "name": "globalize-returned-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::rebind_tests::preparation::ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class",
+    "edits": [["            if result.is_err() {\n                poison_process_global_after_dispatch_terminal_v1();", "            if failed {\n                poison_process_global_after_dispatch_terminal_v1();"]],
+    "expected": ["rebind_tests/preparation.rs:560:", "assertion failed: !take_dispatch_terminal_process_gate_record_v1()"],
+    "property": "Outer settlement preserves the prior process-poison classification of returned errors."
+  }
+]

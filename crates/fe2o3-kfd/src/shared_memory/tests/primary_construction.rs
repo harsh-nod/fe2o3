@@ -345,6 +345,15 @@ impl PreparationMemoryFixtureV1 {
         self.primary_currentness()?;
         self.fixture.transfer(authorities)
     }
+
+    pub(crate) fn primary_validate_live_dispatch_memory_v1(
+        &mut self,
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+    ) -> Result<(), MemorySessionError> {
+        let f = &mut self.fixture;
+        f.engine
+            .validate_live_queue_dispatch_memory(authorities, f.device.model_key(), f.vm)
+    }
     pub(crate) fn primary_authenticate(
         &self,
         foundation: &QueueModelFoundationV1,

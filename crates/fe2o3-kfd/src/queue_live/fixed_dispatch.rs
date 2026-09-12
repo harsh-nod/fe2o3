@@ -89,12 +89,11 @@ impl SharedGttMemorySessionV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
-    fn validate_persistent_bind_preparation_v1(
+    pub(super) fn validate_persistent_bind_preparation_v1<const N: usize>(
         &mut self,
-        preparation: &FixedDispatchPreparationCustodyV1<1>,
+        preparation: &FixedDispatchPreparationCustodyV1<N>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        // Bind ingress reserved both empty slots. Callbacks can mutate memory,
-        // not the exclusively borrowed queue's attachment or dispatch slots.
+        // The completed owner remains rooted until full live-memory validation succeeds.
         let authorities = preparation.completed()?.device_authorities_inline_v1();
         self.engine
             .as_mut()
@@ -4288,105 +4287,19 @@ impl ComputeAqlQueueSessionV1 {
     /// KFD session before the new owner is installed. Every mapped storage input
     /// and inspected program is retained even when no packet in this batch
     /// selects it. This does not publish.
+    /// Rejected inputs and incomplete ordinary preparation remain retained;
+    /// terminal failures retain the whole session until process teardown.
     pub fn bind_fixed_dispatch<const N: usize>(
         &mut self,
         programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        let settled = self.bind_fixed_dispatch_settled_v1(programs, packets, data);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
-        if self.dispatch.is_some() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
-        }
-        if !(self.unpublished_dispatch.is_clear() && self.detached_dispatch_generation.is_some()
-            || self.unpublished_dispatch.is_detached()
-                && self.detached_dispatch_generation.is_none())
-        {
-            self.poison_terminal();
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
-        }
-        let data_identities = fixed_dispatch_storage_identities(&data);
-        if self.detached_data_identities.len() != self.detached_data_count {
-            self.poison_terminal();
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached dispatch-data identity ledger cardinality",
-            ));
-        }
-        if data.len() != self.detached_data_count {
-            self.poison_terminal();
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: data.len().min(self.detached_data_count),
-                detail: "detached dispatch-data cardinality",
-            }
-            .into());
-        }
-        if let Some(index) =
-            first_ordered_identity_mismatch(&self.detached_data_identities, &data_identities)
-        {
-            self.poison_terminal();
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index,
-                detail: "detached rebind storage identity",
-            }
-            .into());
-        }
-        let preflight = self
-            .completion_owner
-            .ensure_releasable()
-            .map_err(ComputeAqlQueueSessionErrorV1::from)
-            .and_then(|()| {
-                validate_fixed_batch_ring::<N>(self.observation.ring_bytes).map_err(Into::into)
-            });
-        if let Err(error) = preflight {
-            if self.unpublished_dispatch.is_detached() {
-                self.poison_terminal();
-            }
-            return Err(error);
-        }
-        if self.unpublished_dispatch.is_detached() {
-            return self.bind_after_pristine_abort_v1(programs, packets, data);
-        }
-        let predecessor_generation = self
-            .detached_dispatch_generation
-            .expect("checked detached dispatch generation");
-        let prepared = self.with_live_queue_memory_model(|memory| {
-            prepare_public_fixed_dispatch_resources_after_detach(
-                memory,
-                programs,
-                packets,
-                data,
-                predecessor_generation,
-            )
-            .map_err(Into::into)
-        });
-        let prepared = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.poison_terminal();
-                return Err(error);
-            }
-        };
-        let validation = {
-            let device_authorities = prepared.device_authorities_inline_v1();
-            self.engine
-                .as_mut()
-                .expect("checked queue engine")
-                .backend
-                .session
-                .validate_live_queue_dispatch_memory(&device_authorities)
-        };
-        if let Err(error) = validation {
-            self.poison_terminal();
-            return Err(error.into());
-        }
-        self.dispatch = Some(prepared);
-        self.detached_data_count = 0;
-        self.detached_dispatch_generation = None;
-        self.detached_data_identities.clear();
-        self.detached_next_insertion_index = None;
-        Ok(())
+        settled.into_result()
     }
 
     /// Allocates and maps one uninitialized device-local extent while no fixed

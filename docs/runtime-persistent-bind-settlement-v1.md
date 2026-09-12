@@ -7,6 +7,10 @@ retained-control replay. The
 [local evidence](evidence/local-r90-persistent-bind-2026-09-11/README.md)
 separates CPU/source acceptance from Linux execution and formal refinement.
 
+R104 reuses this loan settlement and borrowed preparation validation for
+[ordinary live-rebind custody](runtime-ordinary-rebind-custody-v1.md).
+Its separate local evidence does not expand R90's historical acceptance scope.
+
 ## Loan Settlement
 
 The production-used `execute_live_model_custody_v1` catches opening, operation

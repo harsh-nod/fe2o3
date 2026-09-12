@@ -1,0 +1,17 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.42s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 9 tests
+test queue::live::rebind_tests::ordinary_rebind_public_direct_wrapper_transports_terminal_parent ... ok
+test queue::live::rebind_tests::ordinary_rebind_caught_internal_preflight_panic_still_transports ... ok
+test queue::live::rebind_tests::ordinary_rebind_healthy_preflight_retains_parent_without_new_poison ... ok
+test queue::live::rebind_tests::ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation ... ok
+test queue::live::rebind_tests::ordinary_rebind_terminal_facade_restores_exact_parent_before_transport ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_opening_and_validation_faults_keep_original_owners ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_generation_and_suppressed_failure_never_install_invalid_owner ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_real_loan_operation_retake_matrix_preserves_custody ... ok
+test queue::live::rebind_tests::preparation::ordinary_rebind_all_preparation_stages_retain_original_prefixes ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 969 filtered out; finished in 0.29s
+
