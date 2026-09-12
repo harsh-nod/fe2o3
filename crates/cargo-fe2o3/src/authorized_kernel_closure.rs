@@ -211,7 +211,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "2a1c62604e290a3a45b923eac5ef8d0dfaf175a834d9931a9d19cd777adab819",
 )];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "52bc00864c6a96e00ce68a40af13402ce492bc2e99127c74ab062ccae80fbbfa";
+    "0a6ba14e5e9b5c50d1a49f5baae13402bed8e6cca2a89eb573db89722a8821ec";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
@@ -1553,6 +1553,30 @@ mod tests {
         });
         let external_macro_digest = decode_digest(TRUSTED_FE2O3_EXTERNAL_MACROS_TREE);
         validate_host_code_package(&git, &external_macro_digest).unwrap();
+
+        for substituted_digest in [
+            [0_u8; 32],
+            decode_digest("52bc00864c6a96e00ce68a40af13402ce492bc2e99127c74ab062ccae80fbbfa"),
+            external_macro_digest,
+        ] {
+            assert!(
+                validate_reviewed_fe2o3_macros(&local, &substituted_digest)
+                    .unwrap_err()
+                    .contains("reviewed proc-macro closure content changed")
+            );
+        }
+        assert!(
+            validate_host_code_package(&git, &digest)
+                .unwrap_err()
+                .contains("reviewed proc-macro closure content changed")
+        );
+        let mut relocated_local = local.clone();
+        relocated_local["manifest_path"] = serde_json::json!(root.join("other/Cargo.toml"));
+        assert!(
+            validate_reviewed_fe2o3_macros(&relocated_local, &digest)
+                .unwrap_err()
+                .contains("unreviewed procedural macro")
+        );
 
         let hip = serde_json::json!({
             "name": "fe2o3-hip-sys",
