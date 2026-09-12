@@ -7,6 +7,7 @@ use crate::queue::live::construction_auxiliary::{
 };
 
 type Scope = AuxiliaryConstructionScopeV1<3, Parent>;
+type AuxiliaryRunResult = (Box<Scope>, Result<(), Box<dyn std::any::Any + Send>>);
 
 #[path = "integration_prefix_tests.rs"]
 mod prefix_cases;
@@ -14,6 +15,8 @@ mod prefix_cases;
 struct Original {
     primary: Box<Root>,
     lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<Fixture>>>,
+    sdma: Option<Gfx942SdmaQueueSetV1>,
+    striped_sdma: Option<Gfx942SdmaQueueSetV1>,
     data: Rc<RefCell<Option<crate::shared_memory::PreparationMemoryObservationV1>>>,
     preparation: Rc<RefCell<PrimaryPreparationSnapshotV1>>,
 }
@@ -180,8 +183,8 @@ impl AuxiliaryParentV1 for Parent {
             engine: &mut primary.engine,
             primary: &primary.observation,
             lanes: &mut original.lanes,
-            sdma: None,
-            striped_sdma: None,
+            sdma: original.sdma.as_ref(),
+            striped_sdma: original.striped_sdma.as_ref(),
         }
     }
 
@@ -195,10 +198,18 @@ impl AuxiliaryParentV1 for Parent {
 fn run_auxiliary(
     scope: Box<Scope>,
     programs: Vec<ValidatedKernelEnvelope<'static>>,
-) -> (Box<Scope>, Result<(), Box<dyn std::any::Any + Send>>) {
+) -> AuxiliaryRunResult {
+    let slot = prepare_auxiliary_compute_lane_slot_v1(&scope.lanes).unwrap();
+    run_auxiliary_with_slot(scope, programs, slot)
+}
+
+fn run_auxiliary_with_slot(
+    scope: Box<Scope>,
+    programs: Vec<ValidatedKernelEnvelope<'static>>,
+    slot: PreparedAuxiliaryComputeLaneSlotV1,
+) -> AuxiliaryRunResult {
     let mut retained = None;
     let mut success = None;
-    let slot = prepare_auxiliary_compute_lane_slot_v1(&scope.lanes).unwrap();
     let data_snapshot = scope.data.clone();
     let preparation = scope.preparation.clone();
     let prepare_data = scope.parent.faults.prepare_data;
@@ -234,10 +245,19 @@ fn run_auxiliary(
 }
 
 fn assert_pair_custody(scope: &Scope) {
+    assert_pair_custody_with_candidate(scope, scope.lanes.first().and_then(|s| s.state.as_ref()));
+}
+
+fn assert_pair_custody_with_candidate(
+    scope: &Scope,
+    installed: Option<&ComputeAqlQueueLaneStateV1<Fixture>>,
+) {
     let primary = scope.primary.completed.as_ref().unwrap();
     let memory = &primary.engine.backend.session;
-    let installed = scope.lanes.first().and_then(|s| s.state.as_ref());
     let lane = installed.or(scope.construction.completed.as_ref());
+    if let Some(lane) = lane {
+        assert_eq!(Some(lane.key), scope.construction.key);
+    }
     let dispatch = lane
         .and_then(|l| l.dispatch.as_ref())
         .or(scope.construction.dispatch.as_ref())
@@ -301,7 +321,14 @@ fn assert_pair_custody(scope: &Scope) {
 }
 
 fn assert_pair(scope: &Scope) {
-    assert_pair_custody(scope);
+    assert_pair_with_candidate(scope, scope.lanes.first().and_then(|s| s.state.as_ref()));
+}
+
+fn assert_pair_with_candidate(
+    scope: &Scope,
+    installed: Option<&ComputeAqlQueueLaneStateV1<Fixture>>,
+) {
+    assert_pair_custody_with_candidate(scope, installed);
     let primary = scope.primary.completed.as_ref().unwrap();
     if trace().borrow().create_collision {
         assert_eq!(
@@ -495,6 +522,8 @@ fn exercise(fault: Option<(&'static str, bool)>, collision: bool) {
             original: Some(Original {
                 primary,
                 lanes: Vec::with_capacity(1),
+                sdma: None,
+                striped_sdma: None,
                 data: Rc::new(RefCell::new(None)),
                 preparation: Rc::new(RefCell::new(preparation)),
             }),

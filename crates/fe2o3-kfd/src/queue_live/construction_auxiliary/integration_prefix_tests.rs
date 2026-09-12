@@ -12,6 +12,9 @@ mod create_cases;
 #[path = "integration_recovery_tests.rs"]
 mod recovery_cases;
 
+#[path = "integration_roster_slot_tests.rs"]
+mod roster_slot_cases;
+
 type PrefixCaseResult = (
     Box<Scope>,
     Result<(), Box<dyn std::any::Any + Send>>,
@@ -42,6 +45,22 @@ fn prefix_case_with_oracle(
     configure: impl FnOnce(&mut Scope, &Rc<RefCell<Trace>>),
     assert_custody: impl FnOnce(&Scope, bool),
 ) -> PrefixCaseResult {
+    prefix_case_with_runner(
+        external_runtime,
+        setup,
+        configure,
+        run_auxiliary,
+        assert_custody,
+    )
+}
+
+fn prefix_case_with_runner(
+    external_runtime: bool,
+    setup: impl FnOnce(&Rc<RefCell<Trace>>),
+    configure: impl FnOnce(&mut Scope, &Rc<RefCell<Trace>>),
+    run_auxiliary: impl FnOnce(Box<Scope>, Vec<ValidatedKernelEnvelope<'static>>) -> AuxiliaryRunResult,
+    assert_custody: impl FnOnce(&Scope, bool),
+) -> PrefixCaseResult {
     let (memory, trace) = setup_memory_with_host_budget(2 << 20);
     let (primary, trace) = setup_with_memory(memory, trace);
     setup(&trace);
@@ -68,6 +87,8 @@ fn prefix_case_with_oracle(
             original: Some(Original {
                 primary,
                 lanes: Vec::with_capacity(1),
+                sdma: None,
+                striped_sdma: None,
                 data: Rc::new(RefCell::new(None)),
                 preparation: Rc::new(RefCell::new(preparation)),
             }),

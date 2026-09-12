@@ -1,0 +1,7 @@
+{
+  "attempt": "r102-frozen-construction-retry",
+  "runner_result_written": false,
+  "accepted": false,
+  "observation": "After session restart the exec handle 69949 was missing, no r102/cargo/test process remained, and the partial log contained no terminal test result. No exit code recovered.",
+  "retry": "r102-frozen-construction-final"
+}

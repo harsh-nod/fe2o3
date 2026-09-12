@@ -1065,6 +1065,32 @@ pub(crate) struct Gfx942SdmaQueueOwnerV1 {
     poisoned: bool,
 }
 
+// ID-only collision inputs, with no initialized SDMA resources or native bootstrap.
+#[cfg(test)]
+pub(crate) fn id_only_sdma_owner_for_auxiliary_construction_test_v1(
+    owner: QueueKeyV1,
+    queue_id: u32,
+    engine_index: u32,
+) -> Gfx942SdmaQueueOwnerV1 {
+    Gfx942SdmaQueueOwnerV1 {
+        owner,
+        queue_id,
+        engine_index: Some(engine_index),
+        ring: None,
+        control: None,
+        completions: None,
+        doorbell: None,
+        records: Vec::new(),
+        xgmi_records: Vec::new(),
+        persistent_window_slots: Vec::new(),
+        persistent_window_records: Vec::new(),
+        uncertain_xgmi_ticket: None,
+        generations: [0; GFX942_SDMA_RING_SLOT_COUNT_V1],
+        destroyed: false,
+        poisoned: false,
+    }
+}
+
 pub(crate) struct PreparedGfx942SdmaQueueV1 {
     owner: QueueKeyV1,
     engine_index: Option<u32>,

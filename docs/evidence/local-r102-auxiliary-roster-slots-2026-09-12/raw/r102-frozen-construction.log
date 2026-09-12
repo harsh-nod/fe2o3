@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.08s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 60 tests
+test queue::live::construction_auxiliary::tests::auxiliary_production_glue_uses_shared_phases_and_original_target_after_retake ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_vacancy_success_moves_once_without_vector_growth ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_terminal_transfer_preserves_exact_ledgers_after_caller_drop ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_success_installs_only_new_lane_and_leaves_parent_ledgers_unchanged ... ok
+test queue::live::construction::tests::ring_handoffs_preserve_each_profile_and_transfer_once ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic ... ok
+test queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake ... ok
+test queue::live::construction::tests::borrowed_view_rejects_every_mapping_and_publication_substitution ... ok
+test queue::live::construction::tests::resource_prefix_success_transfers_exact_roster_once_without_native_calls ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_returned_completion_survives_composed_operation_and_retake_matrix ... ok
+test queue::live::construction::tests::resource_prefix_rejections_preserve_all_present_owners_and_identity_order ... ok
+test queue::live::construction::tests::ring_admitted_map_failures_match_exact_r88_custody_and_keep_existing_charges ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_native_allocation_failures_retain_exact_pending_or_returned_output ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_stage_failures_preserve_original_inputs_and_every_control_prefix ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_projection_failures_keep_exact_tokens_and_uncommitted_model ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_seal_map_and_materialization_faults_preserve_original_session_tokens ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_capacity_preflight_leaves_original_parent_and_native_calls_unchanged ... ok

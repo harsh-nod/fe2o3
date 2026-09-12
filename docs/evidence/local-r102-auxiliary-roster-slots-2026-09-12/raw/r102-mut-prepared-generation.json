@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_slot_reuse_and_destination_rejections_keep_exact_owners",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r102-mut-prepared-generation.log",
+  "source": "/home/harsh/.codex-tmp/r102-mut-prepared-generation-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 48.874
+}

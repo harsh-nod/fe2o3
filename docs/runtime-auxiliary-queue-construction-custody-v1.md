@@ -1,5 +1,29 @@
 # Auxiliary Queue Construction Custody V1
 
+R102 locally accepts **NATIVE-2B.5B-3C**, the named roster/destination-slot
+matrix, above signed R101 `77ce1196f2867e79eb450b5a9ba5924ed13152fa`.
+The [R102 evidence](evidence/local-r102-auxiliary-roster-slots-2026-09-12/README.md)
+records seventeen source gates, ten auxiliary checks and six compiled
+behavioral negatives. GNU/musl each pass 2,546 tests with five ignored;
+frozen/restored construction suites each pass 60. All 5,658 source hashes match.
+Four files contain test-fixture/helper changes only; production mechanisms
+remain unchanged. Two interrupted construction attempts remain unaccepted.
+
+Two tests cover sixteen constructions: six retained-roster rejections, eight
+late-slot rejections and two generation-4-to-5 reuse successes. Four additional
+borrowed preflight checks leave the original scope unchanged. The candidate-aware
+oracle retains strict original-owner/account/history assertions and separates
+real constructed custody from ID-only SDMA and deliberately inconsistent
+auxiliary metadata. Late slot failure retains the completed bundle and mapped
+doorbell without finalization or installation. Actual new allocation debits
+remain charged; late failure does not mean unchanged total usage.
+
+R102 completes the planned local .5B matrix alongside earlier packets, not
+native bootstrap, destroy/recreate, incarnation succession or callback-internal
+custody. NATIVE-2C and DATA-ADOPT remain open, along with formal correspondence,
+live KFD and performance qualification. Metadata-slot reuse and local fixture
+cleanup are not native lifecycle acceptance.
+
 R101 locally accepts **NATIVE-2B.5B-3B**, the named recovery/currentness matrix,
 above signed R100 `4424f4607d8a64677556b32713a74b1ca5c6557a`.
 The [R101 evidence](evidence/local-r101-auxiliary-recovery-currentness-2026-09-11/README.md)
@@ -7,7 +31,7 @@ records seventeen source gates, ten auxiliary checks and four compiled
 behavioral negatives. GNU/musl each pass 2,544 tests with five ignored;
 frozen/restored construction suites each pass 58. All 5,657 source hashes match.
 Only two test-fixture files change; production mechanisms remain unchanged.
-3C roster/slot composition, 2C and DATA-ADOPT remain open, alongside formal
+At R101, 3C roster/slot composition, 2C and DATA-ADOPT remained open, alongside formal
 correspondence, live KFD and performance qualification.
 
 The two new tests exercise thirty failures plus two successful trace baselines.
@@ -48,8 +72,8 @@ The [R99 evidence](evidence/local-r99-auxiliary-local-platform-2026-09-11/README
 records seventeen source gates, ten auxiliary checks, five compiled behavioral
 negatives and 2,540 tests per GNU/musl target with five ignored. All 5,655 source
 identities match. Seven test-fixture files change; no production mechanism,
-new proof, live KFD or performance acceptance is added. Complete .5B-3
-CREATE/recovery/roster-slot coverage remains next, followed by 2C and DATA-ADOPT.
+new proof, live KFD or performance acceptance is added. At R99, complete .5B-3
+CREATE/recovery/roster-slot coverage remained next, followed by 2C and DATA-ADOPT.
 
 R97 locally accepts **NATIVE-2B.5B-1**, the shared production-used outer driver
 and named CPU/fake-native prefix matrix, above signed planning checkpoint
@@ -283,7 +307,7 @@ construction suites pass 32 and 54 tests respectively, with exact named rosters.
 CREATE remains scripted successful. Synthetic events, VM reservations and real
 local protection/cleanup helpers do not qualify KFD BO aliasing, runtime-enable
 ioctls, real doorbells, native teardown or callback-internal unreturned custody.
-The next .5B-3 packet needs a separate admitted-prefix oracle for unsuccessful
+At R99, the .5B-3 plan required a separate admitted-prefix oracle for unsuccessful
 CREATE without weakening the existing strict late paired oracle. Currentness
 before/after CREATE and before/after doorbell, recovery, retained rosters and
 occupied/reusable slots remain explicit coverage. The current profile still

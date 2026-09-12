@@ -1,0 +1,8 @@
+{
+  "attempt": "r102-frozen-construction",
+  "terminal_exec_exit_code": 143,
+  "runner_result_written": false,
+  "accepted": false,
+  "observation": "The code-mode host closed stdout during execution. The exec session then reported exit 143; no cargo/test/runner process survived in the subsequent process inspection. Partial log retained. Cause not established.",
+  "retry": "r102-frozen-construction-retry"
+}

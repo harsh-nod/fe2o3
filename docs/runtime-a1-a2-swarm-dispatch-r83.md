@@ -1,4 +1,17 @@
-# A1/A2 Swarm Dispatch At R101 Recovery And Currentness
+# A1/A2 Swarm Dispatch At R102 Rosters And Slots
+
+R102 locally accepts **.5B-3C roster/destination slots**, with
+[final evidence](evidence/local-r102-auxiliary-roster-slots-2026-09-12/README.md).
+Two tests exercise sixteen constructions and four separate borrowed preflight
+checks. Frozen/restored construction suites each pass 60; all seventeen source
+gates, ten auxiliary checks and six compiled behavioral negatives pass.
+GNU/musl each pass 2,546 tests with five ignored, and all 5,658 source hashes
+match. Four files contain test-fixture/helper changes only; two interrupted
+attempts remain unaccepted. No production mechanism, solver, live KFD or
+performance is accepted. Native next takes **2C replacement input**, then
+live-lane custody and DATA-ADOPT; Admission takes **CO-2A**; Resources takes
+**VER-1A.2a-d** before the production journal. The completed local .5B matrix
+does not qualify native teardown/recreation or formal adapter correspondence.
 
 R101 locally accepts **.5B-3B recovery/currentness**, with
 [final evidence](evidence/local-r101-auxiliary-recovery-currentness-2026-09-11/README.md).
@@ -7,7 +20,7 @@ construction suites each pass 58; all seventeen source gates, ten auxiliary
 checks and four compiled behavioral negatives pass. GNU/musl each pass 2,544
 tests with five ignored, and all 5,657 source identities match. Two test-fixture
 files change; no new production mechanism, solver, live KFD or performance is accepted.
-Native next takes **.5B-3C**, then **2C**; Admission takes **CO-2A**, then reviewed
+At R101, Native next took **.5B-3C**, then **2C**; Admission took **CO-2A**, then reviewed
 CO-2B/CO-3A; Resources takes **VER-1A.2a-d**, then the production journal in .3.
 The [current board](runtime-a1-a2-swarm-current.md#remaining-work-at-a-glance)
 records exact work orders. Review turns are complete; implementation queues are
@@ -69,8 +82,8 @@ with five ignored. This is CPU phase composition, not complete Linux outer
 settlement, new formal refinement or performance acceptance.
 
 The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
-immediate assignments below: next is .5B-3 CREATE/installation
-coverage, then 2C. Admission takes
+immediate assignments below: next is 2C replacement-input custody after
+R102's accepted local .5B matrix. Admission takes
 CO-2A after accepted R98; Resources takes VER-1A.2 after the reviewed contract.
 The R95 and earlier sections below retain their historical scope.
 

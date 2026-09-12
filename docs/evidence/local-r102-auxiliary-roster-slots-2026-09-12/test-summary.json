@@ -1,0 +1,126 @@
+{
+  "source_parent": "77ce1196f2867e79eb450b5a9ba5924ed13152fa",
+  "scope": "NATIVE-2B.5B-3C named CPU/local-helper roster/destination-slot matrix",
+  "source_identities": 5658,
+  "changed_test_files": [
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_roster_slot_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_tests.rs",
+    "crates/fe2o3-kfd/src/sdma.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 6,
+  "new_test_functions": [
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_retained_roster_collisions_keep_exact_unassembled_owners",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_slot_reuse_and_destination_rejections_keep_exact_owners"
+  ],
+  "new_matrix": {
+    "original_runtime_routes": 2,
+    "retained_roster_rejections": 6,
+    "late_slot_rejections": 8,
+    "successful_reuse_baselines": 2,
+    "auxiliary_runs": 16,
+    "borrowed_preflight_rejections": 4
+  },
+  "frozen_construction_tests": 60,
+  "restored_construction_tests": 60,
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2546,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2546,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "environment_record": "raw/r102-environment.json",
+  "resumed_environment_record": "raw/r102-environment-resumed.json",
+  "interrupted_construction_attempts_not_accepted": 2,
+  "live_kfd": false,
+  "solver_rerun": false,
+  "performance_measurement": false
+}

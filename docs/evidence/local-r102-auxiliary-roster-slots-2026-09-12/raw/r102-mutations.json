@@ -1,0 +1,98 @@
+[
+  {
+    "name": "auxiliary-collision",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_retained_roster_collisions_keep_exact_unassembled_owners",
+    "edits": [
+      [
+        "            auxiliary_collision,\n            sdma_collision,",
+        "            auxiliary_collision && false,\n            sdma_collision,"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "USERPTR auxiliary queue-control creation",
+      "auxiliary compute queue ID admission"
+    ]
+  },
+  {
+    "name": "directional-collision",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_retained_roster_collisions_keep_exact_unassembled_owners",
+    "edits": [
+      [
+        "            .sdma\n            .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id))",
+        "            .sdma\n            .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id) && false)"
+      ]
+    ],
+    "expected": [
+      "DirectionalCollision, external=false",
+      "left: false",
+      "right: true"
+    ]
+  },
+  {
+    "name": "striped-collision",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_retained_roster_collisions_keep_exact_unassembled_owners",
+    "edits": [
+      [
+        "                .striped_sdma\n                .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id));",
+        "                .striped_sdma\n                .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id) && false);"
+      ]
+    ],
+    "expected": [
+      "StripedCollision, external=false",
+      "left: false",
+      "right: true"
+    ]
+  },
+  {
+    "name": "prepared-generation",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_slot_reuse_and_destination_rejections_keep_exact_owners",
+    "edits": [
+      [
+        "    if prepare_auxiliary_compute_lane_slot_v1(slots)? != prepared {",
+        "    let expected = prepare_auxiliary_compute_lane_slot_v1(slots)?;\n    if expected.index != prepared.index || expected.append != prepared.append {"
+      ]
+    ],
+    "expected": [
+      "ChangedGeneration, external=false",
+      "left: false",
+      "right: true"
+    ]
+  },
+  {
+    "name": "append-reservation",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_slot_reuse_and_destination_rejections_keep_exact_owners",
+    "edits": [
+      [
+        "    if prepared.append {\n        if slots.capacity() <= slots.len() {\n            return Err(ComputeAqlQueueSessionErrorV1::Contract(\n                \"compute queue lane destination not reserved\",\n            ));\n        }\n        Ok(CheckedAuxiliaryComputeLaneSlotV1::Append(slots))",
+        "    if prepared.append {\n        Ok(CheckedAuxiliaryComputeLaneSlotV1::Append(slots))"
+      ]
+    ],
+    "expected": [
+      "UnreservedAppend, external=false",
+      "left: false",
+      "right: true"
+    ]
+  },
+  {
+    "name": "reuse-generation",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::roster_slot_cases::same_engine_auxiliary_slot_reuse_and_destination_rejections_keep_exact_owners",
+    "edits": [
+      [
+        "            slot.generation = generation;\n            slot.state = Some(state);",
+        "            slot.generation = generation - 1;\n            slot.state = Some(state);"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: 4",
+      "right: 5"
+    ]
+  }
+]

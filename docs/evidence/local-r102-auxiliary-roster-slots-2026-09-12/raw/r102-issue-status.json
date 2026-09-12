@@ -1,0 +1,20 @@
+{
+  "checked_at": "2026-09-12 09:28:42 UTC",
+  "command": [
+    "gh",
+    "issue",
+    "view",
+    "182",
+    "--repo",
+    "harsh-nod/fe2o3",
+    "--json",
+    "number,title,state,updatedAt,url"
+  ],
+  "issue": {
+    "number": 182,
+    "state": "OPEN",
+    "title": "Runtime: build an asynchronous distributed direct-KFD execution plane",
+    "updatedAt": "2026-09-12T00:09:12Z",
+    "url": "https://github.com/harsh-nod/fe2o3/issues/182"
+  }
+}
