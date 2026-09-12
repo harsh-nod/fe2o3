@@ -1329,6 +1329,12 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_source_float_casts_saturate_in_simulation -- \
         --ignored --exact
+  run_step rocm-production-integer-reduction-overflow \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_source_workgroup_reductions_wrap_on_overflow -- \
+        --ignored --exact
   run_step rocm-production-scalar-casts \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p fe2o3-amdgcn-model \
@@ -1352,6 +1358,18 @@ run_rocm_compile() {
       cargo test --locked -p rustc-codegen-fe2o3 \
         --test production_neutral_workgroup_reduce_driver_v1 \
         ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-v3-typed-layouts \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- \
+        --ignored --exact
+  run_step rocm-production-integer-scan-overflow \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_neutral_workgroup_reduce_driver_v1 \
+        ordinary_integer_scan_sources_wrap_on_overflow -- \
         --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \

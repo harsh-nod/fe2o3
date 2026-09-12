@@ -1193,7 +1193,8 @@ for production_step in \
   rocm-production-simulation-float-casts \
   rocm-production-scalar-casts \
   rocm-production-simulation-bundle-v2-source-variables \
-  rocm-production-simulation-bundle-v2-invalid-name; do
+  rocm-production-simulation-bundle-v2-invalid-name \
+  rocm-production-simulation-bundle-v3-typed-layouts; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
   if [[ " $(step_command "${production_step}") " == *" --features "* ]]; then
@@ -1232,6 +1233,10 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_general_matrix_driver_v1 dynamic_attention_kernel_reaches_gfx942_llvm -- --ignored --exact' \
   "$(step_command rocm-production-general-attention)" \
   'ROCm compile did not run the exact successful dynamic attention compiler test'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v3-typed-layouts)" \
+  'ROCm compile omitted the exact typed-layout source and CPU runtime regression'
 assert_equals \
   "cargo test --locked -p dialect-amdgcn --test lowering rocm_compiles_the_golden_to_an_amdgpu_code_object -- --ignored --exact" \
   "$(step_command rocm-g1-code-object)" \

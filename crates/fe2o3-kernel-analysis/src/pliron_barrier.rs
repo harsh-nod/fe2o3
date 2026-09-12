@@ -6,17 +6,8 @@ use dialect_gpu::{
     AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr, MemoryOrderAttr,
     MemoryScopeAttr,
 };
-use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, PipelineEventKindAttr, PipelineEventOp,
-    ReturnOp, TensorLayoutOp, TrapOp,
-};
-use pliron::{
-    basic_block::BasicBlock,
-    builtin::ops::FuncOp,
-    context::{Context, Ptr},
-    operation::Operation,
-};
+use dialect_kernel::{PipelineEventKindAttr, PipelineEventOp, TensorLayoutOp};
+use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::{
@@ -26,6 +17,9 @@ use crate::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_ana
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::pliron_simt_protocol::{PlironProtocolEventV1, PlironSimtProtocolIssueV1};
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
+
+mod barrier_paths;
+use barrier_paths::summarize_all_barrier_paths;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironBarrierFindingV1 {
@@ -255,7 +249,7 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
                 .to_owned(),
         });
     }
-    match summarize_all_barrier_paths(context, &inventory) {
+    match summarize_all_barrier_paths(context, function, &inventory) {
         BarrierPathSummaryV1::Unique => PlironBarrierReportV1 { findings: vec![] },
         BarrierPathSummaryV1::Divergent {
             first_trace,
@@ -462,48 +456,6 @@ enum BarrierPathSummaryV1 {
 const MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1: usize = 512;
 const MAX_FALLBACK_BARRIER_PATH_EVENTS_V1: usize = 256;
 
-fn summarize_all_barrier_paths(
-    context: &Context,
-    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
-) -> BarrierPathSummaryV1 {
-    let blocks = inventory.blocks();
-    let block_indices = blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| (*block, index))
-        .collect::<HashMap<Ptr<BasicBlock>, usize>>();
-    if blocks.is_empty() {
-        return BarrierPathSummaryV1::Incomplete("the kernel CFG is empty".to_owned());
-    }
-    if blocks.len() > MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1 {
-        return BarrierPathSummaryV1::Incomplete(format!(
-            "the fallback barrier CFG has {} blocks, exceeding the bounded limit of {MAX_FALLBACK_BARRIER_CFG_BLOCKS_V1}",
-            blocks.len()
-        ));
-    }
-    let mut states = vec![0_u8; blocks.len()];
-    let mut summaries = vec![None; blocks.len()];
-    match summarize_barrier_paths_from(
-        context,
-        inventory,
-        blocks,
-        &block_indices,
-        0,
-        &mut states,
-        &mut summaries,
-    ) {
-        Ok(_) => BarrierPathSummaryV1::Unique,
-        Err(BarrierPathFailureV1::Divergent {
-            first_trace,
-            second_trace,
-        }) => BarrierPathSummaryV1::Divergent {
-            first_trace,
-            second_trace,
-        },
-        Err(BarrierPathFailureV1::Incomplete(detail)) => BarrierPathSummaryV1::Incomplete(detail),
-    }
-}
-
 enum BarrierPathFailureV1 {
     Divergent {
         first_trace: Vec<(usize, usize)>,
@@ -581,117 +533,6 @@ fn merge_barrier_path_summary_v1(
         });
     }
     Ok(())
-}
-
-fn summarize_barrier_paths_from(
-    context: &Context,
-    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
-    blocks: &[Ptr<BasicBlock>],
-    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
-    block_index: usize,
-    states: &mut [u8],
-    summaries: &mut [Option<BarrierPathBlockSummaryV1>],
-) -> Result<BarrierPathBlockSummaryV1, BarrierPathFailureV1> {
-    match states.get(block_index).copied() {
-        Some(2) => {
-            return Ok(summaries[block_index]
-                .as_ref()
-                .expect("completed barrier path summary")
-                .clone());
-        }
-        Some(1) => {
-            return Err(BarrierPathFailureV1::Incomplete(format!(
-                "block {block_index} participates in cyclic control flow"
-            )));
-        }
-        Some(_) => {}
-        None => {
-            return Err(BarrierPathFailureV1::Incomplete(
-                "a CFG successor is outside the kernel".to_owned(),
-            ));
-        }
-    }
-    states[block_index] = 1;
-    let block = blocks[block_index];
-    let terminator = block
-        .deref(context)
-        .get_terminator(context)
-        .ok_or_else(|| {
-            BarrierPathFailureV1::Incomplete(format!("block {block_index} has no terminator"))
-        })?;
-    let mut local = Vec::with_capacity(MAX_FALLBACK_BARRIER_PATH_EVENTS_V1);
-    for site in inventory.block_operations(block_index) {
-        let operation_index = site.operation();
-        let operation = site.pointer();
-        if operation == terminator {
-            continue;
-        }
-        if Operation::get_op_dyn(operation, context)
-            .downcast_ref::<BarrierOp>()
-            .is_some()
-        {
-            if local.len() == MAX_FALLBACK_BARRIER_PATH_EVENTS_V1 {
-                return Err(BarrierPathFailureV1::Incomplete(format!(
-                    "block {block_index} has more than {MAX_FALLBACK_BARRIER_PATH_EVENTS_V1} barriers"
-                )));
-            }
-            local.push((block_index, operation_index));
-        }
-    }
-    let terminator = Operation::get_op_dyn(terminator, context);
-    let raw = terminator.get_operation().deref(context);
-    let is_return = terminator.downcast_ref::<ReturnOp>().is_some();
-    let is_trap = terminator.downcast_ref::<TrapOp>().is_some();
-    let successors = if is_return || is_trap {
-        Vec::new()
-    } else if terminator.downcast_ref::<BranchOp>().is_some()
-        || terminator.downcast_ref::<BranchArgsOp>().is_some()
-        || terminator.downcast_ref::<IndexLessThanBranchOp>().is_some()
-        || terminator
-            .downcast_ref::<IndexLessThanBranchArgsOp>()
-            .is_some()
-        || terminator.downcast_ref::<IndexEqualBranchOp>().is_some()
-        || terminator
-            .downcast_ref::<IndexEqualBranchArgsOp>()
-            .is_some()
-        || terminator.downcast_ref::<AnalysisSplitOp>().is_some()
-    {
-        raw.successors()
-            .map(|successor| {
-                block_indices.get(&successor).copied().ok_or_else(|| {
-                    BarrierPathFailureV1::Incomplete(format!(
-                        "block {block_index} targets a block outside the kernel"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        return Err(BarrierPathFailureV1::Incomplete(format!(
-            "block {block_index} has an unsupported terminator"
-        )));
-    };
-    let mut complete = BarrierPathBlockSummaryV1::default();
-    for successor in successors {
-        let suffix = summarize_barrier_paths_from(
-            context,
-            inventory,
-            blocks,
-            block_indices,
-            successor,
-            states,
-            summaries,
-        )?;
-        let candidate = prepend_barrier_path_v1(&local, suffix)?;
-        merge_barrier_path_summary_v1(&mut complete, candidate)?;
-    }
-    if is_return {
-        complete.normal = Some(local);
-    } else if is_trap {
-        complete.trapped_prefix = Some(local);
-    }
-    states[block_index] = 2;
-    summaries[block_index] = Some(complete.clone());
-    Ok(complete)
 }
 
 pub(crate) fn require_pliron_barrier_convergence_with_analyses_v1(

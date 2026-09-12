@@ -1,3 +1,6 @@
+#[path = "pliron_progress/duplicate_edges.rs"]
+mod duplicate_edges;
+
 use dialect_kernel::{
     BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, IndexUnsignedCastOp,

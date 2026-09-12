@@ -583,41 +583,26 @@ fn progress_edge_arguments_v1(
 ) -> Result<Vec<pliron::value::Value>, ()> {
     let terminator = source.deref(context).get_terminator(context).ok_or(())?;
     let operation = Operation::get_op_dyn(terminator, context);
-    let successor = operation
+    let mut arguments = None;
+    for (ordinal, successor) in operation
         .get_operation()
         .deref(context)
         .successors()
-        .position(|successor| successor == target)
-        .ok_or(())?;
-    if let Some(branch) = operation.downcast_ref::<BranchArgsOp>() {
-        return (successor == 0)
-            .then(|| branch.arguments(context))
-            .ok_or(());
+        .enumerate()
+    {
+        if successor != target {
+            continue;
+        }
+        let candidate = successor_arguments(context, &operation, ordinal)
+            .or_else(|| (target.deref(context).get_num_arguments() == 0).then(Vec::new))
+            .ok_or(())?;
+        // A block pair is a usable summary only when all parallel edges agree.
+        if arguments.as_ref().is_some_and(|first| first != &candidate) {
+            return Err(());
+        }
+        arguments = Some(candidate);
     }
-    if let Some(branch) = operation.downcast_ref::<IndexLessThanBranchArgsOp>() {
-        return match successor {
-            0 => Ok(branch.true_arguments(context)),
-            1 => Ok(branch.false_arguments(context)),
-            _ => Err(()),
-        };
-    }
-    if let Some(branch) = operation.downcast_ref::<IndexEqualBranchArgsOp>() {
-        return match successor {
-            0 => Ok(branch.true_arguments(context)),
-            1 => Ok(branch.false_arguments(context)),
-            _ => Err(()),
-        };
-    }
-    if let Some(split) = operation.downcast_ref::<AnalysisSplitOp>() {
-        return match successor {
-            0 => Ok(split.first_arguments(context)),
-            1 => Ok(split.second_arguments(context)),
-            _ => Err(()),
-        };
-    }
-    (target.deref(context).get_num_arguments() == 0)
-        .then(Vec::new)
-        .ok_or(())
+    arguments.ok_or(())
 }
 
 fn progress_index_offset_v1(
@@ -1328,7 +1313,7 @@ fn reachable_blocks(edges: &[Vec<usize>]) -> Vec<bool> {
     reachable
 }
 
-fn strongly_connected_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub(crate) fn strongly_connected_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let mut reverse = vec![Vec::new(); edges.len()];
     for (from, successors) in edges.iter().enumerate() {
         for successor in successors {
