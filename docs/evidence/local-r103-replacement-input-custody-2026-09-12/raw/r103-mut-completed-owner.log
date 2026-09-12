@@ -1,0 +1,25 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.97s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs' (239144) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:542:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs' (239144) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_replacement_tests.rs:89:13:
+queue construction retains completed dispatch
+
+
+failures:
+    queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 968 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -51,7 +51,6 @@ use super::dispatch_binding::{
     prepare_persistent_fixed_dispatch_resources_v1,
     prepare_public_fixed_dispatch_resources_after_detach,
     prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
-    prepare_public_fixed_dispatch_resources_after_recycle,
     prepare_three_binding_persistent_fixed_dispatch_resources_v1,
     three_binding_persistent_fixed_dispatch_control_identity_v1, unwrap_completed,
     unwrap_published, validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress,
@@ -1183,41 +1182,36 @@ impl Gfx942RecycledDispatchResourcesV1 {
     ///
     /// The replacement dispatch owner advances from the exact recycled
     /// predecessor generation. This transition does not restore stale content
-    /// authority or expose native addresses. Any error consumes the returned
-    /// resources because queue creation may have crossed a native side-effect
-    /// boundary.
+    /// authority or expose native addresses. Any error consumes and retains the
+    /// original inputs and every completed preparation prefix, including errors
+    /// before native queue creation. The error grants no disposal authority.
     pub fn recreate_compute_aql_queue_with_fixed_dispatch<const N: usize>(
         self,
         ring_bytes: u32,
         programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
         packets: [Gfx942FixedDispatchPacketV1; N],
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
-        validate_fixed_batch_ring::<N>(ring_bytes)?;
         let Self {
-            destroyed: _,
+            destroyed,
             memory,
             dispatch_generation,
             data,
         } = self;
-        let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
-        ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
+        let root = PrimaryQueueConstructionV1::new(
             memory,
-            geometry,
-            ring_bytes,
-            QueueRingBackingV1::AqlSpecial,
-            move |memory| {
-                prepare_public_fixed_dispatch_resources_after_recycle(
-                    memory,
-                    programs,
-                    packets,
-                    data,
-                    dispatch_generation,
-                )
-                .map(Some)
-                .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)
-            },
-            None,
-        )
+            (
+                destroyed,
+                dispatch_generation,
+                programs,
+                FixedDispatchPreparationCustodyV1::new(packets, data),
+            ),
+        );
+        let mut root = root.run(|root, entry| root.construct_replacement(entry, ring_bytes))?;
+        Ok(root
+            .completed
+            .take()
+            .expect("validated completed replacement queue")
+            .into_session())
     }
 }
 

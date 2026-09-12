@@ -1,0 +1,11 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 56s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-6cd4f20cb887eaec)
+
+running 1 test
+test async_engine::tests::owned_tests::drain_tests::r65_executor_drains_2048_accepted_operations_with_full_reply_budget ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 714 filtered out; finished in 1.53s
+

@@ -254,7 +254,35 @@ fn assert_backing(memory: &Memory, before: &PreparationMemoryObservationV1) {
 
 pub(crate) struct PrimaryPreparationSnapshotV1 {
     data: Vec<Input>,
-    kernargs: Vec<Box<[u8]>>,
+    data_vector: Option<(usize, usize)>,
+    packets: Vec<PacketSnapshotV1>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PacketSnapshotV1 {
+    program_index: usize,
+    geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
+    dynamic_group_segment_bytes: u32,
+    kernarg_storage: usize,
+    kernarg_bytes: Box<[u8]>,
+    bindings_storage: usize,
+    bindings: Box<[Gfx942DispatchBufferBindingV1]>,
+}
+
+impl PacketSnapshotV1 {
+    fn capture(packet: &Gfx942FixedDispatchPacketV1) -> Self {
+        Self {
+            program_index: packet.program_index,
+            geometry: packet.geometry,
+            ordering: packet.ordering,
+            dynamic_group_segment_bytes: packet.dynamic_group_segment_bytes,
+            kernarg_storage: packet.kernarg_bytes.as_ptr() as usize,
+            kernarg_bytes: packet.kernarg_bytes.clone(),
+            bindings_storage: packet.buffers.as_ptr() as usize,
+            bindings: packet.buffers.clone(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -308,7 +336,8 @@ impl PrimaryPreparationSnapshotV1 {
     pub(crate) fn packets(packets: &[Gfx942FixedDispatchPacketV1]) -> Self {
         Self {
             data: Vec::new(),
-            kernargs: packets.iter().map(|p| p.kernarg_bytes.clone()).collect(),
+            data_vector: None,
+            packets: packets.iter().map(PacketSnapshotV1::capture).collect(),
         }
     }
 
@@ -362,11 +391,11 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
     pub(crate) fn primary_snapshot_v1(&self) -> PrimaryPreparationSnapshotV1 {
         PrimaryPreparationSnapshotV1 {
             data: inputs(&self.original_data),
-            kernargs: self
-                .packets
-                .iter()
-                .map(|p| p.kernarg_bytes.clone())
-                .collect(),
+            data_vector: Some((
+                self.original_data.as_ptr() as usize,
+                self.original_data.capacity(),
+            )),
+            packets: self.packets.iter().map(PacketSnapshotV1::capture).collect(),
         }
     }
 
@@ -424,10 +453,21 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         assert_eq!(
             self.packets
                 .iter()
-                .map(|p| &p.kernarg_bytes)
+                .map(PacketSnapshotV1::capture)
                 .collect::<Vec<_>>(),
-            expected.kernargs.iter().collect::<Vec<_>>()
+            expected.packets,
+            "exact original packet descriptors and backing"
         );
+        if let Some(vector) = expected.data_vector {
+            assert_eq!(
+                (
+                    self.original_data.as_ptr() as usize,
+                    self.original_data.capacity()
+                ),
+                vector,
+                "original data vector backing"
+            );
+        }
         assert_inputs_with_completed(
             self,
             &expected.data,
@@ -436,6 +476,47 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         if transferred.is_some() {
             assert_eq!(self.stage, PreparationStageV1::Transferred);
             assert!(!self.failed && self.completed.is_none());
+        }
+    }
+
+    pub(in crate::queue) fn primary_assert_replacement_generation_v1(
+        &self,
+        next_generation: Option<u64>,
+        transferred: Option<&DispatchResourceOwnerV1>,
+    ) {
+        let owners = self
+            .generation
+            .iter()
+            .chain(self.completed.iter().map(|owner| &owner.generation))
+            .chain(transferred.map(|owner| &owner.generation))
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), usize::from(next_generation.is_some()));
+        if let Some(next_generation) = next_generation {
+            let owner = owners[0];
+            assert_eq!(
+                owner.next_generation, next_generation,
+                "exact replacement generation"
+            );
+            assert_ne!(owner.recipe_occurrence, 0);
+            assert_eq!(owner.recipe_queue, None);
+            assert!(
+                owner
+                    .slots
+                    .iter()
+                    .all(|slot| *slot == DispatchEpochSlotV1::VACANT)
+            );
+            assert_eq!(owner.recycled_generation, None);
+            assert!(!owner.poisoned);
+        }
+        assert_eq!(
+            self.control,
+            PersistentFixedDispatchControlStateV1::Ordinary
+        );
+        for owner in self.completed.iter().chain(transferred) {
+            assert_eq!(
+                owner.persistent_control,
+                PersistentFixedDispatchControlStateV1::Ordinary
+            );
         }
     }
 }

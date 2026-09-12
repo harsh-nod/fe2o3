@@ -1,4 +1,15 @@
-# A1/A2 Swarm Dispatch At R102 Rosters And Slots
+# A1/A2 Swarm Dispatch At R103 Replacement Custody
+
+R103 locally accepts **2C replacement-input custody** above signed R102, with
+[retained evidence](evidence/local-r103-replacement-input-custody-2026-09-12/README.md).
+Frozen/restored construction suites each pass 69; all seventeen source gates,
+ten auxiliary checks and six compiled behavioral negatives pass. GNU/musl each
+pass 2,555 tests with five ignored in the fresh four-thread harness campaign.
+The earlier failed musl attempt is retained and unaccepted. The next three
+reviewed packets are **2C live-lane
+restoration/rebind**, **CO-2A Context identity**, and **VER-1A.2a issuance**.
+Primary integrates; the workers remain read-only reviewers by default. Model,
+authenticated proof, hardware and performance acceptance are separate gates.
 
 R102 locally accepts **.5B-3C roster/destination slots**, with
 [final evidence](evidence/local-r102-auxiliary-roster-slots-2026-09-12/README.md).
@@ -8,7 +19,7 @@ gates, ten auxiliary checks and six compiled behavioral negatives pass.
 GNU/musl each pass 2,546 tests with five ignored, and all 5,658 source hashes
 match. Four files contain test-fixture/helper changes only; two interrupted
 attempts remain unaccepted. No production mechanism, solver, live KFD or
-performance is accepted. Native next takes **2C replacement input**, then
+performance is accepted. At R102, Native next took **2C replacement input**, then
 live-lane custody and DATA-ADOPT; Admission takes **CO-2A**; Resources takes
 **VER-1A.2a-d** before the production journal. The completed local .5B matrix
 does not qualify native teardown/recreation or formal adapter correspondence.
@@ -82,8 +93,8 @@ with five ignored. This is CPU phase composition, not complete Linux outer
 settlement, new formal refinement or performance acceptance.
 
 The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
-immediate assignments below: next is 2C replacement-input custody after
-R102's accepted local .5B matrix. Admission takes
+immediate assignments below: after R103 replacement-input acceptance, next is
+2C live-lane restoration/rebind. Admission takes
 CO-2A after accepted R98; Resources takes VER-1A.2 after the reviewed contract.
 The R95 and earlier sections below retain their historical scope.
 

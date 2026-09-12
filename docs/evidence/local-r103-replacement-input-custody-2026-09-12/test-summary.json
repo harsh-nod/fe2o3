@@ -1,0 +1,178 @@
+{
+  "source_parent": "50c4eb075013fde0a984a003c0b5b90eae562847",
+  "scope": "NATIVE-2C replacement-input custody; CPU/shared-sequence acceptance only",
+  "planning_only": "Next Native/Admission/Resources handoffs and VER-1A.2a activation/capacity freeze",
+  "issue_status_record": "raw/r103-issue-status.json",
+  "source_identities": 5659,
+  "changed_source_files": [
+    "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary/integration_replacement_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 6,
+  "new_test_functions": [
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_create_uncertainty_retains_all_published_owners_without_cleanup",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_early_validation_and_planning_retain_inputs_before_any_native_work",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_recipe_retains_original_program_and_packet_rosters",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_native_preparation_failures_preserve_pending_and_returned_owners",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_preparation_stage_failures_preserve_inputs_generation_and_control_prefixes",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_public_entry_roots_inputs_before_the_shared_construction_sequence",
+    "queue::live::construction_primary::integration_tests::replacement_cases::replacement_success_preserves_exact_predecessor_and_last_issuable_generation"
+  ],
+  "replacement_matrix": {
+    "early_rejections": 7,
+    "invalid_generations": 3,
+    "invalid_recipe": 1,
+    "preparation_stage_failures": 62,
+    "preparation_native_failures": 126,
+    "late_failures": 48,
+    "create_uncertainty": 5,
+    "successes": 2,
+    "total_runs": 254,
+    "failures": 252
+  },
+  "frozen_construction_tests": 69,
+  "restored_construction_tests": 69,
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2555,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2555,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "environment_record": "raw/r103-environment.json",
+  "accepted_campaign": "r103-accepted",
+  "accepted_campaign_environment": "raw/r103-accepted-environment.json",
+  "historical_failed_campaign": {
+    "name": "r103-final",
+    "accepted": false,
+    "gnu": {
+      "harnesses": 48,
+      "passed": 2555,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl": {
+      "harnesses": 48,
+      "passed": 2553,
+      "failed": 2,
+      "ignored": 5
+    },
+    "failures": [
+      {
+        "test": "async_engine::tests::owned_tests::drain_tests::r65_executor_drains_2048_accepted_operations_with_full_reply_budget",
+        "assertion": "drain watchdog expired"
+      },
+      {
+        "test": "worker::tests::blocked_request_write_obeys_absolute_deadline_and_reaps_the_worker",
+        "assertion": "worker deadline exceeded scheduler tolerance"
+      }
+    ],
+    "cause": "Undetermined; scheduling contention is consistent with observations but not proven."
+  },
+  "diagnostic_runs": [
+    "r103-diagnostic-drain",
+    "r103-diagnostic-worker"
+  ],
+  "diagnostic_scope": "Focused musl reruns only; not substitutes for full-source acceptance or additional unique tests.",
+  "historical_pre_freeze_runs": [
+    "r103-initial-replacement",
+    "r103-replacement-first",
+    "r103-preflight-clippy"
+  ],
+  "live_kfd": false,
+  "solver_rerun": false,
+  "performance_measurement": false
+}

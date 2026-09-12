@@ -18,6 +18,9 @@ use std::rc::Rc;
 #[path = "integration_preparation_tests.rs"]
 mod preparation_cases;
 
+#[path = "integration_replacement_tests.rs"]
+mod replacement_cases;
+
 #[path = "integration_projection_tests.rs"]
 mod projection_cases;
 
@@ -498,21 +501,31 @@ fn run_with<P>(
     mut external: Option<&mut ExternalSlots>,
     prepare: impl FnOnce(&mut Root<P>) -> Result<(), ComputeAqlQueueSessionErrorV1>,
 ) -> RunResult<P> {
+    run_work(root, |root, entry| {
+        prepare(root)?;
+        root.construct(
+            entry,
+            queue_resource_plan_for_test_v1(4096),
+            4096,
+            backing,
+            external.as_mut().map(|s| (&mut s.runtime, &mut s.control)),
+        )
+    })
+}
+
+fn run_work<P>(
+    root: Box<Root<P>>,
+    work: impl FnOnce(
+        &mut Root<P>,
+        &mut UserptrConstructionEntryV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+) -> RunResult<P> {
     let mut retained = None;
     let mut success = None;
     let result = catch_unwind(AssertUnwindSafe(|| {
         let result = run_rooted_construction_with_v1(
             root,
-            |root, entry| {
-                prepare(root)?;
-                root.construct(
-                    entry,
-                    queue_resource_plan_for_test_v1(4096),
-                    4096,
-                    backing,
-                    external.as_mut().map(|s| (&mut s.runtime, &mut s.control)),
-                )
-            },
+            work,
             |root| {
                 if let Some(shadows) = root.unpublished.as_mut() {
                     Fixture::cleanup_unpublished(shadows);
@@ -581,13 +594,23 @@ fn assert_root_with_external(
     trace: &Rc<RefCell<Trace>>,
     external: Option<&ExternalSlots>,
 ) {
+    assert_prepared_root(root, &root.preparation.1, expected, trace, external);
+}
+
+fn assert_prepared_root<P>(
+    root: &Root<P>,
+    custody: &FixedDispatchPreparationCustodyV1<3>,
+    expected: usize,
+    trace: &Rc<RefCell<Trace>>,
+    external: Option<&ExternalSlots>,
+) {
     assert_common(root, expected, trace);
     assert_platform(root, external);
     let original_dispatch = root
         .dispatch
         .as_ref()
         .or_else(|| root.completed.as_ref().and_then(|c| c.dispatch.as_ref()));
-    root.preparation.1.primary_assert_snapshot_v1(
+    custody.primary_assert_snapshot_v1(
         memory(root),
         trace.borrow().initial_preparation.as_ref().unwrap(),
         original_dispatch,

@@ -10,14 +10,49 @@ mutation lineage, not initialized contents, native currentness, disposal
 authority or successful kernel semantics.
 
 R98 accepts this [contract/inventory only](evidence/local-r98-completion-contract-2026-09-11/README.md).
-The next Resources deliverable is VER-1A.2's production-consumed executable
-model and property proofs, followed by the bounded Context journal.
+The next Resources deliverable is VER-1A.2's executable model and property
+proofs. It remains model-only until the bounded Context journal consumes it
+in VER-1A.3.
 
 VER-1A first provides an explicitly opt-in bounded profile. It must not silently
 restrict existing ordinary-runtime behavior. Complete VER-1B hook coverage,
 bounded ordered writers and recovery are required before enabling persistent
 reuse across the ordinary surface. These are requirements, not optional
 optimizations to be dropped when the initial journal passes tests.
+
+### R103 Planning Freeze
+
+The first model packet is **VER-1A.2a issuance**, not full Begin or settlement.
+The reviewed future integration policy is construction-only opt-in for a fresh
+Context, before its first `next_id()` call. Bind the exact Context generation
+and fix the initial registered-writer watermark at zero. Device enumeration
+does not consume the local allocator. No mid-Context activation, imported
+writer set, caller-selected watermark, reset or reconfiguration is admitted.
+This is a planning contract; it changes no ordinary Context behavior now.
+
+Require explicit independent capacities `1 <= A,W <= 1_048_576`, with no
+implicit default. These match the existing allocation/submission maxima,
+not the credit engine's separate 65,536-record bound. Packet .2a preallocates W
+writer slots; A-sized membership/scratch belongs to .2b. Eventually W includes
+Reserved, Pending and Unknown writers, including attempts without a returned
+submission. Aggregate charging remains a separate obligation.
+
+Registration observes an existing exact Context/local-ID/writer-kind key with
+`0 < local < u64::MAX` and a local ID above the registration watermark. It never
+mints a Context ID. Gaps are legal. Registering 41 then 44 must leave both
+Reserved and allow later lookup/Begin of 41; unregistered 42 cannot register
+after 44. Exact pre-effect abort frees a Reserved slot but cannot decrease the
+watermark or revive its key. Dropping a ticket does not abort. Slot position
+alone is not identity. Both Context generation and local ID `u64::MAX - 1` are
+issuable under existing allocators; `u64::MAX` is not.
+
+Failed registration leaves model state unchanged. The eventual Context
+consumer checks capacity before minting; an already consumed Context ID still
+cannot be reissued. Synchronous write hooks must use the existing `next_id()`;
+asynchronous hooks preserve the already minted submission identity. Acceptance
+of .2a is limited to registration, exact Reserved lookup and explicit
+pre-effect Reserved abort, not destination membership, effects, production
+integration or formal verification.
 
 ## Identity And Capacity
 
@@ -146,8 +181,9 @@ explicitly excluded before private leases are enabled.
 
 ## Acceptance And Proof Boundary
 
-VER-1A.2 adds a production-consumed model; VER-1A.3 implements the bounded
-journal; VER-1A.4/.5 integrates initial hooks and validates them. VER-1B closes
+VER-1A.2 adds the standalone executable model and its proofs; VER-1A.3 implements
+the bounded production journal consuming it; VER-1A.4/.5 integrates initial hooks
+and validates them. VER-1B closes
 every mutation family plus ordered writers/recovery; only then may VER-2 issue
 cross-run leases. First non-reusing generated ISSUE does not depend on leases,
 but must retain its mutation identity/roster now.

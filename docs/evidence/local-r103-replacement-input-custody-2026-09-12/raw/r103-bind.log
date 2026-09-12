@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 4 tests
+test queue::live::tests::injected_persistent_bind_cancellation_failures_preserve_reserved_and_prepared_leases ... ok
+test queue::live::tests::persistent_bind_terminal_ingress_retains_self_but_returns_foreign_input ... ok
+test queue::live::tests::persistent_bind_terminal_retake_dominates_successful_roster_cancellation ... ok
+test queue::live::tests::persistent_bind_early_validation_retains_each_prepared_entry_on_error_and_panic ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 965 filtered out; finished in 0.01s
+

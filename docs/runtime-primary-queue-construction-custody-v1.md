@@ -1,5 +1,32 @@
 # Primary Queue Construction Custody V1
 
+R103 extends the existing primary root to the recycled fixed-dispatch
+replacement entry. The root owns the original session, destruction receipt
+observation, predecessor generation, program vector, packets and data before
+ring validation or geometry planning. A shared production/test method runs
+generation-aware preparation in place, transfers its completed dispatch owner,
+then invokes the existing primary construction sequence. No public signature,
+memory trait, queue engine or backend selection API changes.
+
+The generation result is recorded inside preparation custody: zero is stale,
+`7` advances to `8`, `u64::MAX - 2` advances to `u64::MAX - 1`, and the remaining
+upper boundary is exhausted. Replacement never treats zero as pristine. Early
+errors and panics retain the root without prematurely arming the USERPTR gate;
+after native preparation starts, preparation failure quarantines the session.
+Completed dispatch and original descriptors remain rooted across CREATE,
+doorbell and finalization failures. The input receipt is descriptive metadata,
+not an independently proved native destruction or disposal authority.
+
+R103's [local evidence](evidence/local-r103-replacement-input-custody-2026-09-12/README.md)
+accepts the named 254-run shared-sequence matrix, 69 frozen/restored construction
+tests, seventeen source gates, ten auxiliary checks and six compiled behavioral
+negatives. GNU/musl each pass 2,555 tests with five ignored in the fresh
+four-thread harness campaign; the earlier musl watchdog failures remain
+unaccepted. Live rebind, insertion, detach, release, returning destroy and
+DATA-ADOPT remain separate packets. No new
+solver result, actual predecessor destruction, live KFD, native incarnation
+succession or performance qualification is claimed here.
+
 R92 implements the NATIVE-2A.2 outer primary-constructor owner above signed
 R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`. It composes the existing
 [lower handoffs](runtime-queue-construction-handoffs-v1.md) and

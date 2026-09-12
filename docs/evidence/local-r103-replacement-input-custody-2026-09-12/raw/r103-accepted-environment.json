@@ -1,0 +1,22 @@
+{
+  "attempt": "r103-accepted",
+  "reason": "Fresh full campaign after two unchanged musl watchdog assertions failed; contention is a hypothesis, not a proven cause.",
+  "environment_overrides": {
+    "RUST_TEST_THREADS": "4",
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "available_cpus": 32,
+  "load_average_at_start": [
+    39.5849609375,
+    38.85986328125,
+    38.12939453125
+  ],
+  "prior_attempt": "r103-final",
+  "test_deadlines_changed": false,
+  "test_filters_added": false
+}

@@ -1,0 +1,9 @@
+{
+  "repository": "harsh-nod/fe2o3",
+  "number": 182,
+  "title": "Runtime: build an asynchronous distributed direct-KFD execution plane",
+  "state": "OPEN",
+  "updatedAt": "2026-09-12T10:51:18Z",
+  "source": "gh issue view 182 --repo harsh-nod/fe2o3 --json number,title,state,updatedAt,body",
+  "scope": "Planning status only; not implementation, proof or hardware acceptance."
+}

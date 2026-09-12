@@ -141,6 +141,44 @@ type ExternalPrimaryRuntimeV1<'a, E> = (
     &'a mut Option<<E as PrimaryEnvironmentV1>::RuntimeControl>,
 );
 
+type RecycledQueuePreparationV1<'a, const N: usize> = (
+    ComputeAqlQueueDestroyedV1,
+    u64,
+    Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'a>>,
+    FixedDispatchPreparationCustodyV1<N>,
+);
+
+impl<const N: usize, E: PrimaryEnvironmentV1>
+    PrimaryQueueConstructionV1<RecycledQueuePreparationV1<'_, N>, E>
+where
+    E::Memory: crate::queue::dispatch_binding::preparation::PreparationMemoryV1,
+{
+    pub(super) fn construct_replacement(
+        &mut self,
+        entry: &mut UserptrConstructionEntryV1,
+        ring_bytes: u32,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        validate_fixed_batch_ring::<N>(ring_bytes)?;
+        let memory = self.memory.as_mut().expect("construction memory");
+        let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+        let (_, predecessor, programs, preparation) = &mut self.preparation;
+        crate::queue::dispatch_binding::prepare_public_fixed_dispatch_resources_after_recycle_in_place(
+            memory,
+            programs,
+            preparation,
+            *predecessor,
+        )?;
+        self.dispatch = Some(preparation.take_completed()?);
+        self.construct(
+            entry,
+            geometry,
+            ring_bytes,
+            QueueRingBackingV1::AqlSpecial,
+            None,
+        )
+    }
+}
+
 pub(super) struct UserptrConstructionEntryV1<'a> {
     stage: Option<&'static str>,
     poison: &'a dyn Fn(),

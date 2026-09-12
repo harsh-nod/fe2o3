@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.85s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work' (234096) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_replacement_tests.rs:201:30:
+invalid replacement generation must reject: ()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 968 filtered out; finished in 0.92s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

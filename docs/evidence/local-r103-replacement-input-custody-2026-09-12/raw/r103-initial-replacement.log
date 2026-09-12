@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0369]: binary operation `==` cannot be applied to type `queue::dispatch_binding::Gfx942DispatchBindingErrorV1`
+    --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_replacement_tests.rs:196:93
+     |
+ 196 |             matches!(error, ComputeAqlQueueSessionErrorV1::DispatchBinding(error) if *error == expected)
+     |                                                                                      ------ ^^ -------- queue::dispatch_binding::Gfx942DispatchBindingErrorV1
+     |                                                                                      |
+     |                                                                                      queue::dispatch_binding::Gfx942DispatchBindingErrorV1
+     |
+note: an implementation of `PartialEq` might be missing for `queue::dispatch_binding::Gfx942DispatchBindingErrorV1`
+    --> crates/fe2o3-kfd/src/queue_dispatch_binding.rs:1257:1
+     |
+1257 | pub enum Gfx942DispatchBindingErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `queue::dispatch_binding::Gfx942DispatchBindingErrorV1` with `#[derive(PartialEq)]`
+    -->  crates/fe2o3-kfd/src/queue_dispatch_binding.rs:1257:1
+     |
+1257 + #[derive(PartialEq)]
+1258 | pub enum Gfx942DispatchBindingErrorV1 {
+     |
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

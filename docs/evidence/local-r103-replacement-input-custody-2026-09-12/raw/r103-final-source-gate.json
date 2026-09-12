@@ -1,0 +1,58 @@
+[
+  {
+    "name": "gnu-tests",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r103-final-gnu-tests.log",
+    "returncode": 0,
+    "elapsed_seconds": 299.603
+  },
+  {
+    "name": "musl-tests",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r103-final-musl-tests.log",
+    "returncode": 101,
+    "elapsed_seconds": 1372.182
+  }
+]

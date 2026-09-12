@@ -1,0 +1,88 @@
+[
+  {
+    "name": "zero-pristine",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "test": "queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work",
+    "edits": [
+      [
+        "DispatchGenerationOwnerV1::after_recycled(predecessor_generation),",
+        "DispatchGenerationOwnerV1::after_detached(predecessor_generation),"
+      ]
+    ],
+    "expected": [
+      "invalid replacement generation must reject"
+    ]
+  },
+  {
+    "name": "reset-generation",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "test": "queue::live::construction_primary::integration_tests::replacement_cases::replacement_success_preserves_exact_predecessor_and_last_issuable_generation",
+    "edits": [
+      [
+        "DispatchGenerationOwnerV1::after_recycled(predecessor_generation),",
+        "{ let _ = predecessor_generation; DispatchGenerationOwnerV1::new() },"
+      ]
+    ],
+    "expected": [
+      "exact replacement generation"
+    ]
+  },
+  {
+    "name": "generation-custody",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "test": "queue::live::construction_primary::integration_tests::replacement_cases::replacement_invalid_generations_record_failed_custody_without_native_work",
+    "edits": [
+      [
+        "DispatchGenerationOwnerV1::after_recycled(predecessor_generation),",
+        "Ok(DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?),"
+      ]
+    ],
+    "expected": [
+      "left: Fresh",
+      "right: Generation"
+    ]
+  },
+  {
+    "name": "completed-owner",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "test": "queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs",
+    "edits": [
+      [
+        "self.dispatch = Some(preparation.take_completed()?);",
+        "drop(preparation.take_completed()?);"
+      ]
+    ],
+    "expected": [
+      "queue construction retains completed dispatch"
+    ]
+  },
+  {
+    "name": "original-programs",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "test": "queue::live::construction_primary::integration_tests::replacement_cases::replacement_late_failures_retain_completed_dispatch_and_original_inputs",
+    "edits": [
+      [
+        "self.dispatch = Some(preparation.take_completed()?);",
+        "self.dispatch = Some(preparation.take_completed()?);\n        programs.clear();"
+      ]
+    ],
+    "expected": [
+      "exact original program vector"
+    ]
+  },
+  {
+    "name": "native-quarantine",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs",
+    "test": "queue::live::construction_primary::integration_tests::replacement_cases::replacement_preparation_stage_failures_preserve_inputs_generation_and_control_prefixes",
+    "edits": [
+      [
+        "if self.native_started {\n                    memory.quarantine();\n                }\n                Err(error)",
+        "if self.native_started {\n                    // Deliberate regression: omit quarantine after native preparation.\n                }\n                Err(error)"
+      ]
+    ],
+    "expected": [
+      "left: Active",
+      "right: Quarantined"
+    ]
+  }
+]
