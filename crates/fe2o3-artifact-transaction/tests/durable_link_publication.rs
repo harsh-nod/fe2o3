@@ -7,13 +7,16 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationTokenV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
     DurableJournalStageV1, DurableLinkPublicationError, DurableLinkPublicationFaultPointV1,
     DurableLinkPublicationOptionsV1, DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1,
-    FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationPhaseV1,
-    LinkPublicationScopeV1, LinkPublicationStateV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PinnedWorkerIdentityV1, TargetIdentityV1, ValidatedResponseIdentityV1, publish_durable_link_v1,
-    publish_durable_link_v1_with_options, recover_durable_link_publication_v1,
+    EmitError, FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1,
+    LinkPublicationPhaseV1, LinkPublicationScopeV1, LinkPublicationStateV1, LinkedOutputIdentityV1,
+    PackageIdentityV1, PinnedWorkerIdentityV1, TargetIdentityV1, ValidatedResponseIdentityV1,
+    publish_durable_link_v1, publish_durable_link_v1_with_options,
+    recover_durable_link_publication_v1,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -1223,6 +1226,84 @@ fn current_token_is_bound_to_exact_lease() {
     assert!(matches!(
         second_lease.validate_current_token(&current),
         Err(DurableLinkPublicationError::CurrentPublication { .. })
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_self_fd_directory_admission_rejects_stale_and_non_directory_descriptors() {
+    use rustix::fs::{Mode, OFlags};
+
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let stale_path = PathBuf::from(format!("/proc/self/fd/{}", i32::MAX));
+    assert!(matches!(
+        publish(
+            &stale_path,
+            plan(1, 0x91, 0xf1, b"stale descriptor payload"),
+            b"stale descriptor payload",
+        ),
+        Err(DurableLinkPublicationError::Filesystem(EmitError::Io(error)))
+            if error.raw_os_error() == Some(libc::EBADF)
+    ));
+
+    let regular_file = temp.path.join("regular-file");
+    fs::write(&regular_file, b"not a directory").unwrap();
+    let non_directory = rustix::fs::open(
+        &regular_file,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap();
+    let non_directory_path = PathBuf::from(format!("/proc/self/fd/{}", non_directory.as_raw_fd()));
+    assert!(matches!(
+        publish(
+            &non_directory_path,
+            plan(1, 0x92, 0xf2, b"non-directory descriptor payload"),
+            b"non-directory descriptor payload",
+        ),
+        Err(DurableLinkPublicationError::Filesystem(
+            EmitError::InvalidArtifactDestination { reason, .. }
+        )) if reason == "procfs descriptor does not reference a directory"
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_self_fd_currentness_rejects_descriptor_substitution() {
+    use rustix::fs::{Mode, OFlags};
+
+    let temp = TestDirectory::new();
+    let output = temp.path.join("output");
+    let replacement = temp.path.join("replacement");
+    fs::create_dir(&replacement).unwrap();
+    let retained = rustix::fs::open(
+        &output,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap();
+    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", retained.as_raw_fd()));
+    let bytes = b"descriptor substitution payload";
+    let lease = publish(&descriptor_path, plan(1, 0x93, 0xf3, bytes), bytes)
+        .unwrap()
+        .into_current_lease();
+    let substitute = rustix::fs::open(
+        &replacement,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        unsafe { libc::dup2(substitute.as_raw_fd(), retained.as_raw_fd()) },
+        retained.as_raw_fd()
+    );
+    assert!(matches!(
+        lease.acquire_current_token(),
+        Err(DurableLinkPublicationError::Filesystem(
+            EmitError::OutputDirectoryChanged { .. }
+        ))
     ));
 }
 
