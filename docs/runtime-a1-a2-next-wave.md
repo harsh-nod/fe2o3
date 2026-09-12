@@ -1,5 +1,16 @@
 # A1/A2 Next-Wave Dispatch
 
+The renewed three-worker review is recorded on the
+[current board](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch).
+R104 ordinary rebind is an uncommitted candidate with ten focused tests and all
+seventeen source gates passing locally, not an accepted runtime packet. Auxiliary
+checks, compiled mutations, exact restoration and evidence acceptance remain.
+Native owns its remaining acceptance handoff, then pristine rebind and cleanup;
+Admission starts CO-2A identity coverage; Resources starts the model-only
+VER-1A.2a issuance transition. The three read-only reviews are complete; Primary
+owns edits, serialized validation and publication. No new native, formal or
+performance result is claimed by this planning refresh.
+
 R103 locally accepts **2C replacement-input custody**, with
 [retained evidence](evidence/local-r103-replacement-input-custody-2026-09-12/README.md).
 Frozen/restored construction suites each pass 69, all seventeen source gates
@@ -237,7 +248,7 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 | Native: `native_replacement_handoff` | 2C live-lane restoration/rebind after R103 acceptance | Insertion/release; DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses | Restore selected lanes before terminal transport, root preparation before loan, and retain partial/completed owners across operation/retake error or panic. Preserve pristine/recycled provenance. CPU/local helpers do not qualify native incarnation succession. |
 | Admission: `submission_identity_handoff` | CO-2A Context submission identity, then CO-2B descriptive identity and preissue CO-3 fixtures | ISSUE/native identity -> CO-4/COMPLETE -> API -> generated graph/drain | Five-case matrix covers all observation/release ingress, actual cached completion paths and genuine backend-ID reuse without unrelated-owner changes. Reuse existing validators, reply and decoder. |
 | Resources: `r102_evidence_review` | VER-1A.2a issuance -> .2b-d membership/settlement/proofs -> .3 journal -> .4/.5 initial hooks | Complete VER-1B, ordered writers/recovery; VER-2 leases; aggregate domains; backing/control/code budgets; MEM-5 | Follow the frozen activation/watermark and explicit-capacity policy. Atomic whole-roster admission/settlement, exact writers, nonwrapping attempt epochs and exact NoEffect lineage. Cross-run leases wait for complete coverage. |
-| Primary | Preserve R102 acceptance and serialize the three next packets | Shared-source integration, executable refinement, signed hardware qualification and matched performance | Preserve existing ownership; accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
+| Primary | Preserve R103 acceptance and serialize the three next packets | Shared-source integration, executable refinement, signed hardware qualification and matched performance | Preserve existing ownership; accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's

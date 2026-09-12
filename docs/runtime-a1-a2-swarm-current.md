@@ -13,9 +13,14 @@ This document supersedes the immediate assignment rows in the
 
 Accepted runtime baseline: signed R103
 `61a1479348ec3b744a8881108e059f540f324364`, present on both topic remotes at
-this refresh. The working tree also contains an **uncommitted, untested R104
-ordinary live-rebind draft**. This planning checkpoint neither publishes that
-draft nor advances its acceptance. R103's evidence remains CPU/shared-sequence
+this refresh. The working tree also contains an **uncommitted R104 ordinary
+live-rebind candidate undergoing validation**. Its ten focused tests and all
+seventeen source gates have passed locally; GNU/musl each pass 2,565 tests with
+five ignored, and all 5,662 non-documentation source identities are unchanged.
+Full acceptance, including auxiliary checks, compiled mutations, exact
+restoration and reviewed evidence, remains pending.
+This planning checkpoint neither publishes that candidate nor advances its
+acceptance. R103's evidence remains CPU/shared-sequence
 acceptance, not live KFD, new solver refinement or matched performance.
 
 The renewed user request is split across three read-only review workers below.
@@ -23,14 +28,15 @@ Primary owns implementation, integration, tests, proof registration and signed
 publication. The first three packets are independent; shared module wiring and
 all builds remain serialized. Each worker returns a bounded source/test
 handoff, not an unreviewed concurrent edit to Context or the queue owner.
-All three review handoffs are complete. The implementation packets below are
-queued work, not unattended background implementation jobs.
+All three renewed source-grounded review handoffs are complete. Workers made
+no edits and ran no builds or hardware jobs. The implementation packets below
+are queued work, not unattended background implementation jobs.
 
 | Worker | First packet | Concrete exit requirement |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N1: finish and validate R104 ordinary rebind plus lane restoration | Root inputs/preparation through loan, retake and validation failures; restore primary/auxiliary state before terminal-parent retention even when the callback swallows an error or panic. Preserve nonterminal preflight behavior and panic precedence. |
-| Admission: `submission_identity_handoff` | C1: CO-2A Context submission identity | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. |
-| Resources: `r102_evidence_review` | V1: VER-1A.2a writer issuance model | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. This is model-only, not a production journal. |
+| Native: `native_replacement_handoff` | N1: finish R104 ordinary rebind acceptance in `queue_live/rebind.rs` and `rebind_tests*` | Review the passing source campaign; finish auxiliary gates, six decisive behavioral mutations and exact restoration. Preserve rooted inputs, validation-before-installation, panic precedence, monotonic transport and lane restoration. Actual original-engine composition remains a separate open qualification boundary. |
+| Admission: `submission_identity_handoff` | C1: CO-2A in new `context/tests/submission_identity_tests.rs` | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. Primary owns module wiring and the missing test-backend cancel counter. |
+| Resources: `r102_evidence_review` | V1: VER-1A.2a in new `runtime-model/src/context_version_journal.rs` | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. Primary owns exports. This is model-only, not a production journal. |
 | Primary | I1: integrate accepted packets and maintain qualification gates | Review shared changes, retain failed attempts, run exact-source checks, and publish accepted work to both repositories. Do not promote the R104 draft or a model-only result to runtime acceptance. |
 
 ### Ordered Backlogs
@@ -58,13 +64,20 @@ The first non-reusing ISSUE needs a specified mutation hook, not completed
 cross-run leases. Cross-run reuse does require V7/V8. Model proofs and adapter
 correspondence proceed incrementally, not only at the final hardware gate.
 
-N1's draft review identified concrete acceptance work: update the existing
-source-wiring guard to follow the real validation call chain; explicitly review
-and test process-wide poisoning versus nonterminal rejection; exercise callback
-panic/retention ordering after restoration; and distinguish actual original
-engine/account integration from separate preparation and facade fixtures.
-The consuming pristine helper remains N2 work. Neither an injected closure nor
-a passing ownership snapshot alone establishes same-session native execution.
+N1's candidate now includes the validation call-chain guard, process-wide poison
+classification checks and callback-panic/retention ordering after restoration.
+Its ten focused test functions contain 112 dynamic scenarios and one textual
+routing guard, not 112 successful binds. Actual original engine/account/platform
+composition is not established by its separate preparation and engine-free
+facade fixtures. The consuming pristine helper remains N2 work. Neither an
+injected closure nor a passing ownership snapshot establishes native execution.
+
+C1/C2/C3's proposed test files and V1's model remain absent at this refresh.
+Existing Context identity validators, ordinary typed async launches and ordinary
+graph/drain paths should be reused. Generated production preparation still
+supplies no adoption hooks, and R65's graph-local versions are not a Context
+journal or cross-run input lease. These are implementation boundaries, not
+reasons to duplicate the existing runtime.
 
 ### Later Swarm Rotations
 
@@ -301,7 +314,7 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | R103 production review complete; live-lane restoration/rebind handoff ready | Insertion/release -> generated data adoption -> native publication handoff |
+| Native: `native_replacement_handoff` | R104 candidate review complete; source acceptance still pending | Pristine rebind -> insertion/release/teardown -> generated data adoption -> native publication handoff |
 | Admission: `submission_identity_handoff` | R103 identity/oracle review complete; CO-2A handoff ready | CO-2B descriptive identity and CO-3 reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
 | Resources: `r102_evidence_review` | R103 evidence review complete; VER-1A.2a issuance handoff ready | Membership -> settlement/cost -> proofs -> production journal -> complete mutation hooks/ordered writers/recovery -> cross-run leases |
 | Primary | Integrate 2C, CO-2A and VER-1A.2 without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
@@ -331,7 +344,7 @@ at a time.
 | Wave | Native | Admission | Resources |
 | --- | --- | --- | --- |
 | Ready now | 2C live-lane restoration/rebind | CO-2A Context identity is already independent; reviewed CO-2B and CO-3A handoffs | VER-1A.2a issuance model is already independent |
-| After each lane's first gate | 2C insertion/detach/release/returning destroy, then DATA-ADOPT | CO-2B descriptor matrix and CO-3A lifecycle composition | .2b membership -> .2c settlement/cost -> .2d proof acceptance -> .3 bounded journal |
+| After each lane's first gate | Pristine rebind, then 2C insertion/detach/release/returning destroy and DATA-ADOPT | CO-2B descriptor matrix and CO-3A lifecycle composition | .2b membership -> .2c settlement/cost -> .2d proof acceptance -> .3 bounded journal |
 | Integration | 2C replacement/insertion, then nonpublishing DATA-ADOPT | ISSUE with Native, then CO-4/COMPLETE and typed API | .4/.5 initial mutation hooks, then complete VER-1B with ordered writers and recovery |
 | A1/A2 closure | Native depth, memory pressure and overlap qualification | Generated GRAPH/DRAIN and end-to-end typed execution | VER-2 cross-run leases, aggregate accounting and residency closure |
 
@@ -586,6 +599,27 @@ swallowed terminal errors, exact lane restoration and unchanged failure
 ledgers. Operation panic wins over closing failure; absent an operation panic,
 retake error/panic retains the existing precedence. These are reviewed work
 orders, not implemented live-rebind acceptance.
+
+N1's remaining acceptance checklist is:
+
+1. Review the passing seventeen-gate frozen-source campaign and complete the
+   applicable auxiliary checks without changing the candidate source. Retain
+   failed attempts separately; the local campaign is not a published packet.
+2. Run six compiled behavioral negatives: drop the input root, skip validation,
+   extract failed Complete preparation, overwrite the transport request, omit
+   post-callback lane restoration, and global-poison a returned error. Each must
+   fail its intended dynamic oracle, not merely the textual routing guard.
+3. Restore every source identity and rerun ordinary-rebind and construction
+   suites. Review the exact source, command roster, counts and evidence before
+   signing and publishing the runtime packet to both repositories.
+4. Keep original-engine composition, nonzero auxiliary-slot restoration, native
+   incarnation succession, new formal correspondence and performance explicitly
+   open where the named candidate fixtures do not cover them.
+
+N2/N3/N4 lower-helper reviews can proceed before N1 acceptance. Shared live-lane
+edits integrate serially after it. Split N3's lower initializer-prefix custody
+from its live insertion integration; returned-value retention alone does not
+cover an initializer's incomplete internal prefix.
 
 Actual destroy/recreate, native backing, concurrent bootstrap and native generation
 succession still require separately scheduled hardware qualification. Successful
@@ -1061,6 +1095,8 @@ their implementation to an idle runtime lane:
 | Handoff | Owning work and acceptance boundary |
 | --- | --- |
 | Worker/capsule authority | #209 and broker/handoff #130/#131/#132; concrete reviewed Worker V3 refinement backend and owned proof artifacts, not caller-provided digests or qualification gates |
+| Target admission | [#274](https://github.com/harsh-nod/fe2o3/issues/274): independently reviewed gfx950/MI350X driver/firmware profile, queue resources, memory ownership, checked token and service-host join. gfx942 authority or compile-only evidence cannot qualify gfx950 execution. |
+| Mixed SIMT/tile consumer | [#275](https://github.com/harsh-nod/fe2o3/issues/275), with #134/#271/#272: generated launch/resource contracts and kernel-family qualification through the existing pipeline. Reconcile exact compiler-owner handoffs; do not duplicate their active work or wait for all distributed milestones before developing the initial admitted path. |
 | Protected kernels | #89/#88/#98/#104/#105/#123 plus the compiler-owned device-language G2/G4 milestones; exact ABI/effect contracts, independent output/layout oracles and architecture-specific execution |
 | Release and diagnostics | Offline installation #252, disposable-machine deployment #253 and debugger descendant containment #269; keep deployment and debugger ownership separate from queue construction |
 | Broad qualification | G8 and A6/A7: differential testing, supported-target evidence, isolated fault campaigns and matched complete-output performance, not CPU suite wall time |
