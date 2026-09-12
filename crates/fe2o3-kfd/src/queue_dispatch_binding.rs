@@ -15,7 +15,7 @@ pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 pub(crate) mod pristine_abort;
 pub(super) use pristine_abort::{
     PristineDispatchAbortV1, PristineDispatchContinuationV1,
-    prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
+    prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1,
 };
 
 use core::fmt;
@@ -4905,6 +4905,10 @@ pub(super) use tests::actual_persistent_control_test_program;
 
 #[cfg(test)]
 impl DispatchResourceOwnerV1 {
+    pub(super) fn primary_fixture_recipe_occurrence_v1(&self) -> u64 {
+        self.generation.recipe_occurrence
+    }
+
     pub(super) fn primary_fixture_next_generation_v1(&self) -> u64 {
         self.generation.next_generation
     }

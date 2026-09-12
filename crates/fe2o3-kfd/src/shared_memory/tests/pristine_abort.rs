@@ -257,3 +257,28 @@ impl PristineControlReleaseV1 for PristineAbortMemoryFixtureV1 {
             .release(token, SharedAllocationPhaseV1::ExecutableImmutable)
     }
 }
+
+impl PristineControlReleaseV1 for super::preparation::PreparationMemoryFixtureV1 {
+    fn release_kernarg(&mut self, authority: Kernarg) -> Result<(), MemorySessionError> {
+        let identity = Self::kernarg_identity(&authority);
+        let token = self.fixture.engine.unmap_mutable(authority.into_token())?;
+        self.fixture
+            .engine
+            .release(token, SharedAllocationPhaseV1::CpuWritable)?;
+        self.disposed_controls.push(identity);
+        Ok(())
+    }
+
+    fn release_code(&mut self, authority: Code) -> Result<(), MemorySessionError> {
+        let identity = Self::code_identity(&authority);
+        let token = self
+            .fixture
+            .engine
+            .unmap_executable(authority.into_token())?;
+        self.fixture
+            .engine
+            .release(token, SharedAllocationPhaseV1::ExecutableImmutable)?;
+        self.disposed_controls.push(identity);
+        Ok(())
+    }
+}

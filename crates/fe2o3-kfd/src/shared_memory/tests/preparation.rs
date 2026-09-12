@@ -47,6 +47,7 @@ pub(crate) enum PreparationNativeFaultV1 {
 
 pub(crate) struct PreparationMemoryFixtureV1 {
     pub(super) fixture: BackingConstructorFixture,
+    pub(super) disposed_controls: Vec<SharedGttAllocationIdentityV1>,
     code_count: usize,
     projection_rejection_va: u64,
     pub(crate) fault: Option<(PreparationMemoryCallV1, PreparationNativeFaultV1)>,
@@ -127,6 +128,7 @@ impl PreparationMemoryFixtureV1 {
         }
         Self {
             fixture,
+            disposed_controls: Vec::new(),
             code_count: 0,
             projection_rejection_va: 0x1_0000_u64.checked_add(bytes).unwrap(),
             fault: None,
@@ -263,6 +265,7 @@ impl PreparationMemoryFixtureV1 {
     }
 
     pub(crate) fn observation(&self) -> PreparationMemoryObservationV1 {
+        self.assert_disposed_controls_v1();
         let e = &self.fixture.engine;
         let b = &e.backend;
         let mapping = |m: &FakeMapping| DataMappingObservation {
@@ -326,7 +329,7 @@ impl PreparationMemoryFixtureV1 {
                     matches!(
                         r.profile,
                         SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
-                    )
+                    ) && !self.is_disposed_control_v1(r.id, r.generation)
                 })
                 .count(),
             pending: e.pending_allocation.is_some(),
@@ -427,7 +430,7 @@ impl PreparationMemoryFixtureV1 {
                 matches!(
                     r.profile,
                     SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
-                )
+                ) && !self.is_disposed_control_v1(r.id, r.generation)
             })
             .collect();
         assert_eq!(actual.len(), controls.len(), "missing actual control owner");
@@ -450,6 +453,48 @@ impl PreparationMemoryFixtureV1 {
             assert_eq!(pending.id + 1, e.next_id);
             assert!(e.allocations.iter().all(|r| r.id != pending.id));
         }
+    }
+
+    pub(super) fn is_disposed_control_v1(&self, id: u64, generation: u64) -> bool {
+        self.disposed_controls
+            .contains(&SharedGttAllocationIdentityV1 {
+                session_id: self.fixture.engine.session_id,
+                id,
+                generation,
+            })
+    }
+
+    pub(super) fn assert_disposed_controls_v1(&self) {
+        let e = &self.fixture.engine;
+        assert_eq!(
+            self.disposed_controls.len(),
+            self.disposed_controls
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
+        for id in &self.disposed_controls {
+            assert_eq!(id.session_id, e.session_id);
+            let record = e.allocations.iter().find(|r| r.id == id.id).unwrap();
+            assert_eq!(record.generation, id.generation);
+            assert!(matches!(
+                record.profile,
+                SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
+            ));
+            assert_eq!(record.phase, SharedAllocationPhaseV1::Released);
+            assert!(record.free_attempted);
+            assert!(
+                record.reservation.is_none() && record.handle.is_none() && record.mapping.is_none()
+            );
+            assert!(record.host_backing_charge.is_none());
+        }
+        assert_eq!(
+            e.allocations
+                .iter()
+                .filter(|r| r.phase == SharedAllocationPhaseV1::Released)
+                .count(),
+            self.disposed_controls.len()
+        );
     }
 
     pub(crate) fn code_identity(authority: &CodeAuthority) -> SharedGttAllocationIdentityV1 {

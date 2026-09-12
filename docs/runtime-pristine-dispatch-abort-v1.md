@@ -59,18 +59,24 @@ destruction is admitted only after all detached data has been disposed.
 `bind_fixed_dispatch` accepts exactly one provenance: the existing detached
 generation or the new unpublished continuation. Exact complete data identity
 and cardinality must still match. This consuming API does not return input
-data on rejection. For the unpublished path, a consuming preflight failure is
-therefore terminal and invalidates its continuation.
+data on rejection. Existing preflight rejection classifications are unchanged;
+terminal poisoning invalidates any continuation still in the session.
 
-Once native preparation starts, failure follows the existing terminal
-native-record retention contract, not reusable full-vector recovery. No
-continuation is returned. A successfully prepared owner is rooted in the
-queue before closing-retake or subsequent native-validation results are
-interpreted. Failure/panic retains that owner and poisons the process gate;
-only complete success clears the detached ledger. This does not change the
-existing materializer into a recoverable multi-buffer constructor.
+R105's [shared pristine rebind custody](runtime-pristine-rebind-custody-v1.md)
+roots the original inputs, preparation and admitted continuation before the
+model loan. Opening rejection retains the continuation unconsumed; preparation
+entry consumes it exactly once. Partial and completed preparation remain rooted
+through closing retake and borrowed live-memory validation. Checked extraction
+and nonallocating commit alone install the dispatch and clear its detached
+ledger. Failed Complete cannot be installed after a suppressed error.
 
-## Acceptance Boundary
+Entered pristine errors, including opening errors, preserve the existing
+session/process-terminal policy. No failure returns retry authority. Abort and
+control-disposal behavior are unchanged; abort's retry-safe rejected opening is
+not the same policy as admitted rebind's opening failure. This does not make
+the materializer a recoverable multi-buffer constructor.
+
+## R82 Acceptance Boundary
 
 Focused CPU coverage exercises actual epoch reserve/cancel/publish/complete/
 recycle transitions; every slot's history; exact generation preservation;

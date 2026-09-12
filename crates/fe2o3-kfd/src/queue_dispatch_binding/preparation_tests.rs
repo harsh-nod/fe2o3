@@ -488,6 +488,15 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         }
     }
 
+    pub(in crate::queue) fn assert_fresh_pristine_occurrence_for_test(&self, previous: u64) {
+        let generation = self
+            .generation
+            .as_ref()
+            .or_else(|| self.completed.as_ref().map(|owner| &owner.generation))
+            .expect("retained pristine generation");
+        assert_ne!(generation.recipe_occurrence, previous);
+    }
+
     pub(in crate::queue) fn primary_assert_replacement_generation_v1(
         &self,
         next_generation: Option<u64>,

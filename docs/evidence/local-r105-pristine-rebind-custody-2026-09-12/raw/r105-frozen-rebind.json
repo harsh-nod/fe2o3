@@ -1,0 +1,31 @@
+{
+  "source_head": "c70773b9c9d9383f79a1c2fe829f1e1163596750",
+  "started_at": "2026-09-12T13:34:25.858Z",
+  "finished_at": "2026-09-12T13:34:26.451Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "ordinary_rebind"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r105-frozen-rebind.log",
+  "source": "/home/harsh/.codex-tmp/r105-frozen-rebind-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 0.856,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

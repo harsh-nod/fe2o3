@@ -1,9 +1,25 @@
 # A1/A2 Next-Wave Dispatch
 
-The [R105-candidate swarm breakdown](runtime-swarm-dispatch-r105-candidate.md)
-is the latest immediate dispatch: N2 is implemented but unaccepted, followed by
-N3-C coherent initialization, independent C1 Context identity and V1 issuance.
-It separates fixture integration from the required Worker V3 production join.
+R105 locally accepts [N2 pristine rebind custody](runtime-pristine-rebind-custody-v1.md),
+with [retained evidence](evidence/local-r105-pristine-rebind-custody-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and nine repeated compiled
+negatives satisfy acceptance; GNU/musl each pass 2,573 tests with five ignored.
+Frozen/repeated-restored pristine, ordinary rebind and construction suites pass
+28/28, 10/10 and 69/69; all 5,664 source identities match. The original negative
+campaign's 60 ms chronology rejection is preserved, not silently accepted.
+This adds CPU/shared-sequence acceptance only, not native, new formal or
+performance qualification.
+
+The latest assignments are **Native N3-C coherent initialization**, independent
+**Admission C1 Context identity** and **Resources V1 writer issuance** on the
+[current board](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch).
+Three read-only workers completed bounded implementation/test handoffs; Primary
+owns edits, integration, serialized gates and signed publication. N3-C must
+include `shared_memory/transitions.rs` and same-foundation initializer tests.
+Q2 retains the missing native N1/N2/cache budget qualifier/example/checker.
+The [R105-candidate breakdown](runtime-swarm-dispatch-r105-candidate.md) remains
+the dependency map, with its pending-acceptance wording now historical. It
+separates fixture integration from the required Worker V3 production join.
 The R104 acceptance and earlier planning history below remain unchanged.
 
 The renewed three-worker review is recorded on the
@@ -13,7 +29,7 @@ with [retained evidence](evidence/local-r104-ordinary-rebind-custody-2026-09-12/
 All seventeen source gates, ten auxiliary checks and six compiled behavioral
 negatives pass; GNU/musl each pass 2,565 tests with five ignored. Frozen/restored
 rebind and construction suites pass 10/10 and 69/69; all 5,662 source identities
-match. Native next takes N2 pristine rebind, then insertion and cleanup;
+match. At R104, Native next took N2 pristine rebind, then insertion and cleanup;
 Admission starts CO-2A identity coverage; Resources starts the model-only
 VER-1A.2a issuance transition. The three read-only reviews are complete; Primary
 owns edits, serialized validation and publication. No new native, formal or
@@ -85,7 +101,7 @@ functions cover 369 shared-driver runs plus a separate primary-only capacity
 fixture. This adds no live KFD, new formal refinement or performance result;
 historical acceptance below applies to its named source only.
 
-The renewed three-agent breakdown advances Native from locally accepted R104
+The historical R104 three-agent breakdown advanced Native from locally accepted R104
 ordinary rebind to **N2 pristine rebind**, then insertion/release and
 DATA-ADOPT after their separate gates.
 Admission next takes Context identity coverage; Resources takes the executable

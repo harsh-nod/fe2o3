@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::preparation::tests::ordinary_constructor_root_preserves_real_preparation_before_control_entry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 986 filtered out; finished in 0.02s
+

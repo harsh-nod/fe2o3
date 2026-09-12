@@ -49,7 +49,7 @@ use super::dispatch_binding::{
     PristineDispatchAbortV1, PristineDispatchContinuationV1, ReturnedDispatchDataV1,
     TypedKernargImageV1, persistent_fixed_dispatch_control_identity_v1, prepare_dispatch_resources,
     prepare_persistent_fixed_dispatch_resources_v1,
-    prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
+    prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1,
     prepare_three_binding_persistent_fixed_dispatch_resources_v1,
     three_binding_persistent_fixed_dispatch_control_identity_v1, unwrap_completed,
     unwrap_published, validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress,

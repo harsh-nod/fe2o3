@@ -455,10 +455,22 @@ impl PreparationMemoryFixtureV1 {
         }
     }
     pub(crate) fn primary_assert_accounts_and_records(&self, session_id: u64) {
+        self.primary_assert_accounts_after_disposal_v1(session_id, [0; 3]);
+    }
+
+    pub(crate) fn primary_assert_accounts_after_disposal_v1(
+        &self,
+        session_id: u64,
+        disposal_calls: [usize; 3],
+    ) {
+        self.assert_disposed_controls_v1();
         let f = &self.fixture;
         let e = &f.engine;
         assert_eq!(e.session_id, session_id, "original memory session");
         for record in &e.allocations {
+            if self.is_disposed_control_v1(record.id, record.generation) {
+                continue;
+            }
             assert!(
                 e.shared_host_backing_charge_matches(record),
                 "original Host account and exact charge"
@@ -520,14 +532,16 @@ impl PreparationMemoryFixtureV1 {
             assert_eq!(usage.quarantined_records, usize::from(pending.is_some()));
         }
         assert_eq!(
-            (b.unmap_gpu_calls, b.free_calls, b.release_va_calls),
-            (0, 0, 0)
+            [b.unmap_gpu_calls, b.free_calls, b.release_va_calls],
+            disposal_calls
         );
     }
     pub(crate) fn primary_identities(&self) -> Vec<SharedGttAllocationIdentityV1> {
+        self.assert_disposed_controls_v1();
         let e = &self.fixture.engine;
         e.allocations
             .iter()
+            .filter(|r| !self.is_disposed_control_v1(r.id, r.generation))
             .map(|r| SharedGttAllocationIdentityV1 {
                 session_id: e.session_id,
                 id: r.id,

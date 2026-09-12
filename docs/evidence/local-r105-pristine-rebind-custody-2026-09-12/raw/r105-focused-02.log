@@ -1,0 +1,128 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.78s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 27 tests
+test queue::dispatch_binding::pristine_abort::tests::dispatch_retention_after_pristine_abort_preserves_all_five_input_variants ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_rejects_malformed_premises_before_native_effects ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_releases_only_control_and_preserves_all_storage_variants ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_continuation_preserves_exact_next_generation_and_changes_occurrence ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_rejection_checks_every_slot_and_does_not_mutate ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_rejects_actual_cancelled_and_completed_epoch_histories ... ok
+test queue::live::pristine_abort::tests::pristine_abort_auxiliary_state_restores_on_success_and_panic ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_rejects_partial_and_malformed_gpu_unmap_for_each_control ... ok
+test queue::live::pristine_abort::tests::pristine_abort_cleanup_error_terminalizes_queue_and_process ... ok
+test queue::live::pristine_abort::tests::pristine_abort_cleanup_panic_survives_second_panic_and_keeps_custody ... ok
+test queue::live::pristine_abort::tests::pristine_abort_closing_failure_keeps_complete_terminal_custody ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_sweeps_currentness_and_partial_control_cleanup ... ok
+test queue::live::pristine_abort::tests::pristine_abort_commits_complete_ledger_only_after_closing_success ... ok
+test queue::live::pristine_abort::tests::pristine_abort_loan_rejection_restores_attached_owner_without_effects ... ok
+test queue::live::pristine_abort::tests::pristine_abort_rejects_bad_ledger_and_unreleasable_completion_before_cleanup ... ok
+test queue::live::pristine_abort::tests::pristine_consuming_rebind_preflight_failure_is_terminal_without_native_calls ... ok
+test queue::live::pristine_abort::tests::pristine_detached_quiescence_rejects_mixed_or_incomplete_state ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation ... FAILED
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes ... FAILED
+test queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure ... FAILED
+test queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority ... FAILED
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation ... FAILED
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed ... FAILED
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy ... FAILED
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence ... FAILED
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody ... FAILED
+
+failures:
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation' (693596) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 0
+ right: 4
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes' (693595) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 0
+ right: 4
+
+---- queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure stdout ----
+
+thread 'queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure' (693594) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 4
+ right: 8
+
+thread 'queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure' (693594) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:303:5:
+assertion `left == right` failed
+  left: true
+ right: false
+
+---- queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority stdout ----
+
+thread 'queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority' (693593) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 0
+ right: 4
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation' (693598) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 0
+ right: 4
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed' (693597) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 4
+ right: 8
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy' (693599) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:671:9:
+assertion `left == right` failed
+  left: None
+ right: Some(7)
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence' (693600) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 4
+ right: 8
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence' (693600) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:303:5:
+assertion `left == right` failed
+  left: true
+ right: false
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody' (693601) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:433:9:
+assertion `left == right` failed: missing actual control owner
+  left: 4
+ right: 8
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody' (693601) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:303:5:
+assertion `left == right` failed
+  left: true
+ right: false
+
+
+failures:
+    queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority
+    queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody
+
+test result: FAILED. 18 passed; 9 failed; 0 ignored; 0 measured; 959 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

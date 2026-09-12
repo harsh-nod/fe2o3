@@ -8,7 +8,9 @@ pub(in crate::queue) struct LiveRebindRootV1<'a, const N: usize> {
     pub(in crate::queue) data: Option<Vec<Gfx942FixedDispatchDataV1>>,
     pub(in crate::queue) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
     pub(in crate::queue) predecessor: Option<u64>,
+    pub(in crate::queue) continuation: Option<PristineDispatchContinuationV1>,
     ordinary_entered: bool,
+    pristine_entered: bool,
 }
 
 impl<'a, const N: usize> LiveRebindRootV1<'a, N> {
@@ -24,7 +26,9 @@ impl<'a, const N: usize> LiveRebindRootV1<'a, N> {
             data: Some(data),
             preparation: None,
             predecessor,
+            continuation: None,
             ordinary_entered: false,
+            pristine_entered: false,
         })
     }
 }
@@ -54,11 +58,17 @@ impl ComputeAqlQueueSessionV1 {
             LiveRebindRootV1::new(programs, packets, data, self.detached_dispatch_generation);
         self.settle_fixed_dispatch_rebind_with_v1(
             root,
-            |session, programs, preparation, predecessor| {
+            |session, programs, preparation, predecessor, continuation| {
                 session.with_live_queue_memory_model(|memory| {
-                    super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_in_place(
-                        memory, programs, preparation, predecessor,
-                    ).map_err(Into::into)
+                    match predecessor {
+                        Some(predecessor) => super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_after_detach_in_place(
+                            memory, programs, preparation, predecessor,
+                        ),
+                        None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                            memory, programs, preparation,
+                            continuation.take().expect("one unpublished continuation"),
+                        ),
+                    }.map_err(Into::into)
                 })
             },
             Self::validate_persistent_bind_preparation_v1,
@@ -73,7 +83,8 @@ impl ComputeAqlQueueSessionV1 {
             &mut Self,
             &[fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'a>],
             &mut FixedDispatchPreparationCustodyV1<N>,
-            u64,
+            Option<u64>,
+            &mut Option<PristineDispatchContinuationV1>,
         ) -> Result<(), ComputeAqlQueueSessionErrorV1>,
         validate: impl FnOnce(
             &mut Self,
@@ -90,15 +101,11 @@ impl ComputeAqlQueueSessionV1 {
                     root.data.as_ref().expect("rooted rebind inputs"),
                 )?;
                 if session.unpublished_dispatch.is_detached() {
-                    // Pristine preparation still consumes its separate continuation.
-                    // This delegation does not retain its unreturned internal prefixes.
-                    return session.bind_after_pristine_abort_v1(
-                        root.programs.take().expect("rooted programs"),
-                        root.packets.take().expect("rooted packets"),
-                        root.data.take().expect("rooted data"),
-                    );
+                    root.pristine_entered = true;
+                    root.continuation = session.unpublished_dispatch.continuation.take();
+                } else {
+                    root.ordinary_entered = true;
                 }
-                root.ordinary_entered = true;
                 root.preparation = Some(FixedDispatchPreparationCustodyV1::new(
                     root.packets.take().expect("rooted packets"),
                     root.data.take().expect("rooted data"),
@@ -107,7 +114,8 @@ impl ComputeAqlQueueSessionV1 {
                     session,
                     root.programs.as_ref().expect("rooted programs"),
                     root.preparation.as_mut().expect("rooted preparation"),
-                    root.predecessor.expect("checked detached generation"),
+                    root.predecessor,
+                    &mut root.continuation,
                 )
             },
             |session, root| match &root.preparation {
@@ -130,12 +138,15 @@ impl ComputeAqlQueueSessionV1 {
         });
         let failed = !matches!(result, Ok(Ok(())));
         let transport = result.is_err()
-            || failed && (root.ordinary_entered || !was_terminal && self.terminal_poisoned);
+            || failed
+                && (root.ordinary_entered
+                    || root.pristine_entered
+                    || !was_terminal && self.terminal_poisoned);
         if transport {
             self.poison_terminal();
-            // Returned errors retain the existing local classification; loan and
-            // pristine settlement own their additional process-poison decisions.
-            if result.is_err() {
+            // Admitted pristine rebind is process-terminal even on opening error.
+            // Ordinary returned errors keep their existing local classification.
+            if result.is_err() || root.pristine_entered {
                 poison_process_global_after_dispatch_terminal_v1();
             }
         }

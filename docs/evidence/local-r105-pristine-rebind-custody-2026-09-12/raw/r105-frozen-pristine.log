@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 28 tests
+test queue::dispatch_binding::pristine_abort::tests::dispatch_retention_after_pristine_abort_preserves_all_five_input_variants ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_releases_only_control_and_preserves_all_storage_variants ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_rejects_malformed_premises_before_native_effects ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_continuation_preserves_exact_next_generation_and_changes_occurrence ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_rejection_checks_every_slot_and_does_not_mutate ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_rejects_actual_cancelled_and_completed_epoch_histories ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_rejects_partial_and_malformed_gpu_unmap_for_each_control ... ok
+test queue::live::pristine_abort::tests::pristine_abort_cleanup_error_terminalizes_queue_and_process ... ok
+test queue::live::pristine_abort::tests::pristine_abort_cleanup_panic_survives_second_panic_and_keeps_custody ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry ... ok
+test queue::live::pristine_abort::tests::pristine_abort_commits_complete_ledger_only_after_closing_success ... ok
+test queue::live::pristine_abort::tests::pristine_abort_closing_failure_keeps_complete_terminal_custody ... ok
+test queue::live::pristine_abort::tests::pristine_abort_loan_rejection_restores_attached_owner_without_effects ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_sweeps_currentness_and_partial_control_cleanup ... ok
+test queue::live::pristine_abort::tests::pristine_consuming_rebind_preflight_failure_is_terminal_without_native_calls ... ok
+test queue::live::pristine_abort::tests::pristine_abort_rejects_bad_ledger_and_unreleasable_completion_before_cleanup ... ok
+test queue::live::pristine_abort::tests::pristine_detached_quiescence_rejects_mixed_or_incomplete_state ... ok
+test queue::live::pristine_abort::tests::pristine_abort_auxiliary_state_restores_on_success_and_panic ... ok
+test queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed ... ok
+test queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy ... ok
+test queue::live::rebind_tests::preparation::pristine::facade::pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody ... ok
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 959 filtered out; finished in 1.02s
+

@@ -1,0 +1,33 @@
+{
+  "source_head": "c70773b9c9d9383f79a1c2fe829f1e1163596750",
+  "started_at": "2026-09-12T13:44:18.173Z",
+  "finished_at": "2026-09-12T13:44:48.359Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r105-mut-extract-failed-complete.log",
+  "source": "/home/harsh/.codex-tmp/r105-mut-extract-failed-complete-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 30.464,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

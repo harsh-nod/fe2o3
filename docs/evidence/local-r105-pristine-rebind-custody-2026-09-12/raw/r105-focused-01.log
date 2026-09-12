@@ -1,0 +1,38 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0603]: function import `pristine_settlement_regression_v1` is private
+   --> crates/fe2o3-kfd/src/queue_live/pristine_abort.rs:412:50
+    |
+412 |         super::super::rebind_tests::preparation::pristine_settlement_regression_v1();
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private function import
+    |
+note: the function import `pristine_settlement_regression_v1` is defined here...
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:16:63
+    |
+ 16 | pub(super) use pristine::{pristine_constructor_regression_v1, pristine_settlement_regression_v1};
+    |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: ...and refers to the function `pristine_settlement_regression_v1` which is defined here
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine.rs:37:1
+    |
+ 37 | pub(in crate::queue) fn pristine_settlement_regression_v1() {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: function import `pristine_constructor_regression_v1` is private
+   --> crates/fe2o3-kfd/src/queue_live/pristine_abort.rs:417:50
+    |
+417 |         super::super::rebind_tests::preparation::pristine_constructor_regression_v1();
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private function import
+    |
+note: the function import `pristine_constructor_regression_v1` is defined here...
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:16:27
+    |
+ 16 | pub(super) use pristine::{pristine_constructor_regression_v1, pristine_settlement_regression_v1};
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: ...and refers to the function `pristine_constructor_regression_v1` which is defined here
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine.rs:49:1
+    |
+ 49 | pub(in crate::queue) fn pristine_constructor_regression_v1() {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0603`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

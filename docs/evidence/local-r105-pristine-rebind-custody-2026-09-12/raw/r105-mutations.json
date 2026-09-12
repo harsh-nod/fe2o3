@@ -1,0 +1,74 @@
+[
+  {
+    "name": "increment-continuation",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence",
+    "edits": [["DispatchGenerationOwnerV1::with_next_generation(self.next_generation)", "DispatchGenerationOwnerV1::after_detached(self.next_generation)"]],
+    "expected": ["exact replacement generation", "left: 2", "right: 1", "rebind_tests/preparation.rs:303:", "left: true", "right: false"],
+    "property": "Pristine resume preserves the exact next generation instead of incrementing it."
+  },
+  {
+    "name": "early-resume-error",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation",
+    "edits": [["        continuation.resume(),", "        Ok(continuation.resume()?),"]],
+    "expected": ["preparation_tests.rs:417:", "left: Fresh", "right: Generation"],
+    "property": "Resume rejection is recorded as failed Generation preparation before return."
+  },
+  {
+    "name": "drop-continuation",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation",
+    "edits": [["        if failed {\n            retain(root);\n        }", "        if failed {\n            drop(root.continuation.take());\n            retain(root);\n        }"]],
+    "expected": ["rebind_tests/preparation.rs:416:", "left: None", "right: Some(7)"],
+    "property": "Original continuation stays in the root through loan opening rejection."
+  },
+  {
+    "name": "drop-input-root",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation",
+    "edits": [["        if failed {\n            retain(root);\n        }", "        if failed {\n            drop(root);\n        }"]],
+    "expected": ["rebind_tests/preparation.rs:408:", "called `Option::unwrap()` on a `None` value"],
+    "property": "Failed pristine input, continuation and preparation owners remain retained."
+  },
+  {
+    "name": "skip-validation",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure",
+    "edits": [["Some(preparation) => validate(session, preparation),", "Some(_) => Ok(()),"]],
+    "expected": ["rebind_tests/preparation.rs:289:", "left: [1, 1, 1, 0]", "right: [1, 1, 1, 1]"],
+    "property": "Pristine installation follows required borrowed live-memory validation."
+  },
+  {
+    "name": "extract-failed-complete",
+    "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed",
+    "edits": [["if self.stage != PreparationStageV1::Complete || self.failed || self.completed.is_none() {", "if self.stage != PreparationStageV1::Complete || self.completed.is_none() {"]],
+    "expected": ["rebind_tests/preparation.rs:304:", "left: false", "right: true"],
+    "property": "Failed Complete cannot install despite suppressed operation error and bypassed validation."
+  },
+  {
+    "name": "omit-pristine-process-poison",
+    "path": "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation",
+    "edits": [["if result.is_err() || root.pristine_entered {", "if result.is_err() {"]],
+    "expected": ["rebind_tests/preparation.rs:312:", "left: false", "right: true"],
+    "property": "Entered pristine returned errors preserve their process-terminal policy."
+  },
+  {
+    "name": "overwrite-transport",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::facade::pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots",
+    "edits": [["*self.terminal_transport |= settled.transport;", "*self.terminal_transport = settled.transport;"]],
+    "expected": ["pristine/facade.rs:193:", "left: 0", "right: 1"],
+    "property": "A later public rejection cannot erase the earlier pristine terminal disposition."
+  },
+  {
+    "name": "omit-lane-restoration",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::rebind_tests::preparation::pristine::facade::pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots",
+    "edits": [["        }));\n        self.swap_primary_compute_lane(&mut selected);\n        self.auxiliary_compute_lanes[index].state = Some(selected);", "        }));\n        if !terminal_transport {\n            self.swap_primary_compute_lane(&mut selected);\n        }\n        self.auxiliary_compute_lanes[index].state = Some(selected);"]],
+    "expected": ["pristine/facade.rs:169:", "assertion `left == right` failed", "pristine/facade.rs:187:", "called `Result::unwrap()` on an `Err` value"],
+    "property": "Exact original primary and selected auxiliary metadata are restored before terminal retention."
+  }
+]

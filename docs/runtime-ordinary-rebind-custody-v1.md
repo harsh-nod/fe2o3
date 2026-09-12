@@ -31,16 +31,18 @@ install the dispatch and clear detached identity bookkeeping.
 Ordinary `after_detached` generation handling remains distinct from R103's
 recycled replacement and from pristine continuation authority. Helper-level
 zero compatibility is not evidence that native recycled detach produces zero.
-Pristine rebind still delegates to its consuming helper; retention of that
-helper's unreturned preparation prefixes is separate N2 work.
+R105's [pristine continuation custody](runtime-pristine-rebind-custody-v1.md)
+now uses this same preparation/settlement root. Its exact-generation resume and
+entered-pristine process-terminal policy remain distinct from ordinary rebind.
 
 ## Deferred Parent Retention
 
 An internal settlement result carries only the returned error/panic and a
 terminal-transport request. Failed input/preparation custody is retained before
 this result leaves settlement. Returned errors retain their prior local poison
-classification; existing loan/pristine helpers own any additional process
-poisoning. The outer catch process-poisons unwinds, not every returned error.
+classification; existing loan boundaries own any additional process poisoning.
+The shared root also preserves entered-pristine process poisoning. Ordinary
+returned errors are not newly process-poisoned by that separate policy.
 
 Direct session bind can retain the complete original parent immediately. The
 borrowed lane facade instead accumulates the request monotonically before it
@@ -54,7 +56,7 @@ the selected lane, sibling lanes, account owners and metadata in one retained
 parent. The caller receives an inert terminal shell. Retention grants no
 release, retry, cancellation, recovery or native disposal authority.
 
-## Verification Boundary
+## R104 Verification Boundary
 
 Nine dynamic tests cover 112 scenarios; a tenth test checks source routing.
 Preparation tests use original fixture memory, accounts and certified
@@ -66,8 +68,9 @@ later vector slots remain unqualified.
 
 The packet preserves envelope descriptors that borrow caller-owned module
 bytes; it does not acquire those bytes. Allocator abort and panic-abort are
-outside unwind recovery. Pristine prefixes, insertion, release/teardown,
-DATA-ADOPT, ISSUE and generated completion remain separate work. Authenticated
+outside unwind recovery. R105 separately covers pristine prefixes at its named
+CPU boundary. Insertion, release/teardown, DATA-ADOPT, ISSUE and generated
+completion remain open work. Authenticated
 adapter correspondence, native incarnation succession and matched HIP/HSA
 performance are separate acceptance requirements, not consequences of the
 CPU matrix or compiled behavioral mutations.

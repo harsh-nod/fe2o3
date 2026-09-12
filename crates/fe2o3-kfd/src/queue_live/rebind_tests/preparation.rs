@@ -11,6 +11,19 @@ use crate::queue::live::rebind::LiveRebindRootV1;
 use crate::shared_memory::{PreparationMemoryFixtureV1 as Memory, SharedMemorySessionPhaseV1};
 use fe2o3_aql::AqlDispatchGeometryV1;
 
+#[path = "preparation/pristine.rs"]
+mod pristine;
+pub(in crate::queue) use pristine::{
+    pristine_constructor_regression_v1, pristine_settlement_regression_v1,
+};
+
+#[derive(Clone, Copy)]
+enum Source {
+    Ordinary(u64),
+    Pristine(u64),
+    PristineInvalid,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Opening {
     None,
@@ -90,7 +103,50 @@ fn exercise(
     validation: Validation,
     suppress_operation_error: bool,
 ) {
-    let (mut fixture, data) = fixture();
+    exercise_source(
+        Source::Ordinary(predecessor),
+        opening,
+        operation,
+        closing,
+        validation,
+        suppress_operation_error,
+    );
+}
+
+fn exercise_source(
+    source: Source,
+    opening: Opening,
+    operation: Option<(PreparationStageV1, bool)>,
+    closing: Closing,
+    validation: Validation,
+    suppress_operation_error: bool,
+) {
+    let (mut fixture, data, continuation, prior_occurrence) = match source {
+        Source::Ordinary(_) => {
+            let (fixture, data) = fixture();
+            (fixture, data, None, None)
+        }
+        Source::Pristine(next) => {
+            let (fixture, data, continuation, occurrence) = pristine::fixture(next);
+            (fixture, data, Some(continuation), Some(occurrence))
+        }
+        Source::PristineInvalid => {
+            let (fixture, data, mut continuation, occurrence) = pristine::fixture(7);
+            continuation.invalidate_generation_for_test();
+            (fixture, data, Some(continuation), Some(occurrence))
+        }
+    };
+    let pristine = prior_occurrence.is_some();
+    let continuation_next = continuation.as_ref().map(|c| c.next_generation_for_test());
+    let predecessor = match source {
+        Source::Ordinary(value) => Some(value),
+        Source::Pristine(_) | Source::PristineInvalid => None,
+    };
+    let next_generation = match source {
+        Source::Ordinary(value) => value.checked_add(1).filter(|&next| next != u64::MAX),
+        Source::Pristine(next) => Some(next),
+        Source::PristineInvalid => None,
+    };
     if opening == Opening::Exhausted {
         fixture.memory.primary_expire_loan_generation_v1();
     }
@@ -101,7 +157,8 @@ fn exercise(
     key.vm = fixture.foundation.identity().vms()[0].key;
     let mut session = persistent_compute_cancellation_test_session(key, None, None);
     session.observation.ring_bytes = 4096;
-    session.detached_dispatch_generation = Some(predecessor);
+    session.detached_dispatch_generation = predecessor;
+    session.unpublished_dispatch.continuation = continuation;
     session.detached_data_count = data.len();
     session.detached_data_identities = fixed_dispatch_storage_identities(&data);
     session.detached_next_insertion_index = Some(data.len());
@@ -122,7 +179,7 @@ fn exercise(
     let packets = [packet(0), packet(1), packet(2)];
     let mut original_inputs = PrimaryPreparationSnapshotV1::packets(&packets);
     original_inputs.capture_data_vector_v1(&data, data.capacity());
-    let root = LiveRebindRootV1::new(programs, packets, data, Some(predecessor));
+    let root = LiveRebindRootV1::new(programs, packets, data, predecessor);
     let root_identity = &*root as *const _;
     let retained = RefCell::new(None);
     let snapshot = RefCell::new(None);
@@ -130,8 +187,11 @@ fn exercise(
     let _ = take_dispatch_terminal_process_gate_record_v1();
     let result = session.settle_fixed_dispatch_rebind_with_v1(
         root,
-        |_, programs, preparation, generation| {
+        |session, programs, preparation, generation, continuation| {
             assert_eq!(generation, predecessor);
+            assert!(session.unpublished_dispatch.continuation.is_none());
+            assert_eq!(continuation.as_ref().map(|c| c.next_generation_for_test()),
+                continuation_next);
             preparation.primary_assert_descriptors_v1(&original_inputs, None);
             *snapshot.borrow_mut() = Some(preparation.primary_snapshot_v1());
             if let Some((stage, panic)) = operation {
@@ -150,13 +210,15 @@ fn exercise(
                 },
                 |f| {
                     f.calls[1] += 1;
-                    let result = prepare_public_fixed_dispatch_resources_after_detach_in_place(
-                        &mut f.memory,
-                        programs,
-                        preparation,
-                        generation,
-                    )
-                    .map_err(Into::into);
+                    let result = match generation {
+                        Some(generation) => prepare_public_fixed_dispatch_resources_after_detach_in_place(
+                            &mut f.memory, programs, preparation, generation,
+                        ),
+                        None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1(
+                            &mut f.memory, programs, preparation,
+                            continuation.take().expect("retained pristine continuation"),
+                        ),
+                    }.map_err(Into::into);
                     if suppress_operation_error {
                         assert!(result.is_err());
                         Ok(())
@@ -188,7 +250,8 @@ fn exercise(
             closing?;
             result
         },
-        |_, preparation| {
+        |session, preparation| {
+            assert!(session.dispatch.is_none(), "validation precedes installation");
             let mut f = fixture.borrow_mut();
             f.calls[3] += 1;
             if validation == Validation::Bypass {
@@ -200,7 +263,10 @@ fn exercise(
                 snapshot.borrow().as_ref().unwrap(),
                 None,
             );
-            preparation.primary_assert_replacement_generation_v1(Some(predecessor + 1), None);
+            preparation.primary_assert_replacement_generation_v1(next_generation, None);
+            if let Some(previous) = prior_occurrence {
+                preparation.assert_fresh_pristine_occurrence_for_test(previous);
+            }
             if matches!(validation, Validation::Error | Validation::Panic) {
                 f.memory
                     .primary_arm_native("currentness", validation == Validation::Panic);
@@ -216,7 +282,7 @@ fn exercise(
     );
     let f = fixture.borrow();
     let opened = opening == Opening::None;
-    let generation_valid = predecessor < u64::MAX - 1;
+    let generation_valid = next_generation.is_some();
     let operation_ok = opened && generation_valid && operation.is_none();
     let validation_entered =
         opened && (operation_ok || suppress_operation_error) && closing == Closing::None;
@@ -243,7 +309,11 @@ fn exercise(
             || opened && (operation.is_some_and(|(_, panic)| panic) || closing != Closing::None)
     );
     // This is the outer bind producer only, not the injected fixture loan-poison callback.
-    assert_eq!(take_dispatch_terminal_process_gate_record_v1(), panics);
+    assert_eq!(
+        take_dispatch_terminal_process_gate_record_v1(),
+        panics || pristine && !success
+    );
+    assert!(session.unpublished_dispatch.continuation.is_none());
     match result.result {
         Err(payload) => {
             if opening == Opening::Panic {
@@ -265,6 +335,27 @@ fn exercise(
         }
         Ok(result) => {
             assert_eq!(result.is_ok(), success);
+            if opened && closing == Closing::None && !generation_valid {
+                assert!(matches!(
+                    result,
+                    Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                        Gfx942DispatchBindingErrorV1::GenerationExhausted
+                    ))
+                ));
+            }
+            if opened
+                && closing == Closing::None
+                && generation_valid
+                && operation.is_some()
+                && !suppress_operation_error
+            {
+                assert!(matches!(
+                    result,
+                    Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                        Gfx942DispatchBindingErrorV1::InvalidCode("injected preparation stage")
+                    ))
+                ));
+            }
             if opened && matches!(closing, Closing::PreError | Closing::PostError) {
                 assert!(matches!(
                     result,
@@ -302,8 +393,11 @@ fn exercise(
         let dispatch = session.dispatch.as_ref().unwrap();
         assert_eq!(
             dispatch.primary_fixture_next_generation_v1(),
-            predecessor + 1
+            next_generation.unwrap()
         );
+        if let Some(previous) = prior_occurrence {
+            assert_ne!(dispatch.primary_fixture_recipe_occurrence_v1(), previous);
+        }
         owners.dispatch(dispatch);
         assert_eq!(session.detached_data_count, 0);
         assert_eq!(session.detached_dispatch_generation, None);
@@ -316,9 +410,15 @@ fn exercise(
         assert_eq!(session.detached_data_count, ledger.len());
         assert_eq!(session.detached_data_identities, ledger);
         assert_eq!(session.detached_data_identities.as_ptr(), ledger_storage);
-        assert_eq!(session.detached_dispatch_generation, Some(predecessor));
+        assert_eq!(session.detached_dispatch_generation, predecessor);
         assert_eq!(session.detached_next_insertion_index, Some(ledger.len()));
-        assert_eq!(root.predecessor, Some(predecessor));
+        assert_eq!(root.predecessor, predecessor);
+        assert_eq!(
+            root.continuation
+                .as_ref()
+                .map(|c| c.next_generation_for_test()),
+            if opened { None } else { continuation_next }
+        );
         assert!(root.packets.is_none() && root.data.is_none());
         let programs = root.programs.as_ref().unwrap();
         assert_eq!(
@@ -343,9 +443,15 @@ fn exercise(
             None,
         );
         preparation.primary_assert_replacement_generation_v1(
-            (opened && generation_valid).then(|| predecessor + 1),
+            if opened { next_generation } else { None },
             None,
         );
+        if opened
+            && generation_valid
+            && let Some(previous) = prior_occurrence
+        {
+            preparation.assert_fresh_pristine_occurrence_for_test(previous);
+        }
         if opened
             && generation_valid
             && let Some((stage, _)) = operation
@@ -370,10 +476,19 @@ fn exercise(
     for marker in owners.in_session {
         assert!(shared.contains(&marker));
     }
-    f.memory
-        .primary_assert_accounts_and_records(original_session);
+    f.memory.primary_assert_accounts_after_disposal_v1(
+        original_session,
+        before.calls[5..].try_into().unwrap(),
+    );
     f.memory.assert_data_unchanged(&before);
     let after = f.memory.observation();
+    if !opened || !generation_valid {
+        assert_eq!(
+            &after.calls[1..],
+            &before.calls[1..],
+            "rejection before allocation/map effects"
+        );
+    }
     assert_eq!(after.host, before.host);
     assert_eq!(after.device, before.device);
     assert_eq!(
@@ -405,13 +520,24 @@ fn exercise(
 
 #[test]
 fn ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class() {
+    preflight_source(false);
+}
+
+fn preflight_source(pristine: bool) {
     for case in 0..8 {
-        let (mut fixture, data) = fixture();
+        let (mut fixture, data, continuation) = if pristine {
+            let (fixture, data, continuation, _) = pristine::fixture(7);
+            (fixture, data, Some(continuation))
+        } else {
+            let (fixture, data) = fixture();
+            (fixture, data, None)
+        };
         let mut key = test_queue_key(610, 3);
         key.vm = fixture.foundation.identity().vms()[0].key;
         let mut session = persistent_compute_cancellation_test_session(key, None, None);
         session.observation.ring_bytes = 4096;
-        session.detached_dispatch_generation = Some(7);
+        session.detached_dispatch_generation = (!pristine).then_some(7);
+        session.unpublished_dispatch.continuation = continuation;
         session.detached_data_count = data.len();
         session.detached_data_identities = fixed_dispatch_storage_identities(&data);
         match case {
@@ -437,7 +563,7 @@ fn ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class(
                     .unwrap();
                 session.dispatch = Some(preparation.take_completed().unwrap());
             }
-            2 => session.detached_dispatch_generation = None,
+            2 => session.detached_dispatch_generation = pristine.then_some(7),
             3 => session.detached_data_count += 1,
             4 => {
                 session.detached_data_count += 1;
@@ -483,7 +609,7 @@ fn ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class(
         let _ = take_dispatch_terminal_process_gate_record_v1();
         let settled = session.settle_fixed_dispatch_rebind_with_v1(
             root,
-            |_, _, _, _| panic!("preflight entered preparation"),
+            |_, _, _, _, _| panic!("preflight entered preparation"),
             |_, _| panic!("preflight entered validation"),
             |root| {
                 assert_eq!(&*root as *const _, root_identity);
@@ -543,7 +669,7 @@ fn ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class(
             )),
             _ => unreachable!(),
         }
-        let terminal = (2..=5).contains(&case);
+        let terminal = (2..=5).contains(&case) || pristine && case >= 6;
         assert_eq!(settled.transport, terminal);
         assert_eq!(session.terminal_poisoned, terminal || case == 0);
         assert_eq!(
@@ -569,6 +695,15 @@ fn ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class(
         );
         let mut root = retained.into_inner().unwrap();
         assert!(root.preparation.is_none());
+        assert!(root.continuation.is_none());
+        assert_eq!(
+            session
+                .unpublished_dispatch
+                .continuation
+                .as_ref()
+                .map(|c| c.next_generation_for_test()),
+            (pristine && case == 1).then_some(7)
+        );
         let programs = root.programs.as_ref().unwrap();
         assert_eq!(
             (programs.as_ptr(), programs.len(), programs.capacity()),
@@ -598,9 +733,10 @@ fn ordinary_rebind_preflight_retains_exact_inputs_and_preserves_rejection_class(
         fixture
             .memory
             .primary_assert_shared_layouts_v1(&owners.shared);
-        fixture
-            .memory
-            .primary_assert_accounts_and_records(fixture.memory.primary_session_id());
+        fixture.memory.primary_assert_accounts_after_disposal_v1(
+            fixture.memory.primary_session_id(),
+            before.calls[5..].try_into().unwrap(),
+        );
     }
 }
 

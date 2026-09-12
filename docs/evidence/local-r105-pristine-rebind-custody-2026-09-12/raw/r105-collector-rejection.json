@@ -1,0 +1,12 @@
+{
+  "command": ["node", "/home/harsh/.codex-tmp/r105-retain-local.js"],
+  "returncode": 1,
+  "assertion": "restore before next mutation",
+  "location": "r105-retain-local.js:220",
+  "prior_restoration": "2026-09-12T13:46:05.206Z",
+  "next_mutation_start": "2026-09-12T13:46:05.146Z",
+  "inversion_ms": 60,
+  "cause_established": false,
+  "archive_created": false,
+  "disposition": "Preserve original records. Repeat all nine negatives and restored focused gates; retain strict chronology for acceptance."
+}

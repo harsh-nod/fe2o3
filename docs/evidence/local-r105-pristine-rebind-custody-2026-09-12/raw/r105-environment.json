@@ -1,0 +1,96 @@
+{
+  "recorded_at": "2026-09-12T13:14:14.438Z",
+  "recorded_phase": "Before frozen/full/auxiliary/mutation campaigns; after preliminary focused tests. No host-load qualification.",
+  "publication_parent": "b69a6f21c2beb0aad870d3f4b8cdc2eb183f456f",
+  "accepted_runtime_checkpoint": "b69a6f21c2beb0aad870d3f4b8cdc2eb183f456f",
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "cargo 1.96.0-nightly (888f67534 2026-03-30)\nrelease: 1.96.0-nightly\ncommit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51\ncommit-date: 2026-03-30\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]\n"
+    },
+    {
+      "command": [
+        "rustc",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "rustc 1.96.0-nightly (55e86c996 2026-04-02)\nbinary: rustc\ncommit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9\ncommit-date: 2026-04-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2\n"
+    },
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "output": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "output": "v22.22.1\n"
+    },
+    {
+      "command": [
+        "git",
+        "--version"
+      ],
+      "output": "git version 2.43.0\n"
+    },
+    {
+      "command": [
+        "uname",
+        "-srmo"
+      ],
+      "output": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "cargo",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3"
+    },
+    {
+      "name": "rustc",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950"
+    }
+  ],
+  "runners": [
+    {
+      "name": "r105-run.js",
+      "sha256": "34d700135d8f8c36f5173ccfd7a02e0fb3e8ab7f4eba1d01d78705922cda066a"
+    },
+    {
+      "name": "r105-source-gate.py",
+      "sha256": "b477e7d6344baedf7270e19aa4655fb63e157dda44e1ab91b116d66a4b16c78f"
+    },
+    {
+      "name": "r105-auxiliary-gates.py",
+      "sha256": "239b099e75d76e73860a831032162804b6e8f533f9b3d922768c98f577a948f9"
+    },
+    {
+      "name": "r105-freeze.js",
+      "sha256": "8e97c828b651b8059e2c9b0a09760019b3d5f6b10c85249b67bd2c7d9b45cf93"
+    }
+  ],
+  "environment_overrides": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "test_deadlines_changed": false,
+  "hardware_qualification": false,
+  "solver_rerun": false
+}

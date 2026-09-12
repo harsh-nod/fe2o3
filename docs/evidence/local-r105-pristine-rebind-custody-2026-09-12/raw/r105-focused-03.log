@@ -1,0 +1,170 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0282]: type annotations needed
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs:115:86
+    |
+115 | ...                   f.memory.primary_loan(&mut f.foundation).map_err(Into::into)
+    |                                                                        ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+    |
+help: consider specifying the generic argument
+    |
+115 |                                     f.memory.primary_loan(&mut f.foundation).map_err(Into::<T>::into)
+    |                                                                                          +++++
+
+error[E0283]: type annotations needed
+    --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs:115:86
+     |
+ 115 | ...                   f.memory.primary_loan(&mut f.foundation).map_err(Into::into)
+     |                                                                        ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+     |
+note: multiple `impl`s satisfying `_: From<memory::MemorySessionError>` found
+    --> crates/fe2o3-kfd/src/queue_live.rs:1423:1
+     |
+1423 | impl From<MemorySessionError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/queue_dispatch_binding.rs:1286:1
+     |
+1286 | impl From<MemorySessionError> for Gfx942DispatchBindingErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/sdma.rs:310:1
+     |
+ 310 | impl From<MemorySessionError> for Gfx942SdmaErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `memory::MemorySessionError` to implement `Into<_>`
+help: consider specifying the generic argument
+     |
+ 115 |                                     f.memory.primary_loan(&mut f.foundation).map_err(Into::<T>::into)
+     |                                                                                          +++++
+
+error[E0283]: type annotations needed
+    --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs:115:86
+     |
+ 115 | ...                   f.memory.primary_loan(&mut f.foundation).map_err(Into::into)
+     |                                                                        ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+...
+ 125 | ...                   f.memory.primary_reclaim(&mut f.foundation, loan).map_err(Into::into)
+     |                       --------------------------------------------------------------------- type must be known at this point
+     |
+note: multiple `impl`s satisfying `_: From<memory::MemorySessionError>` found
+    --> crates/fe2o3-kfd/src/queue_live.rs:1423:1
+     |
+1423 | impl From<MemorySessionError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/queue_dispatch_binding.rs:1286:1
+     |
+1286 | impl From<MemorySessionError> for Gfx942DispatchBindingErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/sdma.rs:310:1
+     |
+ 310 | impl From<MemorySessionError> for Gfx942SdmaErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `memory::MemorySessionError` to implement `Into<_>`
+help: consider specifying the generic argument
+     |
+ 115 |                                     f.memory.primary_loan(&mut f.foundation).map_err(Into::<T>::into)
+     |                                                                                          +++++
+
+error[E0283]: type annotations needed
+    --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs:115:86
+     |
+ 115 | ...                   f.memory.primary_loan(&mut f.foundation).map_err(Into::into)
+     |                                                                        ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+...
+ 125 | ...                   f.memory.primary_reclaim(&mut f.foundation, loan).map_err(Into::into)
+     |                                                                                 ---------- type must be known at this point
+     |
+note: multiple `impl`s satisfying `_: From<memory::MemorySessionError>` found
+    --> crates/fe2o3-kfd/src/queue_live.rs:1423:1
+     |
+1423 | impl From<MemorySessionError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/queue_dispatch_binding.rs:1286:1
+     |
+1286 | impl From<MemorySessionError> for Gfx942DispatchBindingErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/sdma.rs:310:1
+     |
+ 310 | impl From<MemorySessionError> for Gfx942SdmaErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `memory::MemorySessionError` to implement `Into<_>`
+help: consider specifying the generic argument
+     |
+ 115 |                                     f.memory.primary_loan(&mut f.foundation).map_err(Into::<T>::into)
+     |                                                                                          +++++
+
+error[E0283]: type annotations needed
+    --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs:115:86
+     |
+ 115 | ...                           f.memory.primary_loan(&mut f.foundation).map_err(Into::into)
+     |                                                                                ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+...
+ 128 | ...                   )?;
+     |                        - type must be known at this point
+     |
+note: multiple `impl`s satisfying `live::ComputeAqlQueueSessionErrorV1: From<_>` found
+    --> crates/fe2o3-kfd/src/queue_live.rs:1417:1
+     |
+1417 | impl From<Gfx942QueueResourcePlanningError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1423 | impl From<MemorySessionError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1429 | impl From<Gfx942CompletionErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1435 | impl From<Gfx942DispatchBindingErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1441 | impl From<LinuxDoorbellErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1447 | impl From<Gfx942SdmaErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider specifying the generic argument
+     |
+ 115 |                                     f.memory.primary_loan(&mut f.foundation).map_err(Into::<T>::into)
+     |                                                                                          +++++
+
+error[E0283]: type annotations needed
+    --> crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs:115:86
+     |
+ 115 | ...                           f.memory.primary_loan(&mut f.foundation).map_err(Into::into)
+     |                                                                                ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+...
+ 129 | ...                   closing?;
+     |                              - type must be known at this point
+     |
+note: multiple `impl`s satisfying `live::ComputeAqlQueueSessionErrorV1: From<_>` found
+    --> crates/fe2o3-kfd/src/queue_live.rs:1417:1
+     |
+1417 | impl From<Gfx942QueueResourcePlanningError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1423 | impl From<MemorySessionError> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1429 | impl From<Gfx942CompletionErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1435 | impl From<Gfx942DispatchBindingErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1441 | impl From<LinuxDoorbellErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1447 | impl From<Gfx942SdmaErrorV1> for ComputeAqlQueueSessionErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider specifying the generic argument
+     |
+ 115 |                                     f.memory.primary_loan(&mut f.foundation).map_err(Into::<T>::into)
+     |                                                                                          +++++
+
+Some errors have detailed explanations: E0282, E0283.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `fe2o3-kfd` (lib test) due to 6 previous errors

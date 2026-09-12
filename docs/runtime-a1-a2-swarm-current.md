@@ -1,11 +1,11 @@
 # Current Runtime Swarm Work Orders
 
-Latest dispatch: the [R105-candidate swarm breakdown](runtime-swarm-dispatch-r105-candidate.md)
-supersedes immediate assignment/status rows below. N2 pristine rebind is now
-implemented but unaccepted under frozen validation; Native next takes N3-C,
-Admission C1 and Resources V1. It also makes the Worker V3 production-authority
-join explicit. R104 remains the accepted runtime checkpoint; this refresh is
-planning only and does not promote the candidate or historical evidence.
+Latest checkpoint: R105 locally accepts [N2 pristine rebind custody](runtime-pristine-rebind-custody-v1.md),
+with [retained evidence](evidence/local-r105-pristine-rebind-custody-2026-09-12/README.md).
+Native next takes N3-C, Admission C1 and Resources V1. The
+[R105-candidate breakdown](runtime-swarm-dispatch-r105-candidate.md) remains the
+detailed dependency map, but its pending-acceptance status is historical.
+This refresh adds no native, authenticated formal or performance qualification.
 
 Execution refresh: 2026-09-12. Scope: finish A1/A2, then advance the remaining
 [issue #182 milestones](https://github.com/harsh-nod/fe2o3/issues/182).
@@ -18,17 +18,19 @@ This document supersedes the immediate assignment rows in the
 
 ## Renewed Swarm Dispatch
 
-R104 locally accepts [ordinary live-rebind custody](runtime-ordinary-rebind-custody-v1.md),
-with [retained evidence](evidence/local-r104-ordinary-rebind-custody-2026-09-12/README.md),
-above signed planning parent `5cdeedd8290fac0bf01ca53b01cc12e828a2e20e` and
-accepted R103 `61a1479348ec3b744a8881108e059f540f324364`.
-All seventeen source gates, ten auxiliary checks and six compiled behavioral
-negatives pass. GNU/musl each pass 2,565 tests with five ignored;
-frozen/restored rebind and construction suites pass 10/10 and 69/69.
-All 5,662 non-documentation source identities are unchanged and exactly restored.
-This is CPU/shared-sequence acceptance, not original-engine composition,
-live KFD, new solver refinement or matched performance. N2 pristine rebind is
-the next Native implementation packet.
+R105 extends accepted R104 ordinary rebind with pristine continuation and
+preparation custody through the same loan, retake, validation and commit.
+All seventeen source gates and ten auxiliary checks pass. GNU/musl each pass
+2,573 tests with five ignored; frozen/repeated-restored pristine, ordinary
+rebind and construction suites pass 28/28, 10/10 and 69/69. Nine repeated
+compiled negatives reject at their intended oracles; all 5,664 source
+identities are exactly restored. The original negative campaign is retained
+but unaccepted because of one 60 ms timestamp-order inversion; its cause is
+not established. Publication follows planning-only parent
+`c70773b9c9d9383f79a1c2fe829f1e1163596750` above R104
+`b69a6f21c2beb0aad870d3f4b8cdc2eb183f456f`.
+This accepts the named CPU/shared-sequence matrix, not original-engine
+composition, live KFD, authenticated adapter refinement or matched performance.
 
 The renewed user request is split across three read-only review workers below.
 Primary owns implementation, integration, tests, proof registration and signed
@@ -41,10 +43,25 @@ are queued work, not unattended background implementation jobs.
 
 | Worker | First packet | Concrete exit requirement |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N2: pristine rebind in `queue_live/rebind.rs`, `queue_live/pristine_abort.rs` and the lower pristine forwarder | Extend the existing root with continuation/preparation custody before the loan; preserve exact next-generation provenance and entered-pristine process poisoning. Reuse R104 settlement and facade transport. Opening failure retains the unconsumed continuation; consumed authority cannot become retry authority. |
+| Native: `native_replacement_handoff` | N3-C: coherent initialization in `shared_memory/coherent_initialization.rs` and `shared_memory/transitions.rs` | Root the CPU token across copy errors/panics using R88 transition custody; preserve mapped successors through projection failure. Add complete initializer tests in the real-foundation transition fixture, not only raw-engine harnesses. Borrowed source cannot escape. |
 | Admission: `submission_identity_handoff` | C1: CO-2A in new `context/tests/submission_identity_tests.rs` | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. Primary owns module wiring and the missing test-backend cancel counter. |
 | Resources: `r102_evidence_review` | V1: VER-1A.2a in new `runtime-model/src/context_version_journal.rs` | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. Primary owns exports. This is model-only, not a production journal. |
 | Primary | I1: integrate accepted packets and maintain qualification gates | Review shared changes, retain failed attempts, run exact-source checks, and publish accepted work to both repositories. Keep local source, model/proof, native and performance acceptance separate. |
+
+The refreshed bounded handoffs add these implementation constraints:
+
+- N3-C changes the private copy stage to consume/return its CPU token through
+  existing transition custody. Test copy/map errors and panics, configured and
+  unconfigured accounts, retained unrelated allocations and complete readback.
+  N3-D is an independent lower initializer; N3-L consumes both accepted paths.
+- C1 starts with five identity coordinates across eight ingresses. Only
+  poll/wait/event require a live stream; retained-identity operations preserve
+  their existing semantics. Use genuinely completed/released handles and
+  actual backend-ID reuse, not manually reset records. Keep validators unchanged.
+- V1 uses a preallocated W-slot Reserved arena/free stack and full-key slot
+  references. Lookup/abort must not reapply the registration watermark. Dropped
+  references retain capacity; abort never rolls the watermark back. No Begin,
+  second ID allocator, runtime activation API or production journal is added.
 
 ### Ordered Backlogs
 
@@ -54,7 +71,7 @@ sequence; it is not a prerequisite where the packets are explicitly independent.
 
 | Lane | Ordered packets after the first assignment | Source boundary / acceptance |
 | --- | --- | --- |
-| Native | N3: data insertion/replacement | Existing `fixed_dispatch.rs` and lower initializers. Retain incomplete prefixes and returned owners; reserve identity capacity before effects and commit metadata only after retake. |
+| Native | N3-D: device initialization; N3-L: live data insertion/replacement | N3-D is independent of N3-C. N3-L consumes both lower paths in existing `fixed_dispatch.rs`: retain incomplete prefixes and returned owners, reserve identity capacity before effects and commit metadata only after retake. |
 | Native | N4a: detach/release -> N4b: auxiliary/full returning destroy | Existing dispatch release and queue teardown paths. Retain untouched data, controls and the original parent through cleanup failure. Do not resurrect disposed authority; permit slot reuse only after confirmed full disposal. |
 | Native | N5: DATA-ADOPT -> joint I2: ISSUE | Existing generated preparation, shell and backend owners. Adoption binds original bytes without publication; ISSUE binds one logical submission and one permit to real resources without retrying uncertain publication. |
 | Admission | C2: CO-2B descriptor identity; C3: CO-3A reply/custody gaps | Both are independently ready now using existing authorization validators and R80/R83 lifecycle fixtures. No second validator, reply, decoder or dummy native completion adapter; neither waits for N5. |
@@ -64,8 +81,8 @@ sequence; it is not a prerequisite where the packets are explicitly independent.
 | Resources with Native | M1: aggregate domains/headroom; M2: native backing/control/slot admission; M3: host/native cache residency; M4: total retained-memory bound | Reuse existing accounts, budgets and caches. Domain design and host-image ceiling are independently ready; native residency and compound pre-effect admission depend on backing/control integration. Include terminal retention without double charging. |
 | Primary with all lanes | Q1: incremental adapter correspondence; Q2: timing/depth/overlap/fault qualification; Q3: matched HIP/HSA performance | Keep CPU/source, authenticated formal, live KFD and performance acceptance separate. Investigate R103's unaccepted default-concurrency musl watchdog failures without weakening deadlines. |
 
-R104 supplies N1's named local acceptance. The remaining critical integration
-path is **N2-N4 -> N5 DATA-ADOPT -> I2 ISSUE ->
+R104 supplies N1 and R105 supplies N2's named local acceptance. The remaining
+critical integration path is **N3/N4 -> N5 DATA-ADOPT -> I2 ISSUE ->
 C4 COMPLETE -> C5 generated API -> C6 GRAPH/DRAIN**. I2 also needs C1/C2 and the preissue
 C3 contract/oracle, but not evidence of its own publication receipt in advance.
 The first non-reusing ISSUE needs a specified mutation hook, not completed
@@ -77,7 +94,8 @@ classification checks and callback-panic/retention ordering after restoration.
 Its ten focused test functions contain 112 dynamic scenarios and one textual
 routing guard, not 112 successful binds. Actual original engine/account/platform
 composition is not established by its separate preparation and engine-free
-facade fixtures. The consuming pristine helper remains N2 work. Neither an
+facade fixtures. R105 replaces the consuming pristine helper at its own named
+CPU boundary, without establishing successful public/native binding. Neither an
 injected closure nor a passing ownership snapshot establishes native execution.
 
 C1/C2/C3's proposed test files and V1's model remain absent at this refresh.
@@ -86,6 +104,12 @@ graph/drain paths should be reused. Generated production preparation still
 supplies no adoption hooks, and R65's graph-local versions are not a Context
 journal or cross-run input lease. These are implementation boundaries, not
 reasons to duplicate the existing runtime.
+
+Q2 still needs the actual native N1/N2/cache budget qualifier, example and
+checker. Existing R66/drain runners do not exercise those optional budgets and
+cannot substitute for that missing harness. The concrete Worker V3 refinement
+backend and owned proof artifacts remain a required production join; fixture
+ISSUE/COMPLETE cannot supply protected-execution authority.
 
 ### Later Swarm Rotations
 
@@ -106,6 +130,15 @@ isolated window. No hardware work is launched by this dispatch refresh.
 
 ## Accepted Checkpoints
 
+R105 locally accepts **N2 pristine rebind custody**, with
+[retained evidence](evidence/local-r105-pristine-rebind-custody-2026-09-12/README.md).
+Eight new dynamic tests and two migrated names cover 119 scenarios. All
+seventeen source gates, ten auxiliary checks and nine repeated compiled
+negatives satisfy acceptance; GNU/musl each pass 2,573 tests with five ignored.
+All 5,664 source identities match. Original chronology rejection, preliminary
+attempts and their raw artifacts remain retained. This is CPU/shared-sequence
+acceptance only. Next: **N3-C initialization + C1 identity + V1 issuance**.
+
 R104 locally accepts **NATIVE-2C ordinary live-rebind custody** above signed
 planning parent `5cdeedd8290fac0bf01ca53b01cc12e828a2e20e`, with
 [retained evidence](evidence/local-r104-ordinary-rebind-custody-2026-09-12/README.md).
@@ -116,7 +149,7 @@ All 5,662 source identities match, including exact restoration after each
 mutation. Nine dynamic tests cover 112 scenarios; a tenth guards source routing.
 Original-engine composition, later auxiliary vector slots, pristine prefixes,
 native execution, formal correspondence and performance remain open.
-Next: **N2 pristine rebind + CO-2A Context identity + VER-1A.2a issuance**.
+At R104, next was **N2 pristine rebind + CO-2A Context identity + VER-1A.2a issuance**.
 
 R103 locally accepts **NATIVE-2C replacement-input custody** above signed R102
 `50c4eb075013fde0a984a003c0b5b90eae562847`, with

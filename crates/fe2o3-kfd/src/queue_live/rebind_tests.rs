@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[path = "rebind_tests/preparation.rs"]
-mod preparation;
+pub(super) mod preparation;
 
 #[test]
 fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation() {
@@ -34,6 +34,20 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .unwrap();
     assert!(root < settle && settle < loan && loan < prepare && prepare < validation);
     assert_eq!(entry.matches("with_live_queue_memory_model(").count(), 1);
+    assert!(entry.contains(
+        "None => prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1("
+    ));
+    assert_eq!(entry.matches("continuation.take()").count(), 1);
+    let pristine = include_str!("../queue_dispatch_binding/pristine_abort.rs")
+        .split("fn prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1")
+        .nth(1)
+        .unwrap()
+        .split("\n}")
+        .next()
+        .unwrap();
+    assert!(pristine.contains("custody.prepare_in_place("));
+    assert!(pristine.contains("continuation.resume(),"));
+    assert!(!pristine.contains('?'));
     let settlement = source
         .split("pub(in crate::queue) fn settle_fixed_dispatch_rebind_with_v1")
         .nth(1)
@@ -42,6 +56,10 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
         .next()
         .unwrap();
     let rooted_preparation = settlement.find("root.preparation = Some(").unwrap();
+    let rooted_continuation = settlement
+        .find("root.continuation = session.unpublished_dispatch.continuation.take()")
+        .unwrap();
+    assert!(rooted_continuation < rooted_preparation);
     let preparation_call = settlement.find("prepare(\n").unwrap();
     let validated = settlement
         .find("Some(preparation) => validate(session, preparation)")
@@ -84,8 +102,19 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
 }
 
 fn parent(auxiliary: bool, terminal: bool) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
-    let mut session =
-        persistent_compute_cancellation_test_session(test_queue_key(410, 7), None, None);
+    parent_in_vm(auxiliary, terminal, test_queue_key(410, 7).vm)
+}
+
+fn parent_in_vm(
+    auxiliary: bool,
+    terminal: bool,
+    vm: fe2o3_runtime_model::VmKeyV1,
+) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
+    let mut primary_key = test_queue_key(410, 7);
+    primary_key.vm = vm;
+    let mut auxiliary_key = test_queue_key(411, 8);
+    auxiliary_key.vm = vm;
+    let mut session = persistent_compute_cancellation_test_session(primary_key, None, None);
     session.detached_dispatch_generation = Some(29);
     session.detached_data_identities = Vec::with_capacity(3);
     session.detached_next_insertion_index = Some(0);
@@ -97,7 +126,7 @@ fn parent(auxiliary: bool, terminal: bool) -> (ComputeAqlQueueSessionV1, Compute
         event_id: 17,
         cwsr_shadow_pages: 2,
     };
-    let mut lane = compute_lane_state_for_multi_inflight_test(test_queue_key(411, 8));
+    let mut lane = compute_lane_state_for_multi_inflight_test(auxiliary_key);
     lane.detached_dispatch_generation = Some(37);
     lane.detached_data_identities = Vec::with_capacity(5);
     lane.detached_next_insertion_index = None;

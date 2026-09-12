@@ -7,6 +7,16 @@ pub(crate) struct PristineDispatchContinuationV1 {
 }
 
 impl PristineDispatchContinuationV1 {
+    #[cfg(test)]
+    pub(in crate::queue) fn next_generation_for_test(&self) -> u64 {
+        self.next_generation
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn invalidate_generation_for_test(&mut self) {
+        self.next_generation = u64::MAX;
+    }
+
     fn resume(self) -> Result<DispatchGenerationOwnerV1, Gfx942DispatchBindingErrorV1> {
         DispatchGenerationOwnerV1::with_next_generation(self.next_generation)
     }
@@ -209,19 +219,19 @@ impl PristineDispatchAbortV1 {
     }
 }
 
-pub(in crate::queue) fn prepare_public_fixed_dispatch_resources_after_pristine_abort_v1<
+pub(in crate::queue) fn prepare_public_fixed_dispatch_resources_after_pristine_abort_in_place_v1<
     const N: usize,
 >(
-    memory: &mut SharedGttMemorySessionV1,
-    programs: Vec<ValidatedKernelEnvelope<'_>>,
-    packets: [Gfx942FixedDispatchPacketV1; N],
-    data: Vec<Gfx942FixedDispatchDataV1>,
+    memory: &mut impl preparation::PreparationMemoryV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    custody: &mut FixedDispatchPreparationCustodyV1<N>,
     continuation: PristineDispatchContinuationV1,
-) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
-    let generation = continuation.resume()?;
-    // Like ordinary preparation, failures retain native records terminally, not a retry token.
-    prepare_public_fixed_dispatch_resources_with_generation(
-        memory, programs, packets, data, generation,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    custody.prepare_in_place(
+        memory,
+        programs,
+        continuation.resume(),
+        PersistentFixedDispatchControlStateV1::Ordinary,
     )
 }
 

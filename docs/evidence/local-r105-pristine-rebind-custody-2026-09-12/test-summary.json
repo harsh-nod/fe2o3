@@ -1,0 +1,275 @@
+{
+  "publication_parent": "c70773b9c9d9383f79a1c2fe829f1e1163596750",
+  "tested_source_checkpoint": "b69a6f21c2beb0aad870d3f4b8cdc2eb183f456f",
+  "accepted_runtime_checkpoint": "b69a6f21c2beb0aad870d3f4b8cdc2eb183f456f",
+  "planning_only_transition": {
+    "from": "b69a6f21c2beb0aad870d3f4b8cdc2eb183f456f",
+    "to": "c70773b9c9d9383f79a1c2fe829f1e1163596750",
+    "files": [
+      "docs/runtime-a1-a2-next-wave.md",
+      "docs/runtime-a1-a2-swarm-current.md",
+      "docs/runtime-swarm-dispatch-r105-candidate.md"
+    ]
+  },
+  "environment_record_changes_from_r104": [
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "previous": "Python 3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]\n",
+      "current": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    }
+  ],
+  "scope": "Pristine rebind continuation/preparation custody through shared settlement; CPU/shared-sequence acceptance only",
+  "source_identities": 5664,
+  "changed_source_files": [
+    "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/queue_live.rs",
+    "crates/fe2o3-kfd/src/queue_live/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation/pristine/facade.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/primary_construction.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 9,
+  "mutation_campaigns": [
+    {
+      "prefix": "r105-",
+      "accepted": false,
+      "compiled_behavioral_mutations": 9,
+      "chronology_violations": [
+        {
+          "previous_mutation": "omit-pristine-process-poison",
+          "next_mutation": "overwrite-transport",
+          "prior_restored_at": "2026-09-12T13:46:05.206Z",
+          "next_started_at": "2026-09-12T13:46:05.146Z",
+          "delta_ms": -60
+        }
+      ]
+    },
+    {
+      "prefix": "r105-repeat-",
+      "accepted": true,
+      "compiled_behavioral_mutations": 9,
+      "chronology_violations": []
+    }
+  ],
+  "historical_compiled_mutation_runs": 9,
+  "total_compiled_mutation_runs": 18,
+  "accepted_mutation_prefix": "r105-repeat-mut-",
+  "accepted_restored_prefix": "r105-repeat-restored-",
+  "collector_rejection_record": "raw/r105-collector-rejection.json",
+  "rejected_collector": {
+    "path": "raw/r105-retain-local-before-repeat.js",
+    "sha256": "1dbd62d4c44d1698887910c53c3cbb3044898d379793db75736356efa4c344a2"
+  },
+  "new_test_functions": [
+    "queue::live::rebind_tests::preparation::pristine::facade::pristine_rebind_facade_retains_restored_primary_and_later_auxiliary_slots",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_all_preparation_stages_retain_original_prefixes",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_corrupted_continuation_records_failed_generation",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_failed_complete_cannot_be_suppressed",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_opening_failure_retains_unconsumed_continuation",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_preflight_retains_exact_inputs_without_entered_poison_policy",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence",
+    "queue::live::rebind_tests::preparation::pristine::pristine_rebind_real_loan_operation_retake_matrix_preserves_custody"
+  ],
+  "retained_name_migrated_test_functions": [
+    "queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure",
+    "queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority"
+  ],
+  "dynamic_scenarios": {
+    "preflight": 8,
+    "operation_retake": 18,
+    "opening": 3,
+    "generation": 4,
+    "suppressed_complete": 2,
+    "corrupted_generation": 1,
+    "preparation_stages": 62,
+    "migrated_settlement": 5,
+    "migrated_constructor_rejection": 1,
+    "terminal_facade": 15,
+    "total": 119
+  },
+  "new_dynamic_test_functions": 8,
+  "migrated_dynamic_test_functions": 2,
+  "extended_textual_source_guards": 1,
+  "preparation_helper_outcomes": {
+    "runs": 96,
+    "successful_installs": 6,
+    "returned_errors": 46,
+    "caught_panics": 44
+  },
+  "facade_outcomes": {
+    "scenarios": 15,
+    "terminal_transports": 15,
+    "auxiliary_vector_indices": [
+      0,
+      1
+    ],
+    "successful_public_bind_qualified": false,
+    "transport_request_injected": true
+  },
+  "focused_tests": {
+    "frozen_pristine": 28,
+    "restored_pristine": 28,
+    "frozen_rebind": 10,
+    "restored_rebind": 10,
+    "frozen_construction": 69,
+    "restored_construction": 69
+  },
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2573,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2573,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "python_tests": {
+    "benchmark_harnesses": 151,
+    "dependency_policy": 8
+  },
+  "historical_attempts": [
+    {
+      "name": "r105-focused-01",
+      "category": "compile-failure-format-overlap",
+      "returncode": 101,
+      "source_unchanged": false,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r105-focused-02",
+      "category": "incorrect-disposal-and-preflight-oracles",
+      "returncode": 101,
+      "source_unchanged": true,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r105-focused-03",
+      "category": "compile-failure",
+      "returncode": 101,
+      "source_unchanged": true,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r105-focused-04",
+      "category": "preliminary-pass-before-vm-alignment",
+      "returncode": 0,
+      "source_unchanged": true,
+      "accepted_campaign": false
+    },
+    {
+      "name": "r105-focused-05",
+      "category": "frozen-source-preliminary-pass",
+      "returncode": 0,
+      "source_unchanged": true,
+      "accepted_campaign": false
+    }
+  ],
+  "preliminary_clippy": "r105-clippy-01",
+  "environment_record": "raw/r105-environment.json",
+  "issue_status_record": "raw/r105-issue-status.json",
+  "environment_record_timing": "Before frozen/full/auxiliary/mutation campaigns; after preliminary focused tests. No host-load qualification.",
+  "metadata_stderr_retained": true,
+  "initial_formatter_output_retained": false,
+  "no_new_formal_source": true,
+  "proof_inventory_only": true,
+  "solver_rerun": false,
+  "original_engine_composition_qualified": false,
+  "later_auxiliary_vector_slots_native_qualified": false,
+  "live_kfd": false,
+  "performance_measurement": false
+}

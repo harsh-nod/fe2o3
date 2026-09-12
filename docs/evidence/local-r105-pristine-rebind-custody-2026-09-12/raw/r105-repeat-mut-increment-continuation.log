@@ -1,0 +1,29 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.74s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence ... FAILED
+
+failures:
+
+---- queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence stdout ----
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence' (842613) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:514:13:
+assertion `left == right` failed: exact replacement generation
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence' (842613) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/preparation.rs:303:5:
+assertion `left == right` failed
+  left: true
+ right: false
+
+
+failures:
+    queue::live::rebind_tests::preparation::pristine::pristine_rebind_preserves_real_continuation_generation_and_fresh_occurrence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 986 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -154,101 +154,6 @@ impl ComputeAqlQueueSessionV1 {
         self.detached_next_insertion_index = None;
         Ok(data)
     }
-
-    pub(super) fn bind_after_pristine_abort_v1<const N: usize>(
-        &mut self,
-        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
-        packets: [Gfx942FixedDispatchPacketV1; N],
-        data: Vec<Gfx942FixedDispatchDataV1>,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        let mut continuation = self.unpublished_dispatch.continuation.take();
-        let mut prepared = None;
-        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_live_queue_memory_model_custody(|memory| {
-                prepared = Some(
-                    prepare_public_fixed_dispatch_resources_after_pristine_abort_v1(
-                        memory,
-                        programs,
-                        packets,
-                        data,
-                        continuation.take().expect("one unpublished continuation"),
-                    ),
-                );
-            })
-        }));
-        self.finish_pristine_rebind_v1(
-            prepared,
-            envelope,
-            |session| {
-                let authorities = session
-                    .dispatch
-                    .as_ref()
-                    .expect("prepared owner retained")
-                    .device_authorities_inline_v1();
-                session
-                    .engine
-                    .as_mut()
-                    .expect("opened queue engine")
-                    .backend
-                    .session
-                    .validate_live_queue_dispatch_memory(&authorities)
-            },
-            permanently_poison_process_global_kfd_runtime_gate_v1,
-        )
-    }
-
-    fn finish_pristine_rebind_v1(
-        &mut self,
-        prepared: Option<Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1>>,
-        envelope: std::thread::Result<AbortEnvelopeV1>,
-        validate: impl FnOnce(&mut Self) -> Result<(), MemorySessionError>,
-        poison_process: impl FnOnce(),
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        // Root a successful constructor before inspecting closing currentness.
-        let preparation = match prepared {
-            Some(Ok(owner)) => {
-                self.dispatch = Some(owner);
-                Ok(())
-            }
-            Some(Err(error)) => Err(error.into()),
-            None => Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "unpublished rebind did not prepare",
-            )),
-        };
-        let result = match envelope {
-            Err(payload) => {
-                self.poison_terminal();
-                poison_process();
-                std::panic::resume_unwind(payload)
-            }
-            Ok(Err(error)) => Err(error),
-            Ok(Ok(((), closing))) => closing.and(preparation),
-        };
-        if let Err(error) = result {
-            // Input data was consumed by this API; never manufacture a retry continuation.
-            self.poison_terminal();
-            poison_process();
-            return Err(error);
-        }
-        let validation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(self)));
-        match validation {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                self.poison_terminal();
-                poison_process();
-                return Err(error.into());
-            }
-            Err(payload) => {
-                self.poison_terminal();
-                poison_process();
-                std::panic::resume_unwind(payload)
-            }
-        }
-        self.detached_data_count = 0;
-        self.detached_data_identities.clear();
-        self.detached_next_insertion_index = None;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -503,69 +408,11 @@ mod tests {
 
     #[test]
     fn pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure() {
-        for fault in 0..5 {
-            let (memory, mut session) = fixture();
-            let prepared = session.dispatch.take();
-            session.detached_data_count = 5;
-            let gated = std::cell::Cell::new(false);
-            let validated = std::cell::Cell::new(false);
-            let envelope: std::thread::Result<AbortEnvelopeV1> = match fault {
-                1 => Ok(Ok((
-                    (),
-                    Err(ComputeAqlQueueSessionErrorV1::Contract("retake error")),
-                ))),
-                2 => Err(Box::new("retake panic")),
-                _ => Ok(Ok(((), Ok(())))),
-            };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                session.finish_pristine_rebind_v1(
-                    prepared.map(Ok),
-                    envelope,
-                    |session| {
-                        validated.set(true);
-                        assert!(session.dispatch.is_some());
-                        match fault {
-                            3 => Err(MemorySessionError::Injected("dispatch validation")),
-                            4 => std::panic::panic_any("dispatch validation panic"),
-                            _ => Ok(()),
-                        }
-                    },
-                    || gated.set(true),
-                )
-            }));
-            assert_eq!(result.is_err(), matches!(fault, 2 | 4));
-            if let Ok(result) = result {
-                assert_eq!(result.is_ok(), fault == 0);
-            }
-            assert_eq!(gated.get(), fault != 0);
-            assert_eq!(validated.get(), !matches!(fault, 1 | 2));
-            assert_eq!(session.terminal_poisoned, fault != 0);
-            assert!(session.dispatch.is_some());
-            assert!(session.unpublished_dispatch.continuation.is_none());
-            assert!(memory.data_is_retained());
-            assert_eq!(session.detached_data_count, if fault == 0 { 0 } else { 5 });
-        }
+        super::super::rebind_tests::preparation::pristine_settlement_regression_v1();
     }
 
     #[test]
     fn pristine_rebind_constructor_rejection_is_terminal_without_retry_authority() {
-        let (memory, mut session) = fixture();
-        drop(session.dispatch.take());
-        let gated = std::cell::Cell::new(false);
-        assert!(
-            session
-                .finish_pristine_rebind_v1(
-                    Some(Err(Gfx942DispatchBindingErrorV1::ResourcePhase)),
-                    Ok(Ok(((), Ok(())))),
-                    |_| panic!("rejected constructor must not reach validation"),
-                    || gated.set(true),
-                )
-                .is_err()
-        );
-        assert!(gated.get());
-        assert!(session.terminal_poisoned);
-        assert!(session.dispatch.is_none());
-        assert!(session.unpublished_dispatch.continuation.is_none());
-        assert!(memory.data_is_retained());
+        super::super::rebind_tests::preparation::pristine_constructor_regression_v1();
     }
 }
