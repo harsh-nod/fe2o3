@@ -12,7 +12,12 @@ performance acceptance is added.
 
 Immediate packets are **Native N3-L initialized-device insertion**, independent
 **Admission C1 identity** and **Resources V1 issuance**, with Primary owning
-integration and qualification. The
+integration and qualification. V1 is now an uncommitted R108 model candidate,
+formatted but not compiled, tested or accepted. The refreshed
+[current assignments](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch)
+split Native into device/coherent/uninitialized insertion and retain the V1
+review gaps before qualification. Three read-only dispatch reviews are complete;
+the implementation queue is not an unattended background job. The
 [N3-L handoff](runtime-device-initialization-custody-v1.md#next-live-integration)
 keeps completed owners through retake and commits before extraction. Coherent
 insertion still needs its own external composite root. The R106 and earlier

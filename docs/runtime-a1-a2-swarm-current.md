@@ -3,6 +3,7 @@
 Latest checkpoint: R107 locally accepts [N3-D device initialization custody](runtime-device-initialization-custody-v1.md),
 with [retained evidence](evidence/local-r107-device-initialization-custody-2026-09-12/README.md).
 Native next takes N3-L live insertion, Admission C1 and Resources V1.
+V1 now exists as an uncommitted R108 candidate, not accepted runtime code.
 Primary owns their integration and qualification. The
 [R105-candidate breakdown](runtime-swarm-dispatch-r105-candidate.md) remains the
 detailed dependency map, but its pending-acceptance status is historical.
@@ -20,8 +21,9 @@ Original ambient stack limits were not recorded. No new formal, native or
 performance acceptance is claimed. See the
 [next live integration boundary](runtime-device-initialization-custody-v1.md#next-live-integration).
 
-The detailed dispatch below was refreshed on 2026-09-12 against accepted R106
-`ad6f71304ddb0f41cc102f9e6ecabd7ed7840efe`. Scope: finish A1/A2, then advance the remaining
+The current dispatch was refreshed on 2026-09-12 against accepted R107
+`589c6f6fd90048643a57cc4d0e250cb9698550a6` and the uncommitted R108 model candidate.
+Scope: finish A1/A2, then advance the remaining
 [issue #182 milestones](https://github.com/harsh-nod/fe2o3/issues/182).
 The issue was checked through the GitHub API and remains open; its reported
 `updatedAt` is `2026-09-12T10:51:18Z`.
@@ -32,8 +34,21 @@ This document supersedes the immediate assignment rows in the
 
 ## Renewed Swarm Dispatch
 
-R106 extends existing transition custody across coherent initialization's copy
-stage. All seventeen source gates and ten auxiliary checks pass. GNU/musl each
+Three read-only workers independently reviewed Native, Admission and Resources
+against R107 and returned the assignments below. Their review turns are complete;
+implementation packets are queued, not unattended background jobs. Primary owns
+edits, shared wiring, integration, serialized validation and signed publication
+to both topic remotes. No builds, solver runs, SSH or GPU jobs were launched by
+this dispatch refresh, and the existing R108 source candidate is unchanged.
+
+R108's constructor, existing-ID registration, exact Reserved lookup and abort
+model and ten test functions are written and formatted, but have not been
+compiled or tested. Its first assignment is review-gap closure and qualification,
+not a second model implementation. It adds neither a production Context journal
+nor membership, settlement, authenticated proofs or cross-run leases.
+
+R106 background: it extends existing transition custody across coherent
+initialization's copy stage. All seventeen source gates and ten auxiliary checks pass. GNU/musl each
 pass 2,583 tests with five ignored; frozen/restored coherent, borrowed and
 transition suites pass 10/10, 8/8 and 30/30. Seven compiled negatives reject at
 their intended oracles, and all 5,665 source identities are exactly restored.
@@ -44,18 +59,11 @@ remain preserved. Publication follows planning-only parent
 Original-engine composition, live KFD, authenticated adapter refinement and
 matched performance remain open.
 
-The renewed user request is split across three read-only review workers below.
-Primary owns implementation, integration, tests, proof registration and signed
-publication. The first three packets are independent; shared module wiring and
-all builds remain serialized. Each worker returns a bounded source/test
+The first three implementation packets are independent; shared module wiring
+and all builds remain serialized. Each worker supplies a bounded source/test
 handoff, not an unreviewed concurrent edit to Context or the queue owner.
-All three source-grounded dispatch reviews were rerun against accepted R106
-for the renewed breakdown request and are complete. Workers checked
-disjoint Native, Admission and Resources packets, made no edits and ran no
-builds or hardware jobs. The implementation packets below
-are queued work, not unattended background implementation jobs.
 
-The ten new tests exercise 130 initializer outcomes and five direct private-copy
+R106's ten tests exercise 130 initializer outcomes and five direct private-copy
 rejections, plus one positive pre-effect retry control. CPU and mapped owners,
 the original foundation, unrelated allocation and exact charges remain in the
 same fixture. The existing borrowed regression supplies the negative's immediate
@@ -66,7 +74,7 @@ native leaves, not successful Linux initialization or protected execution.
 | --- | --- | --- |
 | Native: `native_replacement_handoff` | N3-L: initialized-device live insertion; independent N4-R cleanup review | Keep the R107 in-place root outside the model loan, reserve identity capacity before effects, retain Complete through retake and commit before extraction. Preserve auxiliary restoration before parent transport. |
 | Admission: `submission_identity_handoff` | C1: CO-2A in new `context/tests/submission_identity_tests.rs` | Exercise all eight existing ingresses with exact-coordinate substitution, genuine cached completion, backend-ID reuse, destroyed-stream semantics and rejection precedence. Rejection must leave supplied handles, retained owners and callback state unchanged and precede backend entry. Primary owns module wiring and the missing test-backend cancel counter. |
-| Resources: `r102_evidence_review` | V1: VER-1A.2a in new `runtime-model/src/context_version_journal.rs` | Use existing Context IDs, bounded Reserved slots and the frozen activation/watermark policy; test out-of-order reservations, replay, slot reuse and capacity/overflow rejection. Primary owns exports. This is model-only, not a production journal. |
+| Resources: `r102_evidence_review` | V1: review and qualify the existing R108 candidate in `runtime-model/src/context_version_journal.rs` and its nested tests | Close boundary and counted-work test gaps; compile and validate exact-ID/replay/capacity oracles and compiled negatives against frozen source. Primary owns edits and exports. Acceptance remains model-only, not a production journal. |
 | Primary | I1: integrate N3-L, C1 and V1 with qualification gates | Retain failed attempts, run full/focused/auxiliary and compiled-negative checks, restore exact source and review evidence before signed publication to both repositories. Keep local source, model/proof, native and performance acceptance separate. |
 
 ### Next Implementation Batches
@@ -80,9 +88,10 @@ recorded above; it does not close the following implementation or qualification 
 
 | Owner | Next bounded implementation batch | Required local exit |
 | --- | --- | --- |
-| Native | N3-L: initialized-device append and explicit insertion in `queue_live/fixed_dispatch.rs`, with one outer insertion owner | Exact input/output custody through model retake and metadata commit, no post-effect identity-vector growth, append/hole/middle semantics, and primary/later-auxiliary failure coverage |
+| Native | N3-L1: initialized-device append and explicit insertion in `queue_live/fixed_dispatch.rs`, with one outer insertion owner | Exact input/output custody through model retake and metadata commit; reserve capacity for 16 identities before effects; append/hole/middle semantics, count 15-to-16, reservation rejection and primary/later-auxiliary failure coverage |
+| Native, follow-on | N3-L2 coherent insertion, then N3-L3 uninitialized insertion, reusing L1's settlement contract | Add external coherent custody without duplicating copy/map; retain allocation/map outputs through retake. Uninitialized allocation does not establish initialized contents. |
 | Admission | C1: existing Context identity gates, starting with five coordinates across eight ingresses, then genuine cache and backend-ID reuse | Rejected handles/records/callbacks unchanged; no backend entry; consuming release returns the supplied handle; destroyed-stream and terminal/deadline/graph precedence preserved |
-| Resources | V1: constructor, existing-ID registration, exact Reserved lookup and explicit pre-effect abort only | Preallocated W-slot arena/free stack; constant-work operations without later allocation; full-key slot reuse rejection; failures leave state and watermark unchanged |
+| Resources | V1: finish and qualify the uncommitted constructor/register/lookup/abort model before V2 membership | Preallocated W-slot arena/free stack; counted fixed-work operations without later allocation; full-key slot reuse rejection; failures leave state and watermark unchanged |
 | Primary | I1: integrate one reviewed batch at a time; separately prepare Q1/Q2/Q3 acceptance contracts | Immutable candidate source, focused/full/auxiliary checks, decisive compiled negatives, exact restoration and independent evidence review before signed pushes to both topic remotes |
 
 R107's N3-D implementation lives in the private
@@ -125,6 +134,17 @@ foreign coordinates and invalid integer limits. Dropped references retain
 capacity. This batch does not implement Begin, settlement, a production Context
 journal or another ID allocator.
 
+The V1 review handoff adds valid Context generation `1`, both defensive abort
+capacity-rejection branches, populated-journal work controls and rejection-work
+counts. Deliberately corrupted private test states need exact rejection snapshots,
+not the healthy-state auditor. Strengthen the source guard against uncounted
+iteration, but describe it as counted primitive accesses plus a textual guard,
+not a general complexity proof or an allocator measurement. Constructor
+allocation failure remains a coverage limitation unless separately injected.
+Then run focused compilation/tests, strict lint, applicable full/auxiliary gates,
+decisive compiled negatives, exact restoration and independent evidence review.
+The existing ten test functions are an inventory, not a passing-test count.
+
 ### Dependency Checks
 
 | Work | Ready independently | Actual integration prerequisite |
@@ -138,8 +158,9 @@ journal or another ID allocator.
 | C6 generated GRAPH/DRAIN | Extend existing ordinary graph/drain contracts | Real generated ISSUE/COMPLETE is required; C5-first is the planned API order, not a separate semantic prerequisite |
 | Cross-run input reuse | Contract/model work can proceed with the journal lane | Complete V7 mutation coverage/ordered writers/recovery and V8 exact input leases before enabling reuse |
 
-At this source checkpoint, the proposed C1/C2/C3 test files and V1 model remain
-absent. Existing ordinary typed async launch, graph/drain, identity validators,
+The proposed C1/C2/C3 test files remain absent. V1 is absent from accepted R107
+but present in the worktree as the uncompiled, unaccepted R108 candidate.
+Existing ordinary typed async launch, graph/drain, identity validators,
 resource credits and native budgets must be extended, not replaced.
 
 ### Primary Qualification Packets
@@ -188,7 +209,7 @@ The refreshed bounded handoffs add these implementation constraints:
 
 | Wave | Native | Admission | Resources | Primary |
 | --- | --- | --- | --- | --- |
-| Ready now | N3-L initialized-device insertion; N4-R lower-cleanup review | C1 next; C2/C3 independently ready | V1 next; M1 domain design and M3 host-image ceiling independently ready | Integrate the next reviewed packet, one immutable-source campaign at a time |
+| Ready now | N3-L1 initialized-device insertion; N4-R lower cleanup | C1 next; C2/C3 independently ready | Finish V1 candidate; M1 design, M2 cost inventory and M3 host-image ceiling independently ready | Integrate the next reviewed packet, one immutable-source campaign at a time |
 | After local prerequisites | Coherent/uninitialized N3-L custody; N4-L after N4-R; auxiliary/full destruction after cleanup contracts | C2/C3 in the next review slots; their order is scheduling only | V2 membership, V3 settlement/cost, V4 proofs, then V5 production journal | Integrate reviewed packets without conflicting shared edits |
 | Integration | N5 nonpublishing DATA-ADOPT, then joint I2 ISSUE | I2, C4 COMPLETE, C5 generated API and C6 generated GRAPH/DRAIN | V6 initial hooks, V7 complete mutation/recovery, V8 cross-run leases; M2/native residency | Original-engine composition, incremental correspondence and retained-memory closure |
 | Qualification | Native depth, budget, overlap and teardown matrix | Wake/cancel/drain and complete-output oracles | Exact versions, bounded retained resources and terminal charges | Q1 proofs, Q2 hardware/fault qualification, Q3 matched HIP/HSA benchmarks |
@@ -235,7 +256,8 @@ facade fixtures. R105 replaces the consuming pristine helper at its own named
 CPU boundary, without establishing successful public/native binding. Neither an
 injected closure nor a passing ownership snapshot establishes native execution.
 
-C1/C2/C3's proposed test files and V1's model remain absent at this refresh.
+C1/C2/C3's proposed test files remain absent at this refresh. V1 now exists as
+an uncommitted R108 candidate; its compilation and acceptance remain pending.
 Existing Context identity validators, ordinary typed async launches and ordinary
 graph/drain paths should be reused. Generated production preparation still
 supplies no adoption hooks, and R65's graph-local versions are not a Context
@@ -247,6 +269,11 @@ checker. Existing R66/drain runners do not exercise those optional budgets and
 cannot substitute for that missing harness. The concrete Worker V3 refinement
 backend and owned proof artifacts remain a required production join; fixture
 ISSUE/COMPLETE cannot supply protected-execution authority.
+
+M4's retained-memory inventory must include R107's preallocated terminal slot
+once per engine. Native reservation may retain extra vector capacity after a
+later failure; unchanged logical metadata does not imply unchanged allocated
+bytes. Qualify both without double charging the same owner.
 
 ### Later Swarm Rotations
 
@@ -502,11 +529,11 @@ open.
 | Order | Lead | Bounded deliverable | Dependency / acceptance |
 | --- | --- | --- | --- |
 | Locally accepted Native packets | Primary + Native review | Replacement inputs, ordinary and pristine rebind | R103/R104/R105 retain their named CPU/shared-sequence acceptance; no original-engine or hardware qualification |
-| Locally accepted initializer | Primary + Native/Resources review | R106/N3-C coherent initialization custody | Full source17/aux10, frozen/restored 10/8/30, seven compiled negatives and 5,665 exact source identities; CPU/shared-sequence only |
-| Next Native packets | Native | N3-D device initialization; N3-L insertion; N4-R/L/QA/QP release and destroy; N5 DATA-ADOPT | N3-D and lower-cleanup review are ready independently. Live paths require accepted lower custody; confirmed disposal alone permits slot reuse |
+| Locally accepted initializers | Primary + Native/Resources review | R106/N3-C coherent and R107/N3-D device initialization custody | Named CPU/shared-sequence acceptance only; reuse the accepted lower helpers, not a duplicate initializer |
+| Next Native packets | Native | N3-L1 device, L2 coherent and L3 uninitialized insertion; N4-R/L/QA/QP release and destroy; N5 DATA-ADOPT | Device insertion and lower cleanup are independently ready. Live paths require retained lower custody; confirmed disposal alone permits slot reuse |
 | First Admission packet | Admission | CO-2A: Context submission-identity tests | Existing validators; eight ingresses, stale/reused IDs and preserved precedence |
 | Next Admission packets | Admission | CO-2B descriptor identity and CO-3A private reply/custody composition | Existing source matching and R80/R83 lifecycle; no invented completion adapter |
-| First Resources packets | Resources | VER-1A.2a-d: issuance, membership, settlement/cost, authenticated proofs | Reviewed contract; model-only until .3 has a production consumer |
+| First Resources packets | Resources | Finish R108 issuance candidate, then membership, settlement/cost and authenticated proofs | R108 is written/formatted only; model-only until .3 has an actual production consumer and correspondence |
 | Next Resources packets | Resources | VER-1A.3 journal, .4/.5 hooks, complete VER-1B, then VER-2 leases | Exact Context IDs; complete mutation coverage, ordered writers and recovery before reuse |
 | Native/runtime integration | Primary + Native/Admission | N3/N4 -> DATA-ADOPT -> ISSUE -> CO-4/COMPLETE -> generated typed API -> GRAPH/DRAIN | C1/C2/C3 join ISSUE; real publication/completion identity, exact readback and custody; cross-run reuse also needs V7/V8 |
 | Resource closure | Resources + Native | Aggregate domains, native backing/control budgets, host/native residency and total retained memory | Charged bootstrap/terminal headroom, compound pre-effect admission and no double charging |
@@ -1058,8 +1085,8 @@ The reviewed [contract and inventory](runtime-context-version-journal-v1.md)
 is the input to VER-1A.2, not another drafting assignment. It does not implement
 the executable model, Context journal, hooks or cross-run leases.
 
-Resources' next model handoff is an allocation-free whole-roster transition
-planner consumed by the eventual journal. Validate the complete canonical input
+After V1 issuance acceptance, Resources' next model handoff is an allocation-free
+whole-roster transition planner consumed by the eventual journal. Validate the complete canonical input
 and output capacity before writing scratch; first/middle/last failures leave it
 unchanged. An exact writer cannot be replayed after its record is freed. A
 reviewed issuance watermark observes existing Context IDs at registration, not
