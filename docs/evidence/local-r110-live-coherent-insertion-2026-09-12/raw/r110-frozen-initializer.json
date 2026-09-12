@@ -1,0 +1,31 @@
+{
+  "source_head": "a9e1c73bb9b752610e58be9cd96861962e140787",
+  "started_at": "2026-09-12T21:05:46.426Z",
+  "finished_at": "2026-09-12T21:05:46.735Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::transitions::coherent_initialization::"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r110-frozen-initializer.log",
+  "source": "/home/harsh/.codex-tmp/r110-frozen-initializer-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 0.57444312,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

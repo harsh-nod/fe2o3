@@ -18,6 +18,7 @@ pub(super) enum TransitionStageV1 {
     MapProjection,
     MapCommit,
     Retain,
+    LiveInsertion,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -73,6 +74,24 @@ pub(super) struct TerminalTransitionV1 {
     pub(super) progress: NativeTransitionProgressV1,
     pub(super) input: Option<TerminalTokenV1>,
     pub(super) output: Option<TerminalTokenV1>,
+}
+
+pub(super) fn retain_coherent_insertion_output_v1<B: MemoryBackend>(
+    engine: &mut SharedMemoryEngine<B>,
+    completed: Gfx942InitializedHostVisibleMemoryV1,
+) {
+    engine.phase = SharedMemorySessionPhaseV1::Quarantined;
+    if engine.terminal_transition.is_some() {
+        // Failure retention must not overwrite an earlier owner or revalidate.
+        let _retained = core::mem::ManuallyDrop::new(completed);
+    } else {
+        engine.terminal_transition = Some(TerminalTransitionV1 {
+            stage: TransitionStageV1::LiveInsertion,
+            progress: NativeTransitionProgressV1::default(),
+            input: None,
+            output: Some(TerminalTokenV1::from_token(completed.into_token())),
+        });
+    }
 }
 
 struct TransitionOwnersV1<P: GttProfileV1, I: GttAllocationStateV1, O: GttAllocationStateV1> {

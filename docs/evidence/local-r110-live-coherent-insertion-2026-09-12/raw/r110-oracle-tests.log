@@ -1,0 +1,67 @@
+warning: unused import: `CoherentInsertionSnapshotV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6562:102
+     |
+6562 | ...erentInsertionFaultV1, CoherentInsertionPrefixV1, CoherentInsertionSnapshotV1, CoherentPreparationTraceV1, CoherentTokenSnapsho...
+     |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PrimaryProjectionCaseV1`
+ --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:4:186
+  |
+4 | ...CoherentPreparationTraceV1, CoherentTokenSnapshotV1, PrimaryProjectionCaseV1};
+  |                                                         ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `Currentness`, `Native`, `Map`, `CopyPanic`, and `Projection` are never constructed
+  --> crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:41:5
+   |
+38 | pub(crate) enum CoherentInsertionFaultV1 {
+   |                 ------------------------ variants in this enum
+...
+41 |     Currentness(usize, bool),
+   |     ^^^^^^^^^^^
+42 |     Native(&'static str, bool),
+   |     ^^^^^^
+43 |     Map(u32, bool),
+   |     ^^^
+44 |     CopyPanic(usize),
+   |     ^^^^^^^^^
+45 |     Projection(bool, PrimaryProjectionCaseV1),
+   |     ^^^^^^^^^^
+   |
+   = note: `CoherentInsertionFaultV1` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `coherent_assert_projection_v1` is never used
+   --> crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:240:19
+    |
+199 | impl PreparationMemoryFixtureV1 {
+    | ------------------------------- method in this implementation
+...
+240 |     pub(crate) fn coherent_assert_projection_v1(&self, queue: &QueueModelFoundationV1) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `primary_assert_coherent_projection_with_foundation_v1` is never used
+  --> crates/fe2o3-kfd/src/shared_memory/tests/primary_projection.rs:92:19
+   |
+45 | impl PreparationMemoryFixtureV1 {
+   | ------------------------------- method in this implementation
+...
+92 |     pub(super) fn primary_assert_coherent_projection_with_foundation_v1(&self, foundation: &QueueModelFoundationV1) {
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fe2o3-kfd` (lib test) generated 5 warnings (run `cargo fix --lib -p fe2o3-kfd --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 5 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_constructed_success_preserves_exact_order_source_and_accounts ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_concrete_facade_restores_before_transport_for_all_routes ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_opening_failure_and_missing_complete_never_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1022 filtered out; finished in 85.04s
+

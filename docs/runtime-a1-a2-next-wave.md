@@ -1,5 +1,14 @@
 # A1/A2 Next-Wave Dispatch
 
+R110 locally accepts [N3-L2 initialized coherent insertion](runtime-live-coherent-insertion-custody-v1.md),
+with [retained evidence](evidence/local-r110-live-coherent-insertion-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and ten compiled negatives pass.
+GNU/musl each pass 2,638 tests with five ignored across 48 harnesses. All five
+frozen/restored suites pass 19/14/10/8/4, and all 5,675 source identities match.
+The final collector and independent archive review pass. Preliminary failures
+remain preserved. This is named CPU-boundary acceptance, not authenticated formal,
+native or performance qualification.
+
 R109 locally accepts [N3-L1 initialized-device live insertion](runtime-live-device-insertion-custody-v1.md),
 with [retained evidence](evidence/local-r109-live-device-insertion-2026-09-12/README.md).
 Seventeen source gates, ten auxiliary gates and eleven compiled behavioral
@@ -32,17 +41,17 @@ abort remain preserved. The corrected slot is preallocated once per engine,
 not per initializer; the same runtime test now passes. No new solver, native or
 performance acceptance is added.
 
-Immediate packets are **Native N3-L2 coherent initialized insertion**, independent
+Immediate packets are **Native N3-L3-C/D uninitialized coherent/device insertion**, independent
 **Admission C1 identity** and **Resources V2 membership/Begin**, with Primary
 owning integration and qualification. V1's constructor, existing-ID registration,
 exact Reserved lookup and pre-effect abort are now locally accepted. The refreshed
 [current assignments](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch)
-advance Native from device to coherent/uninitialized insertion and Resources
+advance Native to uninitialized insertion and Resources
 to whole-roster membership. Three read-only dispatch reviews are complete;
 the implementation queue is not an unattended background job. The
 [N3-L1 contract](runtime-live-device-insertion-custody-v1.md)
-keeps completed owners through retake and commits before extraction. Coherent
-insertion still needs its own external composite root. V3 settlement, V4 proofs
+keeps completed owners through retake and commits before extraction. R110 adds
+the corresponding coherent root without duplicating lower copy/map. V3 settlement, V4 proofs
 and V5 production integration remain separate packets. The R106 and earlier
 dispatch text below remains historical.
 

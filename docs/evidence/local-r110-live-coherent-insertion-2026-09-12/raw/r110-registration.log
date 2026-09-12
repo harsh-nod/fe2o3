@@ -1,0 +1,10 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.33s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 2 tests
+test queue_linux::primary_fixture::tests::local_runtime_registration_rejects_foreign_binding_without_mutation ... ok
+test queue_linux::primary_fixture::tests::local_runtime_registrations_share_gate_with_single_queue_transition ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1039 filtered out; finished in 0.00s
+

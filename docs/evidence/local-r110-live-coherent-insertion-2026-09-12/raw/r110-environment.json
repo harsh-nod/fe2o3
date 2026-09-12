@@ -1,0 +1,297 @@
+{
+  "recorded_at": "2026-09-12T20:24:24.099Z",
+  "publication_parent": "a9e1c73bb9b752610e58be9cd96861962e140787",
+  "accepted_runtime_checkpoint": "a9e1c73bb9b752610e58be9cd96861962e140787",
+  "recorded_phase": "Before frozen/full/auxiliary/mutation gates; preliminary failures preserved. No native or load qualification.",
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "cargo 1.96.0-nightly (888f67534 2026-03-30)\nrelease: 1.96.0-nightly\ncommit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51\ncommit-date: 2026-03-30\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]\n"
+    },
+    {
+      "command": [
+        "rustc",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "rustc 1.96.0-nightly (55e86c996 2026-04-02)\nbinary: rustc\ncommit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9\ncommit-date: 2026-04-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2\n"
+    },
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "output": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "output": "v22.22.1\n"
+    },
+    {
+      "command": [
+        "git",
+        "--version"
+      ],
+      "output": "git version 2.43.0\n"
+    },
+    {
+      "command": [
+        "uname",
+        "-srmo"
+      ],
+      "output": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "cargo",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3"
+    },
+    {
+      "name": "rustc",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950"
+    }
+  ],
+  "runners": [
+    {
+      "name": "r110-run.js",
+      "sha256": "ca8d52f429cc79542a52a0ab77a1b9ccaabeec279b11fa290ac71dbc499dfd6e"
+    },
+    {
+      "name": "r110-campaign-run.js",
+      "sha256": "72604765d27bf90fb7f791f3ff03a4105595e82fda77e3645b860337feeac310"
+    },
+    {
+      "name": "r110-source-gate.py",
+      "sha256": "756becc4a01342e59d982d09669af7c2263db0ee3b50bd4f3fad51555e930110"
+    },
+    {
+      "name": "r110-auxiliary-gates.py",
+      "sha256": "0efb2fd27d16bb0339992aa7be6e7fe6d02f7640449dd9d74219ebb7c39c206c"
+    },
+    {
+      "name": "r110-freeze.js",
+      "sha256": "f8b816569b6506bdd9c72a46d98ea2ebb01d48fa23ab81967a6eb126b907ddcc"
+    }
+  ],
+  "environment_overrides": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "test_deadlines_changed": false,
+  "hardware_qualification": false,
+  "solver_rerun": false,
+  "campaign_envelope": {
+    "previous_deadline_ms": 1800000,
+    "deadline_ms": 7200000,
+    "individual_gate_deadline_ms": 1800000,
+    "reason": "Expanded CPU test matrices increase the total of seventeen serialized gates; no individual test or gate deadline is weakened."
+  },
+  "ambient_stack": {
+    "RUST_MIN_STACK": null,
+    "command": [
+      "bash",
+      "-c",
+      "ulimit -s"
+    ],
+    "output": "8192\n"
+  },
+  "prior_artifacts": [
+    {
+      "name": "r110-clean-clippy-source.json",
+      "sha256": "4c3598d03ce705bf8015dda2850835baecb9302a88f2dfff751c9068c323a6bc"
+    },
+    {
+      "name": "r110-clean-clippy.json",
+      "sha256": "93c7d377c05682ebfb6d1f846bfdde1f8a2d1402c8ce3496365093e7bd323b90"
+    },
+    {
+      "name": "r110-clean-clippy.log",
+      "sha256": "2f59255c0541e2b74ca75129468fe0b053a8d4b1d28245b04d0c4ec54feddaeb"
+    },
+    {
+      "name": "r110-coherent-build-source.json",
+      "sha256": "ddddc286373d50a73d41f547e3a596918af4aaccfcbd8f07cb074f20cf9e0d3c"
+    },
+    {
+      "name": "r110-coherent-build.json",
+      "sha256": "38ebc6d45c1cedd6a13c7cf8b2fbcf8400dfbc81243894a5b549337f0e6d47fb"
+    },
+    {
+      "name": "r110-coherent-build.log",
+      "sha256": "529e796cf6431f2b27310d27fa29146c5fdf858bb79ed5ff32cd1565c1f9c9c1"
+    },
+    {
+      "name": "r110-final-format-source.json",
+      "sha256": "7ba503d3f53fe6dbe02fc051a3f08e268ac9dcb8b0a8b407dd786b1152ac4275"
+    },
+    {
+      "name": "r110-final-format.json",
+      "sha256": "132c2534713766d9720688c71bb5ccdf96f30a5f42515ee78eab560692ee3059"
+    },
+    {
+      "name": "r110-final-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r110-initial-build-source.json",
+      "sha256": "959a962ff5a7bcef23375c7550857260b8b66dcd1cd9691162d5aa0d2d254033"
+    },
+    {
+      "name": "r110-initial-build.json",
+      "sha256": "c9a66bed2c341f43eb4ff940ef41c0b1c74a0bf8682f7bce637b8b3d29a919e9"
+    },
+    {
+      "name": "r110-initial-build.log",
+      "sha256": "7eb29d1a724de747502e5f32803e9ba2a39ceb072b1077d7191e20ad8c2278f5"
+    },
+    {
+      "name": "r110-initial-format-source.json",
+      "sha256": "8a3eb92cd7593ef676e53483d5d882ab169d2ad7e1195c6c33fb6cf7ecca3b42"
+    },
+    {
+      "name": "r110-initial-format.json",
+      "sha256": "595f9c9977b68b65e5227c120bbda6d0952899175fd591e1274c0a8d5553b7fd"
+    },
+    {
+      "name": "r110-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r110-matrix-fixed-tests-source.json",
+      "sha256": "24e029b51bd8315fdeebeab9f0099a794fa7effe7f05fc39cb8f6f3c34d197ec"
+    },
+    {
+      "name": "r110-matrix-fixed-tests.json",
+      "sha256": "9e334e8c908451eb78d9b658aa59cbb9a45c76a77b9a60db28cb006c7d8c7409"
+    },
+    {
+      "name": "r110-matrix-fixed-tests.log",
+      "sha256": "ca50cb102872a528ac6abaac0333e9a0aa8a2a0783c4fda50fc339fcc5d4729c"
+    },
+    {
+      "name": "r110-matrix-format-source.json",
+      "sha256": "ad1c114adba602f28d499fd453f9391b7711fe7a092062d726a9b13bd0872deb"
+    },
+    {
+      "name": "r110-matrix-format.json",
+      "sha256": "7270f3f0f197953704d99b993a9adf927e2065c51500c9a5b01394bd750c5ed7"
+    },
+    {
+      "name": "r110-matrix-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r110-matrix-tests-source.json",
+      "sha256": "05ea211d64d9029c0ab9f4a63278a8b145f3bcea22aa2be26c912e67e5b352cf"
+    },
+    {
+      "name": "r110-matrix-tests.json",
+      "sha256": "737f91ab488602bf9ebc2942b4e39dd40b651a716c3b85fc1e97c7344e00cd41"
+    },
+    {
+      "name": "r110-matrix-tests.log",
+      "sha256": "ef4f51a7e89c3b5a1ad7567c99090e825552f7ad2dc8268799d104befa606b0c"
+    },
+    {
+      "name": "r110-oracle-build-source.json",
+      "sha256": "315365e404434660621ebdb75cdb6c50e6bffa8b81e4eee058fd92f469062e4b"
+    },
+    {
+      "name": "r110-oracle-build.json",
+      "sha256": "9edacbc1d671aaf4316593da330d6dac39e16117392a5e46019f1d224f2fcd50"
+    },
+    {
+      "name": "r110-oracle-build.log",
+      "sha256": "bd5f19f6a1292dfecc6c78cd581529d820bd8aabfc6357e264a067b5fc33674d"
+    },
+    {
+      "name": "r110-oracle-tests-source.json",
+      "sha256": "315365e404434660621ebdb75cdb6c50e6bffa8b81e4eee058fd92f469062e4b"
+    },
+    {
+      "name": "r110-oracle-tests.json",
+      "sha256": "19d6da4c9fd787d361c059fe7b6e852fb768adf55f9d2e1ada5f313ec1a6c11d"
+    },
+    {
+      "name": "r110-oracle-tests.log",
+      "sha256": "9486c949d649881c3630a8e1465c4254b8561059be7d1a072a3d6036026c1c8d"
+    },
+    {
+      "name": "r110-prefreeze-format-source.json",
+      "sha256": "7ba503d3f53fe6dbe02fc051a3f08e268ac9dcb8b0a8b407dd786b1152ac4275"
+    },
+    {
+      "name": "r110-prefreeze-format.json",
+      "sha256": "dc10e6f84c0fb492a2d6b3a5ee03c15c8ff82c2f69940c001424f637b916193d"
+    },
+    {
+      "name": "r110-prefreeze-format.log",
+      "sha256": "d8b758d471d5ddbf9baf7d7950079d7c78c531f8ccd23efd79836bea3d869bfc"
+    },
+    {
+      "name": "r110-public-preflight-tests-source.json",
+      "sha256": "7ba503d3f53fe6dbe02fc051a3f08e268ac9dcb8b0a8b407dd786b1152ac4275"
+    },
+    {
+      "name": "r110-public-preflight-tests.json",
+      "sha256": "582822d1bde0177b3037d865a92985b143923fa4c711aafaa8fcae0470563853"
+    },
+    {
+      "name": "r110-public-preflight-tests.log",
+      "sha256": "8989f0e28c0c3dcb3e506fb6f272844cba95a36b4763c4fe1a04e82d72f3cec2"
+    },
+    {
+      "name": "r110-review-clippy-source.json",
+      "sha256": "30be0316cc3456be5e7c1ce5b74b32314b509e4e90f5b3b77919203da5eea5b9"
+    },
+    {
+      "name": "r110-review-clippy.json",
+      "sha256": "455c313e3f8924163a8d1ab86e3f9ff131f0c14bf42644e75fbdfe5bd9036ea5"
+    },
+    {
+      "name": "r110-review-clippy.log",
+      "sha256": "1940b3c933d532d3d8643a242d8ac9e7cc7e3a4310c6ccfd657b744c7153a75b"
+    },
+    {
+      "name": "r110-review-format-source.json",
+      "sha256": "530f59bb0923304faf29aaddaa791956b3479ddbf2a6251e48fff17545b07209"
+    },
+    {
+      "name": "r110-review-format.json",
+      "sha256": "4c0ff91945f135c4eccfb0569459d9e18923451c53f0964127245a36a7726eb9"
+    },
+    {
+      "name": "r110-review-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r110-reviewed-tests-source.json",
+      "sha256": "4c3598d03ce705bf8015dda2850835baecb9302a88f2dfff751c9068c323a6bc"
+    },
+    {
+      "name": "r110-reviewed-tests.json",
+      "sha256": "b5341707a398d836ec047ebd42a2a99155444cda6957ca74054aa32dc3e8b171"
+    },
+    {
+      "name": "r110-reviewed-tests.log",
+      "sha256": "5298871c47fb54d29aff3852c37671b3ac6d822e8537c09886e7e33cffad02df"
+    }
+  ]
+}

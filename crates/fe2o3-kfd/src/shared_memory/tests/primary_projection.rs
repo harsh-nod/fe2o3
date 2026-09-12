@@ -85,14 +85,40 @@ impl PreparationMemoryFixtureV1 {
         &self,
         foundation: &QueueModelFoundationV1,
     ) {
-        let (case, before) = self
+        let before = &self.projection_observation.as_ref().unwrap().1;
+        self.assert_projection_model_and_owners_v1::<P>(foundation, before);
+    }
+
+    pub(super) fn primary_assert_coherent_projection_with_foundation_v1(
+        &self,
+        foundation: &QueueModelFoundationV1,
+    ) {
+        let before = &self.projection_observation.as_ref().unwrap().1;
+        if self.primary_terminal_allocation_v1() {
+            let expected = before.checkpoint_released().unwrap();
+            self.assert_projection_model_and_owners_v1::<HostVisibleCoherentGttV1>(
+                foundation, &expected,
+            );
+        } else {
+            self.assert_projection_model_and_owners_v1::<HostVisibleCoherentGttV1>(
+                foundation, before,
+            );
+        }
+    }
+
+    fn assert_projection_model_and_owners_v1<P: GttProfileV1>(
+        &self,
+        foundation: &QueueModelFoundationV1,
+        expected: &MemoryLifecycleStateV1,
+    ) {
+        let (case, _) = self
             .projection_observation
             .as_ref()
             .expect("selected real projection was entered");
         assert!(self.projection_fault.is_none());
         assert_eq!(
             foundation.memory(),
-            before,
+            expected,
             "failed projection cannot commit model state"
         );
         let e = &self.fixture.engine;

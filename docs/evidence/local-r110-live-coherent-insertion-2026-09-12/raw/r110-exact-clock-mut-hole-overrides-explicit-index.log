@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.79s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_uses_real_release_hole_and_explicit_override ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_uses_real_release_hole_and_explicit_override stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_uses_real_release_hole_and_explicit_override' (2008246) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:940:13:
+assertion `left == right` failed
+  left: ([DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 2, id: 1, generation: 1 }), HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 2, id: 23, generation: 1 }), HostVisibleUninitialized(SharedGttAllocationIdentityV1 { session_id: 2, id: 2, generation: 1 })], 4, None)
+ right: ([DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 2, id: 23, generation: 1 }), HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 2, id: 1, generation: 1 }), HostVisibleUninitialized(SharedGttAllocationIdentityV1 { session_id: 2, id: 2, generation: 1 })], 4, None)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_uses_real_release_hole_and_explicit_override
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1040 filtered out; finished in 7.18s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

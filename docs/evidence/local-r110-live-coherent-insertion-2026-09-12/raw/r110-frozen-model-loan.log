@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 4 tests
+test queue::live::model_loan::tests::live_model_custody_opening_rejection_and_panic_never_retake ... ok
+test queue::live::model_loan::tests::live_model_custody_operation_retake_matrix_preserves_order_and_first_panic ... ok
+test queue::live::model_loan::tests::live_model_custody_external_owner_survives_closing_failure ... ok
+test queue::live::model_loan::tests::live_model_custody_preserves_primary_without_destroying_secondary_payload ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1037 filtered out; finished in 0.00s
+

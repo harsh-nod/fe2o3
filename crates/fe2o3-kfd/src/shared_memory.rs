@@ -4455,6 +4455,58 @@ impl QueueModelOwnershipV1 {
     }
 }
 
+pub(crate) struct CoherentInitializationCustodyV1 {
+    started: bool,
+    completed: Option<Gfx942InitializedHostVisibleMemoryV1>,
+}
+
+impl CoherentInitializationCustodyV1 {
+    pub(crate) const fn new() -> Self {
+        Self {
+            started: false,
+            completed: None,
+        }
+    }
+
+    pub(crate) fn completed(
+        &self,
+    ) -> Result<&Gfx942InitializedHostVisibleMemoryV1, MemorySessionError> {
+        self.completed
+            .as_ref()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)
+    }
+
+    pub(crate) fn take_complete(
+        &mut self,
+    ) -> Result<Gfx942InitializedHostVisibleMemoryV1, MemorySessionError> {
+        self.completed
+            .take()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)
+    }
+
+    pub(crate) fn requires_retention(&self) -> bool {
+        self.completed.is_some()
+    }
+
+    fn prepare_with_memory(
+        &mut self,
+        memory: &mut impl coherent_initialization::CoherentInitializationV1,
+        source: &[u8],
+    ) -> Result<(), MemorySessionError> {
+        if core::mem::replace(&mut self.started, true) {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        self.completed = Some(coherent_initialization::initialize_v1(memory, source)?);
+        Ok(())
+    }
+
+    fn retain_with_engine<B: MemoryBackend>(self, engine: &mut SharedMemoryEngine<B>) {
+        if let Some(completed) = self.completed {
+            transitions::retain_coherent_insertion_output_v1(engine, completed);
+        }
+    }
+}
+
 pub(crate) struct DeviceInitializationCustodyV1(
     device_initialization::DeviceInitializationCustodyV1,
 );
@@ -5840,6 +5892,21 @@ impl SharedGttMemorySessionV1 {
         coherent_initialization::initialize_v1(self, bytes)
     }
 
+    pub(crate) fn prepare_coherent_initialization_in_place(
+        &mut self,
+        root: &mut CoherentInitializationCustodyV1,
+        source: &[u8],
+    ) -> Result<(), MemorySessionError> {
+        root.prepare_with_memory(self, source)
+    }
+
+    pub(crate) fn retain_coherent_initialization_failure(
+        &mut self,
+        root: CoherentInitializationCustodyV1,
+    ) {
+        root.retain_with_engine(&mut self.engine);
+    }
+
     pub fn allocate_kernarg(
         &mut self,
         requested_bytes: usize,
@@ -6490,6 +6557,11 @@ const _: () = {
 #[cfg(test)]
 pub(crate) use tests::device_initialization::RootSnapshot as DeviceInitializationSnapshotV1;
 #[cfg(test)]
+pub(crate) use tests::live_coherent_insertion::{
+    CoherentInsertionFaultV1, CoherentInsertionPrefixV1, CoherentPreparationTraceV1,
+    CoherentTokenSnapshotV1,
+};
+#[cfg(test)]
 pub(crate) use tests::live_insertion::{DeviceInsertionMemorySnapshotV1, DeviceInsertionPrefixV1};
 #[cfg(test)]
 pub(crate) use tests::preparation::{
@@ -6513,6 +6585,7 @@ mod tests {
     mod device_pool;
     mod dispatch_retention;
     mod host_backing;
+    pub(super) mod live_coherent_insertion;
     pub(super) mod live_insertion;
     pub(super) mod preparation;
     mod primary_construction;

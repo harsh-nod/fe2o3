@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.45s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::live_coherent_insertion::coherent_insertion_root_is_one_shot_and_extracts_once ... FAILED
+
+failures:
+
+---- shared_memory::tests::live_coherent_insertion::coherent_insertion_root_is_one_shot_and_extracts_once stdout ----
+
+thread 'shared_memory::tests::live_coherent_insertion::coherent_insertion_root_is_one_shot_and_extracts_once' (2002244) panicked at crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:41:9:
+assertion failed: matches!(memory.primary_prepare_coherent_initialization_v1(&mut root,
+    &[0xff; 9], CoherentInsertionFaultV1::None, &mut trace),
+    Err(MemorySessionError::InvalidAllocationAuthority))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::live_coherent_insertion::coherent_insertion_root_is_one_shot_and_extracts_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1040 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

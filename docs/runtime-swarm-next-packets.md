@@ -1,8 +1,7 @@
 # Runtime Swarm: Remaining Packets
 
-Reviewed on 2026-09-12 through R109's locally accepted source/test campaign,
-above accepted R108 `9171bd68d920681e524d8eda5a29053a8fd8ae88` and planning-only
-publication parent `17d0be5476a4f71c473a619903c62aa316a96fc7`.
+Reviewed on 2026-09-12 through R110's locally accepted source/test campaign,
+above accepted R109 `a9e1c73bb9b752610e58be9cd96861962e140787`.
 [Issue #182](https://github.com/harsh-nod/fe2o3/issues/182) remains open; its GitHub
 API `updatedAt` is `2026-09-12T10:51:18Z`. A1/A2 are not complete.
 
@@ -11,7 +10,9 @@ R108 accepted the bounded writer-issuance model, not a production Context
 journal. R109 accepts initialized-device live insertion at its named
 CPU/shared-sequencer and concrete-facade boundaries, with
 [retained evidence](evidence/local-r109-live-device-insertion-2026-09-12/README.md).
-It does not add native, authenticated formal or performance qualification.
+R110 additionally accepts initialized coherent insertion at those named CPU
+boundaries, with [retained evidence](evidence/local-r110-live-coherent-insertion-2026-09-12/README.md).
+Neither packet adds native, authenticated formal or performance qualification.
 The [full work orders](runtime-a1-a2-swarm-current.md) retain detailed contracts
 and historical evidence; this document is the short current assignment map.
 
@@ -25,7 +26,7 @@ bounded source/test changes; there are three worker slots plus Primary.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N3-L2 coherent initialized insertion; independent N4-R cleanup review | Reuse `fe2o3-kfd/src/queue_live/data_insertion.rs` settlement and R106 shared-memory custody, with constructed-engine tests |
+| Native: `native_replacement_handoff` | N3-L3-C uninitialized coherent insertion, then L3-D device allocation/map custody; independent N4-R cleanup | Reuse `fe2o3-kfd/src/queue_live/data_insertion.rs` settlement and existing borrowed lower cores; preserve uninitialized identity and actual incomplete owners |
 | Admission: `submission_identity_handoff` | C1 submission-identity test matrix | New `fe2o3-runtime/src/context/tests/submission_identity_tests.rs`; Primary owns Context wiring and the missing mock cancel-entry counter |
 | Resources: `r102_evidence_review` | V2 allocation membership and Begin | Existing `fe2o3-runtime-model/src/context_version_journal.rs` and separate membership tests; retain V1 regressions |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |
@@ -39,8 +40,9 @@ must be extended, not replaced.
 | Packet | Remaining Work | Dependency And Exit |
 | --- | --- | --- |
 | N3-L1 / R109 | Locally accepted: initialized-device append, explicit insertion and remembered-hole replacement | Fourteen new test functions and eleven compiled negatives; original-engine scripted composition and concrete missing-engine facade coverage are separate. Native success and formal refinement remain unqualified. |
-| N3-L2 | Coherent initialized insertion | Reuse L1 settlement and R106 copy custody. Retain completed coherent output through retake/commit without a second copy implementation. Preserve required-hole replacement, explicit insertion and owned/borrowed source entrypoints. |
-| N3-L3 | Uninitialized device/coherent insertion | Reuse L1 settlement and borrowed allocation/map cores. Retain incomplete prefixes; successful allocation must remain explicitly uninitialized. L2-first is scheduling, not a semantic prerequisite. |
+| N3-L2 / R110 | Locally accepted: initialized coherent insertion/replacement | Nineteen new functions (eighteen dynamic and one routing guard), ten compiled negatives and unchanged R109 regressions. Complete survives retake/commit; earlier lower failure custody stays intact. No native success or formal refinement qualification. |
+| N3-L3-C | Uninitialized coherent insertion | Small mapped-output root around existing lower allocation/map custody; reuse shared settlement. Preserve explicit insertion and required-hole replacement, with no copy or initialized-content authority. |
+| N3-L3-D | Uninitialized device allocation/map custody and insertion | Retain actual None/Unmapped/Mapped stages, per-call native attempt and map progress using borrowed lower cores. Preserve DEVICE_LOCAL backing and hole-or-append policy. C-first is scheduling, not a semantic dependency. |
 | N4-R | Lower control release/unmap/returning cleanup | Independently ready. Root the owner before validation; first/middle/last error or panic retains untouched owners. Confirmed disposal and failed model projection must not produce retry or duplicate refund. |
 | N4-L | Live detach and data/control release | Needs applicable N4-R contracts. Retain returned owners through retake; failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
 | N4-QA / N4-QP | Auxiliary destruction, then full/returning destruction | Needs applicable lower/live cleanup contracts. Keep the taken lane and parent through every prefix; cover attached/detached return modes. Slot reuse requires confirmed full disposal; QA-first is scheduling. |
@@ -94,12 +96,14 @@ in test auditors, not the production transition.
 
 ## Next-Packet Handoffs
 
-- Native N3-L2 keeps the successful mapped coherent owner outside the loan;
-  R106 already retains failed lower prefixes. Do not overwrite that earlier
-  custody or add a second allocation/copy/map sequence. Preserve empty-source
-  validation after loan entry and deferred facade transport. Test failed retake,
-  exact accounting, required-hole rejection and explicit-index insertion before
-  extending the same settlement contract to N3-L3.
+- Native N3-L3-C reuses lower coherent allocation/map custody and keeps the
+  uninitialized mapped result outside the loan through commit. N3-L3-D must
+  retain the actual unmapped device lease before borrowed mapping; the existing
+  consuming public map is not a custody substitute. Reuse preallocated terminal
+  storage, not per-call boxing or a large inline engine root. Preserve existing
+  flags, error precedence, ledger policy and R109/R110 regressions. The three
+  existing uninitialized entrypoints are direct-session APIs; adding selected-lane
+  facade methods would be a separate public API extension.
 - Admission C1 substitutes Context brand, logical ID, backend ID, stream and
   device across poll, wait, query, callback registration, release, event, cancel
   and drain. Use real completion/event paths and real backend-ID reuse; record
@@ -115,7 +119,7 @@ in test auditors, not the production transition.
 
 ## Qualification And Integration Order
 
-1. Advance N3-L2, C1 and V2 independently; N4-R, C2/C3 and M1/M2/M3 design work
+1. Advance N3-L3-C/D, C1 and V2 independently; N4-R, C2/C3 and M1/M2/M3 design work
    need not wait for those packets. Primary serializes shared edits and builds.
 2. Join required N3/N4 into N5; join N5 and C1/C2/C3 into I2, then C4/C5/C6.
    V7/V8 gate cross-run reuse, not the first non-reusing generated launch.
@@ -135,7 +139,7 @@ checks, decisive compiled negatives, exact source restoration and independent
 evidence review. Preserve failed attempts and immutable accepted archives.
 Keep CPU/source, authenticated formal, native and performance status separate.
 MI300X scheduling stays Primary-owned with task-owned staging/processes and
-cleanup; disruptive fault tests require an isolated window. R109 ran local
+cleanup; disruptive fault tests require an isolated window. R109/R110 ran local
 source/test campaigns, not solver, SSH or GPU jobs.
 
 ## Later Rotations And External Owners

@@ -1,0 +1,42 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: call to `std::mem::forget` with a value that does not implement `Drop`. Forgetting such a type is the same as dropping it
+  --> crates/fe2o3-kfd/src/shared_memory/transitions.rs:86:9
+   |
+86 |         core::mem::forget(completed);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: argument has type `shared_memory::Gfx942InitializedHostVisibleMemoryV1`
+  --> crates/fe2o3-kfd/src/shared_memory/transitions.rs:86:27
+   |
+86 |         core::mem::forget(completed);
+   |                           ^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#forget_non_drop
+   = note: `-D clippy::forget-non-drop` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::forget_non_drop)]`
+
+error: could not compile `fe2o3-kfd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:318:15
+    |
+318 |     terminal: Option<(&str, (bool, Option<bool>, Option<u32>))>,
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: called `unwrap` on `terminal` after checking its variant with `is_none`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:376:15
+    |
+374 |     let expected_stages = if terminal.is_none() {
+    |                           --------------------- help: try: `if let Some(<item>) = terminal`
+375 |         [1, 0, 0]
+376 |     } else if terminal.unwrap().0 == "Copy" {
+    |               ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_unwrap
+    = note: `-D clippy::unnecessary-unwrap` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_unwrap)]`
+
+error: could not compile `fe2o3-kfd` (lib test) due to 3 previous errors

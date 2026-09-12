@@ -1,0 +1,69 @@
+{
+  "source_head": "a9e1c73bb9b752610e58be9cd96861962e140787",
+  "source_map_sha256": "02aab409fd9ab9ddc2ada4d341360018a920f7c732698ec2d9166c3fdd676212",
+  "manifest_sha256": "97ebb34b7a5d21d712e74e6ce75b43f71d3b3813462f5370ca391cbd88cf4d86",
+  "started_at": "2026-09-12T21:09:05.353Z",
+  "finished_at": "2026-09-12T21:09:42.925Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::live_coherent_insertion::coherent_insertion_retention_preserves_earlier_lower_failure",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r110-exact-clock-mut-overwrite-earlier-terminal.log",
+  "source": "/home/harsh/.codex-tmp/r110-exact-clock-mut-overwrite-earlier-terminal-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 40.743580337,
+  "verification_elapsed_seconds": 0.291723473,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r110-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r110-exact-clock-restoration-allow-root-repreparation.json",
+      "sha256": "57593d422921c35dc06d0b4c1f1aa6f1933070f31ba305078c142c849867e3d6",
+      "field": "verified_at",
+      "utc_ms": 1789247344329
+    },
+    "start": {
+      "floor_ms": 1789247344329,
+      "samples": [
+        {
+          "utc_ms": 1789247345353,
+          "monotonic_ns": "44499848060100"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789247382925,
+      "monotonic_ns": "44540591640437"
+    },
+    "source_verified": {
+      "utc_ms": 1789247383216,
+      "monotonic_ns": "44540883363910"
+    },
+    "error": null
+  }
+}

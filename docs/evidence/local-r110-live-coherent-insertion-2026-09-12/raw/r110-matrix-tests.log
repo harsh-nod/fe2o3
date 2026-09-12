@@ -1,0 +1,15 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0616]: field `id` of struct `shared_memory::SharedGttAllocationIdentityV1` is private
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:381:35
+    |
+381 |         assert_eq!(token.identity.id, before.next_id);
+    |                                   ^^ private field
+
+error[E0616]: field `id` of struct `shared_memory::SharedGttAllocationIdentityV1` is private
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:569:43
+    |
+569 |                     assert_eq!(t.identity.id, before.next_id);
+    |                                           ^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

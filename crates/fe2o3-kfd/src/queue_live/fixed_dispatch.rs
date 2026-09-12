@@ -4460,25 +4460,11 @@ impl ComputeAqlQueueSessionV1 {
         data_index: usize,
         bytes: &[u8],
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        self.require_new_detached_data_index(data_index)?;
-        let result = self.with_live_queue_memory_model(|memory| {
-            memory
-                .initialize_host_visible_coherent_from_slice_v1(bytes)
-                .map_err(Into::into)
-        });
-        match result {
-            Ok(memory) => {
-                let data = Gfx942FixedDispatchDataV1::host_visible_initialized(memory);
-                self.record_new_detached_data_at(&data, data_index);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
+        let settled = self.initialize_coherent_data_settled_v1(Some(data_index), bytes);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
+        settled.into_result()
     }
 
     /// Allocates and initializes one coherent host-visible extent at the exact
@@ -4496,27 +4482,11 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         bytes: &[u8],
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        if self.detached_next_insertion_index.is_none() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        let settled = self.initialize_coherent_data_settled_v1(None, bytes);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
-        let result = self.with_live_queue_memory_model(|memory| {
-            memory
-                .initialize_host_visible_coherent_from_slice_v1(bytes)
-                .map_err(Into::into)
-        });
-        match result {
-            Ok(memory) => {
-                let data = Gfx942FixedDispatchDataV1::host_visible_initialized(memory);
-                self.record_new_detached_data(&data);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
-        }
+        settled.into_result()
     }
 
     /// Allocates, maps, and inserts one uninitialized coherent host-visible

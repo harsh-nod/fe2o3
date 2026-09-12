@@ -1,0 +1,44 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0425]: cannot find function `with_owned_coherent_bytes_v1` in module `transitions`
+  --> crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:85:26
+   |
+85 |             transitions::with_owned_coherent_bytes_v1(engine, token, |destination| {
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `transitions`
+   |
+help: consider importing this function
+   |
+ 3 + use crate::shared_memory::transitions::with_owned_coherent_bytes_v1;
+   |
+help: if you import `with_owned_coherent_bytes_v1`, refer to it directly
+   |
+85 -             transitions::with_owned_coherent_bytes_v1(engine, token, |destination| {
+85 +             with_owned_coherent_bytes_v1(engine, token, |destination| {
+   |
+
+error[E0425]: cannot find function `copy_coherent_v1` in module `transitions`
+  --> crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:90:26
+   |
+90 |             transitions::copy_coherent_v1(engine, token, source)
+   |                          ^^^^^^^^^^^^^^^^ not found in `transitions`
+   |
+help: consider importing this function
+   |
+ 3 + use crate::shared_memory::transitions::copy_coherent_v1;
+   |
+help: if you import `copy_coherent_v1`, refer to it directly
+   |
+90 -             transitions::copy_coherent_v1(engine, token, source)
+90 +             copy_coherent_v1(engine, token, source)
+   |
+
+warning: unused imports: `CoherentInsertionSnapshotV1`, `HostVisibleCoherentGttV1`, and `PrimaryProjectionCaseV1`
+ --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:4:133
+  |
+4 | ...x, CoherentInsertionSnapshotV1, CoherentPreparationTraceV1, CoherentTokenSnapshotV1, HostVisibleCoherentGttV1, PrimaryProjectionCaseV1};
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^                                                       ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0425`.
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors; 1 warning emitted

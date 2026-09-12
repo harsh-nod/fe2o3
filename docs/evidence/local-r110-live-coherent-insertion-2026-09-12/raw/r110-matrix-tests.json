@@ -1,0 +1,31 @@
+{
+  "source_head": "a9e1c73bb9b752610e58be9cd96861962e140787",
+  "started_at": "2026-09-12T20:03:28.870Z",
+  "finished_at": "2026-09-12T20:03:48.919Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "coherent_insertion"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r110-matrix-tests.log",
+  "source": "/home/harsh/.codex-tmp/r110-matrix-tests-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 21.853802769,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

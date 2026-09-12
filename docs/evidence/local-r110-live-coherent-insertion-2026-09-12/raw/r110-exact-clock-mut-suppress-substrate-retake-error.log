@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.04s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_retake_failure_precedes_ordinary_operation_error ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_retake_failure_precedes_ordinary_operation_error stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_retake_failure_precedes_ordinary_operation_error' (2016933) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:1058:26:
+retake must precede the ordinary operation error
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_retake_failure_precedes_ordinary_operation_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1040 filtered out; finished in 2.06s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

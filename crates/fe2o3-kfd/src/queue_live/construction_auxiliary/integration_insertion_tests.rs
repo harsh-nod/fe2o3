@@ -4,14 +4,17 @@
 use super::*;
 use crate::queue::dispatch_binding::preparation::PreparationOwnerRefsV1;
 use crate::queue::live::data_insertion::{
-    DetachedInsertionLedgerV1, DeviceInsertionContextV1, SettledDeviceInsertionV1,
-    reserve_identity_capacity_v1, settle_device_insertion_v1,
+    DataInsertionContextV1, DataInsertionIndexV1, DetachedInsertionLedgerV1,
+    SettledDataInsertionV1, reserve_identity_capacity_v1, settle_data_insertion_v1,
 };
 use crate::shared_memory::{
     DeviceInitializationCustodyV1, DeviceInitializationSnapshotV1, DeviceInsertionMemorySnapshotV1,
     DeviceInsertionPrefixV1, SharedMemorySessionPhaseV1,
 };
 use fe2o3_kfd_uapi::KfdAllocMemoryFlags;
+
+#[path = "integration_coherent_insertion_tests.rs"]
+mod coherent_cases;
 
 #[derive(Default)]
 struct PrimaryDetached {
@@ -56,7 +59,7 @@ impl Context<'_> {
     }
 }
 
-impl DeviceInsertionContextV1 for Context<'_> {
+impl DataInsertionContextV1<DeviceInitializationCustodyV1, u64> for Context<'_> {
     fn require_unbound(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         // Fixture preflight uses genuine owners; the concrete session guard is
         // covered separately, not inferred from this test-only implementation.
@@ -133,7 +136,10 @@ impl DeviceInsertionContextV1 for Context<'_> {
         self.trace.reserve_calls += 1;
         outcome("insertion-reserve", self.trace.reserve)?;
         let ledger = self.ledger();
-        reserve_identity_capacity_v1(ledger.identities)?;
+        reserve_identity_capacity_v1(
+            ledger.identities,
+            "detached initialized-device identity ledger",
+        )?;
         self.trace.reserved_storage = Some((
             ledger.identities.as_ptr() as usize,
             ledger.identities.capacity(),
@@ -410,11 +416,14 @@ impl InsertionFixture {
         bytes: Box<[u8]>,
         alignment: u64,
         content: Gfx942DeviceContentDescriptorV1,
-    ) -> SettledDeviceInsertionV1 {
-        settle_device_insertion_v1(
+    ) -> SettledDataInsertionV1 {
+        settle_data_insertion_v1(
             &mut self.context(),
             DeviceInitializationCustodyV1::new(bytes, content),
-            index,
+            index.map_or(
+                DataInsertionIndexV1::HoleOrAppend,
+                DataInsertionIndexV1::Explicit,
+            ),
             alignment,
         )
     }

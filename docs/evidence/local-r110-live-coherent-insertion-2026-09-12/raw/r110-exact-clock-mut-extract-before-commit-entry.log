@@ -1,0 +1,33 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.67s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure' (2000024) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure' (2000024) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure' (2000024) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs:118:13:
+insertion commit ledger access
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure' (2000024) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:711:13:
+assertion `left == right` failed: Complete retained until the full ledger commit
+  left: None
+ right: Some(CoherentTokenSnapshotV1 { identity: SharedGttAllocationIdentityV1 { session_id: 6, id: 23, generation: 1 }, layout: SharedGttAllocationLayoutV1 { profile: HostVisibleCoherent, requested_bytes: 17, cpu_mapping_bytes: 4096, gpu_va_bytes: 4096, uapi_flags: 2214592514 }, profile: TypeId(0x0552d8f9a4453a868598f477d4af1ff1), state: TypeId(0x2ec1e731b4bf774b4380b54c13a7b0ed), userptr: false })
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1040 filtered out; finished in 25.27s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

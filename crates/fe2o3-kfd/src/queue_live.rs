@@ -4459,8 +4459,11 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         data_index: usize,
         bytes: Box<[u8]>,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.session
-            .insert_initialized_host_visible_fixed_dispatch_data(data_index, bytes)
+        let settled = self
+            .session
+            .initialize_coherent_data_settled_v1(Some(data_index), &bytes);
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
@@ -4468,16 +4471,22 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         data_index: usize,
         bytes: &[u8],
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.session
-            .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(data_index, bytes)
+        let settled = self
+            .session
+            .initialize_coherent_data_settled_v1(Some(data_index), bytes);
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn initialize_host_visible_fixed_dispatch_data_from_slice_v1(
         &mut self,
         bytes: &[u8],
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.session
-            .initialize_host_visible_fixed_dispatch_data_from_slice_v1(bytes)
+        let settled = self
+            .session
+            .initialize_coherent_data_settled_v1(None, bytes);
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn release_detached_fixed_dispatch_data(
@@ -19307,18 +19316,16 @@ mod tests {
     #[test]
     fn borrowed_initialization_queue_wiring_keeps_guards_retake_and_identity_order() {
         let source = include_str!("queue_live/fixed_dispatch.rs");
-        for (name, next, guard, record) in [
+        for (name, next, selection) in [
             (
                 "insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1",
                 "initialize_host_visible_fixed_dispatch_data",
-                "require_new_detached_data_index",
-                "record_new_detached_data_at",
+                "Some(data_index), bytes",
             ),
             (
                 "initialize_host_visible_fixed_dispatch_data_from_slice_v1",
                 "insert_host_visible_fixed_dispatch_data",
-                "detached_next_insertion_index.is_none()",
-                "record_new_detached_data",
+                "None, bytes",
             ),
         ] {
             let start = format!("pub fn {name}(");
@@ -19330,20 +19337,85 @@ mod tests {
                 .split(&end)
                 .next()
                 .unwrap();
-            let loan = body.find("self.with_live_queue_memory_model(").unwrap();
-            for preflight in [
-                "require_unbound_fixed_dispatch",
-                "require_detached_allocation_capacity",
-                guard,
-            ] {
-                assert!(body.find(preflight).unwrap() < loan);
-            }
-            assert!(body.contains("initialize_host_visible_coherent_from_slice_v1(bytes)"));
-            assert!(body.find(record).unwrap() > body.find("Ok(memory)").unwrap());
-            assert!(body.contains("self.poison_terminal()"));
+            assert!(body.contains(&format!("initialize_coherent_data_settled_v1({selection})")));
+            assert!(
+                body.find("retain_terminal_rebind_parent_v1").unwrap()
+                    < body.find("settled.into_result()").unwrap()
+            );
             for forbidden in ["submit_", "to_vec(", "to_owned(", "Box::from("] {
                 assert!(!body.contains(forbidden));
             }
+        }
+        let insertion = include_str!("queue_live/data_insertion.rs");
+        let helper = insertion
+            .split("pub(super) fn initialize_coherent_data_settled_v1(")
+            .nth(1)
+            .unwrap();
+        assert!(helper.contains("CoherentInitializationCustodyV1::new()"));
+        assert!(helper.contains("DataInsertionIndexV1::RequiredHole"));
+        assert!(helper.contains("DataInsertionIndexV1::Explicit"));
+        let sequence = insertion
+            .split("pub(in crate::queue) fn settle_data_insertion_v1")
+            .nth(1)
+            .unwrap()
+            .split("impl<R:")
+            .next()
+            .unwrap();
+        let mut previous = 0;
+        for marker in [
+            "context.require_unbound()?",
+            "MAX_DISPATCH_DATA_LEASES_V1",
+            "DataInsertionIndexV1::RequiredHole",
+            "validate_new_detached_data_index",
+            "context.reserve()?",
+            "context.prepare(&mut root, parameters)?",
+            "root.completed_identity()?",
+            "insert_detached_identity_at",
+            "*ledger.count = next_count",
+            ".take_data()",
+        ] {
+            let at = sequence.find(marker).unwrap();
+            assert!(
+                at >= previous,
+                "{marker} preserves borrowed initialization order"
+            );
+            previous = at;
+        }
+        assert!(insertion.contains("root.prepare(memory, parameters)"));
+        assert!(
+            insertion.contains("memory.prepare_coherent_initialization_in_place(self, source)")
+        );
+        let adapter = insertion
+            .split("impl<R: DataInsertionRootV1<P>, P>")
+            .nth(1)
+            .unwrap()
+            .split("impl ComputeAqlQueueSessionV1 {")
+            .next()
+            .unwrap();
+        assert!(adapter.contains("self.poison_terminal()"));
+        let shared = include_str!("shared_memory.rs");
+        let forwarder = shared
+            .split("pub(crate) fn prepare_coherent_initialization_in_place(")
+            .nth(1)
+            .unwrap()
+            .split("\n    }")
+            .next()
+            .unwrap();
+        assert!(forwarder.contains("root.prepare_with_memory(self, source)"));
+        let root = shared
+            .split("impl CoherentInitializationCustodyV1 {")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) struct DeviceInitializationCustodyV1")
+            .next()
+            .unwrap();
+        assert!(root.contains(
+            "self.completed = Some(coherent_initialization::initialize_v1(memory, source)?)"
+        ));
+        for forbidden in ["submit_", "to_vec(", "to_owned(", "Box::from("] {
+            assert!(!insertion.contains(forbidden));
+            assert!(!forwarder.contains(forbidden));
+            assert!(!root.contains(forbidden));
         }
     }
 

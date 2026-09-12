@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.97s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation' (2013990) panicked at crates/fe2o3-kfd/src/queue_live.rs:1292:16:
+insertion index (is 5) should be <= len (is 4)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation' (2013990) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:757:13:
+assertion `left == right` failed
+  left: true
+ right: false
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1040 filtered out; finished in 5.42s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

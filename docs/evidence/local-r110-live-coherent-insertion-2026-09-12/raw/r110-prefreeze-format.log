@@ -1,0 +1,11 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs:193:
+                     )),
+                     5 => assert!(matches!(
+                         error,
+-                        ComputeAqlQueueSessionErrorV1::Completion(Gfx942CompletionErrorV1::Poisoned)
++                        ComputeAqlQueueSessionErrorV1::Completion(
++                            Gfx942CompletionErrorV1::Poisoned
++                        )
+                     )),
+                     6 => assert!(matches!(
+                         error,
