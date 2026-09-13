@@ -247,6 +247,24 @@ equivalence. Existing ownership, reference evidence and numerical requirements
 remain mandatory. In particular, test agreement is not a compiler-proved error
 bound and a clean effect report grants no artifact or launch authority.
 
+### Source scalar value custody
+
+The production Rust projection retains compiler-recognized volatile load call
+results as references to their original ranked read events. Typed disjoint-slice
+write calls retain their actual scalar payload, with the closed arity for each
+write kind. They use the existing reference-effect join and owner pipeline.
+
+Substitution follows exact source definition/use positions. One shared bounded
+analysis checks unique, unescaped scalar definitions, assignment dominance and
+normal call-return availability. Mutated arguments cannot become their original
+argument symbols. Missing reads, overwritten aliases, use-before-definition and
+cleanup edges fail closed. Loop-carried substitutions remain unsupported until
+source SSA instances are associated with the correct dynamic reads. Native
+owner SSA verification still independently checks the resulting dependencies.
+
+This is source-value preservation, not a proof of physical read values,
+CPU/GPU numerical equivalence, export success or GPU execution.
+
 ### Conditional dynamic output coverage
 
 The production ownership pass can now derive a conditional coverage record

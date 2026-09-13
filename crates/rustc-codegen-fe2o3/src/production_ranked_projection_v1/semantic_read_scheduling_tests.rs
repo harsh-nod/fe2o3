@@ -152,9 +152,18 @@ mod semantic_read_scheduling_tests {
             })
             .collect::<Vec<_>>();
         let resolve = |sources: &[ProjectedAccessSourceV1]| {
-            GpuSemanticExpressionResolverV2::with_ranked_reads(&types, &function, &blocks, sources)
-                .unwrap()
-                .resolve_store_v2(function.blocks()[1].statements()[0].kind())
+            GpuSemanticExpressionResolverV2::with_ranked_reads(
+                &types,
+                &[],
+                &function,
+                &blocks,
+                sources,
+            )
+            .unwrap()
+            .resolve_source_write_v2(ProjectedSemanticAccessSiteV1 {
+                block: 1,
+                statement: Some(0),
+            })
         };
         assert_eq!(
             resolve(&sources[..1]),

@@ -3334,8 +3334,13 @@ fn project_and_verify_ranked_root_v1(
         entry_operations,
         projected_blocks,
     )?;
-    let reference_writes =
-        projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
+    let reference_writes = projected_reference_gpu_writes_v2(
+        semantic.types(),
+        semantic.callables(),
+        function,
+        &blocks,
+        &sources,
+    )?;
     let access_sources = production_access_sources(&blocks, &sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
@@ -3409,6 +3414,7 @@ fn project_and_verify_ranked_root_v1(
 
 fn projected_reference_gpu_writes_v2(
     types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
@@ -3438,8 +3444,9 @@ fn projected_reference_gpu_writes_v2(
         }
     }
     let mut writes = Vec::new();
-    let mut expressions =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?;
+    let mut expressions = GpuSemanticExpressionResolverV2::with_ranked_reads(
+        types, callables, function, blocks, sources,
+    )?;
     for source in sources
         .iter()
         .filter(|source| source.access.writes_memory())
@@ -3478,19 +3485,10 @@ fn projected_reference_gpu_writes_v2(
                 "a projected write view has no exact allocation origin",
             ),
         )?;
-        let value = source
-            .semantic_site
-            .and_then(|site| site.statement.map(|statement| (site.block, statement)))
-            .and_then(|(block, statement)| {
-                function
-                    .blocks()
-                    .get(block)
-                    .and_then(|block| block.statements().get(statement))
-            })
-            .map_or(
-                Err("GPU write has no authenticated semantic MIR statement"),
-                |statement| expressions.resolve_store_v2(statement.kind()),
-            );
+        let value = source.semantic_site.map_or(
+            Err("GPU write has no authenticated semantic MIR site"),
+            |site| expressions.resolve_source_write_v2(site),
+        );
         writes.push(
             crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
                 block: source.block,
@@ -3507,14 +3505,18 @@ fn projected_reference_gpu_writes_v2(
 
 struct GpuSemanticExpressionResolverV2<'a> {
     types: &'a [SemanticTypeDeclV1],
+    callables: &'a [SemanticCallableDeclV1],
     function: &'a SemanticFunctionDeclV1,
-    definitions: HashMap<u32, &'a SemanticRvalueV1>,
-    ambiguous: HashSet<u32>,
+    source_proof: SemanticAssertProofsV1<'a>,
+    source_acyclic: Option<bool>,
     visiting: HashSet<u32>,
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
+    call_loads: HashMap<u32, (ProductionSemanticLoadV2, (usize, usize))>,
 }
+
+include!("production_ranked_projection_v1/semantic_read_values_v2.rs");
 
 fn semantic_rvalue_read_places_v2<'a>(
     value: &'a SemanticRvalueV1,
@@ -3583,192 +3585,39 @@ fn semantic_rvalue_read_places_v2<'a>(
 }
 
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
-    fn new(types: &'a [SemanticTypeDeclV1], function: &'a SemanticFunctionDeclV1) -> Self {
-        let mut definitions = HashMap::new();
-        let mut ambiguous = HashSet::new();
-        for statement in function
-            .blocks()
-            .iter()
-            .flat_map(|block| block.statements())
-        {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            if !assignment.destination().projections().is_empty() {
-                continue;
-            }
-            let local = assignment.destination().local().index();
-            if definitions.insert(local, assignment.value()).is_some() {
-                ambiguous.insert(local);
-            }
-        }
-        Self {
+    fn new(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let construction_work = check_source_value_analysis_size_v2(function)?;
+        let mut source_proof = SemanticAssertProofsV1::new(types, function)?;
+        source_proof.work = construction_work;
+        Ok(Self {
             types,
+            callables: &[],
             function,
-            definitions,
-            ambiguous,
+            source_proof,
+            source_acyclic: None,
             visiting: HashSet::new(),
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
-        }
-    }
-
-    fn with_ranked_reads(
-        types: &'a [SemanticTypeDeclV1],
-        function: &'a SemanticFunctionDeclV1,
-        blocks: &[ProductionRankedBlockV1],
-        sources: &[ProjectedAccessSourceV1],
-    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let mut resolver = Self::new(types, function);
-        let mut allocation_origins = HashMap::new();
-        for block in blocks {
-            for operation in block.operations() {
-                match operation {
-                    ProductionRankedOperationV1::View {
-                        result,
-                        allocation_origin,
-                        ..
-                    }
-                    | ProductionRankedOperationV1::ViewInSpace {
-                        result,
-                        allocation_origin,
-                        ..
-                    } => {
-                        allocation_origins
-                            .insert(ProductionRankedValueV1::Local(*result), *allocation_origin);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        for source in sources.iter().filter(|source| source.access.reads_memory()) {
-            if source.access != AccessKindAttr::Read
-                || source.memory_space != MemorySpaceAttr::Global
-            {
-                continue;
-            }
-            let Some(site) = source.semantic_site else {
-                continue;
-            };
-            let Some(statement_index) = site.statement else {
-                continue;
-            };
-            let Some(SemanticStatementKindV1::Assign(assignment)) = function
-                .blocks()
-                .get(site.block)
-                .and_then(|block| block.statements().get(statement_index))
-                .map(|statement| statement.kind())
-            else {
-                continue;
-            };
-            let mut read_places = Vec::new();
-            semantic_rvalue_read_places_v2(assignment.value(), &mut read_places)?;
-            let matching_sources = sources
-                .iter()
-                .filter(|candidate| {
-                    candidate.access == AccessKindAttr::Read
-                        && candidate.memory_space == MemorySpaceAttr::Global
-                        && candidate.semantic_site == source.semantic_site
-                })
-                .collect::<Vec<_>>();
-            let Some(ordinal) = matching_sources
-                .iter()
-                .position(|candidate| std::ptr::eq(*candidate, source))
-            else {
-                continue;
-            };
-            if read_places.len() != matching_sources.len() {
-                continue;
-            }
-            let Some((read_place, read_mode)) = read_places.get(ordinal).copied() else {
-                continue;
-            };
-            let Some(operation) = blocks
-                .get(source.block)
-                .and_then(|block| block.operations().get(source.operation))
-            else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a projected load correspondence does not identify one ranked read",
-                ));
-            };
-            let (kind, view, indices) = match operation {
-                ProductionRankedOperationV1::Access {
-                    kind,
-                    view,
-                    indices,
-                } => (*kind, *view, indices.clone()),
-                ProductionRankedOperationV1::PredicatedAccess {
-                    kind, view, index, ..
-                } => (*kind, *view, vec![*index]),
-                _ => {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a projected load correspondence does not identify one ranked read",
-                    ));
-                }
-            };
-            if kind != AccessKindAttr::Read {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a projected scalar load changed ranked access kind",
-                ));
-            }
-            let allocation_origin = allocation_origins.get(&view).copied().ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "a projected load view has no exact allocation origin",
-                ),
-            )?;
-            let scalar = resolver
-                .scalar_v2(read_place.ty())
-                .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
-            let load = ProductionSemanticLoadV2 {
-                block: u32::try_from(source.block).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a projected load block exceeds the ranked identity width",
-                    )
-                })?,
-                operation: u32::try_from(source.operation).map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "a projected load operation exceeds the ranked identity width",
-                    )
-                })?,
-                scalar,
-                read_mode,
-                allocation_origin,
-                view,
-                indices: indices.into_boxed_slice(),
-            };
-            if resolver
-                .place_loads
-                .insert(read_place as *const SemanticPlaceV1, load.clone())
-                .is_some()
-            {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "one semantic scalar read place maps to multiple ranked reads",
-                ));
-            }
-            if matches!(assignment.value().kind(), SemanticRvalueKindV1::Load(_))
-                && resolver
-                    .loads
-                    .insert(assignment.value() as *const SemanticRvalueV1, load)
-                    .is_some()
-            {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "one semantic scalar load maps to multiple ranked reads",
-                ));
-            }
-        }
-        Ok(resolver)
+            call_loads: HashMap::new(),
+        })
     }
 
     fn resolve_store_v2(
         &mut self,
         kind: &'a SemanticStatementKindV1,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         match kind {
             SemanticStatementKindV1::Assign(assignment) => {
-                self.resolve_rvalue_v2(assignment.value())
+                self.resolve_rvalue_v2(assignment.value(), site)
             }
-            SemanticStatementKindV1::Store(store) => self.resolve_operand_v2(store.value(), 0),
+            SemanticStatementKindV1::Store(store) => {
+                self.resolve_operand_v2(store.value(), 0, site)
+            }
             _ => Err("GPU write semantic site is not a scalar assignment or store"),
         }
     }
@@ -3825,6 +3674,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         &mut self,
         operand: &'a SemanticOperandV1,
         depth: usize,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Self::require_depth_v2(depth)?;
         self.charge_v2()?;
@@ -3839,7 +3689,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 Ok(ProductionSemanticExpressionV2::Constant { scalar, bits })
             }
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-                self.resolve_place_v2(place, depth)
+                self.resolve_place_v2(place, depth, site)
             }
         }
     }
@@ -3848,6 +3698,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         &mut self,
         place: &'a SemanticPlaceV1,
         depth: usize,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Self::require_depth_v2(depth)?;
         if let Some(load) = self.place_loads.get(&(place as *const SemanticPlaceV1)) {
@@ -3862,7 +3713,22 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             .locals()
             .get(local as usize)
             .ok_or("GPU semantic scalar local is out of bounds")?;
+        self.require_source_value_graph_v2()?;
+        if declaration.ty() != place.ty() {
+            return Err("GPU semantic scalar local type changed");
+        }
+        if self.source_proof.address_escaped.get(local as usize) != Some(&false) {
+            return Err("GPU semantic scalar local address escaped");
+        }
+        let definitions = self
+            .source_proof
+            .definition_counts
+            .get(local as usize)
+            .copied();
         if let SemanticLocalRoleV1::Argument(argument) = declaration.role() {
+            if definitions != Some(0) {
+                return Err("GPU semantic scalar argument is overwritten");
+            }
             let symbol = crate::reference_effect_v1::kernel_scalar_symbol_v2(argument)
                 .ok_or("kernel scalar argument exceeds the reserved semantic symbol namespace")?;
             return Ok(ProductionSemanticExpressionV2::Symbol {
@@ -3870,20 +3736,43 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 scalar: self.scalar_v2(declaration.ty())?,
             });
         }
-        if self.ambiguous.contains(&local) {
-            return Err(
-                "GPU semantic scalar local has multiple definitions; select/phi normalization is incomplete",
-            );
+        if definitions != Some(1) {
+            return Err("GPU semantic scalar local has no unique definition");
         }
-        let value = self
-            .definitions
-            .get(&local)
+        self.charge_source_query_v2()?;
+        if let Some((load, edge)) = self.call_loads.get(&local) {
+            if !self
+                .source_proof
+                .edge_set_dominates(&HashSet::from([*edge]), site.block)
+                .map_err(|_| "GPU semantic source dependence exceeds its analysis budget")?
+            {
+                return Err("GPU volatile call return does not dominate its source use");
+            }
+            return Ok(ProductionSemanticExpressionV2::Load(load.clone()));
+        }
+        let definition = self
+            .source_proof
+            .assignments
+            .get(local as usize)
             .copied()
+            .flatten()
             .ok_or("GPU semantic scalar local has no unique definition")?;
+        if !self
+            .source_proof
+            .assignment_dominates_use(definition, site.block, site.statement)
+            .map_err(|_| "GPU semantic source dependence exceeds its analysis budget")?
+        {
+            return Err("GPU scalar assignment does not dominate its source use");
+        }
+        let SemanticStatementKindV1::Assign(assignment) =
+            self.function.blocks()[definition.block].statements()[definition.statement].kind()
+        else {
+            return Err("GPU semantic scalar definition is not an assignment");
+        };
         if !self.visiting.insert(local) {
             return Err("GPU semantic scalar local has a cyclic definition");
         }
-        let resolved = self.resolve_rvalue_inner_v2(value, depth);
+        let resolved = self.resolve_rvalue_inner_v2(assignment.value(), depth, definition);
         self.visiting.remove(&local);
         resolved
     }
@@ -3891,20 +3780,22 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn resolve_rvalue_v2(
         &mut self,
         value: &'a SemanticRvalueV1,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
-        self.resolve_rvalue_inner_v2(value, 0)
+        self.resolve_rvalue_inner_v2(value, 0, site)
     }
 
     fn resolve_rvalue_inner_v2(
         &mut self,
         value: &'a SemanticRvalueV1,
         depth: usize,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Self::require_depth_v2(depth)?;
         self.charge_v2()?;
         let result_scalar = self.scalar_v2(value.result_type())?;
         match value.kind() {
-            SemanticRvalueKindV1::Use(operand) => self.resolve_operand_v2(operand, depth + 1),
+            SemanticRvalueKindV1::Use(operand) => self.resolve_operand_v2(operand, depth + 1, site),
             SemanticRvalueKindV1::Unary { operation, operand } => {
                 let operation = match operation {
                     SemanticUnaryOpV1::Not => ProductionSemanticUnaryOpV2::Not,
@@ -3916,7 +3807,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 Ok(ProductionSemanticExpressionV2::Unary {
                     operation,
                     scalar: result_scalar,
-                    operand: Box::new(self.resolve_operand_v2(operand, depth + 1)?),
+                    operand: Box::new(self.resolve_operand_v2(operand, depth + 1, site)?),
                 })
             }
             SemanticRvalueKindV1::Binary {
@@ -3932,6 +3823,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 left,
                 right,
                 depth,
+                site,
             ),
             SemanticRvalueKindV1::CheckedBinary(checked) => self.resolve_checked_binary_v2(
                 checked.operation(),
@@ -3939,6 +3831,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 checked.left(),
                 checked.right(),
                 depth,
+                site,
             ),
             SemanticRvalueKindV1::UncheckedBinary(unchecked) => self.resolve_unchecked_binary_v2(
                 unchecked.operation(),
@@ -3946,6 +3839,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 unchecked.left(),
                 unchecked.right(),
                 depth,
+                site,
             ),
             SemanticRvalueKindV1::Cast { kind, operand } => {
                 let source = self.scalar_v2(operand.ty())?;
@@ -3988,7 +3882,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     kind,
                     source,
                     target: result_scalar,
-                    operand: Box::new(self.resolve_operand_v2(operand, depth + 1)?),
+                    operand: Box::new(self.resolve_operand_v2(operand, depth + 1, site)?),
                 })
             }
             SemanticRvalueKindV1::Load(_) => self
@@ -4008,6 +3902,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         left: &'a SemanticOperandV1,
         right: &'a SemanticOperandV1,
         depth: usize,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         let operation = match operation {
             SemanticCheckedBinaryOpV1::Add => ProductionSemanticBinaryOpV2::Add,
@@ -4021,6 +3916,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             left,
             right,
             depth,
+            site,
         )
     }
 
@@ -4031,6 +3927,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         _left: &'a SemanticOperandV1,
         _right: &'a SemanticOperandV1,
         _depth: usize,
+        _site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Err("GPU unchecked arithmetic requires a retained dominating no-overflow proof")
     }
@@ -4043,6 +3940,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         left: &'a SemanticOperandV1,
         right: &'a SemanticOperandV1,
         depth: usize,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         let comparison = match operation {
             SemanticBinaryOpV1::Equal => Some(ProductionSemanticComparisonV2::Equal),
@@ -4056,8 +3954,8 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             _ => None,
         };
         if let Some(operation) = comparison {
-            let lhs = self.resolve_operand_v2(left, depth + 1)?;
-            let rhs = self.resolve_operand_v2(right, depth + 1)?;
+            let lhs = self.resolve_operand_v2(left, depth + 1, site)?;
+            let rhs = self.resolve_operand_v2(right, depth + 1, site)?;
             return Ok(ProductionSemanticExpressionV2::Compare {
                 operation,
                 operand_scalar: lhs.scalar(),
@@ -4086,7 +3984,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             | SemanticBinaryOpV1::GreaterOrEqual
             | SemanticBinaryOpV1::GreaterThan => unreachable!(),
         };
-        self.binary_expression_v2(operation, overflow, result_scalar, left, right, depth)
+        self.binary_expression_v2(operation, overflow, result_scalar, left, right, depth, site)
     }
 
     fn binary_expression_v2(
@@ -4097,13 +3995,14 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         left: &'a SemanticOperandV1,
         right: &'a SemanticOperandV1,
         depth: usize,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Ok(ProductionSemanticExpressionV2::Binary {
             operation,
             scalar,
             overflow,
-            lhs: Box::new(self.resolve_operand_v2(left, depth + 1)?),
-            rhs: Box::new(self.resolve_operand_v2(right, depth + 1)?),
+            lhs: Box::new(self.resolve_operand_v2(left, depth + 1, site)?),
+            rhs: Box::new(self.resolve_operand_v2(right, depth + 1, site)?),
         })
     }
 }
@@ -23366,6 +23265,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
     include!("production_ranked_projection_v1/semantic_read_scheduling_tests.rs");
+    include!("production_ranked_projection_v1/semantic_call_read_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
@@ -37844,7 +37744,11 @@ mod tests {
             },
         );
         let expression = GpuSemanticExpressionResolverV2::new(&types, &function)
-            .resolve_rvalue_v2(&rvalue)
+            .unwrap()
+            .resolve_rvalue_v2(&rvalue, ScalarAssignmentSiteV1 {
+                block: 0,
+                statement: 0,
+            })
             .unwrap();
         assert!(matches!(
             expression,
@@ -37870,7 +37774,11 @@ mod tests {
             )),
         );
         let error = GpuSemanticExpressionResolverV2::new(&types, &function)
-            .resolve_rvalue_v2(&rvalue)
+            .unwrap()
+            .resolve_rvalue_v2(&rvalue, ScalarAssignmentSiteV1 {
+                block: 0,
+                statement: 0,
+            })
             .unwrap_err();
         assert_eq!(
             error,
@@ -37915,7 +37823,11 @@ mod tests {
             },
         );
         let expression = GpuSemanticExpressionResolverV2::new(&types, &function)
-            .resolve_rvalue_v2(&rvalue)
+            .unwrap()
+            .resolve_rvalue_v2(&rvalue, ScalarAssignmentSiteV1 {
+                block: 0,
+                statement: 0,
+            })
             .unwrap();
         assert!(matches!(
             expression,
@@ -37968,6 +37880,7 @@ mod tests {
                 ),
             )));
         }
+        assignments.reverse();
         projection_function_with_locals(
             vec![block(241, assignments, SemanticTerminatorKindV1::Return)],
             locals,
@@ -37982,7 +37895,12 @@ mod tests {
                 SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], SCALAR_TYPE)
                     .unwrap(),
             );
-            GpuSemanticExpressionResolverV2::new(&types, function).resolve_operand_v2(&operand, 0)
+            GpuSemanticExpressionResolverV2::new(&types, function)
+                .unwrap()
+                .resolve_operand_v2(&operand, 0, ScalarAssignmentSiteV1 {
+                    block: 0,
+                    statement: function.blocks()[0].statements().len(),
+                })
         };
         assert!(matches!(
             root(&gpu_alias_chain_function(128)).unwrap(),
