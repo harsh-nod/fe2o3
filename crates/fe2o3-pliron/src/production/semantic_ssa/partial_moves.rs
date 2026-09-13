@@ -600,7 +600,31 @@ fn validate_partial_move_destination_v1(
     }
 
     let local = destination.local().index();
-    let Some(path) = canonical_partial_move_path_v1(function, types, destination, location)? else {
+    let path = match canonical_partial_move_path_v1(function, types, destination, location) {
+        Ok(path) => path,
+        Err(
+            error @ ProductionSemanticSsaErrorV1::PartialMove {
+                violation: SemanticPartialMoveViolationV1::UnsupportedProjection,
+                ..
+            },
+        ) => {
+            if !is_supported_indexed_destination_v1(function, types, destination, location, budget)?
+            {
+                return Err(error);
+            }
+            // An unknown element write cannot repair a tracked move. Require
+            // the whole base to remain available and leave all move state intact.
+            validate_partial_move_path_read_v1(local, &[], location, state, budget)?;
+            return validate_partial_move_projection_indices_v1(
+                destination,
+                location,
+                state,
+                budget,
+            );
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(path) = path else {
         return validate_partial_move_projection_indices_v1(destination, location, state, budget);
     };
     if let Some(moved) = state.get_mut(&local) {
@@ -621,6 +645,66 @@ fn validate_partial_move_destination_v1(
         }
     }
     validate_partial_move_projection_indices_v1(destination, location, state, budget)
+}
+
+fn is_supported_indexed_destination_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    place: &SemanticPlaceV1,
+    location: SemanticPartialMoveLocationV1,
+    budget: &mut SemanticPartialMoveBudgetV1,
+) -> Result<bool, ProductionSemanticSsaErrorV1> {
+    let Some(types) = types else { return Ok(false) };
+    let local = place.local().index();
+    let mut current = function
+        .locals()
+        .get(local as usize)
+        .ok_or(ProductionSemanticSsaErrorV1::ReplayMismatch)?
+        .ty();
+    let mut indexed = false;
+    for (ordinal, projection) in place.projections().iter().enumerate() {
+        budget.charge_work()?;
+        let Some(declaration) = types.get(current.index() as usize) else {
+            return Ok(false);
+        };
+        match projection.kind() {
+            SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::ConstantIndex { .. } => {
+                let (SemanticTypeShapeV1::Array { element, .. }
+                | SemanticTypeShapeV1::Slice { element }) = declaration.shape()
+                else {
+                    return Ok(false);
+                };
+                if *element != projection.result_type() {
+                    return Ok(false);
+                }
+                indexed |= matches!(projection.kind(), SemanticProjectionKindV1::Index(_));
+            }
+            SemanticProjectionKindV1::Field(_) => {
+                if matches!(declaration.shape(), SemanticTypeShapeV1::Union(_)) {
+                    return Err(partial_move_error_v1(
+                        location,
+                        local,
+                        SemanticPartialMoveViolationV1::UnionField,
+                    ));
+                }
+            }
+            SemanticProjectionKindV1::Downcast(_) => {
+                if !place
+                    .projections()
+                    .get(ordinal + 1)
+                    .is_some_and(|next| matches!(next.kind(), SemanticProjectionKindV1::Field(_)))
+                {
+                    return Ok(false);
+                }
+            }
+            SemanticProjectionKindV1::Dereference
+            | SemanticProjectionKindV1::Subslice { .. }
+            | SemanticProjectionKindV1::OpaqueCast
+            | SemanticProjectionKindV1::Subtype => return Ok(false),
+        }
+        current = projection.result_type();
+    }
+    Ok(indexed)
 }
 
 fn validate_partial_move_projection_indices_v1(
@@ -822,3 +906,7 @@ fn merge_partial_move_state_v1(
     }
     Ok(changed)
 }
+
+#[cfg(test)]
+#[path = "partial_move_indexed_path_tests.rs"]
+mod indexed_path_tests;

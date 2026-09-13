@@ -1,5 +1,9 @@
 use super::adapter::semantic_edge_role_v1;
 use super::*;
+
+#[path = "partial_move_dynamic_destination_tests.rs"]
+mod partial_move_dynamic_destination_tests;
+
 use crate::ProductionSemanticMirLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, InertSemanticMirRequestV1, SemanticAbiIdentityV1,
@@ -21,7 +25,7 @@ fn test_bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }
 
-fn test_types(union: bool) -> Vec<SemanticTypeDeclV1> {
+pub(super) fn test_types(union: bool) -> Vec<SemanticTypeDeclV1> {
     let scalar = SemanticTypeIdV1::from_index(1);
     let fields =
         fe2o3_mir_model::semantic_mir_v1::SemanticAggregateTypeV1::new(vec![scalar, scalar])
@@ -325,7 +329,7 @@ fn test_block(
     .unwrap()
 }
 
-fn test_function(blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
+pub(super) fn test_function(blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
     test_function_with_reference_locals(blocks, 4)
 }
 
