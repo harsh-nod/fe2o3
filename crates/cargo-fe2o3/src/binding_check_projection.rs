@@ -1,9 +1,9 @@
 //! Immutable workspace target projection for the authority-free check wrapper.
 
-use rustix::fs::{FileType, MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals, fstat};
+use rustix::fs::{FileType, MemfdFlags, SealFlags, fcntl_get_seals, fstat};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::FileExt;
@@ -178,11 +178,10 @@ impl SealedProjection {
                 .map_err(|error| format!("failed to create binding projection memfd: {error}"))?;
         file.write_all(&bytes)
             .map_err(|error| format!("failed to write binding projection: {error}"))?;
-        fcntl_add_seals(
+        fe2o3_process_identity::seal_immutable_memfd_v1(
             &file,
-            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+            fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
         )
-        .and_then(|()| fcntl_add_seals(&file, SealFlags::SEAL))
         .map_err(|error| format!("failed to seal binding projection: {error}"))?;
         file.seek(SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind binding projection: {error}"))?;
@@ -194,6 +193,17 @@ impl SealedProjection {
         {
             return Err("binding projection does not have exact immutable seals".to_owned());
         }
+        if stat.st_size as usize != bytes.len() {
+            return Err("binding projection length mismatch after sealing".to_owned());
+        }
+        let mut sealed_bytes = Vec::with_capacity(bytes.len());
+        file.read_to_end(&mut sealed_bytes)
+            .map_err(|error| format!("failed to revalidate sealed binding projection: {error}"))?;
+        if sealed_bytes != bytes {
+            return Err("binding projection content mismatch after sealing".to_owned());
+        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| format!("failed to rewind sealed binding projection: {error}"))?;
         Ok(Self {
             file,
             identity: (stat.st_dev, stat.st_ino, stat.st_size as u64),
@@ -597,5 +607,17 @@ mod tests {
             worker.join().unwrap();
         }
         assert_eq!(sealed.file.stream_position().unwrap(), size as u64);
+    }
+
+    #[test]
+    fn sealed_projection_has_exact_immutable_seals_and_revalidates_content() {
+        let expected = fixture();
+        let sealed = SealedProjection::new(&expected).unwrap();
+        let seals = fcntl_get_seals(&sealed.file).unwrap();
+        assert_eq!(seals, REQUIRED_SEALS);
+        assert_eq!(
+            sealed.identity.2,
+            expected.validate_and_encode().unwrap().len() as u64
+        );
     }
 }
