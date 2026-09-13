@@ -1,0 +1,11 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0560]: struct `shared_memory::Gfx942DeviceMemoryIdentityV1` has no field named `session_id`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:147:25
+    |
+147 |                         session_id: e.session_id,
+    |                         ^^^^^^^^^^ `shared_memory::Gfx942DeviceMemoryIdentityV1` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+For more information about this error, try `rustc --explain E0560`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

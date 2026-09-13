@@ -104,7 +104,10 @@ fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_valida
     );
 }
 
-fn parent(auxiliary: bool, terminal: bool) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
+pub(super) fn parent(
+    auxiliary: bool,
+    terminal: bool,
+) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
     parent_in_vm(auxiliary, terminal, test_queue_key(410, 7).vm)
 }
 
@@ -172,7 +175,7 @@ fn parent_in_vm(
     (session, selected)
 }
 
-fn assert_shell(session: &mut ComputeAqlQueueSessionV1, lane: ComputeAqlQueueLaneV1) {
+pub(super) fn assert_shell(session: &mut ComputeAqlQueueSessionV1, lane: ComputeAqlQueueLaneV1) {
     assert!(session.terminal_poisoned);
     assert!(session.engine.is_none());
     assert!(session.completion_owner.0.is_none());

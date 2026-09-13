@@ -1,0 +1,555 @@
+{
+  "publication_parent": "fb5e19002e5a451aaf27f4bc16fc78c00b9163b3",
+  "accepted_runtime_checkpoint": "d85d6d7dc4f3b065dce9dc6505eac065c48cb0fa",
+  "recorded_phase": "After separately recorded full GNU/musl prerequisites; before remaining source/auxiliary/mutation gates. Earlier preliminary failures preserved. No native or formal qualification.",
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "cargo 1.96.0-nightly (888f67534 2026-03-30)\nrelease: 1.96.0-nightly\ncommit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51\ncommit-date: 2026-03-30\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]\n"
+    },
+    {
+      "command": [
+        "rustc",
+        "+nightly-2026-04-03",
+        "--version",
+        "--verbose"
+      ],
+      "output": "rustc 1.96.0-nightly (55e86c996 2026-04-02)\nbinary: rustc\ncommit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9\ncommit-date: 2026-04-02\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2\n"
+    },
+    {
+      "command": [
+        "python3",
+        "-VV"
+      ],
+      "output": "Python 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]\n"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "output": "v22.22.1\n"
+    },
+    {
+      "command": [
+        "git",
+        "--version"
+      ],
+      "output": "git version 2.43.0\n"
+    },
+    {
+      "command": [
+        "uname",
+        "-srmo"
+      ],
+      "output": "Linux 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"
+    }
+  ],
+  "binaries": [
+    {
+      "name": "cargo",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3"
+    },
+    {
+      "name": "rustc",
+      "path": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950"
+    }
+  ],
+  "runners": [
+    {
+      "name": "r114-run-v3.js",
+      "sha256": "cc9a9a07225e340d6b29a80b36b56e879af474296e0fb5943a26f80e31bbe651"
+    },
+    {
+      "name": "r114-run-v4.js",
+      "sha256": "76c5b3715c21e0a301e913e3186f81ade536146c36cac746c7acceabe9787853"
+    },
+    {
+      "name": "r114-source-gate.py",
+      "sha256": "0e52cd99eb357e322bd05720ac3024a203ef9ae6e5002b7802f86e161dc287ed"
+    },
+    {
+      "name": "r114-auxiliary-gates.py",
+      "sha256": "3261f88a75939dbb0761664c299cdc5a3d73cb5f9aae459e3e071c3467fb4a96"
+    },
+    {
+      "name": "r114-freeze.js",
+      "sha256": "4930943b942f11d53a9a255dd82e03b43ecd4c62b0441cc7f7dc4cc2019e6919"
+    },
+    {
+      "name": "r114-runner-tests.js",
+      "sha256": "60f71e4e134847053a9c27d6664ca68376c418bd57517ed1b7d55b043f98dd35"
+    },
+    {
+      "name": "r114-freeze-tests.js",
+      "sha256": "544abcf78645d73797dd39890b631e61666be3169de454be558b4700236534c6"
+    },
+    {
+      "name": "r114-qualification-plan.js",
+      "sha256": "02a1f52329578df542bcc801b2dbf7c2e0a558f963bba7002fe1428d90dae062"
+    },
+    {
+      "name": "r114-qualification-evidence.js",
+      "sha256": "14fef86edd2d8a1544330af905eb8e76e217066e93d4e413f8f26c17fdd2688c"
+    }
+  ],
+  "environment_overrides": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "environment_removed": [
+    "XDG_RUNTIME_DIR"
+  ],
+  "test_deadlines_changed": false,
+  "hardware_qualification": false,
+  "solver_rerun": false,
+  "campaign_envelope": {
+    "deadline_ms": 7200000,
+    "individual_gate_deadline_ms": 1800000
+  },
+  "ambient_stack": {
+    "RUST_MIN_STACK": null,
+    "command": [
+      "bash",
+      "-c",
+      "ulimit -s"
+    ],
+    "output": "8192\n"
+  },
+  "prerequisite_runs": [
+    "r114-preliminary-gnu-all",
+    "r114-preliminary-musl-all"
+  ],
+  "prerequisite_artifacts": [
+    {
+      "name": "r114-preliminary-gnu-all-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all.json",
+      "sha256": "3776cae6702dca93e8f7b57a6486162bf2724db1d1c0637d86ba545dbc2e26f3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all.log",
+      "sha256": "736d18aefd41a25c12b060bf45faed75024fa56a58feefc880b9a70f1ed2f552"
+    },
+    {
+      "name": "r114-preliminary-musl-all-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-musl-all-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-musl-all.json",
+      "sha256": "cebf9a61e6a85682fcc7982f069ea48756b4151188d3b1e58997f4c23aaba562"
+    },
+    {
+      "name": "r114-preliminary-musl-all.log",
+      "sha256": "fb975b9cde2b91d870edf7807f40393710a74cb9cc642ae1aa1ce17c52824c8e"
+    }
+  ],
+  "prerequisite_validation_inputs": [
+    {
+      "name": "r114-auxiliary-gates.py",
+      "sha256": "3261f88a75939dbb0761664c299cdc5a3d73cb5f9aae459e3e071c3467fb4a96"
+    },
+    {
+      "name": "r114-device-oracle-format.json",
+      "sha256": "de1d96972232f521eab147725ebdd07bcfb664443fe70958e533b362a1155a26"
+    },
+    {
+      "name": "r114-freeze-tests.js",
+      "sha256": "544abcf78645d73797dd39890b631e61666be3169de454be558b4700236534c6"
+    },
+    {
+      "name": "r114-freeze.js",
+      "sha256": "4930943b942f11d53a9a255dd82e03b43ecd4c62b0441cc7f7dc4cc2019e6919"
+    },
+    {
+      "name": "r114-preliminary-gnu-all-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all.json",
+      "sha256": "3776cae6702dca93e8f7b57a6486162bf2724db1d1c0637d86ba545dbc2e26f3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all.log",
+      "sha256": "736d18aefd41a25c12b060bf45faed75024fa56a58feefc880b9a70f1ed2f552"
+    },
+    {
+      "name": "r114-preliminary-musl-all-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-musl-all-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-musl-all.json",
+      "sha256": "cebf9a61e6a85682fcc7982f069ea48756b4151188d3b1e58997f4c23aaba562"
+    },
+    {
+      "name": "r114-preliminary-musl-all.log",
+      "sha256": "fb975b9cde2b91d870edf7807f40393710a74cb9cc642ae1aa1ce17c52824c8e"
+    },
+    {
+      "name": "r114-qualification-evidence.js",
+      "sha256": "14fef86edd2d8a1544330af905eb8e76e217066e93d4e413f8f26c17fdd2688c"
+    },
+    {
+      "name": "r114-qualification-plan.js",
+      "sha256": "02a1f52329578df542bcc801b2dbf7c2e0a558f963bba7002fe1428d90dae062"
+    },
+    {
+      "name": "r114-run-v3.js",
+      "sha256": "cc9a9a07225e340d6b29a80b36b56e879af474296e0fb5943a26f80e31bbe651"
+    },
+    {
+      "name": "r114-run-v4.js",
+      "sha256": "76c5b3715c21e0a301e913e3186f81ade536146c36cac746c7acceabe9787853"
+    },
+    {
+      "name": "r114-runner-tests.js",
+      "sha256": "60f71e4e134847053a9c27d6664ca68376c418bd57517ed1b7d55b043f98dd35"
+    },
+    {
+      "name": "r114-source-gate.py",
+      "sha256": "0e52cd99eb357e322bd05720ac3024a203ef9ae6e5002b7802f86e161dc287ed"
+    }
+  ],
+  "source_observation_boundary": "Full prerequisites are checked by matching endpoint source maps, not relabeled as executions inside the later campaign. Ambient state not recorded by those runs is not inferred.",
+  "prior_artifacts": [
+    {
+      "name": "r114-cleanup-matrix-tests-source-after.json",
+      "sha256": "2220afcb715ae568166b44f0ee216334c8a4229d5bef99bff263b17ba27c2705"
+    },
+    {
+      "name": "r114-cleanup-matrix-tests-source.json",
+      "sha256": "2220afcb715ae568166b44f0ee216334c8a4229d5bef99bff263b17ba27c2705"
+    },
+    {
+      "name": "r114-cleanup-matrix-tests.json",
+      "sha256": "a6df1d8158dac8c37e8cf997e2c7f8e549a56d3a3ae21c7edcf6a2f073f1b87a"
+    },
+    {
+      "name": "r114-cleanup-matrix-tests.log",
+      "sha256": "b13fdbe5000bcdfd25d0066df60ae1d1758909d9da1d2bb68af70fb309fe3859"
+    },
+    {
+      "name": "r114-complete-oracle-tests-source-after.json",
+      "sha256": "45c3f253bd380df373d2229e844535b8cb3412a6e3285a5df922486639854446"
+    },
+    {
+      "name": "r114-complete-oracle-tests-source.json",
+      "sha256": "45c3f253bd380df373d2229e844535b8cb3412a6e3285a5df922486639854446"
+    },
+    {
+      "name": "r114-complete-oracle-tests.json",
+      "sha256": "276dd0ef724fe93961ab69bb01add383a5546d26105c14ebe6a6b68ac8e223a2"
+    },
+    {
+      "name": "r114-complete-oracle-tests.log",
+      "sha256": "a5b4d98471e052cac77f21c836f65b75060a5bcf195da18b6a6e5fd75b61e01e"
+    },
+    {
+      "name": "r114-device-oracle-format-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-device-oracle-format-source.json",
+      "sha256": "7da240c94d591486cc353dcd5d5f6a562d2a49c4d7a7dc9ddaa5e7f3af972abb"
+    },
+    {
+      "name": "r114-device-oracle-format.json",
+      "sha256": "de1d96972232f521eab147725ebdd07bcfb664443fe70958e533b362a1155a26"
+    },
+    {
+      "name": "r114-device-oracle-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r114-first-strict-clippy-source-after.json",
+      "sha256": "45c3f253bd380df373d2229e844535b8cb3412a6e3285a5df922486639854446"
+    },
+    {
+      "name": "r114-first-strict-clippy-source.json",
+      "sha256": "45c3f253bd380df373d2229e844535b8cb3412a6e3285a5df922486639854446"
+    },
+    {
+      "name": "r114-first-strict-clippy.json",
+      "sha256": "053552f4caa4305b830c2b71b3e238bc658d15f806141b29206a75ce0c5e5c2c"
+    },
+    {
+      "name": "r114-first-strict-clippy.log",
+      "sha256": "09c5aaec26dec21b76595bda41760066333e8ba796c7ac95c326ae7fddcf308d"
+    },
+    {
+      "name": "r114-freeze-contract-tests-restoration-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-freeze-contract-tests-restoration-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-freeze-contract-tests-restoration.json",
+      "sha256": "c6cdde3913369ca58e9562c66b68269d7a54ed972760811eaa9744ce4b224c31"
+    },
+    {
+      "name": "r114-freeze-contract-tests-restoration.log",
+      "sha256": "6e2a48bc5fc5301900f05a8cc8c36bda0bc46aac2334ceb0c069cae07257ba13"
+    },
+    {
+      "name": "r114-freeze-contract-tests-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-freeze-contract-tests-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-freeze-contract-tests.json",
+      "sha256": "0174f41c37f322b6028414d8ed475f61f45619fe490f1dc313e8484114bc465d"
+    },
+    {
+      "name": "r114-freeze-contract-tests.log",
+      "sha256": "6e2a48bc5fc5301900f05a8cc8c36bda0bc46aac2334ceb0c069cae07257ba13"
+    },
+    {
+      "name": "r114-initial-pristine-tests-source-after.json",
+      "sha256": "a44c352edf6c90346e1930c79bf91f9ca7f0a79d4858f898f914d49f0e0a5232"
+    },
+    {
+      "name": "r114-initial-pristine-tests-source.json",
+      "sha256": "a44c352edf6c90346e1930c79bf91f9ca7f0a79d4858f898f914d49f0e0a5232"
+    },
+    {
+      "name": "r114-initial-pristine-tests.json",
+      "sha256": "fd7336a609cd4ceb3b341305ac2a9438d0b4e5863aac5988fa3f046a6eff28af"
+    },
+    {
+      "name": "r114-initial-pristine-tests.log",
+      "sha256": "9e96fefbdba02174457dcf386015dd76ecfc826cedca49d407cb2e371cce5741"
+    },
+    {
+      "name": "r114-planning-format-source-after.json",
+      "sha256": "45c3f253bd380df373d2229e844535b8cb3412a6e3285a5df922486639854446"
+    },
+    {
+      "name": "r114-planning-format-source.json",
+      "sha256": "3a816a7bcad857a05c5712fa0ac8b5bdcd84335ecebd95dc787e62df9de21452"
+    },
+    {
+      "name": "r114-planning-format.json",
+      "sha256": "a28058e8e6f98fc0da6dca340d871b09b0c9cc1547581ca9a52668ebd22dddfa"
+    },
+    {
+      "name": "r114-planning-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r114-pre-restoration-review-helper-snapshot.json",
+      "sha256": "df27350544314c8061652724ffff7c7c9132992dfdb913869a3dae3b6ab75754"
+    },
+    {
+      "name": "r114-preliminary-gnu-all-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all.json",
+      "sha256": "3776cae6702dca93e8f7b57a6486162bf2724db1d1c0637d86ba545dbc2e26f3"
+    },
+    {
+      "name": "r114-preliminary-gnu-all.log",
+      "sha256": "736d18aefd41a25c12b060bf45faed75024fa56a58feefc880b9a70f1ed2f552"
+    },
+    {
+      "name": "r114-preliminary-musl-all-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-musl-all-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-preliminary-musl-all.json",
+      "sha256": "cebf9a61e6a85682fcc7982f069ea48756b4151188d3b1e58997f4c23aaba562"
+    },
+    {
+      "name": "r114-preliminary-musl-all.log",
+      "sha256": "fb975b9cde2b91d870edf7807f40393710a74cb9cc642ae1aa1ce17c52824c8e"
+    },
+    {
+      "name": "r114-reviewed-pristine-tests-source-after.json",
+      "sha256": "bb9ad2119e309891f83952e3f9e55407643bbfe53b4ff7abcf51e9ecbc1b781d"
+    },
+    {
+      "name": "r114-reviewed-pristine-tests-source.json",
+      "sha256": "bb9ad2119e309891f83952e3f9e55407643bbfe53b4ff7abcf51e9ecbc1b781d"
+    },
+    {
+      "name": "r114-reviewed-pristine-tests.json",
+      "sha256": "50d19bf0b1b79efc2c45590b0ad7fd8371c694a639fd387dfeedbddb178aebcc"
+    },
+    {
+      "name": "r114-reviewed-pristine-tests.log",
+      "sha256": "40e517889097cc889ad59c97c8890ff7a5dddc1de951eb6a9ff83dfa1a3a3f63"
+    },
+    {
+      "name": "r114-runner-contract-tests-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-contract-tests-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-contract-tests.json",
+      "sha256": "144493ec03486174f86ff50f3cf5c12cbda3d3e4bc233d16d19b61bb39040cfb"
+    },
+    {
+      "name": "r114-runner-contract-tests.log",
+      "sha256": "c118b9c11556a703e09ee89e8754ab912d3506cc626e6c5aeb0c029029905a5f"
+    },
+    {
+      "name": "r114-runner-v2-fixture-clean-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-clean-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-clean.json",
+      "sha256": "289bcd98521b21394f613232004040207cc2ed3a9561475e8cd1ad793ef8c302"
+    },
+    {
+      "name": "r114-runner-v2-fixture-clean.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r114-runner-v2-fixture-failure-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-failure-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-failure.json",
+      "sha256": "abd6459dafea4897dd451ab49605ff187f6c687a468920242cd91eb2f542c38e"
+    },
+    {
+      "name": "r114-runner-v2-fixture-failure.log",
+      "sha256": "a6037239f08a6ea1e8af5c010032d0d0fb5f2e4fc7db2e31d2019a219f7cd74a"
+    },
+    {
+      "name": "r114-runner-v2-fixture-inner-timeout-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-inner-timeout-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-inner-timeout.json",
+      "sha256": "c661e2a0636105a036fcd5c6e05fb9848501ed87b2873ae99a262502947aff3f"
+    },
+    {
+      "name": "r114-runner-v2-fixture-inner-timeout.log",
+      "sha256": "e815c5ecb78875985ec8f712cd50f62f00369ccc573fe274a5b12d1f096715f1"
+    },
+    {
+      "name": "r114-runner-v2-fixture-spawn-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-spawn-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-spawn.json",
+      "sha256": "6f737a91839c8b75bf47f454402c2c6fd24dd5ce03a3be9a14cce2e7c7e5eb50"
+    },
+    {
+      "name": "r114-runner-v2-fixture-spawn.log",
+      "sha256": "a18042bd8f54e89ea8eca69a7409e9f6e21f238bb490a0f442e75b42266c9b45"
+    },
+    {
+      "name": "r114-runner-v2-fixture-success-source-after.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-success-source.json",
+      "sha256": "faed3c953d7283fc26543d060f9fed71c38febec9886882027ad05a0726db6a3"
+    },
+    {
+      "name": "r114-runner-v2-fixture-success.json",
+      "sha256": "3cabbdb5ff038efda3efe65f3c6fb052eee263044a532a7434e155b986f325c9"
+    },
+    {
+      "name": "r114-runner-v2-fixture-success.log",
+      "sha256": "48b97c5d967b722908983734e6fd119dc359251964aa66f5d776c5b610beda70"
+    },
+    {
+      "name": "r114-wired-pristine-tests-source-after.json",
+      "sha256": "c7679e55c35cad8eadd48f5bebb5fa360673a6632cedf47346f1e81305721fc1"
+    },
+    {
+      "name": "r114-wired-pristine-tests-source.json",
+      "sha256": "c7679e55c35cad8eadd48f5bebb5fa360673a6632cedf47346f1e81305721fc1"
+    },
+    {
+      "name": "r114-wired-pristine-tests.json",
+      "sha256": "5d1cd7737f96169b1d9471c71902e744ca6514c037270d8f0219fcc03d000b0c"
+    },
+    {
+      "name": "r114-wired-pristine-tests.log",
+      "sha256": "4ada4a7be7e3111eeea3b6f61b2b655647afc4f69d25320a86f51e95b2d32d0b"
+    }
+  ],
+  "source_delta": [
+    "crates/fe2o3-kfd/src/queue.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/queue_live.rs",
+    "crates/fe2o3-kfd/src/queue_live/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/tests/pristine_abort_transport.rs",
+    "crates/fe2o3-kfd/src/shared_memory.rs",
+    "crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs",
+    "crates/fe2o3-kfd/src/shared_memory/transitions.rs"
+  ],
+  "observation": {
+    "utc_ms": 1789281366548,
+    "monotonic_ns": "80258307871667",
+    "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+    "clock_source": "node-process-hrtime-linux-monotonic"
+  },
+  "recorded_at": "2026-09-13T06:36:06.548Z"
+}

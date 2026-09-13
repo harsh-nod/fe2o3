@@ -1,0 +1,39 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.26s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check ... FAILED
+
+failures:
+
+---- shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check stdout ----
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check' (3528518) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6980:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check' (3528518) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6980:17:
+Box<dyn Any>
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check' (3528518) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6980:17:
+Box<dyn Any>
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check' (3528518) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6980:17:
+Box<dyn Any>
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check' (3528518) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6980:17:
+Box<dyn Any>
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check' (3528518) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:751:17:
+assertion `left == right` failed
+  left: "Unmapped"
+ right: "NativeDisposed"
+
+
+failures:
+    shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1102 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

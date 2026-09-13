@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.79s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::pristine_abort::tests::transport_tests::abort_facade_restores_all_lanes_before_retaining_failed_control_parent ... FAILED
+
+failures:
+
+---- queue::live::pristine_abort::tests::transport_tests::abort_facade_restores_all_lanes_before_retaining_failed_control_parent stdout ----
+
+thread 'queue::live::pristine_abort::tests::transport_tests::abort_facade_restores_all_lanes_before_retaining_failed_control_parent' (3540669) panicked at crates/fe2o3-kfd/src/queue_live/tests/pristine_abort_transport.rs:201:33:
+transport must precede return or panic resumption
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::pristine_abort::tests::transport_tests::abort_facade_restores_all_lanes_before_retaining_failed_control_parent' (3540669) panicked at crates/fe2o3-kfd/src/queue_live/tests/pristine_abort_transport.rs:283:21:
+assertion `left == right` failed
+  left: true
+ right: false
+
+
+failures:
+    queue::live::pristine_abort::tests::transport_tests::abort_facade_restores_all_lanes_before_retaining_failed_control_parent
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1102 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

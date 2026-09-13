@@ -1,9 +1,20 @@
 # Current Runtime Swarm Work Orders
 
-The latest [R114-candidate dispatch](runtime-swarm-dispatch-r114-candidate.md)
-records the renewed three-lane handoffs and remaining test-review exits.
-R114 is an uncommitted candidate with 32 passing focused tests; this planning
-refresh adds no implementation or qualification acceptance.
+The latest [post-R114 dispatch](runtime-swarm-dispatch-r114.md) records the
+current three-lane handoffs: Native N4-R2 returning controls, Admission C1
+qualification with independent C2/C3 coverage, and Resources V3 settlement.
+Its immediate assignments supersede the older checkpoint tables below, whose
+detailed contracts and historical observations are retained.
+
+Current accepted checkpoint: [R114/N4-R1 pristine control cleanup](runtime-pristine-control-cleanup-v1.md),
+with [254 retained artifacts](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md).
+GNU/musl each pass 2,712 tests with five ignored across 48 libtest harnesses and
+one unchanged harnessless benchmark. All 17 source gates, ten auxiliary checks,
+37/7/9 frozen/restored suites and 15 compiled negatives pass. Nine runner,
+30 freeze and 80 qualification-contract tests pass. Exact restoration of all
+5,683 source identities, the closed collector and both independent archive
+reviews pass. This is local CPU/test acceptance, not ordinary/returning or data
+cleanup, native GPU execution, formal refinement or performance qualification.
 
 For the latest concise assignments, dependencies and exit tests, use
 [Runtime Swarm: Remaining Packets](runtime-swarm-next-packets.md).
@@ -11,7 +22,7 @@ The three-lane read-only swarm reviewed implementation handoffs, behavioral
 oracles and immutable evidence. Primary completed integration and local
 qualification; the next implementation packets remain separately assigned.
 
-Current accepted checkpoint: [R113/V2 membership and whole-roster Begin](runtime-context-version-membership-v1.md),
+Historical checkpoint: [R113/V2 membership and whole-roster Begin](runtime-context-version-membership-v1.md),
 with [retained evidence](evidence/local-r113-context-version-membership-2026-09-13/README.md).
 Seventeen source gates and ten auxiliary checks pass. GNU/musl each pass 2,695
 tests with five ignored across 48 libtest harnesses; one existing harnessless
@@ -22,8 +33,8 @@ independent archive review verify 344 raw artifacts, including retained failures
 Nine runner, nine freeze and 52 corrected collector-contract tests pass. This is
 executable-model acceptance only, not settlement, production Context hooks,
 authenticated proofs, native execution, aggregate memory or performance.
-Native next takes N4-R1, Admission qualifies C1 and Resources freezes the
-reviewed [V3 settlement draft](runtime-context-version-settlement-v1.md).
+At R113, Native next took N4-R1. Admission still qualifies C1 and Resources
+freezes the reviewed [V3 settlement draft](runtime-context-version-settlement-v1.md).
 C1's isolated candidate passes nine focused tests, all 724 runtime-library
 tests and strict all-feature/all-target Clippy after a test-only enum correction;
 the failed compile is retained.

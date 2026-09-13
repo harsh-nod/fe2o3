@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.08s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry stdout ----
+
+thread 'queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry' (3538083) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs:693:26:
+interrupted control remains rooted
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1102 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

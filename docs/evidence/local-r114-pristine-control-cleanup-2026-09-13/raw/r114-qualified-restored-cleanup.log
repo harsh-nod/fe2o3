@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 7 tests
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_actual_commit_rejection_keeps_unmapped_or_disposed_custody ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_success_commits_original_model_and_exact_native_control_order ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_native_failure_retains_typed_control_and_exact_destructive_prefix ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_projection_failures_keep_native_disposal_distinct_from_model_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 0.07s
+

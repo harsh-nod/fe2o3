@@ -4382,7 +4382,7 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
     pub fn abort_unpublished_fixed_dispatch_v1(
         &mut self,
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
-        self.session.abort_unpublished_fixed_dispatch_v1()
+        self.forward_pristine_abort_v1(ComputeAqlQueueSessionV1::abort_unpublished_settled_v1)
     }
 
     /// Releases prepare-once code and kernarg control after persistent data

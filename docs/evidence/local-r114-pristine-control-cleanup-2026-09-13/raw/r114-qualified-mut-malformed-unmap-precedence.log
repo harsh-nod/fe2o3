@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 32.86s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag ... FAILED
+
+failures:
+
+---- shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag stdout ----
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag' (3537284) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:616:70:
+assertion `left == right` failed
+  left: "shared UNMAP_MEMORY_FROM_GPU full prefix"
+ right: "shared UNMAP_MEMORY_FROM_GPU cumulative n_success"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1102 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

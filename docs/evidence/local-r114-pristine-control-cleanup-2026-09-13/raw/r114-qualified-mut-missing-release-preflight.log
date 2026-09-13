@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.47s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit ... FAILED
+
+failures:
+
+---- shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit stdout ----
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit' (3535157) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:839:13:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1102 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

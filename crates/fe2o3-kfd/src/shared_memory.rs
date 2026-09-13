@@ -2,10 +2,15 @@
 
 mod allocation;
 mod coherent_initialization;
+mod control_cleanup;
 mod device_allocation;
 mod device_initialization;
 mod dispatch_retention;
 mod transitions;
+
+pub(crate) use control_cleanup::ControlCleanupCustodyV1;
+#[cfg(test)]
+pub(crate) use control_cleanup::{CleanupStageV1, ControlCleanupObservationV1};
 
 pub(crate) use dispatch_retention::{RetainedDispatchDataRosterV1, RetainedDispatchDataV1};
 
@@ -3634,17 +3639,21 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         token: SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
-        self.with_host_backing_unwind_quarantine::<P, _>(|engine| engine.unmap_mutable_inner(token))
+        self.unmap_mutable_borrowed(&token, &mut Default::default())?;
+        Ok(token.retag())
     }
 
-    fn unmap_mutable_inner<P: MutableGpuGttProfileV1>(
+    fn unmap_mutable_borrowed<P: MutableGpuGttProfileV1>(
         &mut self,
-        token: SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
-    ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
-        let index = self.index(&token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
-        self.unmap_index(index)?;
-        self.allocations[index].phase = SharedAllocationPhaseV1::CpuWritable;
-        Ok(token.retag())
+        token: &SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        self.with_host_backing_unwind_quarantine::<P, _>(|engine| {
+            let index = engine.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+            engine.unmap_index(index, progress)?;
+            engine.allocations[index].phase = SharedAllocationPhaseV1::CpuWritable;
+            Ok(())
+        })
     }
 
     fn unmap_executable(
@@ -3652,18 +3661,34 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
     ) -> Result<SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>, MemorySessionError>
     {
-        let index = self.index(&token, SharedAllocationPhaseV1::GpuAccessibleExecutable)?;
-        self.unmap_index(index)?;
-        self.allocations[index].phase = SharedAllocationPhaseV1::ExecutableImmutable;
+        self.unmap_executable_borrowed(&token, &mut Default::default())?;
         Ok(token.retag())
     }
 
-    fn unmap_index(&mut self, index: usize) -> Result<(), MemorySessionError> {
+    fn unmap_executable_borrowed(
+        &mut self,
+        token: &SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleExecutable)?;
+        self.unmap_index(index, progress)?;
+        self.allocations[index].phase = SharedAllocationPhaseV1::ExecutableImmutable;
+        Ok(())
+    }
+
+    fn unmap_index(
+        &mut self,
+        index: usize,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
         self.check_currentness()?;
         let handle = self.allocations[index]
             .handle
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        progress.attempted = true;
         let outcome = self.backend.unmap_gpu(handle, 0);
+        progress.returned_map_prefix = Some(outcome.value);
+        progress.returned_success = Some(outcome.result.is_ok());
         if outcome.value > 1 {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "shared UNMAP_MEMORY_FROM_GPU cumulative n_success",
@@ -3685,17 +3710,27 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         token: SharedGttAllocationV1<P, S>,
         expected: SharedAllocationPhaseV1,
     ) -> Result<(), MemorySessionError> {
+        self.release_borrowed(&token, expected, &mut Default::default())
+    }
+
+    fn release_borrowed<P: GttProfileV1, S: GttAllocationStateV1>(
+        &mut self,
+        token: &SharedGttAllocationV1<P, S>,
+        expected: SharedAllocationPhaseV1,
+        progress: &mut control_cleanup::NativeDisposalProgressV1,
+    ) -> Result<(), MemorySessionError> {
         self.with_host_backing_unwind_quarantine::<P, _>(|engine| {
-            engine.release_inner(token, expected)
+            engine.release_inner(token, expected, progress)
         })
     }
 
     fn release_inner<P: GttProfileV1, S: GttAllocationStateV1>(
         &mut self,
-        token: SharedGttAllocationV1<P, S>,
+        token: &SharedGttAllocationV1<P, S>,
         expected: SharedAllocationPhaseV1,
+        progress: &mut control_cleanup::NativeDisposalProgressV1,
     ) -> Result<(), MemorySessionError> {
-        let index = self.index(&token, expected)?;
+        let index = self.index(token, expected)?;
         self.check_currentness()?;
         if self.allocations[index].free_attempted {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
@@ -3707,7 +3742,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 .handle
                 .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
             self.allocations[index].free_attempted = true;
-            if let Err(error) = self.backend.free(handle) {
+            progress.free.attempted = true;
+            let result = self.backend.free(handle);
+            progress.free.returned_success = Some(result.is_ok());
+            if let Err(error) = result {
                 return self.quarantine(error);
             }
             self.allocations[index].handle = None;
@@ -3718,7 +3756,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                     .mapping
                     .as_mut()
                     .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-                backend.unmap_cpu(mapping)
+                progress.cpu_unmap.attempted = true;
+                let result = backend.unmap_cpu(mapping);
+                progress.cpu_unmap.returned_success = Some(result.is_ok());
+                result
             };
             if let Err(error) = unmap_result {
                 return self.quarantine(error);
@@ -3728,6 +3769,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             if self.allocations[index].reservation.take().is_none() {
                 return self.quarantine(MemorySessionError::InvalidAllocationAuthority);
             }
+            progress.native_disposed = true;
             self.check_currentness()?;
             self.allocations[index].phase = SharedAllocationPhaseV1::Released;
             self.allocation_record_slots.remove(&token.id);
@@ -3745,7 +3787,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 .mapping
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-            backend.unmap_cpu(mapping)
+            progress.cpu_unmap.attempted = true;
+            let result = backend.unmap_cpu(mapping);
+            progress.cpu_unmap.returned_success = Some(result.is_ok());
+            result
         };
         if let Err(error) = unmap_result {
             return self.quarantine(error);
@@ -3756,7 +3801,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .handle
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
         self.allocations[index].free_attempted = true;
-        if let Err(error) = self.backend.free(handle) {
+        progress.free.attempted = true;
+        let result = self.backend.free(handle);
+        progress.free.returned_success = Some(result.is_ok());
+        if let Err(error) = result {
             return self.quarantine(error);
         }
         self.allocations[index].handle = None;
@@ -3767,11 +3815,15 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 .reservation
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-            backend.release_va_reservation(reservation)
+            progress.va_release.attempted = true;
+            let result = backend.release_va_reservation(reservation);
+            progress.va_release.returned_success = Some(result.is_ok());
+            result
         };
         if let Err(error) = release_reservation {
             return self.quarantine(error);
         }
+        progress.native_disposed = true;
         self.allocations[index].reservation = None;
         self.check_currentness()?;
         self.allocations[index].phase = SharedAllocationPhaseV1::Released;
@@ -6490,6 +6542,18 @@ impl SharedGttMemorySessionV1 {
         Ok(unmapped)
     }
 
+    pub(crate) fn release_control_in_place_v1(
+        &mut self,
+        custody: &mut ControlCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
+        control_cleanup::release_v1(
+            &mut self.engine,
+            &mut control_cleanup::ProjectionV1::new(&mut self.foundation, self.vm),
+            custody,
+            crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1,
+        )
+    }
+
     pub fn unmap_executable_from_gpu(
         &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
@@ -6761,6 +6825,14 @@ mod tests {
         panic_access: Option<&'static str>,
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    enum CleanupCallV1 {
+        UnmapGpu(u64, u32),
+        UnmapCpu(u64, usize, usize),
+        Free(u64),
+        ReleaseVa(u64, usize),
+    }
+
     struct FakeBackend {
         next_va: u64,
         next_handle: u64,
@@ -6790,6 +6862,7 @@ mod tests {
         map_gpu_calls: usize,
         map_gpu_inputs: Vec<(u64, u32)>,
         unmap_gpu_calls: usize,
+        cleanup_calls: Vec<CleanupCallV1>,
         multi_map_script: Vec<(u32, bool)>,
         multi_unmap_script: Vec<(u32, bool)>,
         panic_multi_map_at: Option<usize>,
@@ -6837,6 +6910,7 @@ mod tests {
                 map_gpu_calls: 0,
                 map_gpu_inputs: Vec::new(),
                 unmap_gpu_calls: 0,
+                cleanup_calls: Vec::new(),
                 multi_map_script: Vec::new(),
                 multi_unmap_script: Vec::new(),
                 panic_multi_map_at: None,
@@ -7095,8 +7169,10 @@ mod tests {
                 },
             }
         }
-        fn unmap_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
+        fn unmap_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
             self.unmap_gpu_calls += 1;
+            self.cleanup_calls
+                .push(CleanupCallV1::UnmapGpu(handle, old_success));
             self.operations.push("unmap_gpu");
             KernelOutcome {
                 value: self.unmap_progress,
@@ -7221,6 +7297,11 @@ mod tests {
         fake_host_scope_operation!(observe_completion_signal_state_acquire(_slot_index: u32) -> (i64, i64), "AQL completion state observation backend");
         fake_host_scope_operation!(reset_completion_signal_release(_slot_index: u32) -> (), "AQL completion reset backend");
         fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
+            self.cleanup_calls.push(CleanupCallV1::UnmapCpu(
+                mapping.address,
+                mapping.bytes.as_ptr() as usize,
+                mapping.bytes.len(),
+            ));
             self.operations.push("unmap_cpu");
             self.check("unmap_cpu")?;
             self.last_unmapped_bytes = Some(mapping.bytes.clone());
@@ -7230,13 +7311,16 @@ mod tests {
         }
         fn release_va_reservation(
             &mut self,
-            _reservation: &mut Self::Reservation,
+            reservation: &mut Self::Reservation,
         ) -> Result<(), MemorySessionError> {
             self.release_va_calls += 1;
+            self.cleanup_calls
+                .push(CleanupCallV1::ReleaseVa(reservation.0, reservation.1));
             self.check("release_va_reservation")
         }
-        fn free(&mut self, _handle: u64) -> Result<(), MemorySessionError> {
+        fn free(&mut self, handle: u64) -> Result<(), MemorySessionError> {
             self.free_calls += 1;
+            self.cleanup_calls.push(CleanupCallV1::Free(handle));
             self.operations.push("free");
             self.check("free")
         }

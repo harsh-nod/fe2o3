@@ -1,0 +1,89 @@
+{
+  "source_head": "fb5e19002e5a451aaf27f4bc16fc78c00b9163b3",
+  "accepted_parent": "d85d6d7dc4f3b065dce9dc6505eac065c48cb0fa",
+  "source_map_sha256": "8f906ee94181fa531d0e00789391e28e966b90cb39ebe1f803a2180cb11bd938",
+  "scope": "pristine control cleanup custody and settled parent transport; local scripted tests",
+  "source_identities": 5683,
+  "changed_source": [
+    "crates/fe2o3-kfd/src/queue.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/queue_live.rs",
+    "crates/fe2o3-kfd/src/queue_live/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/tests/pristine_abort_transport.rs",
+    "crates/fe2o3-kfd/src/shared_memory.rs",
+    "crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs",
+    "crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs",
+    "crates/fe2o3-kfd/src/shared_memory/transitions.rs"
+  ],
+  "full": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2712,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2712,
+      "failed": 0,
+      "ignored": 5
+    }
+  },
+  "source_gates": 17,
+  "source_gate_prerequisites": [
+    "r114-preliminary-gnu-all",
+    "r114-preliminary-musl-all"
+  ],
+  "subsequent_source_gates": 15,
+  "auxiliary_gates": 10,
+  "focused": {
+    "pristine": 37,
+    "cleanup": 7,
+    "transport": 9
+  },
+  "compiled_negatives": 15,
+  "new_behavioral_tests": 16,
+  "new_source_guards": 1,
+  "qualification_contract_tests": 80,
+  "runner_contract_tests": 9,
+  "freeze_contract_tests": 30,
+  "doctest_relocations": [
+    [
+      "shared_memory.rs",
+      "shared_memory::Gfx942DeviceMemoryLeaseV1",
+      249,
+      254
+    ],
+    [
+      "shared_memory.rs",
+      "shared_memory::Gfx942DeviceMemoryLeaseV1",
+      260,
+      265
+    ],
+    [
+      "shared_memory.rs",
+      "shared_memory::Gfx942InitializedDeviceMemoryV1",
+      475,
+      480
+    ],
+    [
+      "shared_memory.rs",
+      "shared_memory::Gfx942InitializedDeviceMemoryV1",
+      483,
+      488
+    ],
+    [
+      "shared_memory.rs",
+      "shared_memory::SharedGttAllocationV1",
+      823,
+      828
+    ]
+  ],
+  "harnessless_benchmark_targets_per_full_run": 1,
+  "formal_qualification": false,
+  "native_qualification": false,
+  "performance_qualification": false,
+  "ordinary_returning_cleanup_qualification": false
+}

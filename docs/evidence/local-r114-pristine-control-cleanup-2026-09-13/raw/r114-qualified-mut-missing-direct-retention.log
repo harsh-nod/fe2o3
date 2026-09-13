@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.00s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_original_panic ... FAILED
+
+failures:
+
+---- queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_original_panic stdout ----
+
+thread 'queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_original_panic' (3546280) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6933:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_original_panic' (3546280) panicked at crates/fe2o3-kfd/src/queue_live/tests/pristine_abort_transport.rs:483:5:
+assertion `left == right` failed: direct parent must be retained before return or panic resumption
+  left: 0
+ right: 1
+
+
+failures:
+    queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_original_panic
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1102 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

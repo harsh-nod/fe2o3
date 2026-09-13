@@ -7,6 +7,23 @@ type AbortCleanupV1 = Option<std::thread::Result<Result<(), Gfx942DispatchBindin
 type AbortEnvelopeV1 =
     Result<((), Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1>;
 
+pub(super) struct SettledPristineAbortV1 {
+    result:
+        std::thread::Result<Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1>>,
+    pub(super) transport: bool,
+}
+
+impl SettledPristineAbortV1 {
+    pub(super) fn into_result(
+        self,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        match self.result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct UnpublishedDispatchStateV1 {
     pub(super) continuation: Option<PristineDispatchContinuationV1>,
@@ -51,6 +68,47 @@ impl ComputeAqlQueueSessionV1 {
     /// before control disposal. Once disposal starts, failure is terminal and the
     /// complete data roster remains in queue custody until process teardown.
     pub fn abort_unpublished_fixed_dispatch_v1(
+        &mut self,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        let settled = self.abort_unpublished_settled_v1();
+        self.finish_pristine_abort_v1(settled, core::mem::forget)
+    }
+
+    fn finish_pristine_abort_v1(
+        &mut self,
+        settled: SettledPristineAbortV1,
+        retain: impl FnOnce(Box<Option<Self>>),
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(retain);
+        }
+        settled.into_result()
+    }
+
+    pub(super) fn abort_unpublished_settled_v1(&mut self) -> SettledPristineAbortV1 {
+        self.settle_pristine_abort_with_v1(Self::abort_unpublished_native_v1)
+    }
+
+    fn settle_pristine_abort_with_v1(
+        &mut self,
+        operation: impl FnOnce(
+            &mut Self,
+        )
+            -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1>,
+    ) -> SettledPristineAbortV1 {
+        let was_terminal = self.terminal_poisoned;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self)));
+        let transport = result.is_err() || !was_terminal && self.terminal_poisoned;
+        if transport {
+            if result.is_err() && !self.terminal_poisoned {
+                poison_process_global_after_dispatch_terminal_v1();
+            }
+            self.poison_terminal();
+        }
+        SettledPristineAbortV1 { result, transport }
+    }
+
+    fn abort_unpublished_native_v1(
         &mut self,
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
         self.abort_unpublished_with_v1(
@@ -116,6 +174,9 @@ impl ComputeAqlQueueSessionV1 {
         self.unpublished_dispatch.terminal_abort = abort;
         let cleanup = match cleanup {
             Some(Err(payload)) => {
+                // A secondary retake panic payload may itself panic when dropped.
+                // Preserve the original cleanup panic, as the model-loan driver does.
+                core::mem::forget(envelope);
                 self.poison_terminal();
                 poison_process();
                 std::panic::resume_unwind(payload)
@@ -156,8 +217,21 @@ impl ComputeAqlQueueSessionV1 {
     }
 }
 
+impl ComputeAqlQueueLaneDispatchV1<'_> {
+    pub(super) fn forward_pristine_abort_v1(
+        &mut self,
+        operation: impl FnOnce(&mut ComputeAqlQueueSessionV1) -> SettledPristineAbortV1,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        let settled = operation(self.session);
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[path = "pristine_abort_transport.rs"]
+    mod transport_tests;
     use super::super::tests::{
         compute_lane_state_for_multi_inflight_test, persistent_compute_cancellation_test_session,
     };
@@ -188,6 +262,15 @@ mod tests {
         session: &mut ComputeAqlQueueSessionV1,
         closing: u8,
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        abort_with_observer(memory, session, closing, |_, _| {})
+    }
+
+    fn abort_with_observer(
+        memory: &mut PristineAbortMemoryFixtureV1,
+        session: &mut ComputeAqlQueueSessionV1,
+        closing: u8,
+        observe: impl FnOnce(&PristineDispatchAbortV1, &PristineAbortMemoryFixtureV1),
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
         let gated = std::cell::Cell::new(false);
         let result = session.abort_unpublished_with_v1(
             |_, buffers, dispatch, abort, cleanup| {
@@ -195,6 +278,7 @@ mod tests {
                     return Err(ComputeAqlQueueSessionErrorV1::Contract("loan rejected"));
                 }
                 *abort = Some(dispatch.take().unwrap().begin_pristine_abort_v1(buffers));
+                observe(abort.as_ref().unwrap(), memory);
                 *cleanup = Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || abort.as_mut().unwrap().release_controls(memory),
                 )));

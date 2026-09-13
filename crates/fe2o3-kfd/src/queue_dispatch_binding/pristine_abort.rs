@@ -1,6 +1,7 @@
 //! Unpublished recipe custody. No value here denotes a completed dispatch.
 
 use super::*;
+use crate::shared_memory::ControlCleanupCustodyV1;
 
 pub(crate) struct PristineDispatchContinuationV1 {
     next_generation: u64,
@@ -56,6 +57,7 @@ pub(crate) struct PristineAbortBuffersV1 {
 pub(crate) struct PristineDispatchAbortV1 {
     kernarg: Option<KernargAuthority>,
     code: Vec<CodeAuthority>,
+    active_control: Option<ControlCleanupCustodyV1>,
     data: Vec<Gfx942FixedDispatchDataV1>,
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     continuation: PristineDispatchContinuationV1,
@@ -63,20 +65,53 @@ pub(crate) struct PristineDispatchAbortV1 {
     complete: bool,
 }
 
+#[cfg(test)]
+#[derive(Debug, Eq, PartialEq)]
+pub(in crate::queue) struct PristineAbortSnapshotV1 {
+    pub(in crate::queue) kernarg: Option<crate::shared_memory::SharedGttAllocationIdentityV1>,
+    pub(in crate::queue) code: Vec<crate::shared_memory::SharedGttAllocationIdentityV1>,
+    pub(in crate::queue) active: Option<crate::shared_memory::ControlCleanupObservationV1>,
+    data: Vec<PristineDataSnapshotV1>,
+    identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
+    storage: [(usize, usize); 3],
+    continuation: u64,
+    started: bool,
+    complete: bool,
+}
+
+#[cfg(test)]
+type PristineDataSnapshotV1 = (
+    Gfx942SdmaBufferStorageIdentityV1,
+    Gfx942FixedDispatchDataLayoutV1,
+    bool,
+    Option<Gfx942DeviceContentDescriptorV1>,
+);
+
+#[cfg(test)]
+impl PristineAbortSnapshotV1 {
+    pub(in crate::queue) fn assert_preserved_inputs(&self, before: &Self, complete: bool) {
+        assert_eq!(self.data, before.data);
+        assert_eq!(self.identities, before.identities);
+        assert_eq!(self.storage, before.storage);
+        assert_eq!(self.continuation, before.continuation);
+        assert!(self.started);
+        assert_eq!(self.complete, complete);
+    }
+}
+
 pub(crate) trait PristineControlReleaseV1 {
-    fn release_kernarg(&mut self, authority: KernargAuthority) -> Result<(), MemorySessionError>;
-    fn release_code(&mut self, authority: CodeAuthority) -> Result<(), MemorySessionError>;
+    fn release_control(
+        &mut self,
+        custody: &mut ControlCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError>;
 }
 
 impl PristineControlReleaseV1 for SharedGttMemorySessionV1 {
-    fn release_kernarg(&mut self, authority: KernargAuthority) -> Result<(), MemorySessionError> {
-        let token = self.unmap_from_gpu(authority.into_token())?;
-        self.release(token)
-    }
-
-    fn release_code(&mut self, authority: CodeAuthority) -> Result<(), MemorySessionError> {
-        let token = self.unmap_executable_from_gpu(authority.into_token())?;
-        self.release_executable(token)
+    fn release_control(
+        &mut self,
+        custody: &mut ControlCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.release_control_in_place_v1(custody)
     }
 }
 
@@ -173,6 +208,7 @@ impl DispatchResourceOwnerV1 {
         PristineDispatchAbortV1 {
             kernarg: Some(self.kernarg),
             code: self.code,
+            active_control: None,
             data: buffers.data,
             identities: buffers.identities,
             continuation: self.generation.into_pristine_continuation(),
@@ -183,6 +219,49 @@ impl DispatchResourceOwnerV1 {
 }
 
 impl PristineDispatchAbortV1 {
+    #[cfg(test)]
+    pub(in crate::queue) fn custody_snapshot_for_test(&self) -> PristineAbortSnapshotV1 {
+        PristineAbortSnapshotV1 {
+            kernarg: self
+                .kernarg
+                .as_ref()
+                .map(crate::shared_memory::PreparationMemoryFixtureV1::kernarg_identity),
+            code: self
+                .code
+                .iter()
+                .map(crate::shared_memory::PreparationMemoryFixtureV1::code_identity)
+                .collect(),
+            active: self
+                .active_control
+                .as_ref()
+                .map(ControlCleanupCustodyV1::observation),
+            data: self
+                .data
+                .iter()
+                .map(|d| {
+                    (
+                        d.sdma_storage_identity(),
+                        d.layout(),
+                        d.is_fully_initialized(),
+                        d.initialized_content(),
+                    )
+                })
+                .collect(),
+            identities: self.identities.clone(),
+            storage: [
+                (self.code.as_ptr() as usize, self.code.capacity()),
+                (self.data.as_ptr() as usize, self.data.capacity()),
+                (
+                    self.identities.as_ptr() as usize,
+                    self.identities.capacity(),
+                ),
+            ],
+            continuation: self.continuation.next_generation,
+            started: self.started,
+            complete: self.complete,
+        }
+    }
+
     pub(crate) fn release_controls(
         &mut self,
         memory: &mut impl PristineControlReleaseV1,
@@ -191,16 +270,32 @@ impl PristineDispatchAbortV1 {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
         }
         self.started = true;
-        memory.release_kernarg(
+        self.active_control = Some(ControlCleanupCustodyV1::kernarg(
             self.kernarg
                 .take()
-                .expect("unstarted abort retains kernarg"),
-        )?;
-        // Remove each authority only at its irreversible native disposal boundary.
+                .expect("unstarted abort retains kernarg")
+                .into_token(),
+        ));
+        self.release_active_control(memory)?;
+        // Every removed authority stays rooted across its borrowed cleanup callback.
         while let Some(code) = self.code.pop() {
-            memory.release_code(code)?;
+            self.active_control = Some(ControlCleanupCustodyV1::code(code.into_token()));
+            self.release_active_control(memory)?;
         }
         self.complete = true;
+        Ok(())
+    }
+
+    fn release_active_control(
+        &mut self,
+        memory: &mut impl PristineControlReleaseV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        let active = self.active_control.as_mut().expect("rooted active control");
+        memory.release_control(active)?;
+        if !active.is_complete() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        self.active_control = None;
         Ok(())
     }
 
@@ -520,6 +615,57 @@ mod tests {
     }
 
     #[test]
+    fn pristine_abort_incomplete_callback_keeps_active_control_and_rejects_retry() {
+        struct IncompleteCleanup(usize);
+        impl PristineControlReleaseV1 for IncompleteCleanup {
+            fn release_control(
+                &mut self,
+                _: &mut ControlCleanupCustodyV1,
+            ) -> Result<(), MemorySessionError> {
+                self.0 += 1;
+                Ok(())
+            }
+        }
+        let (memory, owner) = pristine_dispatch_fixture_v1(8);
+        let buffers = owner.prepare_pristine_abort_v1().unwrap();
+        let mut abort = owner.begin_pristine_abort_v1(buffers);
+        let before = abort.custody_snapshot_for_test();
+        let calls = memory.native_calls();
+        let currentness = memory.currentness_calls();
+        let usage = memory.usage();
+        let mut cleanup = IncompleteCleanup(0);
+        assert!(matches!(
+            abort.release_controls(&mut cleanup),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+        let after = abort.custody_snapshot_for_test();
+        let active = after
+            .active
+            .as_ref()
+            .expect("incomplete callback retains control");
+        assert_eq!(active.identity, before.kernarg.unwrap());
+        assert_eq!(active.owner, "Mapped");
+        assert!(!active.started && !active.failed);
+        assert_eq!(active.unmap, (false, None, None));
+        assert_eq!(active.disposal, [(false, None); 3]);
+        assert!(!active.native_disposed);
+        assert_eq!(after.kernarg, None);
+        assert_eq!(after.code, before.code);
+        after.assert_preserved_inputs(&before, false);
+        assert!(matches!(
+            abort.release_controls(&mut cleanup),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+        assert_eq!(cleanup.0, 1, "incomplete cleanup cannot be entered again");
+        assert_eq!(abort.custody_snapshot_for_test(), after);
+        assert_eq!(memory.native_calls(), calls);
+        assert_eq!(memory.cleanup_call_count(), 0);
+        assert_eq!(memory.currentness_calls(), currentness);
+        assert_eq!(memory.usage(), usage);
+        assert!(memory.data_is_retained());
+    }
+
+    #[test]
     fn pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry() {
         for ordinal in 1..=3 {
             for operation in ["unmap_gpu", "unmap_cpu", "free", "release_va_reservation"] {
@@ -529,6 +675,7 @@ mod tests {
                     let buffers = owner.prepare_pristine_abort_v1().unwrap();
                     let mut abort = owner.begin_pristine_abort_v1(buffers);
                     let identities = abort.identities.clone();
+                    let before = abort.custody_snapshot_for_test();
                     memory.fail_control(ordinal, operation, panic);
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         abort.release_controls(&mut memory)
@@ -539,14 +686,47 @@ mod tests {
                         assert!(result.unwrap().is_err(), "{operation}");
                     }
                     assert!(!abort.complete);
+                    let after = abort.custody_snapshot_for_test();
+                    let active = after
+                        .active
+                        .as_ref()
+                        .expect("interrupted control remains rooted");
+                    assert_eq!(
+                        active.identity,
+                        if ordinal == 1 {
+                            before.kernarg.unwrap()
+                        } else {
+                            before.code[3 - ordinal]
+                        }
+                    );
+                    assert_eq!(
+                        active.owner,
+                        if operation == "unmap_gpu" {
+                            "Mapped"
+                        } else {
+                            "Unmapped"
+                        }
+                    );
+                    assert!(active.started && active.failed);
+                    assert!(memory.is_quarantined());
+                    assert_eq!(after.kernarg, None);
+                    assert_eq!(after.code, before.code[..3 - ordinal]);
+                    assert_eq!(after.data, before.data);
+                    assert_eq!(after.storage, before.storage);
+                    assert_eq!(after.continuation, before.continuation);
                     assert_eq!(memory.disposed_controls(), ordinal - 1);
                     assert_eq!(abort.identities, identities);
                     assert_eq!(abort.data.len(), 5);
                     assert_eq!(memory.usage(), usage);
                     assert!(memory.data_is_retained());
                     let calls = memory.native_calls();
+                    let cleanup_calls = memory.cleanup_call_count();
+                    let currentness = memory.currentness_calls();
                     assert!(abort.release_controls(&mut memory).is_err());
                     assert_eq!(memory.native_calls(), calls);
+                    assert_eq!(memory.cleanup_call_count(), cleanup_calls);
+                    assert_eq!(memory.currentness_calls(), currentness);
+                    assert_eq!(abort.custody_snapshot_for_test(), after);
                 }
             }
         }

@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 9 tests
+test queue::live::pristine_abort::tests::transport_tests::abort_cleanup_panic_keeps_secondary_payload_destructor_inert ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_cleanup_panic_survives_panicking_secondary_destructor ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_returns_success_without_transport ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_direct_rejection_and_terminal_retry_do_not_transport_parent ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_public_facade_preflight_and_missing_engine_do_not_transfer_healthy_parent ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_public_paths_use_settled_transport_before_return_or_resume ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_returned_error ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_direct_finisher_retains_exact_parent_before_original_panic ... ok
+test queue::live::pristine_abort::tests::transport_tests::abort_facade_restores_all_lanes_before_retaining_failed_control_parent ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1094 filtered out; finished in 0.55s
+

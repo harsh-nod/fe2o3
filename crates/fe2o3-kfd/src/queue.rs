@@ -237,6 +237,18 @@ pub(crate) struct QueueModelFoundationV1 {
     certificate: Option<QueueModelFoundationInvariantCertificateV1>,
 }
 
+#[cfg(test)]
+pub(crate) type QueueCertificateSnapshotV1 = (
+    u64,
+    u64,
+    DeviceObservationDomainIdV1,
+    ModelDeviceAdmissionV1,
+    VmKeyV1,
+    u64,
+    u64,
+    u64,
+);
+
 impl QueueModelFoundationV1 {
     pub(crate) const fn uncertified(
         identity: DeviceIdentityStateV1,
@@ -419,6 +431,22 @@ impl QueueModelFoundationV1 {
             .as_ref()
             .map(|certificate| certificate.issuer)
             .ok_or("queue foundation certificate missing")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn certificate_snapshot_for_test(&self) -> Option<QueueCertificateSnapshotV1> {
+        self.certificate.as_ref().map(|c| {
+            (
+                c.issuer,
+                c.session_id,
+                c.domain,
+                c.device,
+                c.vm,
+                c.live_loan_generation,
+                c.revision,
+                c.revision_seal,
+            )
+        })
     }
 
     pub(crate) fn revoke_invariant_certificate(

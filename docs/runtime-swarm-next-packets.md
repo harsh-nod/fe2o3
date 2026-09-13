@@ -1,11 +1,18 @@
 # Runtime Swarm: Remaining Packets
 
-The [R114-candidate dispatch](runtime-swarm-dispatch-r114-candidate.md) refreshes
-the three worker assignments and immediate exits. It is planning-only: R114's
-32 passing focused tests and isolated C1 checks are not packet acceptance.
+The [post-R114 dispatch](runtime-swarm-dispatch-r114.md) gives the latest
+three-lane assignments and explicit exits. R114 locally accepts
+[pristine control cleanup and parent transport](runtime-pristine-control-cleanup-v1.md):
+GNU/musl each pass 2,712 tests with five ignored; 17 source gates, ten auxiliary
+checks, 37/7/9 frozen/restored suites and 15 compiled negatives pass. Nine runner,
+30 freeze and 80 qualification-contract tests pass. The closed collector and
+independent reviews verify all 5,683 source identities and
+[254 raw artifacts](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md).
+This adds CPU/test acceptance only, not native, formal or performance evidence.
 
-Reviewed through R113's locally accepted executable-model campaign,
-above accepted R112 `a2feef229758381b66f962ad8be2b87843eb33a3`.
+Reviewed through R114, above accepted R113
+`d85d6d7dc4f3b065dce9dc6505eac065c48cb0fa` and planning parent
+`fb5e19002e5a451aaf27f4bc16fc78c00b9163b3`.
 [Issue #182](https://github.com/harsh-nod/fe2o3/issues/182) remains open; its GitHub
 API `updatedAt` is `2026-09-12T10:51:18Z`. A1/A2 are not complete.
 
@@ -58,12 +65,13 @@ The [R111 uninitialized-coherent packet](runtime-uninitialized-coherent-insertio
 is now locally accepted after full/focused/auxiliary checks, fourteen compiled
 negatives, exact restoration and independent archive review. Refreshed read-only
 handoffs established C1 and V2 as independent packets. With V2 locally accepted
-as R113, Native takes N4-R1, Admission qualifies C1 and Resources freezes the
-reviewed V3 settlement draft. Primary integrates above accepted R113.
+as R113 and N4-R1 accepted as R114, Native takes returning-control cleanup,
+Admission qualifies C1 and Resources freezes the reviewed V3 settlement draft.
+Primary integrates one reviewed packet at a time.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N4-R1 pristine control cleanup | Retain the active control before disposal callbacks; preserve exact mapped/unmapped/disposed custody and native progress |
+| Native: `native_replacement_handoff` | N4-R2 returning-control cleanup | Root the full owner before validation; reserve return capacity before disposal; preserve kernarg-first/forward-code order, exact data and interrupted custody |
 | Admission: `submission_identity_handoff` | C1 submission-identity test matrix | New `fe2o3-runtime/src/context/tests/submission_identity_tests.rs`; Primary owns integration of the candidate's Context wiring and mock cancel-entry counter |
 | Resources: `r102_evidence_review` | Freeze V3 settlement contract, then settlement/cost implementation handoff | Existing `fe2o3-runtime-model/src/context_version_journal.rs`; retain accepted V1/V2 regressions and exact membership invariants |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |
@@ -82,7 +90,7 @@ not a completed implementation packet.
 
 | Wave | Native | Admission | Resources | Primary And Exit |
 | --- | --- | --- | --- | --- |
-| 0: independent starts after R113 | N4-R1 pristine active-control cleanup handoff | Qualify C1 identity matrix: 80 rejection cells plus valid controls | Freeze V3 settlement contract | Qualify one reviewed packet at a time above accepted R113 |
+| 0: independent starts after R114 | N4-R2 returning controls using the accepted lower cleanup adapter | Qualify C1 identity matrix: 80 rejection cells plus valid controls | Freeze V3 settlement contract | Qualify one reviewed packet at a time above accepted R114 |
 | 1: cleanup, lifecycle and settlement | N4-R2 ordinary/returning controls, then data disposal; applicable N4-L and N4-Q paths | C2 generated descriptor identity and C3 retained-owner lifecycle coverage | V3 settlement; V4 proof work and M1/M2/M3 contracts can start incrementally | Serialize shared-file edits and builds; require exact ownership, failure-atomicity and negative-test evidence per packet |
 | 2: generated execution | N5 DATA-ADOPT, then joint I2 actual ISSUE | I2, C4 COMPLETE, C5 typed output and C6 GRAPH/DRAIN | Approve mutation-hook policy; integrate V5/V6 for journal-enabled paths | Join actual production ownership paths; fixtures do not supply external Worker/compiler authority |
 | 3: reuse and resource closure | Integrate compound backing/control/slot admission and native residency | Exercise reused generated graphs and bounded retained replies | V7 complete writers/recovery, V8 input leases; integrate M1-M4 total retained-memory limits | Cross-run reuse requires complete mutation coverage and exclusive graph reservation; kernel reuse also needs admitted effects |
@@ -114,7 +122,7 @@ performance. Their detailed owners remain in the later-milestone table below.
 | N3-L2 / R110 | Locally accepted: initialized coherent insertion/replacement | Nineteen new functions (eighteen dynamic and one routing guard), ten compiled negatives and unchanged R109 regressions. Complete survives retake/commit; earlier lower failure custody stays intact. No native success or formal refinement qualification. |
 | N3-L3-C / R111 | Locally accepted: uninitialized coherent insertion | Nineteen new functions, fourteen compiled negatives and unchanged initialized regressions. Shared settlement preserves explicit insertion and required-hole replacement, with no copy or initialized-content authority. Two direct APIs, no new facade APIs; native/formal qualification remains open. |
 | N3-L3-D / R112 | Locally accepted: uninitialized device insertion | Actual None/Unmapped/Mapped custody, per-call native attempt and map progress use borrowed lower cores. DEVICE_LOCAL and hole-or-append policy remain intact. Twenty-six new functions, sixteen compiled negatives and full/focused/auxiliary/restoration/archive checks pass; native/formal/performance qualification remains open. |
-| N4-R1 | Pristine active-control cleanup | R114 is an uncommitted candidate with 32 passing focused tests, not accepted. Finish the [remaining oracles and qualification](runtime-swarm-dispatch-r114-candidate.md#native-first-exit). First/middle/last control failure must retain actual mapped/unmapped/disposed custody and untouched data/continuation; disposal cannot be retried. |
+| N4-R1 / R114 | Locally accepted: pristine active-control cleanup and terminal transport | Exact mapped/unmapped/disposed custody, untouched data/continuation, one-shot cleanup and restored-parent transport pass the [bounded qualification](runtime-pristine-control-cleanup-v1.md). Other cleanup routes and native/formal/performance evidence remain open. |
 | N4-R2 | Ordinary and returning control cleanup | Reuse R1's borrowed cleanup contract. Root `DispatchResourceOwnerV1` before validation and reserve return capacity before disposal. Preserve forward code order, exact returned data and disposed receipts after failed model projection. |
 | N4-R: data extension | Lower data cleanup and mixed-roster release | Reuse the common cleanup contract; mixed rosters join R2. Cover all host/device and initialized/uninitialized variants. Exact records/charges and untouched owners survive every failed destructive prefix; no repeated free or duplicate refund. |
 | N4-L | Live detach and data/control release | Each route needs its applicable lower cleanup contract. Retain input, returned owners and disposed receipts outside the model loan through retake/commit. Failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
@@ -342,7 +350,8 @@ release-benchmark CI coverage. Its `2026-09-13T03:42:32Z` update reports an
 auxiliary-teardown fix in main commit `ae26717922b1fb7ad62fdd5ad70814d83eb01177`
 and a passing existing-fixture functional smoke with complete readback and
 explicit teardown. The strict audit still rejects `dlsym`. Those external
-results do not qualify this frozen topic branch, resolve N4-R1's active-control
-custody gap, or establish a causal link between the earlier failures. Primary
+results do not qualify this topic branch or establish a causal link between the
+earlier failures. R114 independently closes its named CPU/test custody gap, not
+that external native or release-audit qualification. Primary
 owns the audit/CI work; Native assesses the teardown fix at its own integration
 boundary without importing unsupported acceptance claims.

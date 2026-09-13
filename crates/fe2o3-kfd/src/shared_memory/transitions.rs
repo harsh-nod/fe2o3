@@ -44,7 +44,7 @@ pub(super) struct TerminalTokenV1 {
 }
 
 impl TerminalTokenV1 {
-    fn from_token<P: GttProfileV1, S: GttAllocationStateV1>(
+    pub(super) fn from_token<P: GttProfileV1, S: GttAllocationStateV1>(
         token: SharedGttAllocationV1<P, S>,
     ) -> Self {
         let SharedGttAllocationV1 {

@@ -2,6 +2,9 @@
 
 use super::*;
 use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
+use crate::shared_memory::{control_cleanup, transitions};
+
+mod cleanup_tests;
 
 type Code = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -24,81 +27,105 @@ pub(crate) struct PristineAbortMemoryFixtureV1 {
     control_ordinal: usize,
     control_failure: Option<(usize, &'static str, bool)>,
     control_unmap: Option<(usize, u32, bool)>,
+    projection_fault: Option<(
+        usize,
+        control_cleanup::CleanupStageV1,
+        transitions::ProjectionFaultV1,
+    )>,
+    process_poisoned: usize,
 }
 
 impl PristineAbortMemoryFixtureV1 {
     pub(crate) fn new() -> Self {
-        let mut fixture = BackingConstructorFixture::new(Some(
-            Gfx942DeviceBackingBudgetV1::new(65536, 16).unwrap(),
-        ));
-        fixture
-            .engine
-            .configure_host_visible_backing_budget_v1(
-                fixture.device.model_key(),
-                fixture.vm,
-                Gfx942HostVisibleBackingBudgetV1::new(65536, 16).unwrap(),
-            )
-            .unwrap();
+        Self::new_configured(true)
+    }
+
+    fn new_configured(configured: bool) -> Self {
+        let mut fixture = BackingConstructorFixture::new(
+            configured.then(|| Gfx942DeviceBackingBudgetV1::new(65536, 16).unwrap()),
+        );
+        if configured {
+            fixture
+                .engine
+                .configure_host_visible_backing_budget_v1(
+                    fixture.device.model_key(),
+                    fixture.vm,
+                    Gfx942HostVisibleBackingBudgetV1::new(65536, 16).unwrap(),
+                )
+                .unwrap();
+        }
         Self {
             fixture,
             control_ordinal: 0,
             control_failure: None,
             control_unmap: None,
+            projection_fault: None,
+            process_poisoned: 0,
         }
     }
 
     fn retain<R: SharedGttQueueResourceRoleV1, P: GttProfileV1, S: GpuMappedGttStateV1>(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<P, S>,
     ) -> SharedGttQueueResourceAuthorityV1<R, P, S> {
-        let index = self.fixture.engine.index(&token, S::PHASE).unwrap();
-        let record = &self.fixture.engine.allocations[index];
-        let (_, _, mapping) = model_keys(self.fixture.vm, record.id, record.generation);
-        SharedGttQueueResourceAuthorityV1 {
+        transitions::retain_v1(&mut self.fixture.engine, self.fixture.vm, token).unwrap()
+    }
+
+    fn allocate<P: GttProfileV1>(
+        &mut self,
+        bytes: usize,
+    ) -> SharedGttAllocationV1<P, GttCpuWritableV1> {
+        let f = &mut self.fixture;
+        transitions::allocate_v1(
+            &mut f.engine,
+            &mut transitions::ProjectionV1::new(&mut f.foundation, f.device, f.vm),
+            bytes,
+            || panic!("unexpected construction preflight failure"),
+        )
+        .unwrap()
+    }
+
+    fn map<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: SharedGttAllocationV1<P, GttCpuWritableV1>,
+    ) -> SharedGttAllocationV1<P, GttGpuAccessibleMutableV1> {
+        let f = &mut self.fixture;
+        transitions::map_mutable_v1(
+            &mut f.engine,
+            &mut transitions::ProjectionV1::new(&mut f.foundation, f.device, f.vm),
             token,
-            facts: SharedGttMappedResourceFactsV1 {
-                gpu_va: record.gpu_va,
-                logical_bytes: record.layout.requested_bytes,
-                cpu_mapping_bytes: record.layout.cpu_mapping_bytes,
-                gpu_va_bytes: record.layout.gpu_va_bytes,
-                mapping,
-                publication: MemoryPublicationKeyV1 {
-                    mapping,
-                    id: MemoryPublicationIdV1(record.id),
-                },
-            },
-            role: PhantomData,
-        }
+            || panic!("unexpected construction preflight failure"),
+        )
+        .unwrap()
     }
 
     pub(crate) fn code(&mut self) -> Code {
-        let token = self
-            .fixture
-            .engine
-            .allocate::<ExecutableGttV1>(8192)
-            .unwrap();
-        let token = self.fixture.engine.seal_executable(token).unwrap();
-        let token = self.fixture.engine.map_executable(token).unwrap();
+        let token = self.allocate::<ExecutableGttV1>(8192);
+        let f = &mut self.fixture;
+        let token = transitions::seal_v1(&mut f.engine, token).unwrap();
+        let token = transitions::map_executable_v1(
+            &mut f.engine,
+            &mut transitions::ProjectionV1::new(&mut f.foundation, f.device, f.vm),
+            token,
+            || panic!("unexpected construction preflight failure"),
+        )
+        .unwrap();
         self.retain(token)
     }
 
     pub(crate) fn kernarg(&mut self) -> Kernarg {
-        let token = self.fixture.engine.allocate::<KernargGttV1>(256).unwrap();
-        let token = self.fixture.engine.map_mutable(token).unwrap();
+        let token = self.allocate::<KernargGttV1>(256);
+        let token = self.map(token);
         self.retain(token)
     }
 
     pub(crate) fn host(&mut self) -> Host {
-        let mut token = self
-            .fixture
-            .engine
-            .allocate::<HostVisibleCoherentGttV1>(17)
-            .unwrap();
+        let mut token = self.allocate::<HostVisibleCoherentGttV1>(17);
         self.fixture
             .engine
             .with_bytes_mut(&mut token, |bytes| bytes.fill(0x5a))
             .unwrap();
-        let token = self.fixture.engine.map_mutable(token).unwrap();
+        let token = self.map(token);
         self.retain(token)
     }
 
@@ -176,6 +203,30 @@ impl PristineAbortMemoryFixtureV1 {
         self.control_unmap = Some((ordinal, progress, errno));
     }
 
+    pub(crate) fn fail_control_commit(&mut self, ordinal: usize, release: bool, panic: bool) {
+        self.projection_fault = Some((
+            ordinal,
+            if release {
+                control_cleanup::CleanupStageV1::ReleaseCommit
+            } else {
+                control_cleanup::CleanupStageV1::UnmapCommit
+            },
+            if panic {
+                transitions::ProjectionFaultV1::Panic
+            } else {
+                transitions::ProjectionFaultV1::Error
+            },
+        ));
+    }
+
+    pub(crate) fn is_quarantined(&self) -> bool {
+        self.fixture.engine.phase == SharedMemorySessionPhaseV1::Quarantined
+    }
+
+    pub(crate) fn cleanup_call_count(&self) -> usize {
+        self.fixture.engine.backend.cleanup_calls.len()
+    }
+
     fn start_control(&mut self) {
         self.control_ordinal += 1;
         if let Some((ordinal, operation, panic)) = self.control_failure
@@ -238,46 +289,36 @@ impl PristineAbortMemoryFixtureV1 {
 }
 
 impl PristineControlReleaseV1 for PristineAbortMemoryFixtureV1 {
-    fn release_kernarg(&mut self, authority: Kernarg) -> Result<(), MemorySessionError> {
+    fn release_control(
+        &mut self,
+        custody: &mut ControlCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
         self.start_control();
-        let token = self.fixture.engine.unmap_mutable(authority.into_token())?;
-        self.fixture
-            .engine
-            .release(token, SharedAllocationPhaseV1::CpuWritable)
-    }
-
-    fn release_code(&mut self, authority: Code) -> Result<(), MemorySessionError> {
-        self.start_control();
-        let token = self
-            .fixture
-            .engine
-            .unmap_executable(authority.into_token())?;
-        self.fixture
-            .engine
-            .release(token, SharedAllocationPhaseV1::ExecutableImmutable)
+        let f = &mut self.fixture;
+        let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
+        projection.fault = self
+            .projection_fault
+            .filter(|(ordinal, _, _)| *ordinal == self.control_ordinal)
+            .map(|(_, stage, fault)| (stage, fault));
+        control_cleanup::release_v1(&mut f.engine, &mut projection, custody, || {
+            self.process_poisoned += 1
+        })
     }
 }
 
 impl PristineControlReleaseV1 for super::preparation::PreparationMemoryFixtureV1 {
-    fn release_kernarg(&mut self, authority: Kernarg) -> Result<(), MemorySessionError> {
-        let identity = Self::kernarg_identity(&authority);
-        let token = self.fixture.engine.unmap_mutable(authority.into_token())?;
-        self.fixture
-            .engine
-            .release(token, SharedAllocationPhaseV1::CpuWritable)?;
-        self.disposed_controls.push(identity);
-        Ok(())
-    }
-
-    fn release_code(&mut self, authority: Code) -> Result<(), MemorySessionError> {
-        let identity = Self::code_identity(&authority);
-        let token = self
-            .fixture
-            .engine
-            .unmap_executable(authority.into_token())?;
-        self.fixture
-            .engine
-            .release(token, SharedAllocationPhaseV1::ExecutableImmutable)?;
+    fn release_control(
+        &mut self,
+        custody: &mut ControlCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
+        let identity = custody.observation().identity;
+        let f = &mut self.fixture;
+        control_cleanup::release_v1(
+            &mut f.engine,
+            &mut control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm),
+            custody,
+            || panic!("unexpected cleanup preflight failure"),
+        )?;
         self.disposed_controls.push(identity);
         Ok(())
     }

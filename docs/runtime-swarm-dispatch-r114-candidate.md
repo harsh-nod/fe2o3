@@ -1,5 +1,9 @@
 # Runtime Swarm Dispatch: R114 Candidate
 
+Historical planning snapshot. The [post-qualification dispatch](runtime-swarm-dispatch-r114.md)
+supersedes its candidate status and immediate assignments; the observations below
+remain as recorded at the planning checkpoint.
+
 Planning-only refresh after three read-only, source-grounded worker handoffs.
 The accepted checkpoint remains R113
 `d85d6d7dc4f3b065dce9dc6505eac065c48cb0fa`; this dispatch does not accept R114,
