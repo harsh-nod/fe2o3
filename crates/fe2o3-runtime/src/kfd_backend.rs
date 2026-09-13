@@ -1710,11 +1710,8 @@ impl KfdRuntimeBackendV1 {
             let mut submissions = new_stream_queue
                 .expect("new active SDMA stream queue was reserved before retention");
             submissions.push_back(submission);
-            debug_assert!(
-                self.active_sdma_streams
-                    .insert(stream, submissions)
-                    .is_none()
-            );
+            let replaced = self.active_sdma_streams.insert(stream, submissions);
+            debug_assert!(replaced.is_none());
         }
     }
 
@@ -1811,11 +1808,8 @@ impl KfdRuntimeBackendV1 {
         new_entries: Vec<(u64, RuntimeAllocationCustodyV1)>,
     ) {
         for (allocation, custody) in new_entries {
-            debug_assert!(
-                self.allocation_custody
-                    .insert(allocation, custody)
-                    .is_none()
-            );
+            let replaced = self.allocation_custody.insert(allocation, custody);
+            debug_assert!(replaced.is_none());
         }
         for (index, allocation) in allocations.iter().copied().enumerate() {
             if allocations[..index].contains(&allocation) {
@@ -2058,12 +2052,11 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn release_compute_lane_lease_v1(&mut self, stream: u64, lane: usize) {
-        debug_assert_eq!(self.stream_compute_lanes.remove(&stream), Some(lane));
+        let released = self.stream_compute_lanes.remove(&stream);
+        debug_assert_eq!(released, Some(lane));
         if lane != 0 {
-            debug_assert_eq!(
-                self.auxiliary_compute_lanes[lane - 1].owner_stream.take(),
-                Some(stream)
-            );
+            let released = self.auxiliary_compute_lanes[lane - 1].owner_stream.take();
+            debug_assert_eq!(released, Some(stream));
         }
     }
 
@@ -16380,9 +16373,43 @@ mod tests {
         backend.release_compute_lane_lease_v1(third, 0);
         assert_eq!(backend.free_compute_lane_v1(), Some(0));
         backend.release_compute_lane_lease_v1(first, 1);
+        assert!(backend.stream_compute_lanes.is_empty());
+        assert_eq!(backend.auxiliary_compute_lanes[0].owner_stream, None);
         backend.destroy_stream_v1(first).unwrap();
         backend.destroy_stream_v1(second).unwrap();
         backend.destroy_stream_v1(third).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn direct_kfd_active_sdma_stream_index_retains_and_releases_fifo() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        for submission in [40, 41, 42] {
+            let queue = backend.reserve_active_sdma_stream_v1(stream).unwrap();
+            backend.retain_active_sdma_stream_v1(stream, submission, queue);
+        }
+        assert_eq!(
+            backend.active_sdma_streams[&stream],
+            VecDeque::from([40, 41, 42])
+        );
+
+        backend.release_active_sdma_stream_v1(stream, 41);
+        assert_eq!(
+            backend.active_sdma_streams[&stream],
+            VecDeque::from([40, 42])
+        );
+        backend.release_active_sdma_stream_v1(stream, 40);
+        assert_eq!(backend.active_sdma_streams[&stream], VecDeque::from([42]));
+        backend.release_active_sdma_stream_v1(stream, 42);
+        assert!(backend.active_sdma_streams.is_empty());
+
+        let queue = backend.reserve_active_sdma_stream_v1(stream).unwrap();
+        backend.retain_active_sdma_stream_v1(stream, 43, queue);
+        assert_eq!(backend.active_sdma_streams[&stream], VecDeque::from([43]));
+        backend.release_active_sdma_stream_v1(stream, 43);
+        assert!(backend.active_sdma_streams.is_empty());
+        backend.destroy_stream_v1(stream).unwrap();
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -16428,6 +16455,7 @@ mod tests {
             backend.release_allocation_custody_v1(allocation, submission);
         }
         assert!(!backend.allocation_is_active(allocation));
+        assert!(backend.allocation_custody.is_empty());
         backend.shutdown_native_v1().unwrap();
     }
 

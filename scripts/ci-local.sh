@@ -668,6 +668,18 @@ run_artifact_transaction_tests() {
     cargo test --locked -p fe2o3-artifact-transaction
 }
 
+run_runtime_release_tests() {
+  # These host-only tests intentionally abort child processes and must also
+  # exercise bookkeeping with debug assertions disabled.
+  ulimit -c 0
+  run_step fe2o3-runtime-release-tests \
+    env -u FE2O3_TEST_SCRIPTED_SDMA_ABORT_CHILD \
+      -u FE2O3_RUNTIME_TELEMETRY_ABORT_CASE \
+      CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false \
+    cargo test --locked --release -p fe2o3-runtime \
+      --features hardware-qualification --lib -- --test-threads=1
+}
+
 run_cpu_tests() {
   local cargo_args=(test --locked)
   local wrapper_cargo_args=(test --locked --all-targets)
@@ -713,6 +725,7 @@ run_cpu_tests() {
       --test middle_end_evidence_ui default_api_cannot_self_authorize -- --exact
   run_artifact_transaction_tests
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  run_runtime_release_tests
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
     validate_cargo_fe2o3_driver
@@ -1030,6 +1043,7 @@ run_workspace_tests() {
 
   run_step workspace-tests \
     cargo "${workspace_args[@]}"
+  run_runtime_release_tests
   load_dynamic_loader_environment_removals loader_environment_removals
   run_step workspace-binding-example-tests \
     env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \

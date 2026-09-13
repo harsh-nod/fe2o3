@@ -1,4 +1,5 @@
 #![deny(unsafe_code)]
+#![deny(clippy::debug_assert_with_mut_call)]
 #![doc = include_str!("../README.md")]
 
 mod async_engine;

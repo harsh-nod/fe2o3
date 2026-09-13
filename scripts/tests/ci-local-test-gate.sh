@@ -363,6 +363,17 @@ assert_no_codegen_test_driver() {
     'selector-free codegen tests unexpectedly built a shared driver'
 }
 
+assert_runtime_release_gate() {
+  assert_step_count fe2o3-runtime-release-tests 1 \
+    'runtime release tests did not run exactly once'
+  assert_equals \
+    'env -u FE2O3_TEST_SCRIPTED_SDMA_ABORT_CHILD -u FE2O3_RUNTIME_TELEMETRY_ABORT_CASE CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false cargo test --locked --release -p fe2o3-runtime --features hardware-qualification --lib -- --test-threads=1' \
+    "$(step_command fe2o3-runtime-release-tests)" \
+    'runtime release tests lost their host-only assertion-disabled configuration'
+  assert_equals 0 "$(ulimit -c)" \
+    'runtime release abort tests did not disable core dumps'
+}
+
 assert_source_isa_unit_matrix_gate() {
   local omitted name
   local -a required_environment=("${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}")
@@ -575,6 +586,7 @@ assert_source_isa_characteristic_contract_v2_gate
 assert_source_isa_characteristic_matrix_v2_gate
 run_tests
 assert_no_codegen_test_driver
+assert_runtime_release_gate
 assert_equals \
   'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
   "$(step_command cpu-tests-cargo-fe2o3-bootstrap)" \
@@ -595,7 +607,7 @@ fi
     'raw CPU tests omitted the process-identity and immutable-memfd suite' >&2
   exit 1
 }
-for runtime_package in fe2o3-runtime-machine-adapter fe2o3-target-spec; do
+for runtime_package in fe2o3-runtime fe2o3-runtime-machine-adapter fe2o3-target-spec; do
   [[ " ${cpu_command} " == *" -p ${runtime_package} "* ]] || {
     printf 'raw CPU tests omitted the runtime architecture package %s\n' \
       "${runtime_package}" >&2
@@ -682,6 +694,7 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 run_workspace_tests
 assert_no_codegen_test_driver
+assert_runtime_release_gate
 assert_equals \
   "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE} --exclude fe2o3-artifact-transaction --exclude fe2o3-managed-a --exclude fe2o3-managed-b" \
   "$(step_command workspace-tests)" \
@@ -736,6 +749,7 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
+assert_runtime_release_gate
 assert_step_count source-isa-unit-matrix 0 \
   'generic core unexpectedly ran the protected source/ISA unit matrix'
 assert_step_count source-isa-characteristic-contract-v2 0 \
@@ -788,6 +802,7 @@ for core_step in \
   cargo-fe2o3-worker-v3-envelope-tests \
   fe2o3-pliron-default-api-ui \
   fe2o3-artifact-transaction-tests \
+  fe2o3-runtime-release-tests \
   cpu-tests \
   wrapper-managed-cpu-tests \
   cpu-test-partition-revalidation \
@@ -930,6 +945,7 @@ STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic
 assert_no_codegen_test_driver
+assert_runtime_release_gate
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
@@ -942,6 +958,7 @@ EMPTY_WRAPPER_CPU_INTERSECTION=1
 CARGO_FE2O3_DRIVER_PROFILE=
 reset_mock_production_driver
 run_cpu_tests
+assert_runtime_release_gate
 assert_step_count wrapper-managed-cpu-tests 0 \
   'empty managed CPU intersection still invoked the binding test command'
 assert_equals \
