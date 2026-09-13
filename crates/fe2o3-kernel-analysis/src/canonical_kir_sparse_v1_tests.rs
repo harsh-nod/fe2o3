@@ -140,6 +140,289 @@ fn diamond(dynamic: bool) -> Module {
     )
 }
 
+fn use_query_terminator(function: u32, block: u32, operand: u32) -> Use {
+    Use::TerminatorOperand {
+        block: Block {
+            function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(function),
+            block,
+        },
+        operand,
+    }
+}
+
+fn use_query_operation(function: u32, block: u32, operation: u32, operand: u32) -> Use {
+    Use::OperationOperand {
+        operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+            block: Block {
+                function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(function),
+                block,
+            },
+            operation,
+        },
+        operand,
+    }
+}
+
+#[test]
+fn use_queries_resolve_operands_and_both_checked_result_components() {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        literal(1, Constant::U8(255)),
+        literal(2, Constant::U8(1)),
+        Operation::checked_binary(
+            ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8)),
+            ValueDef::new(ValueId(4), Type::BOOL),
+            CheckedBinaryOperator::Add,
+            ValueId(1),
+            ValueId(2),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(3), ValueId(4)],
+    });
+    inspect(
+        function_module(
+            "checked_uses",
+            Signature::new(vec![], vec![Type::Scalar(ScalarType::U8), Type::BOOL]),
+            vec![],
+            vec![block],
+        ),
+        |_, report| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(32);
+            let mut budget = Budget::new(&mut work, 0);
+            for (coordinate, expected) in [
+                (
+                    use_query_operation(0, 0, 2, 0),
+                    constant(ScalarType::U8, 255),
+                ),
+                (use_query_operation(0, 0, 2, 1), constant(ScalarType::U8, 1)),
+                (use_query_terminator(0, 0, 0), constant(ScalarType::U8, 0)),
+                (use_query_terminator(0, 0, 1), constant(ScalarType::Bool, 1)),
+            ] {
+                assert_eq!(report.value_at_use(coordinate, &mut budget), Ok(expected));
+            }
+            assert_eq!(budget.work(), 32);
+            assert_eq!(budget.storage(), 0);
+            assert_eq!(budget.peak_storage(), 0);
+        },
+    );
+}
+
+#[test]
+fn use_queries_keep_duplicate_edge_payloads_and_lattice_states_distinct() {
+    for dynamic in [false, true] {
+        inspect(diamond(dynamic), |inventory, report| {
+            assert_eq!(inventory.edges()[0].target, inventory.edges()[1].target);
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(40);
+            let mut budget = Budget::new(&mut work, 0);
+            for (coordinate, expected) in [
+                (
+                    use_query_terminator(0, 0, 0),
+                    if dynamic {
+                        Value::Dynamic
+                    } else {
+                        constant(ScalarType::Bool, 1)
+                    },
+                ),
+                (use_query_terminator(0, 0, 1), constant(ScalarType::U32, 11)),
+                (use_query_terminator(0, 0, 2), constant(ScalarType::U32, 22)),
+                (
+                    use_query_terminator(0, 1, 0),
+                    if dynamic {
+                        Value::Dynamic
+                    } else {
+                        constant(ScalarType::U32, 11)
+                    },
+                ),
+                (use_query_terminator(0, 2, 0), Value::Unreachable),
+            ] {
+                assert_eq!(report.value_at_use(coordinate, &mut budget), Ok(expected));
+            }
+            // The untaken edge's argument still names a constant definition.
+            assert_eq!(report.edge_executable(1), Some(dynamic));
+            assert_eq!(budget.work(), 40);
+        });
+    }
+}
+
+#[test]
+fn use_queries_validate_nested_ordinals_instead_of_raw_sparse_ids() {
+    let mut module = diamond(false);
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(result(
+            4_000_000_001,
+            Type::BOOL,
+            OperationKind::Unary {
+                op: UnaryOp::Not,
+                operand: ValueId(9),
+            },
+        ));
+    let mut prefix = BasicBlock::new(BlockId(70));
+    prefix.operations.push(literal(9, Constant::Bool(false)));
+    prefix.terminator = Some(Terminator::Return {
+        values: vec![ValueId(9)],
+    });
+    module.functions.insert(
+        0,
+        Function::internal_helper(
+            "prefix",
+            Signature::new(vec![], vec![Type::BOOL]),
+            vec![],
+            vec![prefix],
+        ),
+    );
+    module.functions.insert(
+        1,
+        Function::external_import("declaration", Signature::new(vec![Type::BOOL], vec![])),
+    );
+    inspect(module, |_, report| {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000);
+        let mut budget = Budget::new(&mut work, 0);
+        assert_eq!(
+            report.value_at_use(use_query_terminator(0, 0, 0), &mut budget),
+            Ok(constant(ScalarType::Bool, 0)),
+        );
+        assert_eq!(
+            report.value_at_use(use_query_operation(2, 0, 3, 0), &mut budget),
+            Ok(constant(ScalarType::Bool, 1)),
+        );
+        assert_eq!(
+            report.value_at_use(use_query_terminator(2, 0, 1), &mut budget),
+            Ok(constant(ScalarType::U32, 11)),
+        );
+        for coordinate in [
+            use_query_terminator(u32::MAX, 0, 0),
+            use_query_terminator(1, 0, 0), // Declaration's empty range cannot spill.
+            use_query_terminator(0, 1, 0), // Nor can the preceding function's range.
+            use_query_terminator(2, 3, 0),
+            use_query_terminator(2, 4_000_000_000, 0),
+            use_query_terminator(2, 0, 3), // Next block has a use at this dense offset.
+            use_query_terminator(2, 0, u32::MAX),
+            use_query_operation(2, 0, 0, 0), // Constant has no operands.
+            use_query_operation(2, 0, 3, 1), // Would spill into terminator operands.
+            use_query_operation(2, 0, 4, 0),
+            use_query_operation(2, 0, u32::MAX, 0),
+        ] {
+            assert_eq!(
+                report.value_at_use(coordinate, &mut budget),
+                Err(CanonicalKirSparseErrorV1::InvalidUseCoordinate { coordinate }),
+            );
+        }
+        assert_eq!(budget.work(), 14 * 8);
+        assert_eq!(budget.storage(), 0);
+    });
+}
+
+#[test]
+fn use_query_budget_is_fixed_upfront_and_preserves_owner_floor_and_history() {
+    let (owner, owner_storage) = admit(&diamond(false));
+    let (inventory, inventory_storage) = inventory(&owner, owner_storage);
+    let base = owner_storage + inventory_storage + 13;
+    let (report, report_storage) = {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = Budget::new(&mut work, base + 1_000_000);
+        budget.reserve_storage(base).unwrap();
+        CanonicalKirSparseV1::derive(
+            &inventory,
+            CanonicalKirSparseLimitsV1::default(),
+            &mut budget,
+        )
+        .unwrap()
+    };
+    let floor = base + report_storage.retained_storage();
+    let coordinate = use_query_terminator(0, 0, 0);
+    for allowance in [8, 7] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(3 + allowance);
+        {
+            let mut budget = Budget::new(&mut work, floor + 5);
+            budget.reserve_storage(floor + 5).unwrap();
+            budget.release_storage(5).unwrap();
+            assert!(budget.reserve_storage(6).is_err());
+            budget.charge_work(3).unwrap();
+            assert!(budget.charge_work(100).is_err());
+            let actual = report.value_at_use(coordinate, &mut budget);
+            if allowance == 8 {
+                assert_eq!(actual, Ok(constant(ScalarType::Bool, 1)));
+            } else {
+                assert!(matches!(
+                    actual,
+                    Err(CanonicalKirSparseErrorV1::Resource(Resource::Work(error)))
+                        if error.actual() == 11 && error.limit() == 10
+                ));
+            }
+            assert_eq!(budget.work(), if allowance == 8 { 11 } else { 3 });
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.peak_storage(), floor + 5);
+            assert_eq!(budget.failed_storage(), Some(floor + 6));
+        }
+        assert_eq!(work.failed_work(), Some(103));
+    }
+    // Exactly the live owner floor is sufficient: the query allocates nothing.
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(8);
+    let mut budget = Budget::new(&mut work, floor);
+    budget.reserve_storage(floor).unwrap();
+    assert_eq!(
+        report.value_at_use(coordinate, &mut budget),
+        Ok(constant(ScalarType::Bool, 1)),
+    );
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(budget.peak_storage(), floor);
+    assert!(report.belongs_to(&inventory));
+    assert!(inventory.belongs_to(&owner));
+    assert_eq!(
+        owner.module().functions[0].body.as_ref().unwrap().blocks[0].id,
+        BlockId(4_000_000_000)
+    );
+}
+
+#[test]
+fn invalid_use_queries_observe_the_same_exact_and_one_under_work_bound() {
+    inspect(diamond(false), |_, report| {
+        let coordinate = use_query_terminator(u32::MAX, u32::MAX, u32::MAX);
+        for allowance in [8, 7] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(allowance);
+            {
+                let mut budget = Budget::new(&mut work, 0);
+                let actual = report.value_at_use(coordinate, &mut budget);
+                if allowance == 8 {
+                    assert_eq!(
+                        actual,
+                        Err(CanonicalKirSparseErrorV1::InvalidUseCoordinate { coordinate }),
+                    );
+                    assert_eq!(budget.work(), 8);
+                } else {
+                    assert!(matches!(
+                        actual,
+                        Err(CanonicalKirSparseErrorV1::Resource(Resource::Work(error)))
+                            if error.actual() == 8 && error.limit() == 7
+                    ));
+                    assert_eq!(budget.work(), 0);
+                }
+                assert_eq!(budget.storage(), 0);
+            }
+            assert_eq!(work.failed_work(), (allowance == 7).then_some(8));
+        }
+    });
+}
+
+#[test]
+fn use_query_range_checks_reject_overflow_inverted_and_spilling_ranges() {
+    assert_eq!(
+        use_query_index(&(usize::MAX - 1..usize::MAX), 2, usize::MAX),
+        None
+    );
+    let reversed = std::ops::Range { start: 2, end: 1 };
+    assert_eq!(use_query_index(&reversed, 0, 3), None);
+    assert_eq!(use_query_index(&(1..3), 0, 2), None);
+    assert_eq!(use_query_index(&(1..2), 1, 3), None);
+    assert_eq!(use_query_index(&(1..2), 0, 3), Some(1));
+    assert!(!use_query_subrange(&(1..3), &(0..2), 3));
+    assert!(!use_query_subrange(&(1..3), &(2..4), 4));
+    assert!(!use_query_subrange(&(1..3), &reversed, 3));
+    assert!(!use_query_subrange(&(1..3), &(1..2), 2));
+}
+
 #[test]
 fn duplicate_targets_remain_distinct_executable_occurrences_and_merge_inputs() {
     for dynamic in [false, true] {

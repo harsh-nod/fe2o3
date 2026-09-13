@@ -100,6 +100,10 @@ pub enum CanonicalKirSparseErrorV1 {
         limit: usize,
     },
     InconsistentInventory,
+    /// A locator does not name an exact use in this report's borrowed graph.
+    InvalidUseCoordinate {
+        coordinate: Use,
+    },
 }
 impl From<Resource> for CanonicalKirSparseErrorV1 {
     fn from(error: Resource) -> Self {
@@ -120,6 +124,12 @@ impl fmt::Display for CanonicalKirSparseErrorV1 {
             ),
             Self::InconsistentInventory => {
                 formatter.write_str("inconsistent canonical sparse inventory")
+            }
+            Self::InvalidUseCoordinate { coordinate } => {
+                write!(
+                    formatter,
+                    "invalid canonical sparse use coordinate {coordinate:?}"
+                )
             }
         }
     }
@@ -187,6 +197,100 @@ impl<'i, 'g> CanonicalKirSparseV1<'i, 'g> {
     pub fn value(&self, definition: usize) -> Option<Value> {
         self.values.get(definition).copied()
     }
+    /// Returns the linked definition's lattice value at one exact graph use.
+    ///
+    /// Coordinates are inert locators in this report's borrowed inventory, not
+    /// owner authentication. Invalid locators are errors, never unknown facts.
+    /// A returned constant does not establish that this use or edge executes.
+    ///
+    /// Charges exactly eight work units before any lookup, including invalid
+    /// coordinates and the shorter terminator path. The fixed charge admits the
+    /// query, function, block, optional operation, use, definition, value and
+    /// consistency checks. Allocates nothing and leaves storage unchanged.
+    pub fn value_at_use(&self, coordinate: Use, budget: &mut Budget<'_>) -> Result<Value> {
+        budget.charge_work(8)?;
+        let invalid = || CanonicalKirSparseErrorV1::InvalidUseCoordinate { coordinate };
+        let block_coordinate = match coordinate {
+            Use::OperationOperand { operation, .. } => operation.block,
+            Use::TerminatorOperand { block, .. } => block,
+        };
+        let inventory = self.inventory;
+        let function = inventory
+            .functions()
+            .get(usize::try_from(block_coordinate.function.0).map_err(|_| invalid())?)
+            .filter(|row| row.coordinate == block_coordinate.function)
+            .ok_or_else(invalid)?;
+        let block_index = use_query_index(
+            &function.blocks,
+            block_coordinate.block,
+            inventory.blocks().len(),
+        )
+        .ok_or_else(invalid)?;
+        let block = inventory.blocks().get(block_index).ok_or_else(invalid)?;
+        if block.coordinate != block_coordinate {
+            return Err(invalid());
+        }
+        let (uses, operand) = match coordinate {
+            Use::OperationOperand { operation, operand } => {
+                if !use_query_subrange(
+                    &function.operations,
+                    &block.operations,
+                    inventory.operations().len(),
+                ) {
+                    return Err(invalid());
+                }
+                let operation_index = use_query_index(
+                    &block.operations,
+                    operation.operation,
+                    inventory.operations().len(),
+                )
+                .ok_or_else(invalid)?;
+                let row = inventory
+                    .operations()
+                    .get(operation_index)
+                    .filter(|row| row.coordinate == operation)
+                    .ok_or_else(invalid)?;
+                (&row.operands, operand)
+            }
+            Use::TerminatorOperand { operand, .. } => (&block.terminator_uses, operand),
+        };
+        if !use_query_subrange(&function.uses, uses, inventory.uses().len()) {
+            return Err(invalid());
+        }
+        let use_index =
+            use_query_index(uses, operand, inventory.uses().len()).ok_or_else(invalid)?;
+        let used = inventory
+            .uses()
+            .get(use_index)
+            .filter(|row| row.coordinate == coordinate)
+            .ok_or_else(invalid)?;
+        let definition = inventory
+            .definitions()
+            .get(used.definition)
+            .ok_or(CanonicalKirSparseErrorV1::InconsistentInventory)?;
+        let definition_function = match definition.coordinate {
+            Definition::FunctionArgument { function, .. } => function,
+            Definition::BlockArgument { block, .. } => block.function,
+            Definition::Result { operation, .. } => operation.block.function,
+        };
+        if function.definitions.start > function.definitions.end
+            || function.definitions.end > inventory.definitions().len()
+            || !function.definitions.contains(&used.definition)
+            || definition_function != block_coordinate.function
+            || definition.value != Some(used.value)
+        {
+            return Err(CanonicalKirSparseErrorV1::InconsistentInventory);
+        }
+        let value = self
+            .value(used.definition)
+            .ok_or(CanonicalKirSparseErrorV1::InconsistentInventory)?;
+        if let Value::Constant(constant) = value
+            && definition.ty != &fe2o3_kernel_ir::Type::Scalar(constant.ty())
+        {
+            return Err(CanonicalKirSparseErrorV1::InconsistentInventory);
+        }
+        Ok(value)
+    }
     pub fn block_executable(&self, block: usize) -> Option<bool> {
         self.blocks.get(block).map(|state| *state != 0)
     }
@@ -196,6 +300,29 @@ impl<'i, 'g> CanonicalKirSparseV1<'i, 'g> {
     pub fn exception(&self, operation: usize) -> Option<CanonicalKirSparseExceptionV1> {
         self.exceptions.get(operation).copied()
     }
+}
+
+fn use_query_index(
+    range: &std::ops::Range<usize>,
+    ordinal: u32,
+    roster_len: usize,
+) -> Option<usize> {
+    if range.start > range.end || range.end > roster_len {
+        return None;
+    }
+    let index = range.start.checked_add(usize::try_from(ordinal).ok()?)?;
+    (index < range.end).then_some(index)
+}
+
+fn use_query_subrange(
+    parent: &std::ops::Range<usize>,
+    child: &std::ops::Range<usize>,
+    roster_len: usize,
+) -> bool {
+    parent.start <= child.start
+        && child.start <= child.end
+        && child.end <= parent.end
+        && parent.end <= roster_len
 }
 
 struct Engine<'i, 'g> {
