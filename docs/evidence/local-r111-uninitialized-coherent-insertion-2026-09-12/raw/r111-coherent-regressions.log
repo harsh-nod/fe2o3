@@ -1,0 +1,45 @@
+warning: method `coherent_assert_model_v1` is never used
+   --> crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:581:19
+    |
+559 | impl PreparationMemoryFixtureV1 {
+    | ------------------------------- method in this implementation
+...
+581 |     pub(crate) fn coherent_assert_model_v1(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 19 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_constructed_success_preserves_exact_order_source_and_accounts ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_admits_sixteenth_then_rejects_full_before_index_or_reservation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_copy_and_map_matrix_retains_cpu_authority has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_currentness_matrix_retains_exact_prefix_and_model has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_completed_owner_survives_retake_and_commit_failure ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_native_allocation_matrix_preserves_pending_owner has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_opening_failure_and_missing_complete_never_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_copy_and_map_matrix_retains_cpu_authority ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_native_allocation_matrix_preserves_pending_owner ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_operation_panic_wins_secondary_retake_error_or_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_projection_matrix_preserves_checkpoint_and_exact_successor has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_retake_failure_precedes_ordinary_operation_error has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_required_hole_and_validation_reject_before_reservation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_retake_failure_precedes_ordinary_operation_error ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_actual_bound_dispatch_precedes_full_and_malformed_ledger ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_all_public_entrypoints_preserve_preflight_precedence ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_concrete_facade_restores_before_transport_for_all_routes ... ok
+test queue::live::rebind_tests::insertion::coherent_insertion_production_routing_preserves_root_and_terminal_owner ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_insertion_empty_root_retention_and_rejected_attempt_have_no_effects ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_insertion_retention_preserves_earlier_lower_failure ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_insertion_root_is_one_shot_and_extracts_once ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_currentness_matrix_retains_exact_prefix_and_model ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_uses_real_release_hole_and_explicit_override ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::coherent_insertion_projection_matrix_preserves_checkpoint_and_exact_successor ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 376.39s
+

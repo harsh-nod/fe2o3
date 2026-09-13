@@ -1,0 +1,242 @@
+[
+  {
+    "name": "omit-complete-retention",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure",
+    "edits": [
+      [
+        "transitions::retain_coherent_insertion_output_v1(engine, completed);",
+        "let _ = engine; let _retained = core::mem::ManuallyDrop::new(completed);"
+      ]
+    ],
+    "expected": [
+      "coherent owner retained after failed settlement"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs",
+    "oracle_line": 988
+  },
+  {
+    "name": "extract-before-commit-entry",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure",
+    "edits": [
+      [
+        "        let ledger = context.ledger();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, index);\n        *ledger.count = next_count;\n        let data = root\n            .take_data()\n            .expect(\"borrowed Complete remains rooted through ledger commit\");",
+        "        let data = root\n            .take_data()\n            .expect(\"borrowed Complete remains rooted through ledger commit\");\n        let ledger = context.ledger();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, index);\n        *ledger.count = next_count;"
+      ]
+    ],
+    "expected": [
+      "Complete retained until the full ledger commit"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 397
+  },
+  {
+    "name": "insert-copy-into-allocation",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_root_is_one_shot_without_copy_or_readback",
+    "edits": [
+      [
+        "        let allocation = memory.allocate(requested_bytes)?;",
+        "        let allocation = memory.allocate(requested_bytes)?;\n        let allocation = memory.copy(allocation, &vec![0u8; requested_bytes])?;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "[1, 1, 1]",
+      "[1, 0, 1]"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs",
+    "oracle_line": 217
+  },
+  {
+    "name": "grant-initialized-authority",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_success_preserves_exact_uninitialized_order_and_accounts",
+    "edits": [
+      [
+        ".map(Gfx942FixedDispatchDataV1::host_visible_uninitialized)",
+        ".map(|token| Gfx942FixedDispatchDataV1::host_visible_initialized(crate::shared_memory::Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(token)))"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "HostVisibleInitialized",
+      "HostVisibleUninitialized"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 291
+  },
+  {
+    "name": "allow-root-repreparation",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_root_is_one_shot_without_copy_or_readback",
+    "edits": [
+      [
+        "    fn prepare_with_memory(\n        &mut self,\n        memory: &mut impl coherent_initialization::CoherentInitializationV1,\n        requested_bytes: usize,\n    ) -> Result<(), MemorySessionError> {\n        if core::mem::replace(&mut self.started, true) {",
+        "    fn prepare_with_memory(\n        &mut self,\n        memory: &mut impl coherent_initialization::CoherentInitializationV1,\n        requested_bytes: usize,\n    ) -> Result<(), MemorySessionError> {\n        if false && core::mem::replace(&mut self.started, true) {"
+      ]
+    ],
+    "expected": [
+      "assertion failed: matches!",
+      "InvalidAllocationAuthority"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs",
+    "oracle_line": 234
+  },
+  {
+    "name": "hoist-size-rejection",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_empty_root_preserves_lower_size_rejection_checkpoint",
+    "edits": [
+      [
+        "        let allocation = memory.allocate(requested_bytes)?;",
+        "        if requested_bytes == 0 { return Err(MemorySessionError::InvalidRequestedSize); }\n        let allocation = memory.allocate(requested_bytes)?;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "[0, 0, 0]",
+      "[1, 0, 0]"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs",
+    "oracle_line": 291
+  },
+  {
+    "name": "overwrite-earlier-terminal",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_preserves_earlier_map_failure_custody",
+    "edits": [
+      [
+        "if engine.terminal_transition.is_some() {\n        // Failure retention",
+        "if false && engine.terminal_transition.is_some() {\n        // Failure retention"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "LiveInsertion",
+      "Map"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs",
+    "oracle_line": 989
+  },
+  {
+    "name": "change-requested-extent",
+    "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+    "test": "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_root_is_one_shot_without_copy_or_readback",
+    "edits": [
+      [
+        "        let allocation = memory.allocate(requested_bytes)?;",
+        "        let allocation = memory.allocate(requested_bytes.saturating_add(1))?;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "requested_bytes: 2",
+      "requested_bytes: 1"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs",
+    "oracle_line": 882
+  },
+  {
+    "name": "append-without-required-hole",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_required_hole_validation_and_lower_size_rejection",
+    "edits": [
+      [
+        "DataInsertionIndexV1::RequiredHole => ledger\n                .next\n                .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?,",
+        "DataInsertionIndexV1::RequiredHole => ledger.next.unwrap_or(ledger.identities.len()),"
+      ]
+    ],
+    "expected": [
+      "assertion failed: !matches!(settled.result, Ok(Ok(_)))"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 451
+  },
+  {
+    "name": "hole-overrides-explicit-index",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_uses_real_release_hole_and_explicit_override",
+    "edits": [
+      [
+        "DataInsertionIndexV1::Explicit(index) => index,",
+        "DataInsertionIndexV1::Explicit(index) => ledger.next.unwrap_or(index),"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 664
+  },
+  {
+    "name": "admit-seventeenth",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_admits_sixteenth_then_rejects_full_before_index_or_reservation",
+    "edits": [
+      [
+        "if *ledger.count >= super::super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {",
+        "if false && *ledger.count >= super::super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {"
+      ]
+    ],
+    "expected": [
+      "assertion failed: !settled.transport"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 603
+  },
+  {
+    "name": "skip-explicit-index-validation",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_required_hole_validation_and_lower_size_rejection",
+    "edits": [
+      [
+        "validate_new_detached_data_index(*ledger.count, index)?;",
+        "if false { validate_new_detached_data_index(*ledger.count, index)?; }"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 450
+  },
+  {
+    "name": "replace-substrate-first-panic",
+    "path": "crates/fe2o3-kfd/src/queue_live/model_loan.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic",
+    "edits": [
+      [
+        "core::mem::forget(closing);\n            resume_unwind(payload)",
+        "match closing {\n                Err(secondary) => { core::mem::forget(payload); resume_unwind(secondary) }\n                other => { core::mem::forget(other); resume_unwind(payload) }\n            }"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: None",
+      "N2 native panic",
+      "map_gpu"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 716,
+    "reused_substrate": true
+  },
+  {
+    "name": "suppress-substrate-retake-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/model_loan.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_retake_failure_precedes_ordinary_operation_error",
+    "edits": [
+      [
+        "Ok(closing) => Ok((result, closing)),",
+        "Ok(_closing) => Ok((result, Ok(()))),"
+      ]
+    ],
+    "expected": [
+      "retake must precede the ordinary operation error"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs",
+    "oracle_line": 801,
+    "reused_substrate": true
+  }
+]

@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 10 tests
+test shared_memory::tests::transitions::coherent_initialization::coherent_copy_invalid_private_inputs_reject_before_currentness_without_poison ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_currentness_keeps_actual_cpu_owner_and_written_prefix ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_allocation_currentness_preserves_preflight_and_pending_policy ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_empty_capacity_and_revision_reject_before_native_effects ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_preserves_revision_headroom_and_rejects_map_exhaustion ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_native_allocation_failures_retain_original_pending_prefix ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_map_failures_retain_cpu_authority_without_duplicate_custody ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_success_preserves_exact_storage_source_and_padded_charge ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_projection_failures_keep_exact_allocation_or_mapped_successor ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1050 filtered out; finished in 0.02s
+

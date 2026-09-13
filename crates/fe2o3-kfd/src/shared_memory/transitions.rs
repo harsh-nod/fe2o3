@@ -78,7 +78,7 @@ pub(super) struct TerminalTransitionV1 {
 
 pub(super) fn retain_coherent_insertion_output_v1<B: MemoryBackend>(
     engine: &mut SharedMemoryEngine<B>,
-    completed: Gfx942InitializedHostVisibleMemoryV1,
+    completed: coherent_initialization::MappedAllocation,
 ) {
     engine.phase = SharedMemorySessionPhaseV1::Quarantined;
     if engine.terminal_transition.is_some() {
@@ -89,7 +89,7 @@ pub(super) fn retain_coherent_insertion_output_v1<B: MemoryBackend>(
             stage: TransitionStageV1::LiveInsertion,
             progress: NativeTransitionProgressV1::default(),
             input: None,
-            output: Some(TerminalTokenV1::from_token(completed.into_token())),
+            output: Some(TerminalTokenV1::from_token(completed)),
         });
     }
 }

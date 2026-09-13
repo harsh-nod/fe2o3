@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0405]: cannot find trait `DataInsertionRootV1` in this scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_coherent_insertion_tests.rs:13:28
+    |
+ 13 | trait CoherentTestRoot<P>: DataInsertionRootV1<P> {
+    |                            ^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/queue_live/data_insertion.rs:140:1
+    |
+140 | pub(in crate::queue) trait DataInsertionContextV1<R: DataInsertionRootV1<P>, P> {
+    | ------------------------------------------------------------------------------- similarly named trait `DataInsertionContextV1` defined here
+    |
+help: a trait with a similar name exists
+    |
+ 13 - trait CoherentTestRoot<P>: DataInsertionRootV1<P> {
+ 13 + trait CoherentTestRoot<P>: DataInsertionContextV1<P> {
+    |
+help: consider importing this trait
+    |
+  3 + use crate::queue::live::data_insertion::DataInsertionRootV1;
+    |
+
+For more information about this error, try `rustc --explain E0405`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

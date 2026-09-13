@@ -1,7 +1,9 @@
-//! Keep initialized data outside the model loan until its ledger commit.
+//! Keep returned data outside the model loan until its ledger commit.
 
 use super::*;
-use crate::shared_memory::{CoherentInitializationCustodyV1, DeviceInitializationCustodyV1};
+use crate::shared_memory::{
+    CoherentAllocationCustodyV1, CoherentInitializationCustodyV1, DeviceInitializationCustodyV1,
+};
 
 pub(in crate::queue) struct DetachedInsertionLedgerV1<'a> {
     pub(in crate::queue) identities: &'a mut Vec<Gfx942FixedDispatchStorageIdentityV1>,
@@ -97,6 +99,41 @@ impl DataInsertionRootV1<&[u8]> for CoherentInitializationCustodyV1 {
 
     fn retain(self, memory: &mut SharedGttMemorySessionV1) {
         memory.retain_coherent_initialization_failure(self);
+    }
+}
+
+impl DataInsertionRootV1<usize> for CoherentAllocationCustodyV1 {
+    const LEDGER_OPERATION: &'static str = "detached uninitialized-coherent identity ledger";
+
+    fn completed_identity(
+        &self,
+    ) -> Result<Gfx942FixedDispatchStorageIdentityV1, MemorySessionError> {
+        Ok(
+            Gfx942FixedDispatchStorageIdentityV1::HostVisibleUninitialized(
+                self.completed()?.storage_identity(),
+            ),
+        )
+    }
+
+    fn take_data(&mut self) -> Result<Gfx942FixedDispatchDataV1, MemorySessionError> {
+        self.take_complete()
+            .map(Gfx942FixedDispatchDataV1::host_visible_uninitialized)
+    }
+
+    fn prepare(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        requested_bytes: usize,
+    ) -> Result<(), MemorySessionError> {
+        memory.prepare_coherent_allocation_in_place(self, requested_bytes)
+    }
+
+    fn requires_retention(&self) -> bool {
+        self.requires_retention()
+    }
+
+    fn retain(self, memory: &mut SharedGttMemorySessionV1) {
+        memory.retain_coherent_allocation_failure(self);
     }
 }
 
@@ -223,7 +260,7 @@ impl<R: DataInsertionRootV1<P>, P> DataInsertionContextV1<R, P> for ComputeAqlQu
             if let Some(engine) = self.engine.as_mut() {
                 root.retain(&mut engine.backend.session);
             } else {
-                // Admitted initialization cannot remove its engine. Preserve
+                // Admitted preparation cannot remove its engine. Preserve
                 // custody rather than replacing the original failure if it does.
                 core::mem::forget(root);
             }
@@ -263,6 +300,22 @@ impl ComputeAqlQueueSessionV1 {
                 DataInsertionIndexV1::Explicit,
             ),
             bytes,
+        )
+    }
+
+    pub(super) fn allocate_coherent_data_settled_v1(
+        &mut self,
+        data_index: Option<usize>,
+        requested_bytes: usize,
+    ) -> SettledDataInsertionV1 {
+        settle_data_insertion_v1(
+            self,
+            CoherentAllocationCustodyV1::new(),
+            data_index.map_or(
+                DataInsertionIndexV1::RequiredHole,
+                DataInsertionIndexV1::Explicit,
+            ),
+            requested_bytes,
         )
     }
 }

@@ -1,0 +1,33 @@
+{
+  "source_head": "356523e6ea8c61c70c6812762aeaab33506de6e2",
+  "manifest_sha256": "8eca32d793c66acd0a183bad772bc9a21b74c4f7f440c82135fd6cbf9bd838c5",
+  "verified_at": "2026-09-12T23:32:05.884Z",
+  "mutation": "hoist-size-rejection",
+  "source_identities": 5676,
+  "source_unchanged": true,
+  "source_map_sha256": "304a11605906da5305c1931242ffe7d006ed6691c7499acb53b292e014f833f2",
+  "clock": {
+    "contract": "r111-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "restoration",
+    "predecessor": {
+      "name": "r111-exact-clock-mut-hoist-size-rejection.json",
+      "sha256": "94db44f2d67a61dae492020fa839839c8783814bcd71f79274a31b27dfe98b98",
+      "field": "finished_at",
+      "utc_ms": 1789255923429
+    },
+    "observation": {
+      "floor_ms": 1789255923429,
+      "samples": [
+        {
+          "utc_ms": 1789255925884,
+          "monotonic_ns": "53531892854545"
+        }
+      ]
+    }
+  }
+}

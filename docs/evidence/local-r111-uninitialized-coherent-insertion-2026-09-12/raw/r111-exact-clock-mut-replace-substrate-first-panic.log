@@ -1,0 +1,36 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.97s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic' (2375803) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6797:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic' (2375803) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6797:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic' (2375803) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6797:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic' (2375803) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic' (2375803) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_coherent_insertion_tests.rs:716:17:
+assertion `left == right` failed
+  left: None
+ right: Some(("N2 native panic", "map_gpu"))
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1059 filtered out; finished in 11.96s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,69 @@
+{
+  "source_head": "356523e6ea8c61c70c6812762aeaab33506de6e2",
+  "source_map_sha256": "678720666368e529d054eed6d7c72218fd0ded6ddb81435304757a97ea8a72c6",
+  "manifest_sha256": "8eca32d793c66acd0a183bad772bc9a21b74c4f7f440c82135fd6cbf9bd838c5",
+  "started_at": "2026-09-12T23:29:31.766Z",
+  "finished_at": "2026-09-12T23:30:19.718Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_success_preserves_exact_uninitialized_order_and_accounts",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r111-exact-clock-mut-grant-initialized-authority.log",
+  "source": "/home/harsh/.codex-tmp/r111-exact-clock-mut-grant-initialized-authority-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 50.948180479,
+  "verification_elapsed_seconds": 0.347227004,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r111-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r111-exact-clock-restoration-insert-copy-into-allocation.json",
+      "sha256": "d694bbfa6406df85491668652808da14659b8ee308db5fba0d76e36488937021",
+      "field": "verified_at",
+      "utc_ms": 1789255770482
+    },
+    "start": {
+      "floor_ms": 1789255770482,
+      "samples": [
+        {
+          "utc_ms": 1789255771766,
+          "monotonic_ns": "53370286406566"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789255819718,
+      "monotonic_ns": "53421234587045"
+    },
+    "source_verified": {
+      "utc_ms": 1789255820066,
+      "monotonic_ns": "53421581814049"
+    },
+    "error": null
+  }
+}

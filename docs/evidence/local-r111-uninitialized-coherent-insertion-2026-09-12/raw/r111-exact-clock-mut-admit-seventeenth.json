@@ -1,0 +1,69 @@
+{
+  "source_head": "356523e6ea8c61c70c6812762aeaab33506de6e2",
+  "source_map_sha256": "4a629f5662a8840910815f7e88073af228d5638e76e1d57517129750aa2f52bd",
+  "manifest_sha256": "8eca32d793c66acd0a183bad772bc9a21b74c4f7f440c82135fd6cbf9bd838c5",
+  "started_at": "2026-09-12T23:35:33.720Z",
+  "finished_at": "2026-09-12T23:36:39.587Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_admits_sixteenth_then_rejects_full_before_index_or_reservation",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r111-exact-clock-mut-admit-seventeenth.log",
+  "source": "/home/harsh/.codex-tmp/r111-exact-clock-mut-admit-seventeenth-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 68.942510118,
+  "verification_elapsed_seconds": 0.310025963,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r111-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r111-exact-clock-restoration-hole-overrides-explicit-index.json",
+      "sha256": "d937aaadebfa2ea792e8a88fe85b818a8753a47cb09f22e62aa19475bb33c8d8",
+      "field": "verified_at",
+      "utc_ms": 1789256132168
+    },
+    "start": {
+      "floor_ms": 1789256132168,
+      "samples": [
+        {
+          "utc_ms": 1789256133720,
+          "monotonic_ns": "53750466494140"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789256199587,
+      "monotonic_ns": "53819409004258"
+    },
+    "source_verified": {
+      "utc_ms": 1789256199897,
+      "monotonic_ns": "53819719030221"
+    },
+    "error": null
+  }
+}

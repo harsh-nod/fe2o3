@@ -1,0 +1,18 @@
+HELPER_PINS: [{"name":"r111-exact-clock-check-mutation.js","sha256":"6f01149738ac8e7f30ba2fe327d37585afa4c6cc22e2f6a9a4de9fc5de0b1717"},{"name":"r111-exact-clock-evidence-tests.js","sha256":"90f9c40f0b484e88d3ce2fbd39dcc64a73597299d30faeef7411464eff3b819f"},{"name":"r111-exact-clock-evidence.js","sha256":"048c9e1699bad501bd89ce972fc2f29db5c751d48a91eb7b1c80f37bd4c05a03"},{"name":"r111-exact-clock-prepare.js","sha256":"7a6c5f5057a0cdd52a82466782b6cfa8f02cab4295e3092069520584e56b9185"},{"name":"r111-exact-clock-restoration.js","sha256":"90fe8354d01e91632def2a2904a5a338275ff47fc5cc037768377f9137faedd1"},{"name":"r111-exact-clock-retain-local.js","sha256":"9d879159b247621f8b8980e9c4768b757aba53a89b8f0e7a3235d28a2b739869"},{"name":"r111-exact-clock-run.js","sha256":"ee106cba36b647028f4b978b2e5df198f8035b092bf0ed7b253b1fb23af605a4"},{"name":"r111-exact-qualification-plan.js","sha256":"639b451f77961afb0edc0e43ce187411401fa24787e8be2efaacafbd5bb20990"}]
+PASS: already above floor preserves actual observation
+PASS: equality is admitted without sleep
+PASS: repeated and regressed UTC waits to exact floor
+PASS: qualifying sample is never reread
+PASS: never reaching floor fails at exact monotonic budget
+PASS: floor reached at exhausted budget still rejects
+PASS: stalled monotonic clock hits hard sample bound
+PASS: invalid readings fail closed with retained observations
+PASS: monotonic regression rejects
+PASS: sleep errors fail closed and prevent the next action
+PASS: raw child-close regressions remain rejected
+PASS: collector rejects altered observations
+PASS: foreign cohort and missing predecessors reject
+PASS: exact predecessor bytes and source identity validate
+PASS: wrong event source cohort bytes or outcome rejects
+PASS: symlink and malformed predecessor reject before reading or spawning
+PASS: all 16 evidence-clock contract tests

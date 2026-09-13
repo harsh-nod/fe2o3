@@ -1,0 +1,69 @@
+{
+  "source_head": "356523e6ea8c61c70c6812762aeaab33506de6e2",
+  "source_map_sha256": "11759214bfcac7e7dafe0f25c57749429d363c5fafabe1765fb072ea7473ae5e",
+  "manifest_sha256": "8eca32d793c66acd0a183bad772bc9a21b74c4f7f440c82135fd6cbf9bd838c5",
+  "started_at": "2026-09-12T23:32:07.329Z",
+  "finished_at": "2026-09-12T23:32:52.532Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_preserves_earlier_map_failure_custody",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r111-exact-clock-mut-overwrite-earlier-terminal.log",
+  "source": "/home/harsh/.codex-tmp/r111-exact-clock-mut-overwrite-earlier-terminal-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 48.271765621,
+  "verification_elapsed_seconds": 0.486582033,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r111-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r111-exact-clock-restoration-hoist-size-rejection.json",
+      "sha256": "1e4fa8a5deb9dbf13c14adf4bc6858f9e37c88c257b79351113c815d782e7df1",
+      "field": "verified_at",
+      "utc_ms": 1789255925884
+    },
+    "start": {
+      "floor_ms": 1789255925884,
+      "samples": [
+        {
+          "utc_ms": 1789255927329,
+          "monotonic_ns": "53533337490395"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789255972532,
+      "monotonic_ns": "53581609256016"
+    },
+    "source_verified": {
+      "utc_ms": 1789255973019,
+      "monotonic_ns": "53582095838049"
+    },
+    "error": null
+  }
+}

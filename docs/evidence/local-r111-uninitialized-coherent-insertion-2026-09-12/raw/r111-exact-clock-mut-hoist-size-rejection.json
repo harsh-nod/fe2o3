@@ -1,0 +1,69 @@
+{
+  "source_head": "356523e6ea8c61c70c6812762aeaab33506de6e2",
+  "source_map_sha256": "a7141cb0c0cceb5294a9a8d546fa940a93de3de7b007cdd27386d8931a8e84ff",
+  "manifest_sha256": "8eca32d793c66acd0a183bad772bc9a21b74c4f7f440c82135fd6cbf9bd838c5",
+  "started_at": "2026-09-12T23:31:09.501Z",
+  "finished_at": "2026-09-12T23:32:03.429Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_empty_root_preserves_lower_size_rejection_checkpoint",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r111-exact-clock-mut-hoist-size-rejection.log",
+  "source": "/home/harsh/.codex-tmp/r111-exact-clock-mut-hoist-size-rejection-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 56.988447236,
+  "verification_elapsed_seconds": 0.345467218,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r111-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r111-exact-clock-restoration-allow-root-repreparation.json",
+      "sha256": "7b272d764bb9fc1f6b5458f218c3308624b3171cd22307eab9050f93b210a66c",
+      "field": "verified_at",
+      "utc_ms": 1789255868340
+    },
+    "start": {
+      "floor_ms": 1789255868340,
+      "samples": [
+        {
+          "utc_ms": 1789255869501,
+          "monotonic_ns": "53472449175356"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789255923429,
+      "monotonic_ns": "53529437622592"
+    },
+    "source_verified": {
+      "utc_ms": 1789255923774,
+      "monotonic_ns": "53529783089810"
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.99s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure' (2345460) panicked at crates/fe2o3-kfd/src/shared_memory/tests/live_coherent_insertion.rs:988:14:
+coherent owner retained after failed settlement
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1059 filtered out; finished in 2.55s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

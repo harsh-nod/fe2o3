@@ -1,0 +1,36 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 01s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 19 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_admits_sixteenth_then_rejects_full_before_index_or_reservation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_currentness_matrix_retains_exact_prefix_and_model has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_map_matrix_retains_cpu_authority has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_completed_owner_survives_retake_and_commit_failure ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_native_allocation_matrix_preserves_pending_owner has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_map_matrix_retains_cpu_authority ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_opening_failure_and_missing_complete_never_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_currentness_matrix_retains_exact_prefix_and_model ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_native_allocation_matrix_preserves_pending_owner ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_projection_matrix_preserves_checkpoint_and_exact_successor has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_required_hole_validation_and_lower_size_rejection has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_retake_failure_precedes_ordinary_operation_error has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_operation_panic_wins_secondary_retake_error_or_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_retake_failure_precedes_ordinary_operation_error ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_required_hole_validation_and_lower_size_rejection ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_bound_dispatch_precedes_full_and_invalid_size ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_missing_engine_retains_terminal_parent_without_panic_marker ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_production_wiring_never_grants_initialized_authority ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_public_preflight_preserves_owners_and_precedence ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_empty_root_preserves_lower_size_rejection_checkpoint ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_preserves_earlier_map_failure_custody ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_root_is_one_shot_without_copy_or_readback ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_success_preserves_exact_uninitialized_order_and_accounts has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_uses_real_release_hole_and_explicit_override ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_success_preserves_exact_uninitialized_order_and_accounts ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::coherent_cases::uninitialized_cases::coherent_allocation_insertion_projection_matrix_preserves_checkpoint_and_exact_successor ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 429.96s
+

@@ -1,14 +1,66 @@
 //! The coherent path reuses the constructed primary, auxiliary and original engine.
 
 use super::*;
+use crate::queue::live::data_insertion::DataInsertionRootV1;
 use crate::shared_memory::{
-    CoherentInitializationCustodyV1, CoherentInsertionFaultV1 as Fault,
-    CoherentInsertionPrefixV1 as Prefix, CoherentPreparationTraceV1, CoherentTokenSnapshotV1,
-    PrimaryProjectionCaseV1,
+    CoherentAllocationCustodyV1, CoherentInitializationCustodyV1,
+    CoherentInsertionFaultV1 as Fault, CoherentInsertionPrefixV1 as Prefix,
+    CoherentPreparationTraceV1, CoherentTokenSnapshotV1, PrimaryProjectionCaseV1,
 };
 
 const SOURCE: [u8; 17] = [0x5a; 17];
 const OPERATIONS: [&str; 3] = ["map_cpu", "prepare_cpu_mapping", "map_gpu"];
+
+#[path = "integration_uninitialized_coherent_insertion_tests.rs"]
+mod uninitialized_cases;
+
+trait CoherentTestRoot<P>: DataInsertionRootV1<P> {
+    fn prepare_for_test(
+        &mut self,
+        memory: &mut Memory,
+        parameters: P,
+        fault: Fault,
+        trace: &mut CoherentPreparationTraceV1,
+    ) -> Result<(), MemorySessionError>;
+    fn snapshot_for_test(&self) -> Option<CoherentTokenSnapshotV1>;
+    fn retain_for_test(self, memory: &mut Memory);
+}
+
+impl CoherentTestRoot<&[u8]> for CoherentInitializationCustodyV1 {
+    fn prepare_for_test(
+        &mut self,
+        memory: &mut Memory,
+        source: &[u8],
+        fault: Fault,
+        trace: &mut CoherentPreparationTraceV1,
+    ) -> Result<(), MemorySessionError> {
+        memory.primary_prepare_coherent_initialization_v1(self, source, fault, trace)
+    }
+    fn snapshot_for_test(&self) -> Option<CoherentTokenSnapshotV1> {
+        self.coherent_snapshot_for_test()
+    }
+    fn retain_for_test(self, memory: &mut Memory) {
+        memory.primary_retain_coherent_initialization_v1(self);
+    }
+}
+
+impl CoherentTestRoot<usize> for CoherentAllocationCustodyV1 {
+    fn prepare_for_test(
+        &mut self,
+        memory: &mut Memory,
+        requested_bytes: usize,
+        fault: Fault,
+        trace: &mut CoherentPreparationTraceV1,
+    ) -> Result<(), MemorySessionError> {
+        memory.primary_prepare_coherent_allocation_v1(self, requested_bytes, fault, trace)
+    }
+    fn snapshot_for_test(&self) -> Option<CoherentTokenSnapshotV1> {
+        self.coherent_snapshot_for_test()
+    }
+    fn retain_for_test(self, memory: &mut Memory) {
+        memory.primary_retain_coherent_allocation_v1(self);
+    }
+}
 
 #[derive(Default)]
 struct CoherentTrace {
@@ -23,7 +75,7 @@ struct CoherentContext<'a> {
     trace: &'a mut CoherentTrace,
 }
 
-impl DataInsertionContextV1<CoherentInitializationCustodyV1, &[u8]> for CoherentContext<'_> {
+impl<R: CoherentTestRoot<P>, P> DataInsertionContextV1<R, P> for CoherentContext<'_> {
     fn require_unbound(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.base.require_unbound()
     }
@@ -34,10 +86,7 @@ impl DataInsertionContextV1<CoherentInitializationCustodyV1, &[u8]> for Coherent
         self.base.trace.reserve_calls += 1;
         outcome("insertion-reserve", self.base.trace.reserve)?;
         let ledger = self.base.ledger();
-        reserve_identity_capacity_v1(
-            ledger.identities,
-            "detached initialized-coherent identity ledger",
-        )?;
+        reserve_identity_capacity_v1(ledger.identities, R::LEDGER_OPERATION)?;
         self.base.trace.reserved_storage = Some((
             ledger.identities.as_ptr() as usize,
             ledger.identities.capacity(),
@@ -46,8 +95,8 @@ impl DataInsertionContextV1<CoherentInitializationCustodyV1, &[u8]> for Coherent
     }
     fn prepare(
         &mut self,
-        root: &mut CoherentInitializationCustodyV1,
-        source: &[u8],
+        root: &mut R,
+        parameters: P,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.base.trace.prepare_calls += 1;
         let before = self.base.ledger_snapshot();
@@ -64,14 +113,9 @@ impl DataInsertionContextV1<CoherentInitializationCustodyV1, &[u8]> for Coherent
                 return Ok(());
             }
             let result = catch_unwind(AssertUnwindSafe(|| {
-                memory.primary_prepare_coherent_initialization_v1(
-                    root,
-                    source,
-                    trace.fault,
-                    &mut trace.memory,
-                )
+                root.prepare_for_test(memory, parameters, trace.fault, &mut trace.memory)
             }));
-            trace.before_retake = root.coherent_snapshot_for_test();
+            trace.before_retake = root.snapshot_for_test();
             match result {
                 Ok(result) => result.map_err(Into::into),
                 Err(payload) => std::panic::resume_unwind(payload),
@@ -93,10 +137,10 @@ impl DataInsertionContextV1<CoherentInitializationCustodyV1, &[u8]> for Coherent
         self.base.trace.commit_ready = true;
         Ok(())
     }
-    fn fail(&mut self, root: CoherentInitializationCustodyV1, panicked: bool) {
+    fn fail(&mut self, root: R, panicked: bool) {
         self.base.trace.fail_calls += 1;
         self.base.trace.panic_fail |= panicked;
-        self.trace.before_failure = root.coherent_snapshot_for_test();
+        self.trace.before_failure = root.snapshot_for_test();
         if let Some(lane) = self.base.lane.as_mut() {
             lane.completion_owner.poison_owner();
             lane.submission.as_mut().unwrap().poison();
@@ -108,19 +152,21 @@ impl DataInsertionContextV1<CoherentInitializationCustodyV1, &[u8]> for Coherent
         if panicked {
             Fixture::poison();
         }
-        self.base
-            .parent
-            .original
-            .as_mut()
-            .unwrap()
-            .primary
-            .completed
-            .as_mut()
-            .unwrap()
-            .engine
-            .backend
-            .session
-            .primary_retain_coherent_initialization_v1(root);
+        root.retain_for_test(
+            &mut self
+                .base
+                .parent
+                .original
+                .as_mut()
+                .unwrap()
+                .primary
+                .completed
+                .as_mut()
+                .unwrap()
+                .engine
+                .backend
+                .session,
+        );
     }
 }
 
@@ -136,6 +182,15 @@ impl CoherentFixture {
             &engine.foundation,
             &mut self.trace.memory,
             &SOURCE,
+            committed,
+        );
+    }
+    fn assert_model_for_length(&mut self, requested_bytes: usize, committed: u8) {
+        let engine = &self.base.scope.primary.completed.as_ref().unwrap().engine;
+        engine.backend.session.coherent_assert_model_for_length_v1(
+            &engine.foundation,
+            &mut self.trace.memory,
+            requested_bytes,
             committed,
         );
     }
@@ -166,6 +221,9 @@ impl CoherentFixture {
         )
     }
     fn assert_retry(&mut self) {
+        self.assert_retry_using(|this| this.insert(Some(0), &SOURCE));
+    }
+    fn assert_retry_using(&mut self, insert: impl FnOnce(&mut Self) -> SettledDataInsertionV1) {
         assert!(self.base.scope.parent.poisoned);
         assert!(
             self.base
@@ -191,7 +249,7 @@ impl CoherentFixture {
             self.base.trace.prepare_calls,
             self.base.trace.fail_calls,
         );
-        let retry = self.insert(Some(0), &SOURCE);
+        let retry = insert(self);
         assert!(!retry.transport);
         assert!(matches!(
             retry.result,
@@ -254,6 +312,15 @@ impl CoherentFixture {
         admitted: bool,
         pending: bool,
     ) {
+        self.assert_account_delta_with_backing(before, admitted, pending, 4096);
+    }
+    fn assert_account_delta_with_backing(
+        &self,
+        before: &crate::shared_memory::PreparationMemoryObservationV1,
+        admitted: bool,
+        pending: bool,
+        backing_bytes: u64,
+    ) {
         self.base.memory().assert_original_records_unchanged(before);
         let after = self.base.memory().observation();
         assert_eq!(after.device, before.device);
@@ -261,7 +328,7 @@ impl CoherentFixture {
         let after = after.host.unwrap();
         assert_eq!(
             after.used_backing_bytes,
-            before.used_backing_bytes + if admitted { 4096 } else { 0 }
+            before.used_backing_bytes + if admitted { backing_bytes } else { 0 }
         );
         assert_eq!(
             after.used_allocation_records,

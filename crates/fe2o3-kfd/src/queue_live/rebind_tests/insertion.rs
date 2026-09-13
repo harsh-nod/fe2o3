@@ -69,6 +69,8 @@ fn invoke_coherent_public(
         1 => session.insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(99, source),
         2 => session.initialize_host_visible_fixed_dispatch_data(source.into()),
         3 => session.initialize_host_visible_fixed_dispatch_data_from_slice_v1(source),
+        7 => session.insert_host_visible_fixed_dispatch_data(99, source.len()),
+        8 => session.allocate_host_visible_fixed_dispatch_data(source.len()),
         _ => session.with_compute_lane_custody_v1(
             lane,
             |selected| {
@@ -95,10 +97,19 @@ fn invoke_coherent_public(
 
 #[test]
 fn coherent_insertion_all_public_entrypoints_preserve_preflight_precedence() {
+    coherent_public_preflight_cases(0..7);
+}
+
+#[test]
+fn coherent_allocation_insertion_public_preflight_preserves_owners_and_precedence() {
+    coherent_public_preflight_cases(7..9);
+}
+
+fn coherent_public_preflight_cases(routes: core::ops::Range<usize>) {
     let mut memory = crate::shared_memory::PreparationMemoryFixtureV1::new(true);
     let data = memory.roster();
     let identity = data[1].storage_identity();
-    for route in 0..7 {
+    for route in routes {
         for empty in [false, true] {
             for mode in 0..8 {
                 let (mut session, lane) = parent(false, false);
@@ -206,7 +217,7 @@ fn coherent_insertion_all_public_entrypoints_preserve_preflight_precedence() {
                             }
                         )
                     )),
-                    _ if matches!(route, 2 | 3 | 6) => assert!(matches!(
+                    _ if matches!(route, 2 | 3 | 6 | 8) => assert!(matches!(
                         error,
                         ComputeAqlQueueSessionErrorV1::DispatchBinding(
                             Gfx942DispatchBindingErrorV1::ResourcePhase
@@ -436,12 +447,114 @@ fn device_insertion_concrete_preflight_keeps_error_precedence_and_healthy_parent
 
 #[test]
 fn device_insertion_concrete_bound_dispatch_precedes_full_and_malformed_ledger() {
-    bound_dispatch_precedence(false);
+    bound_dispatch_precedence(0..0);
 }
 
 #[test]
 fn coherent_insertion_actual_bound_dispatch_precedes_full_and_malformed_ledger() {
-    bound_dispatch_precedence(true);
+    bound_dispatch_precedence(0..7);
+}
+
+#[test]
+fn coherent_allocation_insertion_bound_dispatch_precedes_full_and_invalid_size() {
+    bound_dispatch_precedence(7..9);
+}
+
+#[test]
+fn coherent_allocation_insertion_missing_engine_retains_terminal_parent_without_panic_marker() {
+    for replacement in [false, true] {
+        for requested_bytes in [0, 17] {
+            let (mut session, lane) = parent(false, false);
+            session.detached_next_insertion_index = replacement.then_some(0);
+            let _ = take_dispatch_terminal_process_gate_record_v1();
+            let _ = take_lane_unwind_process_gate_record_v1();
+            let result = if replacement {
+                session.allocate_host_visible_fixed_dispatch_data(requested_bytes)
+            } else {
+                session.insert_host_visible_fixed_dispatch_data(0, requested_bytes)
+            };
+            assert!(matches!(
+                result,
+                Err(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing queue engine"
+                ))
+            ));
+            assert_shell(&mut session, lane);
+            assert!(!take_dispatch_terminal_process_gate_record_v1());
+            assert!(!take_lane_unwind_process_gate_record_v1());
+        }
+    }
+}
+
+#[test]
+fn coherent_allocation_insertion_production_wiring_never_grants_initialized_authority() {
+    let shared = include_str!("../../shared_memory.rs");
+    let root = shared
+        .split("impl CoherentAllocationCustodyV1")
+        .nth(1)
+        .unwrap()
+        .split("pub(crate) struct DeviceInitializationCustodyV1")
+        .next()
+        .unwrap();
+    let allocate = root
+        .find("let allocation = memory.allocate(requested_bytes)?;")
+        .unwrap();
+    let map = root
+        .find("self.completed = Some(memory.map(allocation)?);")
+        .unwrap();
+    assert!(allocate < map);
+    assert!(root.contains("core::mem::replace(&mut self.started, true)"));
+    assert!(root.contains("transitions::retain_coherent_insertion_output_v1(engine, completed)"));
+    for forbidden in [
+        "initialize_v1",
+        "memory.copy(",
+        "copy_from_slice",
+        "retag(",
+        "Box::new",
+        "to_vec()",
+    ] {
+        assert!(
+            !root.contains(forbidden),
+            "uninitialized root cannot introduce {forbidden}"
+        );
+    }
+    let source = include_str!("../data_insertion.rs");
+    let adapter = source
+        .split("impl DataInsertionRootV1<usize>")
+        .nth(1)
+        .unwrap()
+        .split("pub(in crate::queue) trait DataInsertionContextV1")
+        .next()
+        .unwrap();
+    assert!(adapter.contains("Gfx942FixedDispatchStorageIdentityV1::HostVisibleUninitialized"));
+    assert!(adapter.contains(".map(Gfx942FixedDispatchDataV1::host_visible_uninitialized)"));
+    assert!(adapter.contains("memory.prepare_coherent_allocation_in_place(self, requested_bytes)"));
+    assert!(adapter.contains("memory.retain_coherent_allocation_failure(self)"));
+    assert!(!adapter.contains("host_visible_initialized"));
+    let fixed = include_str!("../fixed_dispatch.rs");
+    for (name, argument) in [
+        (
+            "insert_host_visible_fixed_dispatch_data",
+            "Some(data_index)",
+        ),
+        ("allocate_host_visible_fixed_dispatch_data", "None"),
+    ] {
+        let body = fixed
+            .split(&format!("pub fn {name}("))
+            .nth(1)
+            .unwrap()
+            .split("\n    }")
+            .next()
+            .unwrap();
+        assert!(body.contains(&format!(
+            "allocate_coherent_data_settled_v1({argument}, requested_bytes)"
+        )));
+        let retain = body
+            .find("retain_terminal_rebind_parent_v1(core::mem::forget)")
+            .unwrap();
+        assert!(retain < body.find("settled.into_result()").unwrap());
+        assert!(!body.contains("with_live_queue_memory_model"));
+    }
 }
 
 #[test]
@@ -451,7 +564,7 @@ fn coherent_insertion_production_routing_preserves_root_and_terminal_owner() {
         .split("impl DataInsertionRootV1<&[u8]>")
         .nth(1)
         .unwrap()
-        .split("pub(in crate::queue) trait DataInsertionContextV1")
+        .split("impl DataInsertionRootV1<usize>")
         .next()
         .unwrap();
     assert!(root.contains("self.completed()?.storage_identity()"));
@@ -472,10 +585,12 @@ fn coherent_insertion_production_routing_preserves_root_and_terminal_owner() {
         .split("impl CoherentInitializationCustodyV1")
         .nth(1)
         .unwrap()
-        .split("///")
+        .split("pub(crate) struct CoherentAllocationCustodyV1")
         .next()
         .unwrap();
-    assert!(root.contains("transitions::retain_coherent_insertion_output_v1(engine, completed)"));
+    assert!(root.contains(
+        "transitions::retain_coherent_insertion_output_v1(engine, completed.into_token())"
+    ));
     let transition = include_str!("../../shared_memory/transitions.rs");
     let retain = transition
         .split("pub(super) fn retain_coherent_insertion_output_v1")
@@ -488,7 +603,7 @@ fn coherent_insertion_production_routing_preserves_root_and_terminal_owner() {
     assert!(retain.contains("engine.terminal_transition.is_some()"));
     assert!(retain.contains("core::mem::ManuallyDrop::new(completed)"));
     assert!(retain.contains("stage: TransitionStageV1::LiveInsertion"));
-    assert!(retain.contains("output: Some(TerminalTokenV1::from_token(completed.into_token()))"));
+    assert!(retain.contains("output: Some(TerminalTokenV1::from_token(completed))"));
     for body in [root, forwarder, retain] {
         for forbidden in [
             "check_currentness",
@@ -506,7 +621,7 @@ fn coherent_insertion_production_routing_preserves_root_and_terminal_owner() {
     }
 }
 
-fn bound_dispatch_precedence(coherent: bool) {
+fn bound_dispatch_precedence(routes: core::ops::Range<usize>) {
     use crate::queue::dispatch_binding::{
         actual_persistent_control_test_program, prepare_public_fixed_dispatch_resources_in_place,
     };
@@ -539,7 +654,7 @@ fn bound_dispatch_precedence(coherent: bool) {
     for count in [16, 17] {
         session.detached_data_count = count;
         session.detached_data_identities = vec![identity; count];
-        if coherent {
+        if !routes.is_empty() {
             let snapshot = (
                 session.detached_data_identities.clone(),
                 session.detached_data_identities.as_ptr(),
@@ -547,7 +662,7 @@ fn bound_dispatch_precedence(coherent: bool) {
                 session.detached_dispatch_generation,
                 session.detached_next_insertion_index,
             );
-            for route in 0..7 {
+            for route in routes.clone() {
                 for source in [&[][..], &[0x49; 17][..]] {
                     assert!(matches!(
                         invoke_coherent_public(route, &mut session, lane, source),

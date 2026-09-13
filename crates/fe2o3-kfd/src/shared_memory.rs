@@ -4502,6 +4502,59 @@ impl CoherentInitializationCustodyV1 {
 
     fn retain_with_engine<B: MemoryBackend>(self, engine: &mut SharedMemoryEngine<B>) {
         if let Some(completed) = self.completed {
+            transitions::retain_coherent_insertion_output_v1(engine, completed.into_token());
+        }
+    }
+}
+
+pub(crate) struct CoherentAllocationCustodyV1 {
+    started: bool,
+    completed: Option<coherent_initialization::MappedAllocation>,
+}
+
+impl CoherentAllocationCustodyV1 {
+    pub(crate) const fn new() -> Self {
+        Self {
+            started: false,
+            completed: None,
+        }
+    }
+
+    pub(crate) fn completed(
+        &self,
+    ) -> Result<&coherent_initialization::MappedAllocation, MemorySessionError> {
+        self.completed
+            .as_ref()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)
+    }
+
+    pub(crate) fn take_complete(
+        &mut self,
+    ) -> Result<coherent_initialization::MappedAllocation, MemorySessionError> {
+        self.completed
+            .take()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)
+    }
+
+    pub(crate) fn requires_retention(&self) -> bool {
+        self.completed.is_some()
+    }
+
+    fn prepare_with_memory(
+        &mut self,
+        memory: &mut impl coherent_initialization::CoherentInitializationV1,
+        requested_bytes: usize,
+    ) -> Result<(), MemorySessionError> {
+        if core::mem::replace(&mut self.started, true) {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let allocation = memory.allocate(requested_bytes)?;
+        self.completed = Some(memory.map(allocation)?);
+        Ok(())
+    }
+
+    fn retain_with_engine<B: MemoryBackend>(self, engine: &mut SharedMemoryEngine<B>) {
+        if let Some(completed) = self.completed {
             transitions::retain_coherent_insertion_output_v1(engine, completed);
         }
     }
@@ -5904,6 +5957,18 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         root: CoherentInitializationCustodyV1,
     ) {
+        root.retain_with_engine(&mut self.engine);
+    }
+
+    pub(crate) fn prepare_coherent_allocation_in_place(
+        &mut self,
+        root: &mut CoherentAllocationCustodyV1,
+        requested_bytes: usize,
+    ) -> Result<(), MemorySessionError> {
+        root.prepare_with_memory(self, requested_bytes)
+    }
+
+    pub(crate) fn retain_coherent_allocation_failure(&mut self, root: CoherentAllocationCustodyV1) {
         root.retain_with_engine(&mut self.engine);
     }
 

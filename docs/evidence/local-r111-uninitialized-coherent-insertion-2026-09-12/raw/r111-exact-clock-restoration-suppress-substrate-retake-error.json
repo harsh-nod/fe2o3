@@ -1,0 +1,33 @@
+{
+  "source_head": "356523e6ea8c61c70c6812762aeaab33506de6e2",
+  "manifest_sha256": "8eca32d793c66acd0a183bad772bc9a21b74c4f7f440c82135fd6cbf9bd838c5",
+  "verified_at": "2026-09-12T23:39:30.271Z",
+  "mutation": "suppress-substrate-retake-error",
+  "source_identities": 5676,
+  "source_unchanged": true,
+  "source_map_sha256": "304a11605906da5305c1931242ffe7d006ed6691c7499acb53b292e014f833f2",
+  "clock": {
+    "contract": "r111-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "restoration",
+    "predecessor": {
+      "name": "r111-exact-clock-mut-suppress-substrate-retake-error.json",
+      "sha256": "3d71f823a4279d62027b0c49316bf9a61ed76e0801045c91ab9df2f6b5131d97",
+      "field": "finished_at",
+      "utc_ms": 1789256367992
+    },
+    "observation": {
+      "floor_ms": 1789256367992,
+      "samples": [
+        {
+          "utc_ms": 1789256370271,
+          "monotonic_ns": "53999244738569"
+        }
+      ]
+    }
+  }
+}

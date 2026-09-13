@@ -1,0 +1,15 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 53.68s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 7 tests
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_production_wiring_never_grants_initialized_authority ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_empty_root_preserves_lower_size_rejection_checkpoint ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_missing_engine_retains_terminal_parent_without_panic_marker ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_root_is_one_shot_without_copy_or_readback ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_bound_dispatch_precedes_full_and_invalid_size ... ok
+test shared_memory::tests::live_coherent_insertion::coherent_allocation_insertion_preserves_earlier_map_failure_custody ... ok
+test queue::live::rebind_tests::insertion::coherent_allocation_insertion_public_preflight_preserves_owners_and_precedence ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 0.03s
+

@@ -1,5 +1,17 @@
 # A1/A2 Next-Wave Dispatch
 
+R111 locally accepts [N3-L3-C uninitialized coherent insertion](runtime-uninitialized-coherent-insertion-custody-v1.md),
+with [retained evidence](evidence/local-r111-uninitialized-coherent-insertion-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and fourteen compiled negatives
+pass. GNU/musl each pass 2,657 tests with five ignored across 48 harnesses;
+six frozen/restored suites pass 19/19/14/10/8/4. All 5,676 source identities
+match. The collector and independent archive review pass; all preliminary
+failures and the excluded formatter/test overlap remain preserved. This is
+named CPU/shared-sequencer and two direct-session preflight/missing-engine
+acceptance, not authenticated formal, native or performance qualification.
+See the [refreshed handoffs](runtime-swarm-next-packets.md#next-packet-handoffs)
+for independent C1/V2 work and the next Native device packet.
+
 R110 locally accepts [N3-L2 initialized coherent insertion](runtime-live-coherent-insertion-custody-v1.md),
 with [retained evidence](evidence/local-r110-live-coherent-insertion-2026-09-12/README.md).
 Seventeen source gates, ten auxiliary checks and ten compiled negatives pass.
@@ -41,17 +53,19 @@ abort remain preserved. The corrected slot is preallocated once per engine,
 not per initializer; the same runtime test now passes. No new solver, native or
 performance acceptance is added.
 
-Immediate packets are **Native N3-L3-C/D uninitialized coherent/device insertion**, independent
+Immediate packets are **Native N3-L3-D uninitialized device insertion**, independent
 **Admission C1 identity** and **Resources V2 membership/Begin**, with Primary
 owning integration and qualification. V1's constructor, existing-ID registration,
 exact Reserved lookup and pre-effect abort are now locally accepted. The refreshed
 [current assignments](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch)
-advance Native to uninitialized insertion and Resources
+advance Native to uninitialized device insertion and Resources
 to whole-roster membership. Three read-only dispatch reviews are complete;
 the implementation queue is not an unattended background job. The
 [N3-L1 contract](runtime-live-device-insertion-custody-v1.md)
 keeps completed owners through retake and commits before extraction. R110 adds
-the corresponding coherent root without duplicating lower copy/map. V3 settlement, V4 proofs
+the corresponding coherent root without duplicating lower copy/map. R111 extends
+settlement to allocation-only coherent output without copying or granting
+initialized authority. V3 settlement, V4 proofs
 and V5 production integration remain separate packets. The R106 and earlier
 dispatch text below remains historical.
 

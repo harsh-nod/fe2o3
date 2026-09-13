@@ -4496,24 +4496,11 @@ impl ComputeAqlQueueSessionV1 {
         data_index: usize,
         requested_bytes: usize,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        self.require_new_detached_data_index(data_index)?;
-        let result = self.with_live_queue_memory_model(|memory| {
-            let allocation = memory.allocate_host_visible_coherent(requested_bytes)?;
-            memory.map_to_gpu(allocation).map_err(Into::into)
-        });
-        match result {
-            Ok(memory) => {
-                let data = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory);
-                self.record_new_detached_data_at(&data, data_index);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
+        let settled = self.allocate_coherent_data_settled_v1(Some(data_index), requested_bytes);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
+        settled.into_result()
     }
 
     /// Allocates and maps one uninitialized coherent host-visible extent at the
@@ -4522,26 +4509,11 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         requested_bytes: usize,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        if self.detached_next_insertion_index.is_none() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        let settled = self.allocate_coherent_data_settled_v1(None, requested_bytes);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
-        let result = self.with_live_queue_memory_model(|memory| {
-            let allocation = memory.allocate_host_visible_coherent(requested_bytes)?;
-            memory.map_to_gpu(allocation).map_err(Into::into)
-        });
-        match result {
-            Ok(memory) => {
-                let data = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory);
-                self.record_new_detached_data(&data);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
-        }
+        settled.into_result()
     }
 
     /// Unmaps and releases detached fixed-dispatch storage exactly once.
@@ -4630,20 +4602,6 @@ impl ComputeAqlQueueSessionV1 {
             &mut self.detached_data_identities,
             &mut self.detached_next_insertion_index,
             data.storage_identity(),
-        );
-        self.detached_data_count += 1;
-    }
-
-    pub(super) fn record_new_detached_data_at(
-        &mut self,
-        data: &Gfx942FixedDispatchDataV1,
-        data_index: usize,
-    ) {
-        insert_detached_identity_at(
-            &mut self.detached_data_identities,
-            &mut self.detached_next_insertion_index,
-            data.storage_identity(),
-            data_index,
         );
         self.detached_data_count += 1;
     }

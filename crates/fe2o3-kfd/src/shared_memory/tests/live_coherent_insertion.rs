@@ -198,6 +198,164 @@ impl CoherentTokenSnapshotV1 {
     }
 }
 
+#[test]
+fn coherent_allocation_insertion_root_is_one_shot_without_copy_or_readback() {
+    for configured in [false, true] {
+        for requested_bytes in [1, 17, 4097] {
+            let mut memory = PreparationMemoryFixtureV1::new(configured);
+            let mut root = CoherentAllocationCustodyV1::new();
+            let mut trace = CoherentPreparationTraceV1::default();
+            let before = memory.coherent_insertion_snapshot_v1();
+            memory
+                .primary_prepare_coherent_allocation_v1(
+                    &mut root,
+                    requested_bytes,
+                    CoherentInsertionFaultV1::None,
+                    &mut trace,
+                )
+                .unwrap();
+            assert_eq!(trace.stages, [1, 0, 1]);
+            assert!(trace.source.is_none());
+            let identity = root.completed().unwrap().storage_identity();
+            memory.coherent_assert_prefix_for_length_v1(
+                &before,
+                requested_bytes,
+                None,
+                CoherentInsertionPrefixV1 {
+                    calls: [5, 1, 1, 1, 1],
+                    operations: vec!["map_cpu", "prepare_cpu_mapping", "map_gpu"],
+                    copied: 0,
+                    record_phase: Some("GpuAccessibleMutable"),
+                    pending: None,
+                },
+            );
+            let after = memory.coherent_insertion_snapshot_v1();
+            let accounting = memory.observation();
+            assert!(matches!(
+                memory.primary_prepare_coherent_allocation_v1(
+                    &mut root,
+                    99,
+                    CoherentInsertionFaultV1::None,
+                    &mut trace
+                ),
+                Err(MemorySessionError::InvalidAllocationAuthority)
+            ));
+            let output = root.take_complete().unwrap();
+            assert_eq!(output.storage_identity(), identity);
+            assert!(matches!(
+                root.take_complete(),
+                Err(MemorySessionError::InvalidAllocationAuthority)
+            ));
+            assert!(matches!(
+                memory.primary_prepare_coherent_allocation_v1(
+                    &mut root,
+                    0,
+                    CoherentInsertionFaultV1::None,
+                    &mut trace
+                ),
+                Err(MemorySessionError::InvalidAllocationAuthority)
+            ));
+            memory.primary_retain_coherent_allocation_v1(root);
+            assert_eq!(memory.coherent_insertion_snapshot_v1(), after);
+            assert_eq!(memory.observation(), accounting);
+            assert_eq!(trace.stages, [1, 0, 1]);
+            assert!(trace.source.is_none());
+        }
+    }
+}
+
+#[test]
+fn coherent_allocation_insertion_empty_root_preserves_lower_size_rejection_checkpoint() {
+    for configured in [false, true] {
+        let mut memory = PreparationMemoryFixtureV1::new(configured);
+        let before = memory.coherent_insertion_snapshot_v1();
+        let accounting = memory.observation();
+        let model = memory
+            .fixture
+            .foundation
+            .memory()
+            .checkpoint_released()
+            .unwrap();
+        memory.primary_retain_coherent_allocation_v1(CoherentAllocationCustodyV1::new());
+        let mut root = CoherentAllocationCustodyV1::new();
+        let mut trace = CoherentPreparationTraceV1::default();
+        assert!(matches!(
+            memory.primary_prepare_coherent_allocation_v1(
+                &mut root,
+                0,
+                CoherentInsertionFaultV1::None,
+                &mut trace
+            ),
+            Err(MemorySessionError::InvalidRequestedSize)
+        ));
+        assert_eq!(trace.stages, [1, 0, 0]);
+        assert!(!root.requires_retention());
+        assert!(matches!(
+            memory.primary_prepare_coherent_allocation_v1(
+                &mut root,
+                17,
+                CoherentInsertionFaultV1::None,
+                &mut trace
+            ),
+            Err(MemorySessionError::InvalidAllocationAuthority)
+        ));
+        memory.primary_retain_coherent_allocation_v1(root);
+        assert_eq!(memory.coherent_insertion_snapshot_v1(), before);
+        assert_eq!(memory.observation(), accounting);
+        assert_eq!(memory.fixture.foundation.memory(), &model);
+        assert_eq!(trace.stages, [1, 0, 0]);
+        assert!(trace.source.is_none());
+    }
+}
+
+#[test]
+fn coherent_allocation_insertion_preserves_earlier_map_failure_custody() {
+    for configured in [false, true] {
+        let mut memory = PreparationMemoryFixtureV1::new(configured);
+        let mut first = CoherentAllocationCustodyV1::new();
+        let mut first_trace = CoherentPreparationTraceV1::default();
+        memory
+            .primary_prepare_coherent_allocation_v1(
+                &mut first,
+                17,
+                CoherentInsertionFaultV1::None,
+                &mut first_trace,
+            )
+            .unwrap();
+        let mut second = CoherentAllocationCustodyV1::new();
+        let mut trace = CoherentPreparationTraceV1::default();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            memory.primary_prepare_coherent_allocation_v1(
+                &mut second,
+                17,
+                CoherentInsertionFaultV1::Native("map_gpu", true),
+                &mut trace,
+            )
+        }));
+        assert_eq!(
+            failure.unwrap_err().downcast_ref::<(&str, &str)>(),
+            Some(&("N2 native panic", "map_gpu"))
+        );
+        let token = trace.allocated.as_ref().unwrap();
+        memory.coherent_assert_terminal_v1(token, "Map", false, (true, None, None));
+        let before = memory.coherent_insertion_snapshot_v1();
+        let accounting = memory.observation();
+        let model = memory.fixture.foundation.memory().clone();
+        assert!(first.requires_retention());
+        assert!(!second.requires_retention());
+        for root in [second, first] {
+            memory.primary_retain_coherent_allocation_v1(root);
+            memory.coherent_assert_terminal_v1(token, "Map", false, (true, None, None));
+            assert_eq!(memory.coherent_insertion_snapshot_v1(), before);
+            assert_eq!(memory.observation(), accounting);
+            assert_eq!(memory.fixture.foundation.memory(), &model);
+        }
+        assert_eq!(first_trace.stages, [1, 0, 1]);
+        assert_eq!(trace.stages, [1, 0, 1]);
+        assert!(first_trace.source.is_none() && trace.source.is_none());
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) enum CoherentInsertionFaultV1 {
     #[default]
@@ -392,6 +550,12 @@ impl CoherentInitializationCustodyV1 {
     }
 }
 
+impl CoherentAllocationCustodyV1 {
+    pub(crate) fn coherent_snapshot_for_test(&self) -> Option<CoherentTokenSnapshotV1> {
+        self.completed.as_ref().map(CoherentTokenSnapshotV1::new)
+    }
+}
+
 impl PreparationMemoryFixtureV1 {
     pub(crate) fn coherent_expect_unchanged_model_v1(
         &self,
@@ -421,6 +585,16 @@ impl PreparationMemoryFixtureV1 {
         source: &[u8],
         committed: u8,
     ) {
+        self.coherent_assert_model_for_length_v1(queue, trace, source.len(), committed);
+    }
+
+    pub(crate) fn coherent_assert_model_for_length_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+        trace: &mut CoherentPreparationTraceV1,
+        requested_bytes: usize,
+        committed: u8,
+    ) {
         assert!(committed <= 2);
         let mut expected = trace
             .before_model
@@ -433,7 +607,7 @@ impl PreparationMemoryFixtureV1 {
             let id = token.identity.id;
             let vm = self.fixture.vm;
             let raw = self.fixture.engine.backend.last_allocation_output.unwrap();
-            let layout = profile_layout::<HostVisibleCoherentGttV1>(source.len()).unwrap();
+            let layout = profile_layout::<HostVisibleCoherentGttV1>(requested_bytes).unwrap();
             let reservation = VaReservationKeyV1 {
                 vm,
                 id: VaReservationIdV1(id),
@@ -538,6 +712,33 @@ impl PreparationMemoryFixtureV1 {
         root.retain_with_engine(&mut self.fixture.engine);
     }
 
+    pub(crate) fn primary_prepare_coherent_allocation_v1(
+        &mut self,
+        root: &mut CoherentAllocationCustodyV1,
+        requested_bytes: usize,
+        fault: CoherentInsertionFaultV1,
+        trace: &mut CoherentPreparationTraceV1,
+    ) -> Result<(), MemorySessionError> {
+        if trace.before_model.is_none() {
+            trace.before_model = Some(self.fixture.foundation.memory().clone());
+        }
+        root.prepare_with_memory(
+            &mut Initializer {
+                memory: self,
+                trace,
+                fault,
+            },
+            requested_bytes,
+        )
+    }
+
+    pub(crate) fn primary_retain_coherent_allocation_v1(
+        &mut self,
+        root: CoherentAllocationCustodyV1,
+    ) {
+        root.retain_with_engine(&mut self.fixture.engine);
+    }
+
     pub(crate) fn coherent_insertion_snapshot_v1(&self) -> CoherentInsertionSnapshotV1 {
         let e = &self.fixture.engine;
         let b = &e.backend;
@@ -604,6 +805,16 @@ impl PreparationMemoryFixtureV1 {
         source: &[u8],
         expected: CoherentInsertionPrefixV1,
     ) {
+        self.coherent_assert_prefix_for_length_v1(before, source.len(), Some(source), expected);
+    }
+
+    pub(crate) fn coherent_assert_prefix_for_length_v1(
+        &self,
+        before: &CoherentInsertionSnapshotV1,
+        requested_bytes: usize,
+        source: Option<&[u8]>,
+        expected: CoherentInsertionPrefixV1,
+    ) {
         let CoherentInsertionPrefixV1 {
             calls,
             operations,
@@ -611,6 +822,9 @@ impl PreparationMemoryFixtureV1 {
             record_phase,
             pending,
         } = expected;
+        if source.is_none() {
+            assert_eq!(copied, 0, "uninitialized allocation has no copied source");
+        }
         let after = self.coherent_insertion_snapshot_v1();
         assert_eq!(
             core::array::from_fn::<_, 5, _>(|i| after.calls[i] - before.calls[i]),
@@ -648,9 +862,13 @@ impl PreparationMemoryFixtureV1 {
         assert_eq!(after.gpu_inputs.len() - before.gpu_inputs.len(), calls[4]);
         let e = &self.fixture.engine;
         assert_eq!(e.pending_allocation.is_some(), pending.is_some());
-        let bytes = profile_layout::<HostVisibleCoherentGttV1>(source.len())
-            .unwrap()
-            .gpu_va_bytes();
+        let bytes = if calls[1] == 0 {
+            0
+        } else {
+            profile_layout::<HostVisibleCoherentGttV1>(requested_bytes)
+                .unwrap()
+                .gpu_va_bytes()
+        };
         assert_eq!(
             after.retained_va,
             before.retained_va + if calls[1] != 0 { bytes } else { 0 }
@@ -663,7 +881,7 @@ impl PreparationMemoryFixtureV1 {
             assert_eq!(after.next_id, before.next_id + 1);
             assert_eq!(
                 r.layout,
-                profile_layout::<HostVisibleCoherentGttV1>(source.len()).unwrap()
+                profile_layout::<HostVisibleCoherentGttV1>(requested_bytes).unwrap()
             );
             assert_eq!(format!("{:?}", r.phase), phase);
             assert_eq!(
@@ -683,7 +901,10 @@ impl PreparationMemoryFixtureV1 {
                 (mapping.address, mapping.byte_offset, mapping.bytes.len()),
                 (r.gpu_va, 0, r.layout.cpu_mapping_bytes)
             );
-            assert_eq!(&mapping.bytes[..copied], &source[..copied]);
+            if let Some(source) = source {
+                assert_eq!(&mapping.bytes[..copied], &source[..copied]);
+            }
+            assert_eq!(mapping.readback_calls.get(), 0);
             assert!(
                 mapping.bytes[copied..].iter().all(|&b| b == 0),
                 "exact untouched logical suffix and padding"
@@ -718,7 +939,7 @@ impl PreparationMemoryFixtureV1 {
             assert_eq!(p.profile, SharedGttProfileV1::HostVisibleCoherent);
             assert_eq!(
                 p.layout,
-                profile_layout::<HostVisibleCoherentGttV1>(source.len()).unwrap()
+                profile_layout::<HostVisibleCoherentGttV1>(requested_bytes).unwrap()
             );
             assert!(
                 p.host_backing_charge.is_none(),

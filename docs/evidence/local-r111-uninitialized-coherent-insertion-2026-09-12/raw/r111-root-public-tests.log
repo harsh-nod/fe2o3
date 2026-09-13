@@ -1,0 +1,15 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0599]: no method named `is_none` found for type `bool` in the current scope
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs:483:69
+    |
+483 |             assert!(take_dispatch_terminal_process_gate_record_v1().is_none());
+    |                                                                     ^^^^^^^ method not found in `bool`
+
+error[E0599]: no method named `is_none` found for type `bool` in the current scope
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/insertion.rs:484:63
+    |
+484 |             assert!(take_lane_unwind_process_gate_record_v1().is_none());
+    |                                                               ^^^^^^^ method not found in `bool`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors
