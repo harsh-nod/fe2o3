@@ -821,6 +821,58 @@
     }
 
     #[test]
+    fn semantic_read_modes_retain_explicit_source_volatility() {
+        use fe2o3_pliron::ProductionSemanticReadModeV2 as Mode;
+        for (volatility, mode) in [
+            (SemanticVolatilityV1::NonVolatile, Mode::UnorderedNonVolatile),
+            (SemanticVolatilityV1::Volatile, Mode::UnorderedVolatile),
+        ] {
+            let value = SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Load(
+                SemanticMemoryLoadV1::new(dereferenced_place(), volatility, None),
+            ));
+            let mut reads = Vec::new();
+            semantic_rvalue_read_places_v2(&value, &mut reads).unwrap();
+            let SemanticRvalueKindV1::Load(load) = value.kind() else { unreachable!() };
+            assert_eq!(reads.len(), 1);
+            assert!(std::ptr::eq(reads[0].0, load.source()));
+            assert_eq!(reads[0].1, mode);
+        }
+    }
+
+    #[test]
+    fn semantic_read_modes_only_label_actual_copy_move_dereferences() {
+        use fe2o3_pliron::ProductionSemanticReadModeV2 as Mode;
+        for (operand, count) in [
+            (SemanticOperandV1::Copy(dereferenced_place()), 1),
+            (SemanticOperandV1::Move(dereferenced_place()), 1),
+            (SemanticOperandV1::Copy(scalar_place()), 0),
+            (SemanticOperandV1::Move(scalar_place()), 0),
+            (constant(7), 0),
+        ] {
+            let value = SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(operand));
+            let mut reads = Vec::new();
+            semantic_rvalue_read_places_v2(&value, &mut reads).unwrap();
+            assert_eq!(reads.len(), count);
+            assert!(reads.iter().all(|(_, mode)| *mode == Mode::UnorderedNonVolatile));
+        }
+    }
+
+    #[test]
+    fn semantic_read_modes_reject_even_relaxed_atomic_loads() {
+        for volatility in [SemanticVolatilityV1::NonVolatile, SemanticVolatilityV1::Volatile] {
+            let value = SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Load(
+                SemanticMemoryLoadV1::new(dereferenced_place(), volatility, Some(atomic_access())),
+            ));
+            let mut reads = Vec::new();
+            assert!(matches!(semantic_rvalue_read_places_v2(&value, &mut reads),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "atomic scalar load requires an exact ordered read contract"
+                ))));
+            assert!(reads.is_empty());
+        }
+    }
+
+    #[test]
     fn explicit_or_dereferenced_unranked_memory_fails_closed() {
         assert_unsupported(
             audit_statements(vec![statement(SemanticStatementKindV1::Store(

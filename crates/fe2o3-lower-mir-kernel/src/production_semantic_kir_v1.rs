@@ -2801,7 +2801,8 @@ fn unsupported_indices_match_ranked_sources_result(
             "unsupported-index correlation could not index semantic access sites",
         ));
     };
-    let Some(ranked) = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
+    let Some(ranked) =
+        index_ranked_correlation(lowering.kernel(), sources, max_operations, &mut budget)
     else {
         return Err(ProductionMemoryDischargeFailureV1::stage(
             "unsupported-index correlation could not index ranked access receipts",
@@ -3535,7 +3536,7 @@ fn index_semantic_access_span(
 }
 
 fn index_ranked_correlation(
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    ranked_kernel: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedAccessSourceV1],
     max_operations: usize,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
@@ -3546,7 +3547,7 @@ fn index_ranked_correlation(
     let mut operation_count = 0_usize;
     let mut view_definitions = BTreeMap::new();
     let mut semantic_expressions = BTreeMap::new();
-    for block in lowering.kernel().blocks() {
+    for block in ranked_kernel.blocks() {
         budget.charge()?;
         for operation in block.operations() {
             operation_count = operation_count.checked_add(1)?;
@@ -3613,8 +3614,7 @@ fn index_ranked_correlation(
     let mut ambiguous_conservative_statements = BTreeSet::new();
     for source in sources {
         budget.charge()?;
-        let operation = lowering
-            .kernel()
+        let operation = ranked_kernel
             .blocks()
             .get(source.ranked_block as usize)?
             .operations()
@@ -3750,6 +3750,7 @@ enum NormalizedScalarExpressionV1 {
     Load {
         site: SemanticAccessSiteV1,
         scalar: ProductionSemanticScalarTypeV2,
+        read_mode: fe2o3_pliron::ProductionSemanticReadModeV2,
     },
     Unary {
         operation: ProductionSemanticUnaryOpV2,
@@ -3785,7 +3786,7 @@ enum NormalizedScalarExpressionV1 {
 
 fn normalize_ranked_expression_v1(
     expression: &ProductionSemanticExpressionV2,
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    ranked_kernel: &fe2o3_pliron::ProductionRankedKernelV1,
     ranked: &RankedCorrelationIndexV1,
     depth: usize,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
@@ -3831,8 +3832,7 @@ fn normalize_ranked_expression_v1(
             {
                 return None;
             }
-            let operation = lowering
-                .kernel()
+            let operation = ranked_kernel
                 .blocks()
                 .get(load.block as usize)?
                 .operations()
@@ -3850,6 +3850,7 @@ fn normalize_ranked_expression_v1(
             NormalizedScalarExpressionV1::Load {
                 site,
                 scalar: load.scalar,
+                read_mode: load.read_mode,
             }
         }
         ProductionSemanticExpressionV2::Unary {
@@ -3860,7 +3861,11 @@ fn normalize_ranked_expression_v1(
             operation: *operation,
             scalar: *scalar,
             operand: Box::new(normalize_ranked_expression_v1(
-                operand, lowering, ranked, next, budget,
+                operand,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
         },
         ProductionSemanticExpressionV2::Binary {
@@ -3874,10 +3879,18 @@ fn normalize_ranked_expression_v1(
             scalar: *scalar,
             overflow: *overflow,
             lhs: Box::new(normalize_ranked_expression_v1(
-                lhs, lowering, ranked, next, budget,
+                lhs,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
             rhs: Box::new(normalize_ranked_expression_v1(
-                rhs, lowering, ranked, next, budget,
+                rhs,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
         },
         ProductionSemanticExpressionV2::Compare {
@@ -3889,10 +3902,18 @@ fn normalize_ranked_expression_v1(
             operation: *operation,
             operand_scalar: *operand_scalar,
             lhs: Box::new(normalize_ranked_expression_v1(
-                lhs, lowering, ranked, next, budget,
+                lhs,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
             rhs: Box::new(normalize_ranked_expression_v1(
-                rhs, lowering, ranked, next, budget,
+                rhs,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
         },
         ProductionSemanticExpressionV2::Select {
@@ -3903,13 +3924,25 @@ fn normalize_ranked_expression_v1(
         } => NormalizedScalarExpressionV1::Select {
             scalar: *scalar,
             condition: Box::new(normalize_ranked_expression_v1(
-                condition, lowering, ranked, next, budget,
+                condition,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
             when_true: Box::new(normalize_ranked_expression_v1(
-                when_true, lowering, ranked, next, budget,
+                when_true,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
             when_false: Box::new(normalize_ranked_expression_v1(
-                when_false, lowering, ranked, next, budget,
+                when_false,
+                ranked_kernel,
+                ranked,
+                next,
+                budget,
             )?),
         },
         ProductionSemanticExpressionV2::Cast {
@@ -3918,7 +3951,8 @@ fn normalize_ranked_expression_v1(
             target,
             operand,
         } => {
-            let operand = normalize_ranked_expression_v1(operand, lowering, ranked, next, budget)?;
+            let operand =
+                normalize_ranked_expression_v1(operand, ranked_kernel, ranked, next, budget)?;
             if source == target {
                 operand
             } else {
@@ -4064,10 +4098,18 @@ fn normalize_kir_expression_inner_v1(
                 }
             }
         }
-        OperationKind::Load { .. } => {
+        OperationKind::Load { access, .. } => {
             let location = *kir.definition_locations.get(&value)?;
             let site = *semantic_sites.get(&(location, 0))?;
-            NormalizedScalarExpressionV1::Load { site, scalar }
+            NormalizedScalarExpressionV1::Load {
+                site,
+                scalar,
+                read_mode: if access.volatile {
+                    fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedVolatile
+                } else {
+                    fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedNonVolatile
+                },
+            }
         }
         _ => return None,
     })
@@ -5809,7 +5851,7 @@ fn validate_generated_executable_effect_relations_v1(
     semantic_function: SemanticFunctionIdV1,
     body: &FunctionBody,
     correspondence: &SemanticKirCorrespondenceV1,
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    ranked_kernel: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedExecutableEffectSourceV1],
     kir: &KirCorrelationIndexV1<'_>,
 ) -> Result<
@@ -5897,8 +5939,7 @@ fn validate_generated_executable_effect_relations_v1(
                 return Err(mismatch(ordinal));
             }
             previous_ranked = Some((source.ranked_block, source.ranked_operation));
-            let ranked_operation = lowering
-                .kernel()
+            let ranked_operation = ranked_kernel
                 .blocks()
                 .get(source.ranked_block as usize)
                 .and_then(|block| block.operations().get(source.ranked_operation as usize))
@@ -5952,7 +5993,7 @@ fn validate_generated_executable_effect_relations_v1(
             }
         }
     }
-    for (block, contents) in lowering.kernel().blocks().iter().enumerate() {
+    for (block, contents) in ranked_kernel.blocks().iter().enumerate() {
         for (operation, effect) in contents.operations().iter().enumerate() {
             let ProductionRankedOperationV1::AllocationEffect {
                 allocation_origin,
@@ -6017,6 +6058,31 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
     max_operations: usize,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
+    compare_mir_ranked_recipe_translation_v1(
+        semantic,
+        module,
+        correspondence,
+        kernel_id,
+        lowering.kernel(),
+        sources,
+        executable_effect_sources,
+        max_operations,
+    )
+}
+
+// Comparison of bounded recipe data is not memory admission. Production callers
+// must enter through the owner-held wrapper above; this core grants no typestate.
+#[allow(clippy::too_many_arguments)]
+fn compare_mir_ranked_recipe_translation_v1(
+    semantic: Option<&AdmittedInertSemanticMirV1>,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    kernel_id: &str,
+    ranked_kernel: &fe2o3_pliron::ProductionRankedKernelV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
+    max_operations: usize,
+) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
     let Some(kernel) = module
         .kernels
         .iter()
@@ -6057,7 +6123,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         semantic_function,
         body,
         correspondence,
-        lowering,
+        ranked_kernel,
         executable_effect_sources,
         &kir,
     )?;
@@ -6069,7 +6135,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         &mut budget,
     )
     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let ranked = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
+    let ranked = index_ranked_correlation(ranked_kernel, sources, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     if let Some(location) = kir.unmodeled_memory_effects.first().copied() {
         return Err(
@@ -6300,7 +6366,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
             }
             let expected = normalize_ranked_expression_v1(
                 ranked_expression,
-                lowering,
+                ranked_kernel,
                 &ranked,
                 0,
                 &mut budget,
@@ -6372,20 +6438,19 @@ fn validate_mir_pliron_translation_with_semantic_v1(
             });
         }
     }
-    validate_effect_control_flow_v1(body, lowering.kernel(), &effect_locations, &mut budget)?;
+    validate_effect_control_flow_v1(body, ranked_kernel, &effect_locations, &mut budget)?;
 
     let kir_synchronization = kir_synchronization_contracts_v1(body)?;
-    let ranked_synchronization = ranked_synchronization_contracts_v1(lowering.kernel())?;
+    let ranked_synchronization = ranked_synchronization_contracts_v1(ranked_kernel)?;
     if kir_synchronization != ranked_synchronization {
         return Err(ProductionMirPlironTranslationErrorV1::SynchronizationMismatch);
     }
     let kir_tensors = kir_tensor_contracts_v1(body)?;
-    let ranked_tensors = ranked_tensor_contracts_v1(lowering.kernel())?;
+    let ranked_tensors = ranked_tensor_contracts_v1(ranked_kernel)?;
     if kir_tensors != ranked_tensors {
         return Err(ProductionMirPlironTranslationErrorV1::TensorContractMismatch);
     }
-    let conservative_ranked_effects = lowering
-        .kernel()
+    let conservative_ranked_effects = ranked_kernel
         .blocks()
         .iter()
         .flat_map(|block| block.operations())
@@ -30008,8 +30073,26 @@ mod resource_tests {
     struct ValueTranslationFixtureV1 {
         module: Module,
         correspondence: SemanticKirCorrespondenceV1,
-        lowering: ProductionRankedKernelLoweringInputV1,
+        recipe: ProductionRankedKernelV1,
         sources: [ProductionRankedAccessSourceV1; 2],
+    }
+
+    impl ValueTranslationFixtureV1 {
+        fn compare(
+            &self,
+        ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1>
+        {
+            compare_mir_ranked_recipe_translation_v1(
+                None,
+                &self.module,
+                &self.correspondence,
+                self.module.kernels[0].id.as_str(),
+                &self.recipe,
+                &self.sources,
+                &[],
+                32,
+            )
+        }
     }
 
     fn value_translation_fixture(
@@ -30147,6 +30230,7 @@ mod resource_tests {
             block: 0,
             operation: 3,
             scalar,
+            read_mode: fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedNonVolatile,
             allocation_origin: 1,
             view: ProductionRankedValueV1::Local(view),
             indices: vec![ProductionRankedValueV1::Local(index)].into_boxed_slice(),
@@ -30210,15 +30294,10 @@ mod resource_tests {
             )],
         )
         .expect("value translation ranked kernel must be valid");
-        let lowering = compile_ranked_kernel_for_lowering_v1(
-            ProductionConstructionV1::ranked_kernel("value_translation_module", kernel).unwrap(),
-            ProductionSessionLimitsV1::default(),
-        )
-        .expect("value translation ranked kernel must pass mandatory checks");
         ValueTranslationFixtureV1 {
             module,
             correspondence,
-            lowering,
+            recipe: kernel,
             sources: [
                 ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 3),
                 ProductionRankedAccessSourceV1::new(0, Some(0), 1, 0, 5),
@@ -30232,15 +30311,9 @@ mod resource_tests {
             ProductionSemanticBinaryOpV2::Add,
             u64::from(0x3f80_0000_u32),
         );
-        let report = validate_mir_pliron_translation_v1(
-            &fixture.module,
-            &fixture.correspondence,
-            fixture.module.kernels[0].id.as_str(),
-            &fixture.lowering,
-            &fixture.sources,
-            32,
-        )
-        .expect("the independently reconstructed write expression must agree");
+        let report = fixture
+            .compare()
+            .expect("the independently reconstructed write expression must agree");
         assert_eq!(report.memory_effects(), 2);
         assert_eq!(report.value_expressions(), 1);
     }
@@ -30274,14 +30347,7 @@ mod resource_tests {
             ),
         ] {
             assert!(matches!(
-                validate_mir_pliron_translation_v1(
-                    &fixture.module,
-                    &fixture.correspondence,
-                    fixture.module.kernels[0].id.as_str(),
-                    &fixture.lowering,
-                    &fixture.sources,
-                    32,
-                ),
+                fixture.compare(),
                 Err(
                     ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch {
                         location: FunctionOperationLocation {
@@ -30308,16 +30374,78 @@ mod resource_tests {
         *op = BinaryOp::Multiply;
         verify_module(&fixture.module).expect("mutated arithmetic remains valid Kernel IR");
         assert!(matches!(
-            validate_mir_pliron_translation_v1(
-                &fixture.module,
-                &fixture.correspondence,
-                fixture.module.kernels[0].id.as_str(),
-                &fixture.lowering,
-                &fixture.sources,
-                32,
-            ),
+            fixture.compare(),
             Err(ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn value_translation_comparison_does_not_replace_owned_memory_admission() {
+        let fixture = value_translation_fixture(ProductionSemanticBinaryOpV2::Add, 0x3f80_0000);
+        assert!(fixture.compare().is_ok());
+        let result = compile_ranked_kernel_for_lowering_v1(
+            ProductionConstructionV1::ranked_kernel("value_translation_module", fixture.recipe)
+                .unwrap(),
+            ProductionSessionLimitsV1::default(),
+        );
+        let Err(fe2o3_pliron::ProductionRankedCompileErrorV1::Session(
+            fe2o3_pliron::ProductionSessionErrorV1::RankedBounds(error),
+        )) = result
+        else {
+            panic!("comparison must not admit a typed-read recipe");
+        };
+        assert!(error.report().findings().iter().any(|finding| matches!(finding,
+            fe2o3_pliron::RankedBoundsFindingV1::UnsupportedOperation { block: 0, operation: 4, kind }
+                if kind == "kernel.semantic_typed_read"
+        )));
+    }
+
+    #[test]
+    fn value_translation_comparison_retains_both_sides_read_volatility() {
+        for (ranked_volatile, kir_volatile) in
+            [(false, false), (true, true), (true, false), (false, true)]
+        {
+            let mut fixture =
+                value_translation_fixture(ProductionSemanticBinaryOpV2::Add, 0x3f80_0000);
+            let mut blocks = fixture.recipe.blocks().to_vec();
+            let mut operations = blocks[0].operations().to_vec();
+            let ProductionRankedOperationV1::SemanticExpression {
+                expression: ProductionSemanticExpressionV2::Binary { lhs, .. },
+                ..
+            } = &mut operations[4]
+            else {
+                unreachable!()
+            };
+            let ProductionSemanticExpressionV2::Load(load) = lhs.as_mut() else {
+                unreachable!()
+            };
+            load.read_mode = if ranked_volatile {
+                fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedVolatile
+            } else {
+                fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedNonVolatile
+            };
+            blocks[0] =
+                ProductionRankedBlockV1::new(operations, ProductionRankedTerminatorV1::Return);
+            fixture.recipe = ProductionRankedKernelV1::new("value_translation", 0, blocks).unwrap();
+            let body = fixture.module.functions[0].body.as_mut().unwrap();
+            let mut loads = 0;
+            for operation in &mut body.blocks[0].operations {
+                if let OperationKind::Load { access, .. } = &mut operation.kind {
+                    access.volatile = kir_volatile;
+                    loads += 1;
+                }
+            }
+            assert_eq!(loads, 1);
+            let result = fixture.compare();
+            if ranked_volatile == kir_volatile {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch { .. })
+                ));
+            }
+        }
     }
 
     #[test]

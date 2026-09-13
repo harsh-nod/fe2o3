@@ -136,7 +136,13 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
                 operation_count,
                 MAX_PLIRON_IDENTITY_OPERATIONS_V1,
             )?;
-            if !is_production_ranked_operation_v1(dynamic.as_ref()) {
+            // Capture read operands/attributes for custody, without treating an
+            // unpaired read as a bounds-checked memory event.
+            if !is_production_ranked_operation_v1(dynamic.as_ref())
+                && dynamic
+                    .downcast_ref::<dialect_kernel::SemanticTypedReadOp>()
+                    .is_none()
+            {
                 return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
                     location,
                     detail: "operation is outside the closed ranked operation allowlist",
@@ -634,6 +640,8 @@ fn is_production_attribute_id_parts_v1(dialect: &str, name: &str) -> bool {
                 | "semantic_ieee_rounding"
                 | "semantic_numerical_policy"
                 | "semantic_overflow"
+                | "semantic_read_ordering"
+                | "semantic_read_volatility"
                 | "semantic_scalar_kind"
                 | "semantic_step_bound"
                 | "semantic_symbol"

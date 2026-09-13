@@ -299,7 +299,12 @@ fn build_identity(
                 .downcast_ref::<IndexLessThanBranchArgsOp>()
                 .is_some(),
         );
-        semantic_definitions += usize::from(is_semantic_refinement_definition_v1(&*operation));
+        semantic_definitions += usize::from(
+            is_semantic_refinement_definition_v1(&*operation)
+                || operation
+                    .downcast_ref::<dialect_kernel::SemanticTypedReadOp>()
+                    .is_some(),
+        );
         semantic_refinement_contracts +=
             usize::from(is_semantic_refinement_contract_v1(&*operation));
     }

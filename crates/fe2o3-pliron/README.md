@@ -191,6 +191,20 @@ kernel-to-GPU service does not yet lower every ranked operation. Future lowering
 must consume this owner-bound result rather than reconstructing or bypassing the
 checked graph.
 
+### Typed read boundary
+
+Ranked semantic load leaves now refer to one `SemanticTypedReadOp` immediately
+after their original ranked access, rather than free scalar symbols. Repeated
+uses share that SSA result; distinct source reads remain distinct. The producer
+retains exact view, indices, allocation, scalar type and source volatility.
+Native verification still checks dominance, and unavailable producers reject.
+
+This is representation, not memory or value equivalence. Exact structural
+capture includes the read metadata, but mandatory bounds admission still rejects
+typed reads until independent companion-access validation is integrated. Atomic
+loads and volatile call-result binding remain unsupported here. Read labels and
+expression commitments alone never establish CPU/GPU equality or an error bound.
+
 ## Remaining trusted surfaces
 
 `DialectRegistrationHook` no longer receives `&mut Context`; all eight current

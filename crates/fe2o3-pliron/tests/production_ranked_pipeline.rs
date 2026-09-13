@@ -134,6 +134,7 @@ fn typed_load_kernel(
                         block: 0,
                         operation: load_operation,
                         scalar,
+                        read_mode: fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedNonVolatile,
                         allocation_origin: load_origin,
                         view: local(VIEW),
                         indices: vec![local(INDEX)].into_boxed_slice(),
@@ -160,12 +161,20 @@ fn typed_load_leaf_is_reconciled_to_the_exact_live_ranked_read() {
     );
 
     let kernel = typed_load_kernel(3, 1).expect("exact live load is structurally valid");
-    let _lowering = compile_ranked_kernel_for_lowering_v1(
+    let lowering = compile_ranked_kernel_for_lowering_v1(
         ProductionConstructionV1::ranked_kernel("typed_load_module", kernel)
             .expect("typed load construction must succeed"),
         ProductionSessionLimitsV1::default(),
-    )
-    .expect("typed load commitment must match the live PLIRON expression");
+    );
+    assert!(
+        matches!(
+            lowering,
+            Err(ProductionRankedCompileErrorV1::Session(
+                ProductionSessionErrorV1::RankedBounds(_)
+            ))
+        ),
+        "read representation needs independent companion-access admission: {lowering:?}"
+    );
 }
 
 fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {

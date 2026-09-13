@@ -82,6 +82,9 @@ use super::{
     ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
 };
 
+mod semantic_reads_v1;
+use semantic_reads_v1::RankedSemanticReadsV1;
+
 /// Compiler-derived provenance retained for one cooperative tensor call.
 ///
 /// These are identities of typed capability roots, not user assertions. The
@@ -2055,6 +2058,8 @@ impl ProductionRankedKernelV1 {
                 .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
             validate_live_semantic_loads(self, expression)?;
         }
+        // Each load occurrence was counted as a leaf. Sharing one producer per
+        // source site only reduces this operation bound; it adds no local slot.
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
             let materialized = block
                 .operations
@@ -4526,6 +4531,8 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
+        let mut reads =
+            RankedSemanticReadsV1::new(&kernel).map_err(ProductionSessionErrorV1::RankedRecipe)?;
         let operation = self
             .inner
             .create_module(root_name)
@@ -4597,7 +4604,7 @@ impl ProductionPlironSessionV1 {
         let mut locals = Vec::new();
         for (block_index, recipe_block) in kernel.blocks.iter().enumerate() {
             let block = blocks[block_index];
-            for recipe in &recipe_block.operations {
+            for (operation_index, recipe) in recipe_block.operations.iter().enumerate() {
                 materialize_operation(
                     &mut self.inner.context,
                     block,
@@ -4606,6 +4613,8 @@ impl ProductionPlironSessionV1 {
                     &mut locals,
                     &block_arguments,
                     &policy_checked_refinement_staging,
+                    (block_index as u32, operation_index as u32),
+                    &mut reads,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
             }
@@ -4620,6 +4629,9 @@ impl ProductionPlironSessionV1 {
             )
             .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         }
+        reads
+            .finish()
+            .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         self.inner
             .finish_internal_root_construction(&operation, transaction)
             .map_err(ProductionSessionErrorV1::Operation)?;
@@ -5053,6 +5065,8 @@ fn materialize_operation(
     locals: &mut Vec<Value>,
     block_arguments: &HashMap<(u32, u32), Value>,
     policy_checked_refinement_staging: &[ProductionPolicyCheckedRefinementStagingV2],
+    source_site: (u32, u32),
+    reads: &mut RankedSemanticReadsV1<'_>,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
@@ -5596,7 +5610,8 @@ fn materialize_operation(
             numerical_contract,
         } => {
             let digest = expression.materialized_pliron_transcript_sha256(*numerical_contract);
-            let expression = materialize_typed_semantic_expression(context, block, expression)?;
+            let expression =
+                materialize_typed_semantic_expression(context, block, expression, reads)?;
             let (policy, rounding, exceptional_values) =
                 typed_numerical_contract(*numerical_contract)?;
             let op = SemanticTypedExpressionRootOp::new(
@@ -5832,6 +5847,15 @@ fn materialize_operation(
         }
     };
     operation.insert_at_back(block, context);
+    reads.emit_after(
+        context,
+        block,
+        source_site,
+        operation,
+        arguments,
+        locals,
+        block_arguments,
+    )?;
     if let Some((identity, value)) = result {
         if identity.get() as usize != locals.len() {
             return Err(ProductionRankedKernelErrorV1::Materialization(
@@ -5961,6 +5985,7 @@ fn materialize_typed_semantic_expression(
     context: &mut pliron::context::Context,
     block: Ptr<BasicBlock>,
     expression: &ProductionSemanticExpressionV2,
+    reads: &RankedSemanticReadsV1<'_>,
 ) -> Result<Value, ProductionRankedKernelErrorV1> {
     let operation = match expression {
         ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
@@ -5970,15 +5995,14 @@ fn materialize_typed_semantic_expression(
             SemanticTypedConstantOp::new(context, *bits, typed_scalar(*scalar)?).get_operation()
         }
         ProductionSemanticExpressionV2::Load(load) => {
-            SemanticTypedSymbolOp::new(context, load.proof_symbol(), typed_scalar(load.scalar)?)
-                .get_operation()
+            return reads.resolve(load);
         }
         ProductionSemanticExpressionV2::Unary {
             operation,
             scalar,
             operand,
         } => {
-            let operand = materialize_typed_semantic_expression(context, block, operand)?;
+            let operand = materialize_typed_semantic_expression(context, block, operand, reads)?;
             SemanticTypedUnaryOp::new(
                 context,
                 match operation {
@@ -5997,8 +6021,8 @@ fn materialize_typed_semantic_expression(
             lhs,
             rhs,
         } => {
-            let lhs = materialize_typed_semantic_expression(context, block, lhs)?;
-            let rhs = materialize_typed_semantic_expression(context, block, rhs)?;
+            let lhs = materialize_typed_semantic_expression(context, block, lhs, reads)?;
+            let rhs = materialize_typed_semantic_expression(context, block, rhs, reads)?;
             SemanticTypedBinaryOp::new(
                 context,
                 match operation {
@@ -6035,8 +6059,8 @@ fn materialize_typed_semantic_expression(
             lhs,
             rhs,
         } => {
-            let lhs = materialize_typed_semantic_expression(context, block, lhs)?;
-            let rhs = materialize_typed_semantic_expression(context, block, rhs)?;
+            let lhs = materialize_typed_semantic_expression(context, block, lhs, reads)?;
+            let rhs = materialize_typed_semantic_expression(context, block, rhs, reads)?;
             SemanticTypedCompareOp::new(
                 context,
                 match operation {
@@ -6069,9 +6093,12 @@ fn materialize_typed_semantic_expression(
             when_true,
             when_false,
         } => {
-            let condition = materialize_typed_semantic_expression(context, block, condition)?;
-            let when_true = materialize_typed_semantic_expression(context, block, when_true)?;
-            let when_false = materialize_typed_semantic_expression(context, block, when_false)?;
+            let condition =
+                materialize_typed_semantic_expression(context, block, condition, reads)?;
+            let when_true =
+                materialize_typed_semantic_expression(context, block, when_true, reads)?;
+            let when_false =
+                materialize_typed_semantic_expression(context, block, when_false, reads)?;
             SemanticTypedSelectOp::new(
                 context,
                 typed_scalar(*scalar)?,
@@ -6087,7 +6114,7 @@ fn materialize_typed_semantic_expression(
             target,
             operand,
         } => {
-            let operand = materialize_typed_semantic_expression(context, block, operand)?;
+            let operand = materialize_typed_semantic_expression(context, block, operand, reads)?;
             SemanticTypedCastOp::new(
                 context,
                 match kind {

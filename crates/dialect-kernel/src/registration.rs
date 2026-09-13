@@ -18,13 +18,14 @@ use crate::{
     SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticCoverageBindingAttr,
     SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr,
     SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, SemanticIeeeRoundingAttr,
-    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticScalarType,
-    SemanticStepBoundAttr, SemanticSymbolAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
-    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
-    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
-    SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
-    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr,
-    TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp, TensorValueRootAttr, TrapOp,
+    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticReadOrderingAttr,
+    SemanticReadVolatilityAttr, SemanticScalarKindAttr, SemanticScalarType, SemanticStepBoundAttr,
+    SemanticSymbolAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp,
+    SemanticTypedCastKindAttr, SemanticTypedCastOp, SemanticTypedCompareKindAttr,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedReadOp, SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr,
+    SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr,
+    TensorLayoutOp, TensorResultComponentOp, TensorValueRootAttr, TrapOp,
 };
 
 fn registration_hook(
@@ -42,6 +43,8 @@ fn registration_hook(
     service.register_attribute::<SemanticTypedUnaryKindAttr>()?;
     service.register_attribute::<SemanticTypedBinaryKindAttr>()?;
     service.register_attribute::<SemanticOverflowAttr>()?;
+    service.register_attribute::<SemanticReadOrderingAttr>()?;
+    service.register_attribute::<SemanticReadVolatilityAttr>()?;
     service.register_attribute::<SemanticTypedCompareKindAttr>()?;
     service.register_attribute::<SemanticTypedCastKindAttr>()?;
     service.register_attribute::<SemanticNumericalPolicyAttr>()?;
@@ -104,6 +107,7 @@ fn registration_hook(
     service.register_operation::<SemanticExpressionCommitmentOp>()?;
     service.register_operation::<SemanticBinaryOp>()?;
     service.register_operation::<SemanticTypedSymbolOp>()?;
+    service.register_operation::<SemanticTypedReadOp>()?;
     service.register_operation::<TensorResultComponentOp>()?;
     service.register_operation::<SemanticTypedConstantOp>()?;
     service.register_operation::<SemanticTypedUnaryOp>()?;

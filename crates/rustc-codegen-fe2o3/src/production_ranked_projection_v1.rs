@@ -3518,9 +3518,18 @@ struct GpuSemanticExpressionResolverV2<'a> {
 
 fn semantic_rvalue_read_places_v2<'a>(
     value: &'a SemanticRvalueV1,
-    places: &mut Vec<&'a SemanticPlaceV1>,
-) {
-    fn push_operand<'a>(operand: &'a SemanticOperandV1, places: &mut Vec<&'a SemanticPlaceV1>) {
+    places: &mut Vec<(
+        &'a SemanticPlaceV1,
+        fe2o3_pliron::ProductionSemanticReadModeV2,
+    )>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticVolatilityV1;
+    use fe2o3_pliron::ProductionSemanticReadModeV2 as Mode;
+
+    fn push_operand<'a>(
+        operand: &'a SemanticOperandV1,
+        places: &mut Vec<(&'a SemanticPlaceV1, Mode)>,
+    ) {
         let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
             return;
         };
@@ -3529,11 +3538,22 @@ fn semantic_rvalue_read_places_v2<'a>(
             .iter()
             .any(|projection| projection.kind() == SemanticProjectionKindV1::Dereference)
         {
-            places.push(place);
+            places.push((place, Mode::UnorderedNonVolatile));
         }
     }
     match value.kind() {
-        SemanticRvalueKindV1::Load(load) => places.push(load.source()),
+        SemanticRvalueKindV1::Load(load) => {
+            if load.atomic().is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "atomic scalar load requires an exact ordered read contract",
+                ));
+            }
+            let mode = match load.volatility() {
+                SemanticVolatilityV1::NonVolatile => Mode::UnorderedNonVolatile,
+                SemanticVolatilityV1::Volatile => Mode::UnorderedVolatile,
+            };
+            places.push((load.source(), mode));
+        }
         SemanticRvalueKindV1::Use(operand)
         | SemanticRvalueKindV1::Unary { operand, .. }
         | SemanticRvalueKindV1::Cast { operand, .. } => push_operand(operand, places),
@@ -3559,6 +3579,7 @@ fn semantic_rvalue_read_places_v2<'a>(
         | SemanticRvalueKindV1::Length(_)
         | SemanticRvalueKindV1::Discriminant(_) => {}
     }
+    Ok(())
 }
 
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
@@ -3642,7 +3663,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 continue;
             };
             let mut read_places = Vec::new();
-            semantic_rvalue_read_places_v2(assignment.value(), &mut read_places);
+            semantic_rvalue_read_places_v2(assignment.value(), &mut read_places)?;
             let matching_sources = sources
                 .iter()
                 .filter(|candidate| {
@@ -3660,7 +3681,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             if read_places.len() != matching_sources.len() {
                 continue;
             }
-            let Some(read_place) = read_places.get(ordinal).copied() else {
+            let Some((read_place, read_mode)) = read_places.get(ordinal).copied() else {
                 continue;
             };
             let Some(operation) = blocks
@@ -3711,6 +3732,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     )
                 })?,
                 scalar,
+                read_mode,
                 allocation_origin,
                 view,
                 indices: indices.into_boxed_slice(),
