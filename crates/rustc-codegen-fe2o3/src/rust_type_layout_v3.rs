@@ -10,17 +10,14 @@ use fe2o3_artifacts::{
     RustcAbiClassV1, ScalarType, TypeIdentity,
 };
 use rustc_abi::{BackendRepr, ExternAbi, HasDataLayout, Primitive};
-use rustc_hir::def::DefKind;
 use rustc_hir::{Mutability as HirMutability, Safety};
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
     FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
 };
-use rustc_span::Symbol;
 
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
-const INDEX_1D_DIAGNOSTIC_ITEM: &str = "fe2o3_device_thread_index_1d";
 const POINTER_BYTES: u64 = 8;
 const POINTER_ALIGNMENT: u32 = 8;
 const SLICE_BYTES: u64 = 16;
@@ -1005,54 +1002,7 @@ fn require_64_bit_target<'tcx>(
 }
 
 fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralTypedExtractError> {
-    let marker = tcx
-        .get_diagnostic_item(Symbol::intern(INDEX_1D_DIAGNOSTIC_ITEM))
-        .ok_or_else(|| {
-            GeneralTypedExtractError::new(format!(
-                "missing trusted diagnostic item `{INDEX_1D_DIAGNOSTIC_ITEM}`"
-            ))
-        })?;
-    if tcx.def_kind(marker) != DefKind::Fn {
-        return Err(GeneralTypedExtractError::new(
-            "Index1D diagnostic item does not resolve to a function",
-        ));
-    }
-    if trusted_device_items::classify(tcx, marker) != Some(TrustedDeviceItem::ThreadIndex1d) {
-        let reason = trusted_device_items::rejected_provider(tcx, marker).map_or_else(
-            || "provider is not registered as trusted".to_owned(),
-            |rejection| rejection.reason,
-        );
-        return Err(GeneralTypedExtractError::new(format!(
-            "Index1D diagnostic item does not resolve to the trusted function: {reason}"
-        )));
-    }
-    let signature =
-        tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(marker).instantiate_identity());
-    if !signature.inputs().is_empty()
-        || signature.safety != Safety::Safe
-        || signature.abi != ExternAbi::Rust
-        || signature.c_variadic
-    {
-        return Err(GeneralTypedExtractError::new(
-            "trusted Index1D function has an unexpected signature",
-        ));
-    }
-    let TyKind::Adt(thread_index, args) = *signature.output().kind() else {
-        return Err(GeneralTypedExtractError::new(
-            "trusted Index1D function has an unexpected return type",
-        ));
-    };
-    if trusted_device_items::classify(tcx, thread_index.did())
-        != Some(TrustedDeviceItem::ThreadIndex)
-        || args.len() != 1
-    {
-        return Err(GeneralTypedExtractError::new(
-            "trusted Index1D return type is not the trusted ThreadIndex",
-        ));
-    }
-    args.first()
-        .and_then(|arg| arg.as_type())
-        .ok_or_else(|| GeneralTypedExtractError::new("trusted Index1D type argument is missing"))
+    trusted_device_items::authenticated_index1d_type_v1(tcx).map_err(GeneralTypedExtractError::new)
 }
 
 #[cfg(test)]

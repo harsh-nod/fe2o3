@@ -275,7 +275,8 @@ pub(crate) fn prepare_reference_effect_request_v2(
     }
     let mut output_relations = BTreeMap::new();
     for relation in &binding.effect_ir.relations {
-        if let ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element } =
+        if let ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element }
+            | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, element } =
             relation
             && output_relations.insert(*argument, *element).is_some()
         {
@@ -929,6 +930,7 @@ fn compiler_extracted_gpu_effect_v1(
         .iter()
         .find_map(|relation| match relation {
             ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element }
+            | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, element }
                 if *argument == output_argument =>
             {
                 Some(*element)

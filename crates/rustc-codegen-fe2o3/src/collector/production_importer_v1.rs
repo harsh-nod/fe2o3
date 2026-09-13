@@ -3855,16 +3855,7 @@ fn rust_disjoint_row_stripe_2d_v1<'tcx>(
 }
 
 fn trusted_index1d_type_v1<'tcx>(tcx: TyCtxt<'tcx>) -> Option<Ty<'tcx>> {
-    let function = trusted_device_items::definition(tcx, TrustedDeviceItem::ThreadIndex1d)?;
-    let signature =
-        tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(function).instantiate_identity());
-    let TyKind::Adt(definition, arguments) = *signature.output().kind() else {
-        return None;
-    };
-    (trusted_device_items::classify(tcx, definition.did()) == Some(TrustedDeviceItem::ThreadIndex)
-        && arguments.len() == 1)
-        .then(|| arguments[0].as_type())
-        .flatten()
+    trusted_device_items::authenticated_index1d_type_v1(tcx).ok()
 }
 
 fn option_payload_v1(

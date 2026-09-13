@@ -1453,6 +1453,69 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
     classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation)
 }
 
+/// Derive the identity index space from the authenticated zero-argument terminal.
+/// This returns a type identity, not a capability or permission to erase a brand.
+pub(crate) fn authenticated_index1d_type_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<rustc_middle::ty::Ty<'tcx>, String> {
+    let marker = tcx
+        .get_diagnostic_item(Symbol::intern("fe2o3_device_thread_index_1d"))
+        .ok_or_else(|| "authenticated invocation index producer is unavailable".to_owned())?;
+    if tcx.def_kind(marker) != rustc_hir::def::DefKind::Fn || tcx.generics_of(marker).count() != 0 {
+        return Err("identity index producer must be one monomorphic function".to_owned());
+    }
+    provider_rule(tcx, marker, TrustedDeviceItem::ThreadIndex1d)?;
+    let signature = tcx.fn_sig(marker).instantiate_identity();
+    if !signature.bound_vars().is_empty() {
+        return Err("identity index producer must have no bound signature variables".to_owned());
+    }
+    let signature = signature.skip_binder();
+    if !signature.inputs().is_empty()
+        || signature.safety != Safety::Safe
+        || signature.abi != ExternAbi::Rust
+        || signature.c_variadic
+    {
+        return Err("trusted Index1D function has an unexpected signature".to_owned());
+    }
+    let TyKind::Adt(index, arguments) = *signature.output().kind() else {
+        return Err("identity index producer must return the authenticated ThreadIndex".to_owned());
+    };
+    if classify(tcx, index.did()) != Some(TrustedDeviceItem::ThreadIndex) {
+        return Err(rejected_provider(tcx, index.did()).map_or_else(
+            || "identity index producer returns an unauthenticated carrier".to_owned(),
+            |rejection| rejection.reason,
+        ));
+    }
+    let generics = tcx.generics_of(index.did());
+    if generics.parent.is_some()
+        || generics.parent_count != 0
+        || !matches!(arguments.len(), 1 | 2)
+        || generics.own_params.len() != arguments.len()
+    {
+        return Err("identity index carrier has an unsupported generic schema".to_owned());
+    }
+    // Both the legacy index and the branded index must use their authenticated
+    // defaults. An arbitrary second argument must not masquerade as an unbranded index.
+    for (parameter, argument) in generics.own_params.iter().zip(arguments) {
+        if !matches!(
+            parameter.kind,
+            rustc_middle::ty::GenericParamDefKind::Type {
+                has_default: true,
+                ..
+            }
+        ) || argument.as_type()
+            != Some(tcx.type_of(parameter.def_id).instantiate(tcx, arguments))
+        {
+            return Err(
+                "identity index carrier does not use its authenticated type defaults".to_owned(),
+            );
+        }
+    }
+    arguments[0]
+        .as_type()
+        .ok_or_else(|| "identity index-space type is missing".to_owned())
+}
+
 pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<RejectedTrustedProvider> {
     let (item, marker) = TRUSTED_ITEMS
         .iter()

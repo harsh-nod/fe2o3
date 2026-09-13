@@ -84,6 +84,10 @@ pub(crate) enum ReferenceArgumentRelationV1 {
         argument: u32,
         element: ReferenceScalarTypeV1,
     },
+    InvocationDisjointOutputCoordinate1D {
+        argument: u32,
+        element: ReferenceScalarTypeV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -448,7 +452,8 @@ impl ReferenceEffectIrV1 {
                 ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. } => {
                     (*argument, false)
                 }
-                ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
+                ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, .. } => {
                     (*argument, true)
                 }
                 ReferenceArgumentRelationV1::ScalarInput { .. }
@@ -577,6 +582,10 @@ impl ReferenceEffectIrV1 {
                 }
                 ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element } => {
                     digest.update([3, scalar_tag(*element)]);
+                    digest.update(argument.to_le_bytes());
+                }
+                ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, element } => {
+                    digest.update([5, scalar_tag(*element)]);
                     digest.update(argument.to_le_bytes());
                 }
             }
@@ -743,7 +752,8 @@ impl ReferenceEffectIrV1 {
                 }
                 ReferenceArgumentRelationV1::SharedSliceInput { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputSlice { .. }
-                | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. } => {}
+                | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { .. } => {}
             }
         }
         let mut pending = VecDeque::from([ReferenceSymbolicStateV2 {
@@ -1067,7 +1077,8 @@ impl ReferenceEffectIrV1 {
                 ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. } => {
                     (*argument, false)
                 }
-                ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
+                ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, .. } => {
                     (*argument, true)
                 }
                 _ => return None,
@@ -2219,6 +2230,7 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
             relation,
             ReferenceArgumentRelationV1::DisjointOutputSlice { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { .. }
         )
     }) && observable_output_writes.is_empty()
     {
@@ -2406,7 +2418,15 @@ fn logical_abi_relation_v1<'tcx>(
             relations.push(ReferenceArgumentRelationV1::SharedSliceInput { argument, element });
             continue;
         }
-        if let Some((element_ty, element)) = disjoint_slice_element_v1(tcx, kernel_ty) {
+        if let Some((element_ty, element, kind)) = disjoint_output_element_v1(tcx, kernel_ty)? {
+            if kind == ReferenceOutputCarrierV1::InvocationIndex1D {
+                if point_axis_count != 1
+                    || !matches!(*reference_ty.kind(), TyKind::Ref(_, pointee, Mutability::Mut) if pointee == element_ty) {
+                    return Err(logical_abi_mismatch(index, kernel_ty, reference_ty));
+                }
+                relations.push(ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, element });
+                continue;
+            }
             match *reference_ty.kind() {
                 TyKind::Ref(_, pointee, Mutability::Mut) if matches!(*pointee.kind(), TyKind::Slice(actual) if actual == element_ty) =>
                 {
@@ -2475,20 +2495,55 @@ fn shared_slice_element_v1(ty: Ty<'_>) -> Option<ReferenceScalarTypeV1> {
     scalar_type_v1(element)
 }
 
-fn disjoint_slice_element_v1<'tcx>(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReferenceOutputCarrierV1 {
+    LegacyMutableSlice,
+    InvocationIndex1D,
+}
+
+fn disjoint_output_element_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-) -> Option<(Ty<'tcx>, ReferenceScalarTypeV1)> {
+) -> Result<
+    Option<(Ty<'tcx>, ReferenceScalarTypeV1, ReferenceOutputCarrierV1)>,
+    ReferenceBindingErrorV1,
+> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
-        return None;
+        return Ok(None);
     };
-    if trusted_device_items::classify(tcx, definition.did())
-        != Some(TrustedDeviceItem::DisjointSlice)
-    {
-        return None;
-    }
-    let element = arguments.first()?.as_type()?;
-    Some((element, scalar_type_v1(element)?))
+    let Some(element) = arguments.first().and_then(|argument| argument.as_type()) else {
+        return Ok(None);
+    };
+    let Some(scalar) = scalar_type_v1(element) else {
+        return Ok(None);
+    };
+    let kind = match trusted_device_items::classify(tcx, definition.did()) {
+        Some(TrustedDeviceItem::DisjointSlice) => ReferenceOutputCarrierV1::LegacyMutableSlice,
+        Some(TrustedDeviceItem::WriteOnlyDisjointSlice) => {
+            let identity = trusted_device_items::authenticated_index1d_type_v1(tcx)
+                .map_err(ReferenceBindingErrorV1::new)?;
+            if arguments.len() != 2
+                || arguments.get(1).and_then(|argument| argument.as_type()) != Some(identity)
+            {
+                return Err(ReferenceBindingErrorV1::new(
+                    "write-only reference output requires the authenticated Index1D mapping",
+                ));
+            }
+            ReferenceOutputCarrierV1::InvocationIndex1D
+        }
+        None => {
+            if let Some(rejection) = trusted_device_items::rejected_provider(tcx, definition.did())
+            {
+                return Err(ReferenceBindingErrorV1::new(format!(
+                    "cannot authenticate reference output '{ty}': {}",
+                    rejection.reason
+                )));
+            }
+            return Ok(None);
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some((element, scalar, kind)))
 }
 
 fn lower_reference_effect_ir_v1<'tcx>(
@@ -3092,7 +3147,8 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     ReferenceArgumentRelationV1::ScalarInput { argument, .. }
                     | ReferenceArgumentRelationV1::SharedSliceInput { argument, .. }
                     | ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
-                    | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
+                    | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. }
+                    | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { argument, .. } => {
                         *argument == kernel_argument
                     }
                     ReferenceArgumentRelationV1::PointCoordinate { .. } => false,
@@ -4276,6 +4332,37 @@ mod tests {
             loop_summaries: Box::default(),
             observable_output_effects: Box::default(),
         }
+    }
+
+    #[test]
+    fn invocation_output_preserves_point_effects_but_has_distinct_canonical_identity() {
+        let legacy = guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
+        let mut invocation = legacy.clone();
+        invocation.relations[2] =
+            ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                argument: 1,
+                element: ReferenceScalarTypeV1::U32,
+            };
+        assert_eq!(
+            legacy.observable_output_writes_v1().unwrap(),
+            invocation.observable_output_writes_v1().unwrap(),
+        );
+        assert_ne!(
+            legacy.canonical_sha256_v1(),
+            invocation.canonical_sha256_v1()
+        );
+        invocation.blocks[1].assignments[0].value =
+            ReferenceValueV1::Use(ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                local: 3,
+                projection: vec![ReferencePlaceProjectionV1::Dereference].into_boxed_slice(),
+            }));
+        assert!(
+            invocation
+                .observable_output_writes_v1()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported place projection")
+        );
     }
 
     #[test]

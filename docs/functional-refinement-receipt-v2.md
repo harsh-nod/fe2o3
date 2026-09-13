@@ -73,6 +73,35 @@ evidence IDs are independently domain-separated and checked for zero/collision.
 
 ## Execution requirement
 
+### Write-only point outputs
+
+The source collector relates an authenticated
+`WriteOnlyDisjointSlice<T, Index1D>` kernel argument to an exact `&mut T`
+reference argument with one leading `usize` point coordinate. It retains a
+distinct canonical relation through the existing output-effect join. This
+does not grant access to the previous output value: reference reads and
+read-modify-write updates are rejected. Slice outputs, nonidentity spaces,
+wrong element types, and zero or multiple point axes are not admitted by this
+relation.
+
+The reference collector, physical layout query, and semantic importer share
+the authenticated identity-space query. The zero-argument producer and its
+carrier must match the reviewed device source closure and declared type
+defaults. A same-named local type or a different device-library version cannot
+establish that identity. The layout and reference-collector diagnostics retain
+the underlying authentication failure; changing the pin alone is not a
+compiler/provider migration.
+
+Source-export regression tests verify these admission and rejection boundaries.
+Reaching the protected proof runtime is not a proof, an emitted bundle, or GPU
+execution. The explicit numerical policy remains
+`abs(GPU - CPU) <= A + R * abs(CPU)`, with finite nonnegative declared limits,
+a checked domain, and both implementations' errors composed to final outputs.
+The production `ErrorBounded` path remains unsupported; this output relation
+does not establish a numerical bound for `exp` or other math functions.
+
+### Protected runtime
+
 The producer requires FunctionalRefinementVerusRuntimeLeaseV1 over a retained
 no-follow root under /opt/fe2o3/verus-runtime-v2/<version>. Its exact manifest
 contains only the pinned rust_verify, Z3, Rust toolchain/target files, system

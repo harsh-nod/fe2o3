@@ -26,6 +26,17 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-dynamic-loop",
     feature = "reference-nested-call",
     feature = "reference-slice-read",
+    feature = "reference-write-only",
+    feature = "reference-write-only-read",
+    feature = "reference-write-only-abi-mismatch",
+    feature = "reference-write-only-shared-output",
+    feature = "reference-write-only-zero-axes",
+    feature = "reference-write-only-two-axes",
+    feature = "reference-write-only-slice-output",
+    feature = "reference-write-only-blocked",
+    feature = "reference-write-only-shifted",
+    feature = "reference-write-only-custom-space",
+    feature = "reference-write-only-no-output",
     feature = "reference-helper-memory",
     feature = "reference-helper-unsafe",
     feature = "reference-helper-recursive",
@@ -50,6 +61,95 @@ pub fn fill(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 17;
+    }
+}
+
+#[cfg(any(
+    feature = "reference-write-only",
+    feature = "reference-write-only-read",
+    feature = "reference-write-only-abi-mismatch",
+    feature = "reference-write-only-shared-output",
+    feature = "reference-write-only-zero-axes",
+    feature = "reference-write-only-two-axes",
+    feature = "reference-write-only-slice-output",
+    feature = "reference-write-only-blocked",
+    feature = "reference-write-only-shifted",
+    feature = "reference-write-only-custom-space",
+    feature = "reference-write-only-no-output"
+))]
+mod write_only_reference {
+    use fe2o3_device::{WriteOnlyDisjointSlice, kernel, thread};
+
+    #[cfg(any(
+        feature = "reference-write-only",
+        feature = "reference-write-only-blocked",
+        feature = "reference-write-only-shifted",
+        feature = "reference-write-only-custom-space"
+    ))]
+    fn reference(_point: usize, output: &mut u32) {
+        *output = 17;
+    }
+
+    #[cfg(feature = "reference-write-only-read")]
+    fn reference(_point: usize, output: &mut u32) {
+        *output += 1;
+    }
+
+    #[cfg(feature = "reference-write-only-abi-mismatch")]
+    fn reference(_point: usize, output: &mut f32) {
+        *output = 17.0;
+    }
+
+    #[cfg(feature = "reference-write-only-shared-output")]
+    fn reference(_point: usize, _output: &u32) {}
+
+    #[cfg(feature = "reference-write-only-zero-axes")]
+    fn reference(output: &mut u32) {
+        *output = 17;
+    }
+
+    #[cfg(feature = "reference-write-only-two-axes")]
+    fn reference(_x: usize, _y: usize, output: &mut u32) {
+        *output = 17;
+    }
+
+    #[cfg(feature = "reference-write-only-slice-output")]
+    fn reference(point: usize, output: &mut [u32]) {
+        output[point] = 17;
+    }
+
+    #[cfg(feature = "reference-write-only-no-output")]
+    fn reference(_point: usize, _output: &mut u32) {}
+
+    #[cfg(feature = "reference-write-only-blocked")]
+    #[kernel(typed, reference = reference, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+    pub fn write_only_point(
+        _output: WriteOnlyDisjointSlice<u32, fe2o3_device::Blocked<fe2o3_device::Index1D, 64, 2>>,
+    ) {
+    }
+
+    #[cfg(feature = "reference-write-only-shifted")]
+    #[kernel(typed, reference = reference, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+    pub fn write_only_point(
+        _output: WriteOnlyDisjointSlice<u32, fe2o3_device::Shifted<fe2o3_device::Index1D, 1>>,
+    ) {
+    }
+
+    #[cfg(feature = "reference-write-only-custom-space")]
+    pub enum Index1D {}
+
+    #[cfg(feature = "reference-write-only-custom-space")]
+    #[kernel(typed, reference = reference, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+    pub fn write_only_point(_output: WriteOnlyDisjointSlice<u32, Index1D>) {}
+
+    #[cfg(not(any(
+        feature = "reference-write-only-blocked",
+        feature = "reference-write-only-shifted",
+        feature = "reference-write-only-custom-space"
+    )))]
+    #[kernel(typed, reference = reference, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+    pub fn write_only_point(mut output: WriteOnlyDisjointSlice<u32>) {
+        let _stored = output.write_disjoint(thread::index_1d().into_disjoint(), 17);
     }
 }
 

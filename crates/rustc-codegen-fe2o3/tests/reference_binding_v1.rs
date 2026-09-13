@@ -156,6 +156,115 @@ fn two_output_reference_is_joined_once_and_mutations_fail_closed() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn write_only_reference_preserves_point_mapping_without_read_authority() {
+    let target = ScratchTarget::new();
+    let positive = run_export_feature(&target.0, "reference-write-only");
+    assert!(
+        positive.contains("functional-refinement proof runtime unavailable")
+            && !positive.contains("has no reference ABI relation"),
+        "write-only reference did not reach the existing proof boundary:\n{positive}"
+    );
+    for feature in [
+        "reference-write-only-abi-mismatch",
+        "reference-write-only-shared-output",
+        "reference-write-only-zero-axes",
+        "reference-write-only-two-axes",
+        "reference-write-only-slice-output",
+    ] {
+        let diagnostic = run_export_feature(&target.0, feature);
+        assert!(
+            diagnostic.contains("logical ABI mismatch at argument 1"),
+            "{diagnostic}"
+        );
+    }
+    for feature in [
+        "reference-write-only-blocked",
+        "reference-write-only-shifted",
+        "reference-write-only-custom-space",
+    ] {
+        let diagnostic = run_export_feature(&target.0, feature);
+        assert!(
+            diagnostic
+                .contains("write-only reference output requires the authenticated Index1D mapping"),
+            "{diagnostic}"
+        );
+    }
+    let no_output = run_export_feature(&target.0, "reference-write-only-no-output");
+    assert!(
+        no_output.contains("no observable output write"),
+        "{no_output}"
+    );
+    let read = run_export_feature(&target.0, "reference-write-only-read");
+    assert!(
+        read.contains("reference effect scalar operand uses unsupported place projection")
+            && !read.contains("functional-refinement proof runtime unavailable"),
+        "write-only reference must not assume initialized prior output contents:\n{read}"
+    );
+}
+
+fn run_export_feature(target: &Path, feature: &str) -> String {
+    eprintln!("exporting {feature}");
+    let bundle = target.join(format!("{feature}.bundle-v6"));
+    let mut command = Command::new("timeout");
+    for name in [
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6",
+        "FE2O3_EXTRACT_RANKED_MEMORY_V1",
+        "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
+        "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
+        "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1",
+    ] {
+        command.env_remove(name);
+    }
+    let output = command
+        .args(["--kill-after=10s", "300"])
+        .arg(env!("CARGO_BIN_EXE_fe2o3-export-sim"))
+        .current_dir(workspace())
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "--crate",
+            "fe2o3_production_extraction_fixture",
+            "--bundle-version",
+            "6",
+            "--target",
+            "gfx942",
+            "--target-dir",
+        ])
+        .arg(target.join("cargo"))
+        .arg("--output")
+        .arg(&bundle)
+        .args([
+            "--",
+            "--manifest-path",
+            "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/Cargo.toml",
+            "--lib",
+            "--no-default-features",
+            "--features",
+            feature,
+        ])
+        .output()
+        .expect("run standard production source exporter");
+    let diagnostic = String::from_utf8(output.stderr).expect("UTF-8 compiler diagnostic");
+    assert!(
+        !output.status.success(),
+        "fixture unexpectedly emitted a bundle:\n{diagnostic}"
+    );
+    assert!(!bundle.exists(), "failed fixture left an output bundle");
+    assert!(
+        !matches!(output.status.code(), Some(124 | 137)),
+        "fixture timed out:\n{diagnostic}"
+    );
+    diagnostic
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn unsafe_abi_and_unsupported_reference_semantics_fail_closed() {
     let target = ScratchTarget::new();
     for (feature, expected) in [
