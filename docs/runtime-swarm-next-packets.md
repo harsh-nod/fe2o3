@@ -295,9 +295,10 @@ arbitrary unrelated private-state corruption. Production sealing is a V5 gate.
 
 ## Qualification And Integration Order
 
-1. Advance N4-R1, C1 and V3 settlement independently above accepted R113;
+1. Advance N4-R2, C1 and V3 settlement independently above accepted R114;
    C2/C3 and M1/M2/M3 design work need not wait for those packets. Primary
-   serializes shared edits and builds, preserving the isolated preliminary V2 worktree.
+   serializes shared edits and builds, preserving the isolated preliminary C1
+   candidate and the accepted V2 evidence.
 2. Join required N3/N4 into N5; join N5 and C1/C2/C3 into I2, then C4/C5/C6.
    V7/V8 gate cross-run reuse, not the first non-reusing generated launch.
 3. Q1 runs incrementally: authenticate property-specific proofs and the actual

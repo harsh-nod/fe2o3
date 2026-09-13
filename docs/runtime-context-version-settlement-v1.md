@@ -77,9 +77,11 @@ scratch, so it does not require release headroom or write a temporary plan.
 
 ## Commit And Complexity
 
-Reuse the seven V2 vectors. `MemberEntryV1` and `BeginMemberPlanV1` already retain
-the writer/allocation references, prior lineage, admitted epoch and member slot
-needed for settlement; no additional per-member field is currently required.
+Reuse the seven V2 vectors. `MemberEntryV1` retains the writer/allocation
+references, prior lineage, admitted epoch and next link. `BeginMemberPlanV1`
+retains the member slot, allocation reference, prior lineage and admitted epoch,
+but no writer reference. These existing fields are sufficient for settlement;
+no additional per-member field is currently required.
 
 After complete validation, plan and commit under the same exclusive mutable
 borrow. There must be no remaining allocation, callback, native operation or
