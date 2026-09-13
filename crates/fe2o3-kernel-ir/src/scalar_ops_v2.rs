@@ -1138,6 +1138,8 @@ pub enum IntOutcome {
     Overflowing { value: u128, overflowed: bool },
     Trap,
 }
+include!("scalar_integer_evaluation_v3.rs");
+
 pub fn evaluate_integer_binary(
     ty: ScalarType,
     op: IntBinary,

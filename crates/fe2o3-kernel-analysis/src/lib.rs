@@ -8,6 +8,8 @@
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod canonical_kir_inventory_v1;
+mod canonical_kir_sparse_scalar_v1;
+mod canonical_kir_sparse_v1;
 mod control_flow;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_atomic_collective_structure;
@@ -35,6 +37,7 @@ mod uniformity;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use authenticated_machine_effect::*;
 pub use canonical_kir_inventory_v1::*;
+pub use canonical_kir_sparse_v1::*;
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
     ControlFlowErrors, ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS,
