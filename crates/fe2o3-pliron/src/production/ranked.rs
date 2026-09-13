@@ -87,6 +87,10 @@ use semantic_reads_v1::RankedSemanticReadsV1;
 mod materialization_v1;
 use materialization_v1::{RankedLocalValuesV1, RankedOperationScheduleV1};
 
+#[cfg(test)]
+#[path = "ranked/stored_value_tests.rs"]
+mod stored_value_tests;
+
 /// Compiler-derived provenance retained for one cooperative tensor call.
 ///
 /// These are identities of typed capability roots, not user assertions. The
@@ -5259,12 +5263,18 @@ fn materialize_operation(
                 .iter()
                 .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                 .collect::<Result<Vec<_>, _>>()?;
-            let op = RankedAccessOp::new(
-                context,
-                *kind,
-                resolve_value(*view, arguments, locals, block_arguments)?,
-                indices,
-            )
+            let view = resolve_value(*view, arguments, locals, block_arguments)?;
+            let op = if let ProductionRankedOperationV1::ValueAccess { value, .. } = recipe {
+                RankedAccessOp::new_value(
+                    context,
+                    *kind,
+                    view,
+                    indices,
+                    resolve_value(*value, arguments, locals, block_arguments)?,
+                )
+            } else {
+                RankedAccessOp::new(context, *kind, view, indices)
+            }
             .map_err(|_| {
                 ProductionRankedKernelErrorV1::Materialization(
                     "validated ranked access failed materialization",
@@ -5311,14 +5321,20 @@ fn materialize_operation(
                 .iter()
                 .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                 .collect::<Result<Vec<_>, _>>()?;
-            let op = RankedAccessOp::new_atomic(
-                context,
-                *kind,
-                *ordering,
-                *scope,
-                resolve_value(*view, arguments, locals, block_arguments)?,
-                indices,
-            )
+            let view = resolve_value(*view, arguments, locals, block_arguments)?;
+            let op = if let ProductionRankedOperationV1::AtomicValueAccess { value, .. } = recipe {
+                RankedAccessOp::new_atomic_value(
+                    context,
+                    *kind,
+                    *ordering,
+                    *scope,
+                    view,
+                    indices,
+                    resolve_value(*value, arguments, locals, block_arguments)?,
+                )
+            } else {
+                RankedAccessOp::new_atomic(context, *kind, *ordering, *scope, view, indices)
+            }
             .map_err(|_| {
                 ProductionRankedKernelErrorV1::Materialization(
                     "validated ranked atomic access failed materialization",

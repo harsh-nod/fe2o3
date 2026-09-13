@@ -32,6 +32,19 @@ fn later_listed_source_uses_one_original_read_without_reordering_the_graph() {
                 consumer.deref(context).operands().collect::<Vec<_>>(),
                 vec![read.result(context); 2]
             );
+            let consumer_ops = blocks[1].deref(context).iter(context).collect::<Vec<_>>();
+            let expression_root = consumer_ops
+                .iter()
+                .find(|op| Operation::is_op::<SemanticTypedExpressionRootOp>(**op, context))
+                .unwrap();
+            let store = consumer_ops
+                .iter()
+                .find(|op| Operation::is_op::<RankedAccessOp>(**op, context))
+                .unwrap();
+            assert_eq!(
+                RankedAccessOp::from_operation(*store).stored_value(context),
+                Some(expression_root.deref(context).get_result(0))
+            );
             let ops = blocks
                 .iter()
                 .flat_map(|block| block.deref(context).iter(context))
@@ -144,6 +157,10 @@ fn later_listed_read_constructs_with_a_real_cfg_backedge() {
 
 fn later_producer(block_argument: bool, bypass: bool) -> ProductionRankedKernelV1 {
     let mut kernel = kernel(Mode::UnorderedNonVolatile);
+    let O::ViewInSpace { writable, .. } = &mut kernel.blocks[0].operations[1] else {
+        unreachable!()
+    };
+    *writable = true;
     let index = if block_argument {
         ProductionRankedValueV1::BlockArgument {
             block: 2,
@@ -176,7 +193,15 @@ fn later_producer(block_argument: bool, bypass: bool) -> ProductionRankedKernelV
         ProductionRankedTerminatorV1::Branch { target: 2 }
     };
     kernel.blocks.push(ProductionRankedBlockV1::new(
-        vec![expression],
+        vec![
+            expression,
+            O::ValueAccess {
+                kind: AccessKindAttr::Write,
+                view: local(0),
+                indices: vec![local(1)],
+                value: local(2),
+            },
+        ],
         ProductionRankedTerminatorV1::Return,
     ));
     let mut producer = Vec::new();

@@ -10,8 +10,8 @@ use std::{
 };
 
 use dialect_kernel::{
-    DYNAMIC_EXTENT, MAX_SEMANTIC_TYPED_EXPRESSION_NODES_V1, MemorySpaceAttr, OwnershipContractOp,
-    RankedAccessOp, RankedViewOp, ranked_view_type,
+    AccessKindAttr, DYNAMIC_EXTENT, MAX_SEMANTIC_TYPED_EXPRESSION_NODES_V1, MemorySpaceAttr,
+    OwnershipContractOp, RankedAccessOp, RankedViewOp, ranked_view_type,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
@@ -44,6 +44,13 @@ const EFFECT_FINDING_NAME_SLOTS_V1: usize = 1;
 const EFFECT_FINDING_DESCRIPTION_SLOTS_V1: usize = 2;
 const EFFECT_FINDING_FIXED_STORAGE_V1: usize = 32;
 const EFFECT_FINDING_WITNESS_STORAGE_V1: usize = dialect_kernel::MAX_RANKED_MEMORY_RANK * 2;
+// Additional write-record fields, including vector growth slack and alignment.
+const WRITE_VALUE_BINDING_STORAGE_V1: usize = 2
+    * (std::mem::size_of::<Option<Value>>()
+        + std::mem::size_of::<AccessKindAttr>()
+        + std::mem::align_of::<WriteSiteV1>()
+        - 1)
+    .div_ceil(std::mem::size_of::<usize>());
 
 fn effect_finding_dynamic_text_storage_v1() -> Result<usize, ProductionAnalysisResourceLimitV1> {
     checked_effect_product_v1(
@@ -195,6 +202,9 @@ pub(crate) fn preflight_effect_refinement_resource_upper_bound_v1(
         // `collect` performs the independently bounded nonempty analysis.
         census.operations,
         checked_effect_product_v1(census.operations, 8)?,
+        // Fixed-position RHS extraction and exact contract-to-write comparison.
+        checked_effect_product_v1(census.operations, 8)?,
+        checked_effect_product_v1(contracts, 3)?,
         semantic_work,
         correlation_work,
         // One bounded render/copy for every retained text byte and fixed field.
@@ -210,7 +220,7 @@ pub(crate) fn preflight_effect_refinement_resource_upper_bound_v1(
             census
                 .max_operation_arity
                 .checked_mul(3)
-                .and_then(|items| items.checked_add(32))
+                .and_then(|items| items.checked_add(32 + WRITE_VALUE_BINDING_STORAGE_V1))
                 .ok_or_else(effect_resource_overflow_v1)?,
         )?,
         checked_effect_product_v1(contracts, census.operations)?,
@@ -686,6 +696,8 @@ struct WriteSiteV1 {
     location: EffectRefinementLocationV1,
     view: Value,
     indices: Vec<Value>,
+    kind: AccessKindAttr,
+    stored_value: Option<Value>,
 }
 
 pub(crate) fn clean_effect_refinement_report_v1() -> PlironEffectRefinementReportV1 {
@@ -800,13 +812,12 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         return one(contracts.len(), effect_finding);
     }
 
-    let mut writes_by_signature =
-        HashMap::<(usize, Value, Vec<Value>), Vec<EffectRefinementLocationV1>>::new();
-    for write in &writes {
+    let mut writes_by_signature = HashMap::<(usize, Value, Vec<Value>), Vec<usize>>::new();
+    for (index, write) in writes.iter().enumerate() {
         writes_by_signature
             .entry((write.location.block, write.view, write.indices.clone()))
             .or_default()
-            .push(write.location);
+            .push(index);
     }
     let mut by_write = HashMap::<EffectRefinementLocationV1, usize>::new();
     let mut write_by_contract = vec![None; contracts.len()];
@@ -835,8 +846,9 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
             });
             continue;
         }
-        let write = matching[0];
-        write_by_contract[contract_index] = Some(write);
+        let write_index = matching[0];
+        let write = writes[write_index].location;
+        write_by_contract[contract_index] = Some(write_index);
         if let Some(first_index) = by_write.insert(write, contract_index) {
             findings.push(PlironEffectRefinementFindingV1::DuplicateEffectContract {
                 view: contract.view_name.clone(),
@@ -876,10 +888,14 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
     };
     let mut proved = 0;
     for (index, contract) in contracts.iter().enumerate() {
+        let write = &writes[write_by_contract[index].expect("correlated contract has write")];
+        if let Some(finding) = validate_write_value(contract, write) {
+            findings.push(finding);
+            continue;
+        }
         if !validate_proof(contract, &obligations, &evidence, &mut findings) {
             continue;
         }
-        let _write = write_by_contract[index].expect("correlated contract has write");
         let witness = None;
         let mut pairs = contract
             .coordinates
@@ -1030,6 +1046,10 @@ fn collect(
                     location,
                     view: access.view(context),
                     indices: access.indices(context),
+                    kind: access
+                        .kind(context)
+                        .expect("verified write has an access kind"),
+                    stored_value: access.stored_value(context),
                 });
             }
         } else if let Some(contract) = operation.downcast_ref::<OwnershipContractOp>() {
@@ -1052,6 +1072,32 @@ fn collect(
         }
     }
     (contracts, writes, ownership, obligations, evidence)
+}
+
+fn validate_write_value(
+    contract: &EffectContractV1,
+    write: &WriteSiteV1,
+) -> Option<PlironEffectRefinementFindingV1> {
+    let incomplete = |reason| PlironEffectRefinementFindingV1::ReferenceProofIncomplete {
+        obligation: contract.obligation,
+        location: contract.location,
+        reason,
+    };
+    let Some(value) = write.stored_value else {
+        return Some(incomplete("the matched write has no retained scalar RHS"));
+    };
+    if value != contract.expressions[4] {
+        return Some(PlironEffectRefinementFindingV1::ReferenceProofRejected {
+            obligation: contract.obligation,
+            location: contract.location,
+            reason: "the claimed GPU value is not the matched write's actual SSA operand",
+        });
+    }
+    (write.kind == AccessKindAttr::AtomicReadModifyWrite).then(|| {
+        incomplete(
+            "an atomic read-modify-write update operand does not establish the final stored value",
+        )
+    })
 }
 
 fn validate_proof(

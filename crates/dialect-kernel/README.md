@@ -7,7 +7,9 @@ structured-algorithm root, it defines a bounded ranked-memory vocabulary:
   zero shape entries are runtime dimensions and nonzero entries are static.
 - `kernel.index_constant` and `kernel.dim` produce unsigned index values.
 - `kernel.access` describes a read or write with exactly one index per
-  dimension. Atomic forms additionally retain explicit ordering and scope.
+  dimension. Valued writes retain their scalar SSA operand after the indices
+  and before any checked-success token. Atomic forms additionally retain
+  explicit ordering and scope.
 - `kernel.index_lt_br`, `kernel.br`, and `kernel.return` form the closed CFG
   vocabulary used by target-neutral safety analysis.
 - `kernel.require_finite_fold`, `kernel.require_finite_recurrence`, and
@@ -33,6 +35,14 @@ coherent-allocation provenance.
 The current aggregate read-modify-write effect does not encode
 compare-exchange failure ordering; source projection must leave
 compare-exchange incomplete until that exact operation contract is represented.
+
+`RankedAccessOp::new_value` and `new_atomic_value` preserve the supplied scalar;
+they do not create a replacement symbol or perform a conversion. The shared
+`kernel.semantic_scalar` carrier admits both legacy and typed producers. Its
+local verification is not a theorem about physical store width or conversion.
+For an atomic read-modify-write, the retained scalar is the update operand, not
+the final stored result. Legacy writes without values remain structurally valid
+for memory analysis, but cannot establish an effect-value refinement.
 
 The vocabulary and analysis do not contain GEMM names, tiles, schedules, or
 target details. The same pass covers vectors, images, tensors, volumes, and

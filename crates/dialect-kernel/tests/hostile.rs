@@ -63,6 +63,7 @@ use pliron::{
     context::Context,
     dialect::DialectName,
     identifier::Identifier,
+    linked_list::ContainsLinkedList,
     op::{Op, op_cast, verify_op},
     operation::{Operation, verify_operation},
     parsable::{Parsable, parse_from_str},
@@ -930,6 +931,54 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     verify_op(&access, context).unwrap();
     assert_eq!(access.indices(context), [tiled.result(context)]);
     assert_eq!(access.checked_success(context), tiled.success(context));
+
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::Float, 32).unwrap();
+    let value = SemanticTypedConstantOp::new(context, 0, scalar).result(context);
+    Operation::insert_operand(access.get_operation(), context, 2, value);
+    verify_op(&access, context).unwrap();
+    assert_eq!(access.indices(context), [tiled.result(context)]);
+    assert_eq!(access.stored_value(context), Some(value));
+    assert_eq!(access.checked_success(context), tiled.success(context));
+    let module = ModuleOp::new(context, "checked_store".try_into().unwrap());
+    for operation in values.iter().map(Op::get_operation).chain([
+        view.get_operation(),
+        tiled.get_operation(),
+        value.defining_op().unwrap(),
+        access.get_operation(),
+    ]) {
+        module.append_operation(context, operation, 0);
+    }
+    let printed = module.get_operation().disp(context).to_string();
+    let parsed = parse_from_str(Operation::top_level_parser(), context, &printed).unwrap();
+    pliron::operation::verify_operation(parsed, context).unwrap();
+    let parsed = ModuleOp::from_operation(parsed);
+    let operations = parsed
+        .get_body(context, 0)
+        .deref(context)
+        .iter(context)
+        .collect::<Vec<_>>();
+    let parsed_tiled = CheckedTiledIndex2DOp::from_operation(operations[7]);
+    let parsed_access = RankedAccessOp::from_operation(operations[9]);
+    assert_eq!(
+        parsed_access.view(context),
+        operations[6].deref(context).get_result(0)
+    );
+    assert_eq!(
+        parsed_access.indices(context),
+        [parsed_tiled.result(context)]
+    );
+    assert_eq!(
+        parsed_access.stored_value(context),
+        Some(operations[8].deref(context).get_result(0))
+    );
+    assert_eq!(
+        parsed_access.checked_success(context),
+        parsed_tiled.success(context)
+    );
+    Operation::replace_operand(access.get_operation(), context, 2, extent);
+    assert!(verify_op(&access, context).is_err());
+    Operation::remove_operand(access.get_operation(), context, 2);
+    verify_op(&access, context).unwrap();
 
     let other = CheckedRowStripedIndex2DOp::new_predicated(
         context,

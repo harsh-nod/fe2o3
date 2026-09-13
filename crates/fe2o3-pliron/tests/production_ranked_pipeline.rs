@@ -2544,32 +2544,121 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
             .unwrap()
         );
     }
-    let (proof, imported, policy) = imported_reference(
-        functional_binding(4, obligation),
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
-    );
-    let bound = skeleton
-        .bind_functional_refinement_request_v2(0, 7, proof)
-        .unwrap();
-    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
-        construction(bound),
-        ProductionSessionLimitsV1::default(),
-        vec![imported],
-        policy,
-    )
-    .unwrap();
-    assert!(input.semantic_report().effect_refinement().is_clean());
-    assert_eq!(
-        input.semantic_report().effect_refinement().contract_count(),
-        1
-    );
-    assert_eq!(
-        input
-            .semantic_report()
-            .effect_refinement()
-            .proved_contract_count(),
-        1
-    );
+    let with_write = |write| {
+        let mut operations = skeleton.blocks()[0].operations().to_vec();
+        operations[5] = write;
+        ProductionRankedKernelV1::new(
+            "authenticated_effect",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    };
+    let obligation_for = |recipe: &ProductionRankedKernelV1| {
+        let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+            &recipe.blocks()[0].operations()[7]
+        else {
+            unreachable!()
+        };
+        normalized_effect_refinement_hash_for_kernel_v2(
+            recipe,
+            0,
+            7,
+            contract,
+            functional_subjects(4),
+        )
+    };
+    // Bad recipe claims must still reject before proof staging or live analysis.
+    for write in [
+        ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Write,
+            view: local(view),
+            indices: vec![local(index)],
+        },
+        ProductionRankedOperationV1::ValueAccess {
+            kind: AccessKindAttr::Write,
+            view: local(view),
+            indices: vec![local(index)],
+            value: local(alternate_formula),
+        },
+    ] {
+        assert_eq!(
+            obligation_for(&with_write(write)),
+            Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+        );
+    }
+    for kind in [
+        AccessKindAttr::Write,
+        AccessKindAttr::AtomicWrite,
+        AccessKindAttr::AtomicReadModifyWrite,
+    ] {
+        let recipe = if kind.is_atomic() {
+            with_write(ProductionRankedOperationV1::AtomicValueAccess {
+                kind,
+                ordering: if kind == AccessKindAttr::AtomicWrite {
+                    AtomicOrderingAttr::Release
+                } else {
+                    AtomicOrderingAttr::AcquireRelease
+                },
+                scope: AtomicScopeAttr::Device,
+                view: local(view),
+                indices: vec![local(index)],
+                value: local(formula),
+            })
+        } else {
+            skeleton.clone()
+        };
+        let (proof, imported, policy) = imported_reference(
+            functional_binding(4, obligation_for(&recipe).unwrap()),
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        );
+        let bound = recipe
+            .bind_functional_refinement_request_v2(0, 7, proof)
+            .unwrap();
+        let result = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+            construction(bound),
+            ProductionSessionLimitsV1::default(),
+            vec![imported],
+            policy,
+        );
+        if kind.is_atomic() {
+            // Target-agnostic staging must reject atomics before effect refinement.
+            let Err(ProductionRankedCompileErrorV2::Pipeline(
+                ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedAtomic(
+                    error,
+                )),
+            )) = result
+            else {
+                panic!("atomic staging needs a target capability: {result:?}");
+            };
+            assert_eq!(error.report().status(), KernelCheckStatusV1::Incomplete);
+            assert!(matches!(
+                error.report().findings(),
+                [
+                    fe2o3_pliron::PlironAtomicLegalityFindingV1::TargetCapabilityUnavailable {
+                        block: 0,
+                        operation: 5,
+                        element_width: 32,
+                        memory_space: MemorySpaceAttr::Global,
+                        scope: AtomicScopeAttr::Device,
+                    }
+                ]
+            ));
+        } else {
+            let input = result.unwrap();
+            assert!(!input.grants_compiler_refinement_authority());
+            assert!(!input.grants_artifact_or_launch_authority());
+            let report = input.semantic_report().effect_refinement();
+            assert!(report.is_clean());
+            assert_eq!(report.contract_count(), 1);
+            assert_eq!(report.proved_contract_count(), 1);
+            assert!(!report.grants_compiler_refinement_authority());
+            assert!(!report.grants_artifact_or_launch_authority());
+        }
+    }
 }
 
 #[test]

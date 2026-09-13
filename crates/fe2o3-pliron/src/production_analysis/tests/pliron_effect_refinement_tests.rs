@@ -25,6 +25,9 @@ use pliron::{
 
 const OBLIGATION: [u64; 4] = [1, 2, 3, 4];
 
+#[path = "pliron_effect_refinement_value_binding_tests.rs"]
+mod value_binding;
+
 #[derive(Clone, Copy)]
 enum FormulaCase {
     Equivalent,
@@ -268,11 +271,12 @@ fn effect_function_with_coverage(
         );
         append(context, entry, &evidence);
     }
-    let store = RankedAccessOp::new(
+    let store = RankedAccessOp::new_value(
         context,
         AccessKindAttr::Write,
         view.result(context),
         vec![invocation.result(context)],
+        expressions[4],
     )
     .unwrap();
     append(context, write_block, &store);

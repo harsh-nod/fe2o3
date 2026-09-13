@@ -222,6 +222,31 @@ semantic gate. Approximate math still requires explicit finite absolute and
 relative limits, a checked input domain, and compiler-proved composition into
 the final output error; construction does not relax that contract.
 
+### Stored value boundary
+
+`ValueAccess` and `AtomicValueAccess` now materialize their actual RHS as an SSA
+operand on `kernel.access`. This includes typed scalar roots, tensor components,
+and expressions derived from paired reads. The existing dependency scheduler,
+native dominance verifier, owner snapshot, structural identity and input census
+all observe that operand. Address analyses still see exactly one index per
+dimension; a retained RHS does not add a second memory event.
+
+The mandatory effect-refinement gate first correlates a contract with a unique
+write by block, view and ordered indices. It then requires the contract's GPU
+value to be that write's exact SSA operand. A missing RHS is incomplete; a
+different RHS is rejected even when the expressions normalize identically.
+Matching atomic writes can proceed through the existing proof checks only with
+the required target capability. The public target-agnostic staging entry still
+rejects atomics at the earlier atomic-legality gate. A matching
+atomic read-modify-write update remains incomplete because its input does not
+establish the final stored value. No RHS can disambiguate competing writes.
+
+These are necessary custody checks, not new final-output theorems. They do not
+prove physical store conversion, live read values, or CPU/GPU math-library
+equivalence. Existing ownership, reference evidence and numerical requirements
+remain mandatory. In particular, test agreement is not a compiler-proved error
+bound and a clean effect report grants no artifact or launch authority.
+
 ## Remaining trusted surfaces
 
 `DialectRegistrationHook` no longer receives `&mut Context`; all eight current

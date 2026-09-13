@@ -3,6 +3,9 @@ use super::*;
 #[path = "scheduling_tests.rs"]
 mod scheduling;
 
+#[path = "stored_value_tests.rs"]
+mod stored_values;
+
 type O = ProductionRankedOperationV1;
 type X = ProductionSemanticExpressionV2;
 type Mode = ProductionSemanticReadModeV2;

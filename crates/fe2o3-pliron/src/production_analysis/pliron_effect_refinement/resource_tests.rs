@@ -3,6 +3,12 @@ mod resource_upper_bound_tests {
     use super::*;
 
     #[test]
+    fn write_value_record_fits_the_fixed_storage_reservation() {
+        let words = std::mem::size_of::<WriteSiteV1>().div_ceil(std::mem::size_of::<usize>());
+        assert!(2 * words <= 32 + WRITE_VALUE_BINDING_STORAGE_V1);
+    }
+
+    #[test]
     fn effect_bound_has_exact_and_one_under_admission() {
         let census = ProductionAnalysisInputCensusV1 {
             operations: 1,
@@ -13,9 +19,9 @@ mod resource_upper_bound_tests {
         // Each finding retains 3*4096 text bytes, 16 witness words, and 32
         // fixed-field units. Work additionally covers the semantic table,
         // correlation, finding materialization, and one source-name render.
-        const EXACT_WORK: usize = 172_613;
+        const EXACT_WORK: usize = 172_624;
         const EXACT_RETAINED: usize = 135_696;
-        const EXACT_PEAK: usize = 156_225;
+        const EXACT_PEAK: usize = 156_225 + WRITE_VALUE_BINDING_STORAGE_V1;
         let exact = preflight_effect_refinement_resource_upper_bound_v1(
             census,
             ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK),
