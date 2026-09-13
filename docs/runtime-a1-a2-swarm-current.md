@@ -1,5 +1,10 @@
 # Current Runtime Swarm Work Orders
 
+The latest [R114-candidate dispatch](runtime-swarm-dispatch-r114-candidate.md)
+records the renewed three-lane handoffs and remaining test-review exits.
+R114 is an uncommitted candidate with 32 passing focused tests; this planning
+refresh adds no implementation or qualification acceptance.
+
 For the latest concise assignments, dependencies and exit tests, use
 [Runtime Swarm: Remaining Packets](runtime-swarm-next-packets.md).
 The three-lane read-only swarm reviewed implementation handoffs, behavioral

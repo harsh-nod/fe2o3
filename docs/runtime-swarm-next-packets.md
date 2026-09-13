@@ -1,5 +1,9 @@
 # Runtime Swarm: Remaining Packets
 
+The [R114-candidate dispatch](runtime-swarm-dispatch-r114-candidate.md) refreshes
+the three worker assignments and immediate exits. It is planning-only: R114's
+32 passing focused tests and isolated C1 checks are not packet acceptance.
+
 Reviewed through R113's locally accepted executable-model campaign,
 above accepted R112 `a2feef229758381b66f962ad8be2b87843eb33a3`.
 [Issue #182](https://github.com/harsh-nod/fe2o3/issues/182) remains open; its GitHub
@@ -110,7 +114,7 @@ performance. Their detailed owners remain in the later-milestone table below.
 | N3-L2 / R110 | Locally accepted: initialized coherent insertion/replacement | Nineteen new functions (eighteen dynamic and one routing guard), ten compiled negatives and unchanged R109 regressions. Complete survives retake/commit; earlier lower failure custody stays intact. No native success or formal refinement qualification. |
 | N3-L3-C / R111 | Locally accepted: uninitialized coherent insertion | Nineteen new functions, fourteen compiled negatives and unchanged initialized regressions. Shared settlement preserves explicit insertion and required-hole replacement, with no copy or initialized-content authority. Two direct APIs, no new facade APIs; native/formal qualification remains open. |
 | N3-L3-D / R112 | Locally accepted: uninitialized device insertion | Actual None/Unmapped/Mapped custody, per-call native attempt and map progress use borrowed lower cores. DEVICE_LOCAL and hole-or-append policy remain intact. Twenty-six new functions, sixteen compiled negatives and full/focused/auxiliary/restoration/archive checks pass; native/formal/performance qualification remains open. |
-| N4-R1 | Pristine active-control cleanup | Design ready. Extend `queue_dispatch_binding/pristine_abort.rs` and borrowed lower cleanup cores. First/middle/last control failure retains actual mapped/unmapped/disposed custody and untouched data/continuation; disposal cannot be retried. |
+| N4-R1 | Pristine active-control cleanup | R114 is an uncommitted candidate with 32 passing focused tests, not accepted. Finish the [remaining oracles and qualification](runtime-swarm-dispatch-r114-candidate.md#native-first-exit). First/middle/last control failure must retain actual mapped/unmapped/disposed custody and untouched data/continuation; disposal cannot be retried. |
 | N4-R2 | Ordinary and returning control cleanup | Reuse R1's borrowed cleanup contract. Root `DispatchResourceOwnerV1` before validation and reserve return capacity before disposal. Preserve forward code order, exact returned data and disposed receipts after failed model projection. |
 | N4-R: data extension | Lower data cleanup and mixed-roster release | Reuse the common cleanup contract; mixed rosters join R2. Cover all host/device and initialized/uninitialized variants. Exact records/charges and untouched owners survive every failed destructive prefix; no repeated free or duplicate refund. |
 | N4-L | Live detach and data/control release | Each route needs its applicable lower cleanup contract. Retain input, returned owners and disposed receipts outside the model loan through retake/commit. Failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
