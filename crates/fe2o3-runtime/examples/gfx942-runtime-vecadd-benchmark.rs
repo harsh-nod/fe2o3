@@ -94,6 +94,13 @@ mod enabled {
         format!("{error:?}")
     }
 
+    fn teardown_error(stage: &str, error: impl core::fmt::Debug) -> String {
+        let detail = backend_error(error);
+        // Terminal native custody deliberately aborts on Drop, so report first.
+        eprintln!("backend=kfd teardown_stage={stage} status=failed error={detail}");
+        detail
+    }
+
     fn validate_output(observed: &[u8], expected: &[u8]) -> Result<(), String> {
         if observed.len() != expected.len() {
             return Err(format!(
@@ -362,21 +369,26 @@ mod enabled {
             for allocation in self.allocations.into_iter().rev() {
                 self.context
                     .release_allocation(allocation)
-                    .map_err(backend_error)?;
+                    .map_err(|error| teardown_error("release_allocation", error))?;
             }
             self.context
                 .unload_module(self.module)
-                .map_err(backend_error)?;
+                .map_err(|error| teardown_error("unload_module", error))?;
             self.context
                 .destroy_stream(self.stream)
-                .map_err(backend_error)?;
-            let mut backend = self.context.shutdown().map_err(backend_error)?;
-            backend.shutdown_native_v1().map_err(backend_error)?;
+                .map_err(|error| teardown_error("destroy_stream", error))?;
+            let mut backend = self
+                .context
+                .shutdown()
+                .map_err(|error| teardown_error("context_shutdown", error))?;
+            backend
+                .shutdown_native_v1()
+                .map_err(|error| teardown_error("native_shutdown", error))?;
             if profiling_enabled {
                 backend
                     .finish_profiler_v1()
                     .map(Some)
-                    .map_err(backend_error)
+                    .map_err(|error| teardown_error("finish_profiler", error))
             } else {
                 Ok(None)
             }
