@@ -4309,25 +4309,11 @@ impl ComputeAqlQueueSessionV1 {
         requested_bytes: u64,
         alignment: u64,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        self.require_detached_allocation_capacity()?;
-        let result = self.with_live_queue_memory_model(|memory| {
-            memory
-                .allocate_gfx942_device_memory(requested_bytes, alignment)
-                .and_then(|lease| memory.map_gfx942_device_memory(lease))
-                .map_err(Into::into)
-        });
-        match result {
-            Ok(lease) => {
-                let data = Gfx942FixedDispatchDataV1::uninitialized(lease);
-                self.record_new_detached_data(&data);
-                Ok(data)
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(error)
-            }
+        let settled = self.allocate_device_data_settled_v1(requested_bytes, alignment);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
+        settled.into_result()
     }
 
     /// Allocates, writes, verifies, CPU-unmaps, and GPU-maps one fully
@@ -4595,15 +4581,6 @@ impl ComputeAqlQueueSessionV1 {
         data_index: usize,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         validate_new_detached_data_index(self.detached_data_count, data_index).map_err(Into::into)
-    }
-
-    pub(super) fn record_new_detached_data(&mut self, data: &Gfx942FixedDispatchDataV1) {
-        insert_detached_identity(
-            &mut self.detached_data_identities,
-            &mut self.detached_next_insertion_index,
-            data.storage_identity(),
-        );
-        self.detached_data_count += 1;
     }
 
     pub(super) fn require_detached_allocation_capacity(

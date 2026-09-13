@@ -1,0 +1,23 @@
+{
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "started_at": "2026-09-13T02:59:50.537Z",
+  "finished_at": "2026-09-13T02:59:50.625Z",
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r112-exact-clock-continuation-evidence-tests.js"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r112-exact-clock-continuation-contract-tests.log",
+  "source": "/home/harsh/.codex-tmp/r112-exact-clock-continuation-contract-tests-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 0.415106245,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

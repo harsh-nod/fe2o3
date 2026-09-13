@@ -16,6 +16,9 @@ use fe2o3_kfd_uapi::KfdAllocMemoryFlags;
 #[path = "integration_coherent_insertion_tests.rs"]
 mod coherent_cases;
 
+#[path = "integration_uninitialized_device_insertion_tests.rs"]
+mod allocation_cases;
+
 #[derive(Default)]
 struct PrimaryDetached {
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
@@ -429,6 +432,20 @@ impl InsertionFixture {
     }
 
     fn assert_partition(&self, attempted_id: u64, bytes: usize) {
+        let layout = crate::shared_memory::device_memory_layout(
+            bytes as u64,
+            4096,
+            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+        )
+        .unwrap();
+        self.assert_partition_with_layout(attempted_id, layout);
+    }
+
+    fn assert_partition_with_layout(
+        &self,
+        attempted_id: u64,
+        layout: crate::Gfx942DeviceMemoryLayoutV1,
+    ) {
         let mut refs = PreparationOwnerRefsV1::default();
         if let Some(dispatch) = &self.scope.primary.completed.as_ref().unwrap().dispatch {
             refs.dispatch(dispatch);
@@ -439,20 +456,25 @@ impl InsertionFixture {
             }
         }
         refs.data(&self.data);
-        let layout = crate::shared_memory::device_memory_layout(
-            bytes as u64,
-            4096,
-            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
-        )
-        .unwrap();
-        self.memory().insertion_assert_device_partition_v1(
-            &refs.device_leases,
-            &refs.device_authorities,
-            None,
-            attempted_id,
-            layout,
-            &self.released,
-        );
+        if layout.uapi_flags() == KfdAllocMemoryFlags::DEVICE_LOCAL.bits() {
+            self.memory().insertion_assert_allocation_partition_v1(
+                &refs.device_leases,
+                &refs.device_authorities,
+                None,
+                attempted_id,
+                layout,
+                &self.released,
+            );
+        } else {
+            self.memory().insertion_assert_device_partition_v1(
+                &refs.device_leases,
+                &refs.device_authorities,
+                None,
+                attempted_id,
+                layout,
+                &self.released,
+            );
+        }
         self.memory().primary_assert_shared_layouts_v1(&refs.shared);
         self.memory()
             .primary_assert_accounts_with_device_disposal_v1(

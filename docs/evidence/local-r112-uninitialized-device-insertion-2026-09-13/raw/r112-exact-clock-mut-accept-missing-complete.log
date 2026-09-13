@@ -1,0 +1,26 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.40s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit' (2892596) panicked at crates/fe2o3-kfd/src/queue_live/data_insertion.rs:255:14:
+borrowed Complete remains rooted through ledger commit: InvalidDeviceMemoryAuthority
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit' (2892596) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs:560:9:
+assertion failed: matches!(settled.result,
+    Ok(Err(ComputeAqlQueueSessionErrorV1::Memory(MemorySessionError::InvalidDeviceMemoryAuthority))))
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1085 filtered out; finished in 2.18s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

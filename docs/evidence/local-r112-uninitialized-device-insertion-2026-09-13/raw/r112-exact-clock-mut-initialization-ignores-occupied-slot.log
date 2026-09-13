@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.05s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite ... FAILED
+
+failures:
+
+---- shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite stdout ----
+
+thread 'shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite' (2881244) panicked at crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs:912:17:
+assertion failed: matches!(Input::new(false, 17).run(&mut fixture, 4096),
+    Err(MemorySessionError::SharedSessionQuarantined))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1085 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

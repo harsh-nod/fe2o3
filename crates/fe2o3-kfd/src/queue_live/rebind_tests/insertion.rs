@@ -58,7 +58,7 @@ fn coherent_insertion_concrete_facade_restores_before_transport_for_all_routes()
     }
 }
 
-fn invoke_coherent_public(
+fn invoke_insertion_public(
     route: usize,
     session: &mut ComputeAqlQueueSessionV1,
     lane: ComputeAqlQueueLaneV1,
@@ -71,6 +71,10 @@ fn invoke_coherent_public(
         3 => session.initialize_host_visible_fixed_dispatch_data_from_slice_v1(source),
         7 => session.insert_host_visible_fixed_dispatch_data(99, source.len()),
         8 => session.allocate_host_visible_fixed_dispatch_data(source.len()),
+        9 | 10 => session.allocate_uninitialized_fixed_dispatch_data(
+            source.len() as u64,
+            if route == 9 { 4096 } else { 0 },
+        ),
         _ => session.with_compute_lane_custody_v1(
             lane,
             |selected| {
@@ -97,21 +101,26 @@ fn invoke_coherent_public(
 
 #[test]
 fn coherent_insertion_all_public_entrypoints_preserve_preflight_precedence() {
-    coherent_public_preflight_cases(0..7);
+    public_preflight_cases(0..7);
 }
 
 #[test]
 fn coherent_allocation_insertion_public_preflight_preserves_owners_and_precedence() {
-    coherent_public_preflight_cases(7..9);
+    public_preflight_cases(7..9);
 }
 
-fn coherent_public_preflight_cases(routes: core::ops::Range<usize>) {
+#[test]
+fn device_allocation_insertion_public_preflight_preserves_owners_and_precedence() {
+    public_preflight_cases(9..11);
+}
+
+fn public_preflight_cases(routes: core::ops::Range<usize>) {
     let mut memory = crate::shared_memory::PreparationMemoryFixtureV1::new(true);
     let data = memory.roster();
     let identity = data[1].storage_identity();
     for route in routes {
         for empty in [false, true] {
-            for mode in 0..8 {
+            for mode in 0..if route >= 9 { 7 } else { 8 } {
                 let (mut session, lane) = parent(false, false);
                 session.detached_data_count = if mode <= 2 {
                     17
@@ -174,7 +183,9 @@ fn coherent_public_preflight_cases(routes: core::ops::Range<usize>) {
                 let before = snapshot(&session);
                 session.dependency_owner.ensure_idle().unwrap();
                 let source = if empty { &[][..] } else { &[0x49; 17][..] };
-                let error = invoke_coherent_public(route, &mut session, lane, source)
+                let _ = take_dispatch_terminal_process_gate_record_v1();
+                let _ = take_lane_unwind_process_gate_record_v1();
+                let error = invoke_insertion_public(route, &mut session, lane, source)
                     .err()
                     .unwrap();
                 match mode {
@@ -236,6 +247,8 @@ fn coherent_public_preflight_cases(routes: core::ops::Range<usize>) {
                 assert_eq!(snapshot(&session), before);
                 session.dependency_owner.ensure_idle().unwrap();
                 assert!(session.engine.is_none());
+                assert!(!take_dispatch_terminal_process_gate_record_v1());
+                assert!(!take_lane_unwind_process_gate_record_v1());
             }
         }
     }
@@ -461,6 +474,34 @@ fn coherent_allocation_insertion_bound_dispatch_precedes_full_and_invalid_size()
 }
 
 #[test]
+fn device_allocation_insertion_bound_dispatch_precedes_full_and_invalid_request() {
+    bound_dispatch_precedence(9..11);
+}
+
+#[test]
+fn device_allocation_insertion_missing_engine_retains_parent_without_panic_marker() {
+    for hole in [None, Some(0)] {
+        for requested_bytes in [0, 17] {
+            for alignment in [0, 4096] {
+                let (mut session, lane) = parent(false, false);
+                session.detached_next_insertion_index = hole;
+                let _ = take_dispatch_terminal_process_gate_record_v1();
+                let _ = take_lane_unwind_process_gate_record_v1();
+                assert!(matches!(
+                    session.allocate_uninitialized_fixed_dispatch_data(requested_bytes, alignment),
+                    Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "missing queue engine"
+                    ))
+                ));
+                assert_shell(&mut session, lane);
+                assert!(!take_dispatch_terminal_process_gate_record_v1());
+                assert!(!take_lane_unwind_process_gate_record_v1());
+            }
+        }
+    }
+}
+
+#[test]
 fn coherent_allocation_insertion_missing_engine_retains_terminal_parent_without_panic_marker() {
     for replacement in [false, true] {
         for requested_bytes in [0, 17] {
@@ -493,7 +534,7 @@ fn coherent_allocation_insertion_production_wiring_never_grants_initialized_auth
         .split("impl CoherentAllocationCustodyV1")
         .nth(1)
         .unwrap()
-        .split("pub(crate) struct DeviceInitializationCustodyV1")
+        .split("pub(crate) struct DeviceAllocationCustodyV1")
         .next()
         .unwrap();
     let allocate = root
@@ -665,7 +706,7 @@ fn bound_dispatch_precedence(routes: core::ops::Range<usize>) {
             for route in routes.clone() {
                 for source in [&[][..], &[0x49; 17][..]] {
                     assert!(matches!(
-                        invoke_coherent_public(route, &mut session, lane, source),
+                        invoke_insertion_public(route, &mut session, lane, source),
                         Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
                             Gfx942DispatchBindingErrorV1::ResourcePhase
                         ))
@@ -749,10 +790,10 @@ fn device_insertion_production_routing_roots_reserves_settles_commits_then_extra
     assert!(adapter.contains("self.poison_terminal()"));
     assert!(!adapter.contains("take_data"));
     let device_root = source
-        .split("impl DataInsertionRootV1<u64>")
+        .split("impl DataInsertionRootV1<u64> for DeviceInitializationCustodyV1")
         .nth(1)
         .unwrap()
-        .split("impl DataInsertionRootV1<&[u8]>")
+        .split("impl DataInsertionRootV1<(u64, u64)> for DeviceAllocationCustodyV1")
         .next()
         .unwrap();
     assert!(device_root.contains("memory.prepare_device_initialization_in_place(self, alignment)"));
@@ -816,4 +857,107 @@ fn device_insertion_production_routing_roots_reserves_settles_commits_then_extra
             < facade.find("settled.into_result()").unwrap()
     );
     assert!(!facade.contains("retain_terminal_rebind_parent"));
+}
+
+#[test]
+fn device_allocation_insertion_production_wiring_preserves_uninitialized_custody() {
+    let source = include_str!("../../shared_memory/device_allocation.rs");
+    let allocate = source
+        .find("engine.allocate_device_memory_with_flags_inner(")
+        .unwrap();
+    let root = source
+        .find("self.lease = AllocationLeaseV1::Unmapped(lease)")
+        .unwrap();
+    let map = source
+        .find("engine.map_device_memory_borrowed(lease, &mut self.progress)?")
+        .unwrap();
+    let promote = source
+        .find("self.lease = AllocationLeaseV1::Mapped(lease.retag())")
+        .unwrap();
+    assert!(allocate < root && root < map && map < promote);
+    assert!(source.contains("KfdAllocMemoryFlags::DEVICE_LOCAL,"));
+    assert!(source.contains("&mut self.native_started"));
+    assert!(source.contains("engine.terminal_device_initialization.is_some()"));
+    assert!(source.contains(".retain_allocation(self)"));
+    let insertion = include_str!("../data_insertion.rs");
+    let adapter = insertion
+        .split("impl DataInsertionRootV1<(u64, u64)> for DeviceAllocationCustodyV1")
+        .nth(1)
+        .unwrap()
+        .split("impl DataInsertionRootV1<&[u8]>")
+        .next()
+        .unwrap();
+    assert!(adapter.contains("Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized"));
+    assert!(adapter.contains(".map(Gfx942FixedDispatchDataV1::uninitialized)"));
+    assert!(
+        adapter.contains(
+            "memory.prepare_device_allocation_in_place(self, requested_bytes, alignment)"
+        )
+    );
+    assert!(adapter.contains("memory.retain_device_allocation_failure(self)"));
+    let settled = insertion
+        .split("pub(super) fn allocate_device_data_settled_v1(")
+        .nth(1)
+        .unwrap()
+        .split("\n    }")
+        .next()
+        .unwrap();
+    assert!(settled.contains("DeviceAllocationCustodyV1::new()"));
+    assert!(settled.contains("DataInsertionIndexV1::HoleOrAppend"));
+    assert!(settled.contains("(requested_bytes, alignment)"));
+    let shared = include_str!("../../shared_memory.rs");
+    for (name, signature, marker) in [
+        (
+            "prepare_device_allocation_in_place",
+            "root: &mut DeviceAllocationCustodyV1",
+            "root.prepare_with_engine(\n            &mut self.engine,\n            self.model_device.model_key(),\n            self.vm,\n            requested_bytes,\n            alignment,\n        )",
+        ),
+        (
+            "retain_device_allocation_failure",
+            "root: DeviceAllocationCustodyV1",
+            "root.retain_with_engine(&mut self.engine)",
+        ),
+    ] {
+        let body = shared
+            .split(&format!("pub(crate) fn {name}("))
+            .nth(1)
+            .unwrap()
+            .split("\n    }")
+            .next()
+            .unwrap();
+        assert!(body.contains(signature));
+        assert!(body.contains(marker));
+    }
+    let fixed = include_str!("../fixed_dispatch.rs");
+    let body = fixed
+        .split("pub fn allocate_uninitialized_fixed_dispatch_data(")
+        .nth(1)
+        .unwrap()
+        .split("\n    }")
+        .next()
+        .unwrap();
+    assert!(body.contains("allocate_device_data_settled_v1(requested_bytes, alignment)"));
+    assert!(
+        body.find("retain_terminal_rebind_parent_v1(core::mem::forget)")
+            .unwrap()
+            < body.find("settled.into_result()").unwrap()
+    );
+    for selected in [source, adapter, body] {
+        for forbidden in [
+            ".map_device_memory(",
+            "with_live_queue_memory_model",
+            "initialize_v1",
+            "copy_from_slice",
+            "DEVICE_LOCAL_PUBLIC",
+            "Box::new",
+            "to_vec()",
+            "DeviceInitializedContent",
+            "initialized_after_dispatch",
+        ] {
+            assert!(
+                !selected.contains(forbidden),
+                "allocation-only path introduced {forbidden}"
+            );
+        }
+    }
 }

@@ -4,6 +4,9 @@ use crate::shared_memory::device_initialization::{
     self as init, DeviceInitializationStageV1 as Stage,
 };
 
+#[path = "device_allocation.rs"]
+pub(in crate::shared_memory) mod allocation_cases;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct NativeSnapshot {
     identity: (u64, u64, DeviceKeyV1, VmKeyV1, Gfx942DeviceMemoryLayoutV1),
@@ -286,9 +289,11 @@ struct Fixture {
 
 impl Fixture {
     fn new(configured: bool) -> Self {
-        let mut memory = BackingConstructorFixture::new(
-            configured.then(|| Gfx942DeviceBackingBudgetV1::new(32_768, 8).unwrap()),
-        );
+        Self::with_budget(configured.then(|| Gfx942DeviceBackingBudgetV1::new(32_768, 8).unwrap()))
+    }
+
+    fn with_budget(budget: Option<Gfx942DeviceBackingBudgetV1>) -> Self {
+        let mut memory = BackingConstructorFixture::new(budget);
         let anchor = memory.mapped_device();
         let anchor_native = snapshot(&memory.engine.device_memory[0]);
         let identity = memory.foundation.identity().clone();

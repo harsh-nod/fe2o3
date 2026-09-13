@@ -1,0 +1,25 @@
+{
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "started_at": "2026-09-13T02:00:46.628Z",
+  "finished_at": "2026-09-13T02:00:52.658Z",
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/r112-auxiliary-gates.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r112-auxiliary-campaign.log",
+  "source": "/home/harsh/.codex-tmp/r112-auxiliary-campaign-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "campaign_deadline_ms": 7200000,
+  "elapsed_seconds": 6.293432686,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

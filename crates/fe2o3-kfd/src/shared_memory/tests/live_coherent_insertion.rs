@@ -557,6 +557,13 @@ impl CoherentAllocationCustodyV1 {
 }
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn insertion_model_snapshot_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+    ) -> model::MemoryLifecycleStateV1 {
+        self.coherent_active_foundation_v1(queue).memory().clone()
+    }
+
     pub(crate) fn coherent_expect_unchanged_model_v1(
         &self,
         queue: &QueueModelFoundationV1,

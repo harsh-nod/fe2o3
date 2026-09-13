@@ -42,9 +42,27 @@ pub(super) struct DeviceInitializationCustodyV1 {
     started: bool,
 }
 
-// Reserve once before backend effects; retaining an admitted failure cannot allocate.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "One slot is preallocated before native effects; boxing during retention could fail"
+)]
+enum TerminalDeviceCustodyV1 {
+    Initialized(DeviceInitializationCustodyV1),
+    Uninitialized(device_allocation::DeviceAllocationCustodyV1),
+}
+
+impl TerminalDeviceCustodyV1 {
+    fn admitted(&self) -> bool {
+        match self {
+            Self::Initialized(root) => root.requires_live_retention(),
+            Self::Uninitialized(root) => root.requires_retention(),
+        }
+    }
+}
+
+// Reserve once before backend effects; both preparation kinds share this slot.
 pub(super) struct TerminalInitializationSlotV1 {
-    roots: Vec<DeviceInitializationCustodyV1>,
+    roots: Vec<TerminalDeviceCustodyV1>,
 }
 
 impl TerminalInitializationSlotV1 {
@@ -56,25 +74,48 @@ impl TerminalInitializationSlotV1 {
         Ok(Self { roots })
     }
 
+    #[cfg(test)]
     pub(super) fn as_ref(&self) -> Option<&DeviceInitializationCustodyV1> {
-        self.roots.first()
+        match self.roots.first() {
+            Some(TerminalDeviceCustodyV1::Initialized(root)) => Some(root),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn allocation_as_ref(
+        &self,
+    ) -> Option<&device_allocation::DeviceAllocationCustodyV1> {
+        match self.roots.first() {
+            Some(TerminalDeviceCustodyV1::Uninitialized(root)) => Some(root),
+            _ => None,
+        }
     }
 
     pub(super) fn is_some(&self) -> bool {
-        self.as_ref().is_some()
+        !self.roots.is_empty()
     }
 
     #[cfg(test)]
     pub(super) fn is_none(&self) -> bool {
-        self.as_ref().is_none()
+        self.roots.is_empty()
     }
 
     pub(super) fn retain(&mut self, root: DeviceInitializationCustodyV1) {
+        self.retain_root(TerminalDeviceCustodyV1::Initialized(root));
+    }
+
+    pub(super) fn retain_allocation(&mut self, root: device_allocation::DeviceAllocationCustodyV1) {
+        self.retain_root(TerminalDeviceCustodyV1::Uninitialized(root));
+    }
+
+    fn retain_root(&mut self, root: TerminalDeviceCustodyV1) {
         assert!(self.roots.is_empty(), "occupied initialization custody");
         assert!(
             self.roots.capacity() >= 1,
             "reserved initialization custody"
         );
+        debug_assert!(root.admitted(), "admitted device custody");
         self.roots.push(root);
     }
 

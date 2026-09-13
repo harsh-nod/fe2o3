@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 12 tests
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_independent_credit_limits_release_only_after_actual_disposal ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_capacity_rejection_and_real_release_allow_fresh_retry ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_invalid_layout_and_coordinates_reject_before_effects ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_currentness_matrix_distinguishes_per_call_native_admission ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_malformed_allocations_never_fabricate_a_lease ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_map_prefix_matrix_preserves_progress_and_error_precedence ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_success_retains_exact_device_local_owner_until_single_extraction ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_native_error_and_panic_prefixes_retain_actual_owners ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_preflight_arithmetic_and_configured_domain_are_side_effect_free ... ok
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite ... ok
+test shared_memory::tests::live_insertion::device_allocator_partition_does_not_invent_pending_custody_after_extraction ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1074 filtered out; finished in 0.01s
+

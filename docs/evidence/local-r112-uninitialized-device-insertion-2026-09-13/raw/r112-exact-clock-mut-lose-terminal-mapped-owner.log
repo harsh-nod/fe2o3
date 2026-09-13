@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.37s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack ... FAILED
+
+failures:
+
+---- shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack stdout ----
+
+thread 'shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack' (2874881) panicked at crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs:844:9:
+assertion `left == right` failed
+  left: AllocationSnapshot { lease: None, started: true, failed: true, native_started: true, progress: NativeTransitionProgressV1 { attempted: true, returned_success: Some(true), returned_map_prefix: Some(1) } }
+ right: AllocationSnapshot { lease: Some(((2, 1, DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) }, Gfx942DeviceMemoryLayoutV1 { requested_bytes: 4097, backing_bytes: 8192, alignment: 4096, uapi_flags: 2147483649 }), true)), started: true, failed: true, native_started: true, progress: NativeTransitionProgressV1 { attempted: true, returned_success: Some(true), returned_map_prefix: Some(1) } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1085 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

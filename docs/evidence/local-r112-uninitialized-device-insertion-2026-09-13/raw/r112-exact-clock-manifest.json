@@ -1,0 +1,1404 @@
+{
+  "recorded_at": "2026-09-13T02:30:01.443Z",
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+  "entries": {
+    "r112-exact-clock-mut-historical-admission.json": {
+      "kind": "run",
+      "source_map_sha256": "8f5e5bd8d41a68584319ac2f093227a070b70fa480c8761c5d3864cd5d2400d8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_currentness_matrix_distinguishes_per_call_native_admission",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-manifest.json",
+        "field": "recorded_at"
+      }
+    },
+    "r112-exact-clock-restoration-historical-admission.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-historical-admission.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-omit-immediate-quarantine.json": {
+      "kind": "run",
+      "source_map_sha256": "1dd86529bc8cb84ee9f5a9502c6038f5ca78bb2a481a2f73509efe2ff6f36645",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_native_error_and_panic_prefixes_retain_actual_owners",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-historical-admission.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-omit-immediate-quarantine.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-omit-immediate-quarantine.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-lose-unmapped-owner.json": {
+      "kind": "run",
+      "source_map_sha256": "6a5c069d3aee597741c552d09d5e42848748cc53a4210a80595d789a1d4813d1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_native_error_and_panic_prefixes_retain_actual_owners",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-omit-immediate-quarantine.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-lose-unmapped-owner.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-lose-unmapped-owner.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-public-instead-of-device-local.json": {
+      "kind": "run",
+      "source_map_sha256": "31e39869b9b7ffe94edf444b156a1cca4d903492969c2797f2add137a370bba7",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_success_retains_exact_device_local_owner_until_single_extraction",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-lose-unmapped-owner.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-public-instead-of-device-local.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-public-instead-of-device-local.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-discard-map-progress.json": {
+      "kind": "run",
+      "source_map_sha256": "94e8fbd9da93d7cd83ece6dd1a1feed5ee82100850e3e49f8199581cfc35584c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_map_prefix_matrix_preserves_progress_and_error_precedence",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-public-instead-of-device-local.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-discard-map-progress.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-discard-map-progress.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-allow-repreparation.json": {
+      "kind": "run",
+      "source_map_sha256": "468febbb7d3438c58bead078bc8192f41870b4bd1a44c788b1ae1b711cc67c9f",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_success_retains_exact_device_local_owner_until_single_extraction",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-discard-map-progress.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-allow-repreparation.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-allow-repreparation.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-lose-terminal-mapped-owner.json": {
+      "kind": "run",
+      "source_map_sha256": "33829050e9de716427d3c9411f6c8c4ed29575c9feec746cabcab821676beed1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-allow-repreparation.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-lose-terminal-mapped-owner.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-lose-terminal-mapped-owner.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-expose-failed-output.json": {
+      "kind": "run",
+      "source_map_sha256": "0908a78194368d724d96544636e7492065afee2477b0c911a043561f39917c5e",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-lose-terminal-mapped-owner.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-expose-failed-output.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-expose-failed-output.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-allocation-ignores-occupied-slot.json": {
+      "kind": "run",
+      "source_map_sha256": "111fca7e974e10a166f0dd4d3ac1b0abab1a78cdc4b5b65eb0d6503ee2a773fc",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-expose-failed-output.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-allocation-ignores-occupied-slot.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-allocation-ignores-occupied-slot.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-initialization-ignores-occupied-slot.json": {
+      "kind": "run",
+      "source_map_sha256": "4ba858de6c84867218dc00a05fdd60f3c9e0bbf0169da9908e4133e08bed0cd8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-allocation-ignores-occupied-slot.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-initialization-ignores-occupied-slot.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-initialization-ignores-occupied-slot.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-ignore-remembered-hole.json": {
+      "kind": "run",
+      "source_map_sha256": "4ce6cac0ffd708532490edfe1f4f86225913644f16693c7376ae4f0b8a2194e7",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_uses_genuine_released_hole_before_append",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-initialization-ignores-occupied-slot.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-ignore-remembered-hole.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-ignore-remembered-hole.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-grant-initialized-authority.json": {
+      "kind": "run",
+      "source_map_sha256": "dbe801aa9b842b0595f3a74a5166171b000952da22bdf9ddd7f5b6ed7610016a",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_constructed_append_preserves_exact_uninitialized_identity",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-ignore-remembered-hole.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-grant-initialized-authority.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-grant-initialized-authority.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-extract-before-commit-entry.json": {
+      "kind": "run",
+      "source_map_sha256": "2ae3827d331f46077fa0a052443d3dafbbb530b03cad6ec58ab152dfcfbfc7a9",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-grant-initialized-authority.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-extract-before-commit-entry.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-extract-before-commit-entry.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-accept-missing-complete.json": {
+      "kind": "run",
+      "source_map_sha256": "c2fb4f0673c15f3c6e5ed31a1454a80ec3e0bdd04b120c731c33912cf6a45829",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-extract-before-commit-entry.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-accept-missing-complete.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-accept-missing-complete.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-replace-substrate-first-panic.json": {
+      "kind": "run",
+      "source_map_sha256": "2cad32e648ec6b8665a405fa341fa5ec1214949de5730606005d7437487c35cb",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_operation_panic_wins_each_secondary_closing_failure",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-accept-missing-complete.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-replace-substrate-first-panic.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-replace-substrate-first-panic.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-mut-suppress-substrate-retake-error.json": {
+      "kind": "run",
+      "source_map_sha256": "17ba9adf706599554b5fd49511e82e7a184b5edcbd6f8ab228d31c1e7eb83d76",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_operation_panic_wins_each_secondary_closing_failure",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-replace-substrate-first-panic.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restoration-suppress-substrate-retake-error.json": {
+      "kind": "restoration",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "predecessor": {
+        "name": "r112-exact-clock-mut-suppress-substrate-retake-error.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-insertion.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_allocation_insertion_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restoration-suppress-substrate-retake-error.json",
+        "field": "verified_at"
+      }
+    },
+    "r112-exact-clock-restored-allocator.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_allocator_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-insertion.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-device-initializer.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_initializer_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-allocator.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-coherent-allocation.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "coherent_allocation_insertion_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-device-initializer.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-coherent-insertion.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "coherent_insertion_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-coherent-allocation.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-device-insertion.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_insertion_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-coherent-insertion.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-initializer.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::transitions::coherent_initialization::"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-device-insertion.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-borrowed.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "borrowed_initialization_"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-initializer.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-restored-model-loan.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::model_loan::tests::"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-borrowed.json",
+        "field": "finished_at"
+      }
+    },
+    "r112-exact-clock-collector-validation.json": {
+      "kind": "run",
+      "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r112-exact-clock-retain-local.js",
+        "--check"
+      ],
+      "returncode": 0,
+      "predecessor": {
+        "name": "r112-exact-clock-restored-model-loan.json",
+        "field": "finished_at"
+      }
+    }
+  },
+  "helpers": [
+    {
+      "name": "r112-exact-clock-check-mutation.js",
+      "sha256": "aedbdb839065c0aa2e6634d3642fe13701f9d4faba81b2195b17c2f39077ea35"
+    },
+    {
+      "name": "r112-exact-clock-evidence-tests.js",
+      "sha256": "18e2bdbbf47a70b33608877a587bfa30ca300f9e8173c2c21ff0f81ef0930c78"
+    },
+    {
+      "name": "r112-exact-clock-evidence.js",
+      "sha256": "a84aba4e4cc1c7c65d0938d5b363cdc0f3eb5419759083d843be065081aa31b9"
+    },
+    {
+      "name": "r112-exact-clock-prepare.js",
+      "sha256": "a6f7792b88f961a8ce2fa2d660adbb5912783735540b8321708a7774a6214e0a"
+    },
+    {
+      "name": "r112-exact-clock-restoration.js",
+      "sha256": "cdcd42bb037d1d1f1a6cf8d3d1a983fe266a204bd02d1f9bda904ebe9a74df66"
+    },
+    {
+      "name": "r112-exact-clock-retain-local.js",
+      "sha256": "9b06b937b57b1085724c24e37cf3f4d4ebe6fa4386b5bff29ac6c376048a3bb1"
+    },
+    {
+      "name": "r112-exact-clock-run.js",
+      "sha256": "1498b73a814a037edafeebe59f8d0e99fdcdc207db50ecef27ca180587476961"
+    },
+    {
+      "name": "r112-exact-qualification-plan.js",
+      "sha256": "f33a92c52beda473a41086ac0b03aa5ab91302421c7555539067ecf8a4271cac"
+    }
+  ],
+  "historical_artifacts": [
+    {
+      "name": "r112-assert-frozen.js",
+      "sha256": "bd015584bb2909550f9f916c89cf8fc3cf7c062606037d6774f10e3f54fc61c6"
+    },
+    {
+      "name": "r112-auxiliary-campaign-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-auxiliary-campaign.json",
+      "sha256": "4dcd70d462e3625829325e42188f847c4594f769aab6b0bde4e6d01915b8ae40"
+    },
+    {
+      "name": "r112-auxiliary-campaign.log",
+      "sha256": "1f4448468965b96afb66d9cc5ac64f6d23dd9d3c6610da18ca45e565631ae2fa"
+    },
+    {
+      "name": "r112-auxiliary-complete.json",
+      "sha256": "a58f7070008fd36353262ffcb079df53102ac3e4b13efe7e6d825375ebd3f7a6"
+    },
+    {
+      "name": "r112-auxiliary-gates.py",
+      "sha256": "9355c5e6f1f1752ae01b48462f5dd884026598c80798fea361a728f0a4ff029f"
+    },
+    {
+      "name": "r112-auxiliary-results.json",
+      "sha256": "2adda2552ff1bc93a3e863982f1a3049d8628c8a175423c3b033febe5173a3e8"
+    },
+    {
+      "name": "r112-auxiliary-source-after.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-auxiliary-source-inputs.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-bind.log",
+      "sha256": "b742239f3e298d504c93a900fa2acfd3fcb0a5fee84fb93ec5c5a040b75b0bdd"
+    },
+    {
+      "name": "r112-campaign-run.js",
+      "sha256": "321c33f780b83733935e4f756825cbe29446fcc745419ccfe36dc14c829ae34f"
+    },
+    {
+      "name": "r112-environment.json",
+      "sha256": "1e7e1a6f2b13d5b186b5364c7aac3519d315372ccfeeaa39f382e67f883aafc7"
+    },
+    {
+      "name": "r112-exact-mutations.json",
+      "sha256": "3592b623c89ab237c767ddad033116d6a56eed52776500521de05f374e082ac7"
+    },
+    {
+      "name": "r112-exact-qualification-plan.js",
+      "sha256": "f33a92c52beda473a41086ac0b03aa5ab91302421c7555539067ecf8a4271cac"
+    },
+    {
+      "name": "r112-final-ci-test-gate.log",
+      "sha256": "7614173c0974c8aa8202f60f5fc9a9ed8691211147a0004dab9299a3555f5b9b"
+    },
+    {
+      "name": "r112-final-clippy-all.log",
+      "sha256": "1cd38eede290e43b1f0f295ec3a82c6c414d3761653057ac0caf478838bf26e2"
+    },
+    {
+      "name": "r112-final-clippy-production.log",
+      "sha256": "64db89ad97e61c58048257b5f5516893954def9b86ec7d1c76f026b693ce6aa0"
+    },
+    {
+      "name": "r112-final-complete.json",
+      "sha256": "d130748a8ef4280fdf1f1df0583b090a1c9d078b7106fc385fd22a47169b1cb4"
+    },
+    {
+      "name": "r112-final-dependency-policy.log",
+      "sha256": "e4909791d89201a88e23213fca74159a2d5b8e869b5227635acbe74c893d6e25"
+    },
+    {
+      "name": "r112-final-dependency-tests.log",
+      "sha256": "75ff54e727b57e4bd7b88956ed0c92c4b9a416e6f0976707e8fb54aa385ac0bd"
+    },
+    {
+      "name": "r112-final-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-format-check-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-format-check.json",
+      "sha256": "a5983966896c09cd8901410e56d210ec783d008b5edf378ef969b32d85a8978b"
+    },
+    {
+      "name": "r112-final-format-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-gnu-docs.log",
+      "sha256": "4711c28386e75777976d5c4d4a7561377982f0619f1449b170d88d1c5d0c5f3a"
+    },
+    {
+      "name": "r112-final-gnu-host.log",
+      "sha256": "6f89cc6b3f5d864fadc6ecdd3a1a4a5aae4bbcabf7ea41568dfd1a905b184a8d"
+    },
+    {
+      "name": "r112-final-gnu-tests.log",
+      "sha256": "409bdc0c64da5d52fd6755b23aa58bd684c870a0d5cb8bc471eaa33a5f4d3d95"
+    },
+    {
+      "name": "r112-final-guard-allocator-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-allocator.json",
+      "sha256": "9ab122cbf94a606fec070289726051466885893db3d48387e9adc8ceb3fe0388"
+    },
+    {
+      "name": "r112-final-guard-allocator.log",
+      "sha256": "6b03028ac5c31a092d5e4063a8e32c8facad39e3b39b243930bf93fd34d390fc"
+    },
+    {
+      "name": "r112-final-guard-clippy-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-clippy.json",
+      "sha256": "648f1a80475472027e997858bf48c40afaebb0aefd571e57ed08018db2754ebe"
+    },
+    {
+      "name": "r112-final-guard-clippy.log",
+      "sha256": "5a5716ce863e20b6d41eb03369ec547bd29aa98cc806d3cb9a68e5fe1d0a5c36"
+    },
+    {
+      "name": "r112-final-guard-format-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-format.json",
+      "sha256": "7f8fa62bf54e28ab3d2531479da43cb1398a327f7c0b7640ca9dea2ac5a9ce29"
+    },
+    {
+      "name": "r112-final-guard-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-guard-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-insertion.json",
+      "sha256": "122bb4d03edd39d25eba92675cc3d0fd45c77bc6fae6512a4f40fc4ca7782ab1"
+    },
+    {
+      "name": "r112-final-guard-insertion.log",
+      "sha256": "8e37ba705fc3cb5632341aaab797d16c7346778e4d4d55133cac2e2759dbb8a9"
+    },
+    {
+      "name": "r112-final-macro-fixtures.log",
+      "sha256": "ba829cdb4c94ae879069406ce6089fadc75d0bc547609f43bd117a83c3de7f55"
+    },
+    {
+      "name": "r112-final-musl-docs.log",
+      "sha256": "3f9d1fe93ee1507cf6777ed8018da3412392260d12e27915b3d23a02dabb89f9"
+    },
+    {
+      "name": "r112-final-musl-host-docs.log",
+      "sha256": "32074044ffe94b63d422e1ac00317ad77ce46f393004d16e473aed217877303d"
+    },
+    {
+      "name": "r112-final-musl-host.log",
+      "sha256": "20439a37a74c0cbdee2604c8046ad4e7b3c40c4103e9418adbd8daa71e23ebdb"
+    },
+    {
+      "name": "r112-final-musl-tests.log",
+      "sha256": "76f44499de1ad074f5992c08b1b80ce9c3aa36a498640da8aabd6474e486d3ad"
+    },
+    {
+      "name": "r112-final-python.log",
+      "sha256": "942f668a3a906dfcdd02f6dc1af9f8f58c1c44e449aab520bc31ad0fd24a6c56"
+    },
+    {
+      "name": "r112-final-source-after.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-final-source-gate.json",
+      "sha256": "222130618c0bdf5d120ebac64ed458d6f8fe1b162511814fe903a9830f1221c1"
+    },
+    {
+      "name": "r112-final-source-inputs.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-final-standalone-lockfiles.log",
+      "sha256": "192a90ed1f437f0cc1b070e66c2061a491c34346df88f5da05cf21234c4bf430"
+    },
+    {
+      "name": "r112-final-whitespace-check-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-whitespace-check.json",
+      "sha256": "5bd8f8fe8b92c111de08e97c25167a721fd34e12c9593cf80c56648a511ca3aa"
+    },
+    {
+      "name": "r112-final-whitespace-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-freeze.js",
+      "sha256": "fe7a23425b51dc6bed84dec50b687458de6fc74a93ebe4cb7c63a23d389209d7"
+    },
+    {
+      "name": "r112-frozen-allocator-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-allocator.json",
+      "sha256": "68ea434dab2d6e34e565a7bdf6825c94fb2c8fcf018cbf944376b1a59a1a5a30"
+    },
+    {
+      "name": "r112-frozen-allocator.log",
+      "sha256": "d9dd2bce98f66c5660e68abacd3f7d6361c62ba061242f7a6209f30d7dffa03e"
+    },
+    {
+      "name": "r112-frozen-borrowed-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-borrowed.json",
+      "sha256": "c45cf8821d294dde22c5fb7cf2ca13898c4f6dfa161bc72f3c106463249315f8"
+    },
+    {
+      "name": "r112-frozen-borrowed.log",
+      "sha256": "b524610396c81861f5e2c86fa8e5a7dc43296cfb941638fb1be6634469677438"
+    },
+    {
+      "name": "r112-frozen-coherent-allocation-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-coherent-allocation.json",
+      "sha256": "be783207c662d64223834ddaabd941a7d15ec6f8f9d2a70c6a0938c8de204012"
+    },
+    {
+      "name": "r112-frozen-coherent-allocation.log",
+      "sha256": "29a84e5e0a71f7ed1c36f030e132f14e1339c825b4771e5c34b53700e394e4ed"
+    },
+    {
+      "name": "r112-frozen-coherent-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-coherent-insertion.json",
+      "sha256": "74853291e925b5971df853041f704d94de48bee7381f12ecfde8884204131fe4"
+    },
+    {
+      "name": "r112-frozen-coherent-insertion.log",
+      "sha256": "bd3adf4a894f04bb13f5e86249ca02a5818bfb1f6ef6e704bdfca23ff7576cfb"
+    },
+    {
+      "name": "r112-frozen-device-initializer-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-device-initializer.json",
+      "sha256": "1e1a1ef14e69b2b3ffb2bf5b0dadabf87087e48844d9ecf978034972382bc2b8"
+    },
+    {
+      "name": "r112-frozen-device-initializer.log",
+      "sha256": "208cf604300d4700c08fe9015d7049e46e41f394612822d3bdc0acd6a9f62717"
+    },
+    {
+      "name": "r112-frozen-device-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-device-insertion.json",
+      "sha256": "423161ed0ee2e4bab1579621e442ed851d3fc8be021901f62caa0a3d2cdc3129"
+    },
+    {
+      "name": "r112-frozen-device-insertion.log",
+      "sha256": "ea2eed892ad22e47f4f0babecfa4eab697d65e4c1389b320a6aeea92fee13a5b"
+    },
+    {
+      "name": "r112-frozen-initializer-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-initializer.json",
+      "sha256": "14d1b993a61be299fa6194b5e5f4531f9013d5903380b8bed682d66cf802554c"
+    },
+    {
+      "name": "r112-frozen-initializer.log",
+      "sha256": "8d770b491fcff211a47001be963fe3b727bae3b47218f2cfb8438445f15c116a"
+    },
+    {
+      "name": "r112-frozen-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-insertion.json",
+      "sha256": "8ed0849860a625e361bd8340c9df3a1ac072341da741bf17e41ff21453891966"
+    },
+    {
+      "name": "r112-frozen-insertion.log",
+      "sha256": "6892be0d8ba5da14ad0518b6e1bcaaec8d5ff65929f131902325867646fd3a3c"
+    },
+    {
+      "name": "r112-frozen-model-loan-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-model-loan.json",
+      "sha256": "582a0bd01fe049bbc0d58f219a1db226902d6356fbfd061fc7aa7ccd2e6aa1b7"
+    },
+    {
+      "name": "r112-frozen-model-loan.log",
+      "sha256": "d8e69ec678f365eae5a801c71233b3640d5227cff73fca8d48fa37c6264aebac"
+    },
+    {
+      "name": "r112-frozen-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-initial-build-source.json",
+      "sha256": "ecb90844e04c567bea354a6b287fce69c099185bc16746d8c7437a3751b6ce71"
+    },
+    {
+      "name": "r112-initial-build.json",
+      "sha256": "70c20d468e3e1caf3c3ab5cf6c41067d9fac06539e4880b5ae29ec2899e8b855"
+    },
+    {
+      "name": "r112-initial-build.log",
+      "sha256": "5e997b230eff37a3fa58660e25e33832910cd6cce97b24b20103f52741212e07"
+    },
+    {
+      "name": "r112-initial-format-source.json",
+      "sha256": "b7816cdbf3b38a8734cddb96dbce0af00017fe274b863847d280740d8dc99a09"
+    },
+    {
+      "name": "r112-initial-format.json",
+      "sha256": "21664189b70894ba27152637e0c29a10a040bde34b24d293e221e68efecd314c"
+    },
+    {
+      "name": "r112-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-initialization.log",
+      "sha256": "1e6364c7405528319b21bce6f860f5e4c1468aade702c0d837c34eb35a027ff8"
+    },
+    {
+      "name": "r112-integrated-format-corrected-source.json",
+      "sha256": "ae5e9b4f12685bf22d74069d40162204542e2e39bd1d96da1f709c4fb0cf68e3"
+    },
+    {
+      "name": "r112-integrated-format-corrected.json",
+      "sha256": "70ba2260e42b651aa9217945707090253d7373478781386138f340bddac42bdc"
+    },
+    {
+      "name": "r112-integrated-format-corrected.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-integrated-format-source.json",
+      "sha256": "85389ffe69a632e766e09c1fdcecc56bd3f81368fa73963b36dbe099dbbb3e62"
+    },
+    {
+      "name": "r112-integrated-format.json",
+      "sha256": "15b4f4e3ef39c0d05e1c6dca001436dfb7a4341ab1865f9112eb46551f403281"
+    },
+    {
+      "name": "r112-integrated-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-integrated-tests-corrected-source.json",
+      "sha256": "7b85a76326bf4862e0db916c213ef1577811f0e3a52a40c33334058fca00eb1d"
+    },
+    {
+      "name": "r112-integrated-tests-corrected.json",
+      "sha256": "a2c078724a2e7d1a3d1f9b8e82e05d7c335af12df2b449e01357b166314398c8"
+    },
+    {
+      "name": "r112-integrated-tests-corrected.log",
+      "sha256": "3cf67ae71d068e540a346e127c17b971a7b25ea7a80a4e2bdc8e4841cfa6f2dd"
+    },
+    {
+      "name": "r112-integrated-tests-source.json",
+      "sha256": "498cee8d1596f1ab2a1c0ccfdcee8497846929e0b08695eaf9b4b90829f203e1"
+    },
+    {
+      "name": "r112-integrated-tests.json",
+      "sha256": "ff5e1d279617953bf8b2117d13efb4243d7e71fae5a9b2ebf8a4493c61ce5116"
+    },
+    {
+      "name": "r112-integrated-tests.log",
+      "sha256": "4d6596ba3ab863d082af7854cf5afcaebdec6c2da158b7d2b90736b5bc8cae56"
+    },
+    {
+      "name": "r112-issue-status.json",
+      "sha256": "e538a64c335eecce0489ed42949545bd658b673520d6f4d5fc6eb580fd784fd9"
+    },
+    {
+      "name": "r112-lint-cleanup-format-source.json",
+      "sha256": "66ab6a00feb4dabf25f3b2b2b90e6f66bd02df4ff304991411ebfeed8e226839"
+    },
+    {
+      "name": "r112-lint-cleanup-format.json",
+      "sha256": "1ab29708a3fcea88e433183db4153a934ea0e40f6daaa285712a7441cd9ebf0d"
+    },
+    {
+      "name": "r112-lint-cleanup-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-linux-helpers.log",
+      "sha256": "05245f0b6aa978259798261bafaa1b33cc154009a9e5fb57b39a0c7e5ab946ad"
+    },
+    {
+      "name": "r112-low-level-format-source.json",
+      "sha256": "d0b0f0620a1c8db58d5ceb748ee624c9b2ffe2d2bb965006b3408c8bb8bf2202"
+    },
+    {
+      "name": "r112-low-level-format.json",
+      "sha256": "f34e63c7cec942b07f7c40f9d2c95039ec30e6cd95b7626bcb0b70cdf58ca9cf"
+    },
+    {
+      "name": "r112-low-level-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-low-level-tests-source.json",
+      "sha256": "2e9d68df6056df870640f29a86785dedc3a0d962a34273594c7974f6eac31b02"
+    },
+    {
+      "name": "r112-low-level-tests.json",
+      "sha256": "cdf4fbbdbdb6cfb9fa0357c1145a4d85d2120bd228ed934625b3bedf9e571e1f"
+    },
+    {
+      "name": "r112-low-level-tests.log",
+      "sha256": "2c41297ad44a1a414e9e8b6b2fcde16238ecc03be0cff037dbb89a13c9d25c25"
+    },
+    {
+      "name": "r112-ordinary.log",
+      "sha256": "5b2f89d3762ffb6c0e50c0c7da3accca0f2965e427d9780fc9ae1603c2b36b89"
+    },
+    {
+      "name": "r112-preparation.log",
+      "sha256": "7461a21c78fef508e46eb6b297d3598b1f3500f54d51e5de3117d0cb7251cdf2"
+    },
+    {
+      "name": "r112-production-audit.log",
+      "sha256": "400860e866d558eb288fcb5fa535c2f1df7461ba462f0c21f77e3b96009a228c"
+    },
+    {
+      "name": "r112-production-metadata.log",
+      "sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+    },
+    {
+      "name": "r112-production-metadata.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-proof-inventory.log",
+      "sha256": "71666f9ef118d670089a13bab3ca328ec739b8b3870abc98706f4b572884f2e5"
+    },
+    {
+      "name": "r112-registration.log",
+      "sha256": "40ddabc9f2ddbbaeecc516f1882d7a4e1d6e71dd1c54d30ea8c672eb144bf4b1"
+    },
+    {
+      "name": "r112-review-clippy-corrected-source.json",
+      "sha256": "24382371f605d1c689d24252fbc69382d41bd49cfb63e44f5104d48057f58a44"
+    },
+    {
+      "name": "r112-review-clippy-corrected.json",
+      "sha256": "a355c71faa831af29370eeeadaab3b8ec140c83fa3b7eb145edc2d85d02a3efc"
+    },
+    {
+      "name": "r112-review-clippy-corrected.log",
+      "sha256": "f973183e0bad45e5421935fa4c077c40c45f7e63f7a7bbf8556df0dc0be9d138"
+    },
+    {
+      "name": "r112-review-clippy-source.json",
+      "sha256": "1085249295dd7c36a753a8aa2aae1200ce8fa214bb846564c641a966a0d46dc1"
+    },
+    {
+      "name": "r112-review-clippy.json",
+      "sha256": "5fa300b1b4832518188e00c94b6e0f1b337062e74e85f004b4950fd8863a58b0"
+    },
+    {
+      "name": "r112-review-clippy.log",
+      "sha256": "2b04b234b7a6658e439f70a6592921216ae4a29e86809ecb5ab57d7deed460c0"
+    },
+    {
+      "name": "r112-review-format-source.json",
+      "sha256": "735bc35e77e846f12341b4bc1f049569838deac05830fc43c8447c332ef00bed"
+    },
+    {
+      "name": "r112-review-format.json",
+      "sha256": "dd4ac35c55182160c88bd48011cec08427b3da729d430c0ee48e123a6bc54b01"
+    },
+    {
+      "name": "r112-review-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-review-kfd-all-targets-source.json",
+      "sha256": "24382371f605d1c689d24252fbc69382d41bd49cfb63e44f5104d48057f58a44"
+    },
+    {
+      "name": "r112-review-kfd-all-targets.json",
+      "sha256": "8f40bd21e723f01b175390063d05a1159a37f41c896170fe158bd3b91eb96c1e"
+    },
+    {
+      "name": "r112-review-kfd-all-targets.log",
+      "sha256": "201d9a1d2286a87691608b1097537f23da22729a846fc88c180396bf0901b1ce"
+    },
+    {
+      "name": "r112-run.js",
+      "sha256": "910dce4f7e8ebed2202ed5845645fa1324504e36b1b4cfdaf2d348fa30580aa3"
+    },
+    {
+      "name": "r112-source-campaign-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-source-campaign.json",
+      "sha256": "46f14c31ce2910db386a0f0c7fe7690d584ca8a8d9e05c3817177f8eacfbff82"
+    },
+    {
+      "name": "r112-source-campaign.log",
+      "sha256": "e115a861b2466ffb543834dfa29080a524c69c17b759a321137c8e11443029da"
+    },
+    {
+      "name": "r112-source-gate.py",
+      "sha256": "4837fb0d7b45726ecc1774ab49845150fc3f0f708c5faa9a05f2616595cca23b"
+    },
+    {
+      "name": "r112-transitions.log",
+      "sha256": "f900410f4ce5b253c2d9d088b5c5e0e526c1c8785651792224bc6f43f4470813"
+    }
+  ],
+  "prerequisite_floors": [
+    {
+      "name": "r112-source-campaign.json",
+      "field": "finished_at",
+      "sha256": "46f14c31ce2910db386a0f0c7fe7690d584ca8a8d9e05c3817177f8eacfbff82",
+      "utc_ms": 1789264761849
+    },
+    {
+      "name": "r112-auxiliary-campaign.json",
+      "field": "finished_at",
+      "sha256": "4dcd70d462e3625829325e42188f847c4594f769aab6b0bde4e6d01915b8ae40",
+      "utc_ms": 1789264852658
+    },
+    {
+      "name": "r112-frozen-insertion.json",
+      "field": "finished_at",
+      "sha256": "8ed0849860a625e361bd8340c9df3a1ac072341da741bf17e41ff21453891966",
+      "utc_ms": 1789264997311
+    },
+    {
+      "name": "r112-frozen-allocator.json",
+      "field": "finished_at",
+      "sha256": "68ea434dab2d6e34e565a7bdf6825c94fb2c8fcf018cbf944376b1a59a1a5a30",
+      "utc_ms": 1789265139239
+    },
+    {
+      "name": "r112-frozen-device-initializer.json",
+      "field": "finished_at",
+      "sha256": "1e1a1ef14e69b2b3ffb2bf5b0dadabf87087e48844d9ecf978034972382bc2b8",
+      "utc_ms": 1789265151895
+    },
+    {
+      "name": "r112-frozen-coherent-allocation.json",
+      "field": "finished_at",
+      "sha256": "be783207c662d64223834ddaabd941a7d15ec6f8f9d2a70c6a0938c8de204012",
+      "utc_ms": 1789265522673
+    },
+    {
+      "name": "r112-frozen-coherent-insertion.json",
+      "field": "finished_at",
+      "sha256": "74853291e925b5971df853041f704d94de48bee7381f12ecfde8884204131fe4",
+      "utc_ms": 1789266039756
+    },
+    {
+      "name": "r112-frozen-device-insertion.json",
+      "field": "finished_at",
+      "sha256": "423161ed0ee2e4bab1579621e442ed851d3fc8be021901f62caa0a3d2cdc3129",
+      "utc_ms": 1789266307197
+    },
+    {
+      "name": "r112-frozen-initializer.json",
+      "field": "finished_at",
+      "sha256": "14d1b993a61be299fa6194b5e5f4531f9013d5903380b8bed682d66cf802554c",
+      "utc_ms": 1789266320390
+    },
+    {
+      "name": "r112-frozen-borrowed.json",
+      "field": "finished_at",
+      "sha256": "c45cf8821d294dde22c5fb7cf2ca13898c4f6dfa161bc72f3c106463249315f8",
+      "utc_ms": 1789266335709
+    },
+    {
+      "name": "r112-frozen-model-loan.json",
+      "field": "finished_at",
+      "sha256": "582a0bd01fe049bbc0d58f219a1db226902d6356fbfd061fc7aa7ccd2e6aa1b7",
+      "utc_ms": 1789266346597
+    },
+    {
+      "name": "r112-environment.json",
+      "field": "recorded_at",
+      "sha256": "1e7e1a6f2b13d5b186b5364c7aac3519d315372ccfeeaa39f382e67f883aafc7",
+      "utc_ms": 1789261664100
+    },
+    {
+      "name": "r112-exact-clock-contract-tests.json",
+      "field": "finished_at",
+      "sha256": "45cdf824c36465bf2b3abee151e3efb2294941f8b644e0c62232a818a6f986f3",
+      "utc_ms": 1789266591430
+    }
+  ],
+  "contract_tests": [
+    {
+      "name": "r112-exact-clock-contract-tests.json",
+      "sha256": "45cdf824c36465bf2b3abee151e3efb2294941f8b644e0c62232a818a6f986f3"
+    },
+    {
+      "name": "r112-exact-clock-contract-tests.log",
+      "sha256": "c62f43d7d1cc8328f1b878f70e3cd48125f7693aa3f4851398bbf1a2643365c2"
+    },
+    {
+      "name": "r112-exact-clock-contract-tests-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    }
+  ],
+  "test_environment_changed": false,
+  "test_deadlines_changed": false,
+  "clock": {
+    "contract": "r112-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "manifest",
+    "observation": {
+      "floor_ms": 1789266591430,
+      "samples": [
+        {
+          "utc_ms": 1789266601443,
+          "monotonic_ns": "64753157907128"
+        }
+      ]
+    }
+  }
+}

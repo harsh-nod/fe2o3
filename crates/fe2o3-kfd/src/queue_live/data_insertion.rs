@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::shared_memory::{
-    CoherentAllocationCustodyV1, CoherentInitializationCustodyV1, DeviceInitializationCustodyV1,
+    CoherentAllocationCustodyV1, CoherentInitializationCustodyV1, DeviceAllocationCustodyV1,
+    DeviceInitializationCustodyV1,
 };
 
 pub(in crate::queue) struct DetachedInsertionLedgerV1<'a> {
@@ -64,6 +65,39 @@ impl DataInsertionRootV1<u64> for DeviceInitializationCustodyV1 {
 
     fn retain(self, memory: &mut SharedGttMemorySessionV1) {
         memory.retain_device_initialization_failure(self);
+    }
+}
+
+impl DataInsertionRootV1<(u64, u64)> for DeviceAllocationCustodyV1 {
+    const LEDGER_OPERATION: &'static str = "detached uninitialized-device identity ledger";
+
+    fn completed_identity(
+        &self,
+    ) -> Result<Gfx942FixedDispatchStorageIdentityV1, MemorySessionError> {
+        Ok(Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized(
+            self.completed()?.storage_identity(),
+        ))
+    }
+
+    fn take_data(&mut self) -> Result<Gfx942FixedDispatchDataV1, MemorySessionError> {
+        self.take_complete()
+            .map(Gfx942FixedDispatchDataV1::uninitialized)
+    }
+
+    fn prepare(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        (requested_bytes, alignment): (u64, u64),
+    ) -> Result<(), MemorySessionError> {
+        memory.prepare_device_allocation_in_place(self, requested_bytes, alignment)
+    }
+
+    fn requires_retention(&self) -> bool {
+        self.requires_retention()
+    }
+
+    fn retain(self, memory: &mut SharedGttMemorySessionV1) {
+        memory.retain_device_allocation_failure(self);
     }
 }
 
@@ -269,6 +303,19 @@ impl<R: DataInsertionRootV1<P>, P> DataInsertionContextV1<R, P> for ComputeAqlQu
 }
 
 impl ComputeAqlQueueSessionV1 {
+    pub(super) fn allocate_device_data_settled_v1(
+        &mut self,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> SettledDataInsertionV1 {
+        settle_data_insertion_v1(
+            self,
+            DeviceAllocationCustodyV1::new(),
+            DataInsertionIndexV1::HoleOrAppend,
+            (requested_bytes, alignment),
+        )
+    }
+
     pub(super) fn initialize_device_data_settled_v1(
         &mut self,
         data_index: Option<usize>,

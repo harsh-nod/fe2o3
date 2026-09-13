@@ -1,0 +1,33 @@
+{
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "manifest_sha256": "f724627804c86fd1521983d94c247e81cd7544928f11b0ca2ec63d4c220254ae",
+  "verified_at": "2026-09-13T02:39:06.721Z",
+  "mutation": "lose-terminal-mapped-owner",
+  "source_identities": 5679,
+  "source_unchanged": true,
+  "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+  "clock": {
+    "contract": "r112-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "restoration",
+    "predecessor": {
+      "name": "r112-exact-clock-mut-lose-terminal-mapped-owner.json",
+      "sha256": "2a0e3965af06bc6c7bff58f30c6e79c776851c9ae0801231c2017a5b2052117d",
+      "field": "finished_at",
+      "utc_ms": 1789267144846
+    },
+    "observation": {
+      "floor_ms": 1789267144846,
+      "samples": [
+        {
+          "utc_ms": 1789267146721,
+          "monotonic_ns": "65328663372345"
+        }
+      ]
+    }
+  }
+}

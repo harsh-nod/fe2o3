@@ -1261,15 +1261,6 @@ fn content_descriptor_matches_sha256(
     descriptor.byte_len() == byte_len && descriptor.sha256() == sha256
 }
 
-fn insert_detached_identity<T>(
-    identities: &mut Vec<T>,
-    next_insertion_index: &mut Option<usize>,
-    identity: T,
-) {
-    let index = next_insertion_index.take().unwrap_or(identities.len());
-    identities.insert(index, identity);
-}
-
 fn validate_new_detached_data_index(
     detached_data_count: usize,
     data_index: usize,
@@ -19206,7 +19197,12 @@ mod tests {
         assert_eq!(identities.remove(removed_index), 12);
         let mut next_insertion_index = Some(removed_index);
 
-        insert_detached_identity(&mut identities, &mut next_insertion_index, 22);
+        insert_detached_identity_at(
+            &mut identities,
+            &mut next_insertion_index,
+            22,
+            removed_index,
+        );
 
         assert_eq!(identities, [11, 22, 13]);
         assert_eq!(next_insertion_index, None);

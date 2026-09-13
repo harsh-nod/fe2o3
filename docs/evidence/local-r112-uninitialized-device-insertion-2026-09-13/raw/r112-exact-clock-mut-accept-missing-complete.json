@@ -1,0 +1,69 @@
+{
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "source_map_sha256": "c2fb4f0673c15f3c6e5ed31a1454a80ec3e0bdd04b120c731c33912cf6a45829",
+  "manifest_sha256": "f724627804c86fd1521983d94c247e81cd7544928f11b0ca2ec63d4c220254ae",
+  "started_at": "2026-09-13T02:45:09.969Z",
+  "finished_at": "2026-09-13T02:45:49.300Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r112-exact-clock-mut-accept-missing-complete.log",
+  "source": "/home/harsh/.codex-tmp/r112-exact-clock-mut-accept-missing-complete-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 42.640175523,
+  "verification_elapsed_seconds": 0.283429399,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r112-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r112-exact-clock-restoration-extract-before-commit-entry.json",
+      "sha256": "7a22ca707b334477913ba5dade671249caca246d1279a6862a8dea108f4587b9",
+      "field": "verified_at",
+      "utc_ms": 1789267508843
+    },
+    "start": {
+      "floor_ms": 1789267508843,
+      "samples": [
+        {
+          "utc_ms": 1789267509969,
+          "monotonic_ns": "65710213230054"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789267549300,
+      "monotonic_ns": "65752853405577"
+    },
+    "source_verified": {
+      "utc_ms": 1789267549583,
+      "monotonic_ns": "65753136834976"
+    },
+    "error": null
+  }
+}

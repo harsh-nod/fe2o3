@@ -1,0 +1,15 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: method `allocation_as_ref` is never used
+  --> crates/fe2o3-kfd/src/shared_memory/device_initialization.rs:82:19
+   |
+64 | impl TerminalInitializationSlotV1 {
+   | --------------------------------- method in this implementation
+...
+82 |     pub(super) fn allocation_as_ref(
+   |                   ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.72s
+  Executable unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)

@@ -1,0 +1,128 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0603]: struct import `DeviceInitializationCustodyV1` is private
+    --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:50:44
+     |
+  50 |     Initialized(&'a device_initialization::DeviceInitializationCustodyV1),
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private struct import
+     |
+note: the struct import `DeviceInitializationCustodyV1` is defined here...
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_initialization.rs:2:5
+     |
+   2 | use super::*;
+     |     ^^^^^^^^
+note: ...and refers to the struct import `DeviceInitializationCustodyV1` which is defined here...
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6723:9
+     |
+6723 |     use super::*;
+     |         ^^^^^^^^
+note: ...and refers to the struct `DeviceInitializationCustodyV1` which is defined here
+    --> crates/fe2o3-kfd/src/shared_memory.rs:4604:1
+     |
+4604 | / pub(crate) struct DeviceInitializationCustodyV1(
+4605 | |     device_initialization::DeviceInitializationCustodyV1,
+4606 | | );
+     | |__^
+help: consider importing this struct through its public re-export instead
+     |
+  50 -     Initialized(&'a device_initialization::DeviceInitializationCustodyV1),
+  50 +     Initialized(&'a crate::DeviceInitializationCustodyV1),
+     |
+
+error[E0308]: mismatched types
+    --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:351:60
+     |
+ 351 |             external.map(|r| InsertionRootRef::Initialized(&r.0)),
+     |                              ----------------------------- ^^^^ expected `DeviceInitializationCustodyV1`, found a different `DeviceInitializationCustodyV1`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: `DeviceInitializationCustodyV1` and `DeviceInitializationCustodyV1` have similar names, but are actually distinct types
+note: `DeviceInitializationCustodyV1` is defined in module `crate::shared_memory::device_initialization` of the current crate
+    --> crates/fe2o3-kfd/src/shared_memory/device_initialization.rs:34:1
+     |
+  34 | pub(super) struct DeviceInitializationCustodyV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `DeviceInitializationCustodyV1` is defined in module `crate::shared_memory` of the current crate
+    --> crates/fe2o3-kfd/src/shared_memory.rs:4604:1
+     |
+4604 | pub(crate) struct DeviceInitializationCustodyV1(
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: tuple variant defined here
+    --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:50:5
+     |
+  50 |     Initialized(&'a device_initialization::DeviceInitializationCustodyV1),
+     |     ^^^^^^^^^^^
+
+error[E0631]: type mismatch in function arguments
+    --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:395:18
+     |
+  50 |     Initialized(&'a device_initialization::DeviceInitializationCustodyV1),
+     |     ----------- found signature defined here
+...
+ 395 |             .map(InsertionRootRef::Initialized)
+     |              --- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected due to this
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = note: expected function signature `fn(&shared_memory::device_initialization::DeviceInitializationCustodyV1) -> _`
+                found function signature `fn(&shared_memory::DeviceInitializationCustodyV1) -> _`
+note: required by a bound in `Option::<T>::map`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+     |
+1160 |     pub const fn map<U, F>(self, f: F) -> Option<U>
+     |                  --- required by a bound in this associated function
+1161 |     where
+1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
+help: consider wrapping the function in a closure
+     |
+ 395 |             .map(|arg0: &shared_memory::device_initialization::DeviceInitializationCustodyV1| InsertionRootRef::Initialized(/* &shared_memory::DeviceInitializationCustodyV1 */))
+     |                  ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++                              +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0609]: no field `lease` on type `&shared_memory::DeviceInitializationCustodyV1`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:422:29
+    |
+422 |                 match &root.lease {
+    |                             ^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+422 |                 match &root.0.lease {
+    |                             ++
+
+error[E0609]: no field `native_started` on type `&shared_memory::DeviceInitializationCustodyV1`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:431:22
+    |
+431 |                 root.native_started
+    |                      ^^^^^^^^^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+431 |                 root.0.native_started
+    |                      ++
+
+error[E0609]: no field `stage` on type `&shared_memory::DeviceInitializationCustodyV1`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:432:29
+    |
+432 |                     && root.stage == Stage::Allocate
+    |                             ^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+432 |                     && root.0.stage == Stage::Allocate
+    |                             ++
+
+error[E0609]: no field `lease` on type `&shared_memory::DeviceInitializationCustodyV1`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:433:38
+    |
+433 |                     && matches!(root.lease, InitializationLeaseV1::None)
+    |                                      ^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+433 |                     && matches!(root.0.lease, InitializationLeaseV1::None)
+    |                                      ++
+
+Some errors have detailed explanations: E0308, E0603, E0609, E0631.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `fe2o3-kfd` (lib test) due to 7 previous errors

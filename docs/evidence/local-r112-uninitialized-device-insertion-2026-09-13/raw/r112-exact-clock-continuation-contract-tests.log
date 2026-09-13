@@ -1,0 +1,18 @@
+HELPER_PINS: [{"name":"r112-exact-clock-continuation-evidence.js","sha256":"35077d7b706f241e50db6358aaec637c2a958846e0d12be6c321a1a71fa6a489"},{"name":"r112-exact-clock-continuation-evidence-tests.js","sha256":"4e3d745dd3944832e90a95dd8b4e6f442e7f8b5f1069f2c2f4d8f7c051c83378"},{"name":"r112-exact-clock-continuation-prepare.js","sha256":"2b5a6a247b92e901e5cdf4b202c285899744eb9ef379a0e450f7bb1e5f5e1d89"},{"name":"r112-exact-clock-continuation-run.js","sha256":"34e0864a678047e9db6e2c5dfd07f8ef1cc3f99fe9f981eac65f7a807266e70c"},{"name":"r112-exact-clock-continuation-retain-local.js","sha256":"5f26307a75408e084e8d528de8e38cee85ce30b45703943cf9946c6d1de606e6"}]
+PASS: raw UTC rewind is preserved
+PASS: start before predecessor rejects
+PASS: child-close regression rejects
+PASS: source-verification regression rejects
+PASS: boot substitution rejects
+PASS: clock-source substitution rejects
+PASS: predecessor substitution rejects
+PASS: predecessor-byte substitution rejects
+PASS: source substitution rejects
+PASS: source change rejects
+PASS: failed child rejects
+PASS: signalled child rejects
+PASS: timeout rejects
+PASS: duration substitution rejects
+PASS: raw UTC substitution rejects
+PASS: malformed raw UTC rejects
+PASS: all 16 continuation contract tests

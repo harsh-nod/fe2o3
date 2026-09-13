@@ -1,0 +1,33 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.97s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures' (2889702) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures' (2889702) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures' (2889702) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_insertion_tests.rs:121:13:
+insertion commit ledger access
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures' (2889702) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs:424:13:
+assertion `left == right` failed
+  left: AllocationSnapshot { lease: None, started: true, failed: true, native_started: true, progress: NativeTransitionProgressV1 { attempted: true, returned_success: Some(true), returned_map_prefix: Some(1) } }
+ right: AllocationSnapshot { lease: Some(((5, 1, DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) }, Gfx942DeviceMemoryLayoutV1 { requested_bytes: 4097, backing_bytes: 8192, alignment: 4096, uapi_flags: 2147483649 }), true)), started: true, failed: true, native_started: true, progress: NativeTransitionProgressV1 { attempted: true, returned_success: Some(true), returned_map_prefix: Some(1) } }
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1085 filtered out; finished in 13.23s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,69 @@
+{
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "source_map_sha256": "6a5c069d3aee597741c552d09d5e42848748cc53a4210a80595d789a1d4813d1",
+  "manifest_sha256": "f724627804c86fd1521983d94c247e81cd7544928f11b0ca2ec63d4c220254ae",
+  "started_at": "2026-09-13T02:34:10.302Z",
+  "finished_at": "2026-09-13T02:35:00.691Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::device_initialization::allocation_cases::device_allocator_native_error_and_panic_prefixes_retain_actual_owners",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r112-exact-clock-mut-lose-unmapped-owner.log",
+  "source": "/home/harsh/.codex-tmp/r112-exact-clock-mut-lose-unmapped-owner-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 53.74562943,
+  "verification_elapsed_seconds": 0.371887941,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r112-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r112-exact-clock-restoration-omit-immediate-quarantine.json",
+      "sha256": "291fde39b89359c71d8c2c426f5ed9cf0cd7012992af8a6e7bd13dd3421bd2ba",
+      "field": "verified_at",
+      "utc_ms": 1789266848162
+    },
+    "start": {
+      "floor_ms": 1789266848162,
+      "samples": [
+        {
+          "utc_ms": 1789266850302,
+          "monotonic_ns": "65015504984628"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789266900691,
+      "monotonic_ns": "65069250614058"
+    },
+    "source_verified": {
+      "utc_ms": 1789266901063,
+      "monotonic_ns": "65069622501999"
+    },
+    "error": null
+  }
+}

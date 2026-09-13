@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.43s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 14 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_constructed_append_preserves_exact_uninitialized_identity ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_invalid_layout_retakes_without_native_custody ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_real_fifteen_to_sixteen_capacity_is_pre_effect_bounded ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_currentness_and_map_prefixes_never_fabricate_output has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_native_prefixes_remain_in_original_terminal_custody ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_operation_panic_wins_each_secondary_closing_failure has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_uses_genuine_released_hole_before_append ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_bound_dispatch_precedes_full_and_invalid_request ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_missing_engine_retains_parent_without_panic_marker ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_production_wiring_preserves_uninitialized_custody ... ok
+test queue::live::rebind_tests::insertion::device_allocation_insertion_public_preflight_preserves_owners_and_precedence ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_reservation_and_opening_failures_never_enter_native_calls ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_currentness_and_map_prefixes_never_fabricate_output ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_operation_panic_wins_each_secondary_closing_failure ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1072 filtered out; finished in 118.75s
+

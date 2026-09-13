@@ -1,0 +1,284 @@
+[
+  {
+    "name": "historical-admission",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_currentness_matrix_distinguishes_per_call_native_admission",
+    "edits": [
+      [
+        "        self.started = true;\n        let result =",
+        "        self.started = true;\n        self.native_started = engine.device_backing_activity_started;\n        let result ="
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 377,
+    "expected": [
+      "assertion `left == right` failed",
+      "left: true",
+      "right: false"
+    ]
+  },
+  {
+    "name": "omit-immediate-quarantine",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_native_error_and_panic_prefixes_retain_actual_owners",
+    "edits": [
+      [
+        "            if self.native_started {\n                engine.phase = SharedMemorySessionPhaseV1::Quarantined;\n            }",
+        "            if false && self.native_started {\n                engine.phase = SharedMemorySessionPhaseV1::Quarantined;\n            }"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 183,
+    "expected": [
+      "assertion `left == right` failed",
+      "left: Active",
+      "right: Quarantined"
+    ]
+  },
+  {
+    "name": "lose-unmapped-owner",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_native_error_and_panic_prefixes_retain_actual_owners",
+    "edits": [
+      [
+        "        if !matches!(result, Ok(Ok(()))) {\n            self.failed = true;",
+        "        if !matches!(result, Ok(Ok(()))) {\n            self.lease = AllocationLeaseV1::None;\n            self.failed = true;"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 160,
+    "expected": [
+      "assertion `left == right` failed",
+      "left: None",
+      "right: Some("
+    ]
+  },
+  {
+    "name": "public-instead-of-device-local",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_success_retains_exact_device_local_owner_until_single_extraction",
+    "edits": [
+      [
+        "                    KfdAllocMemoryFlags::DEVICE_LOCAL,\n                    &mut self.native_started,",
+        "                    KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,\n                    &mut self.native_started,"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 160,
+    "expected": [
+      "assertion `left == right` failed",
+      "uapi_flags: 2684354561",
+      "uapi_flags: 2147483649"
+    ]
+  },
+  {
+    "name": "discard-map-progress",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_map_prefix_matrix_preserves_progress_and_error_precedence",
+    "edits": [
+      [
+        "            engine.map_device_memory_borrowed(lease, &mut self.progress)?;",
+        "            engine.map_device_memory_borrowed(lease, &mut NativeTransitionProgressV1::default())?;"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 544,
+    "expected": [
+      "assertion `left == right` failed",
+      "(false, None, None)",
+      "(true, Some(true), Some(0))"
+    ]
+  },
+  {
+    "name": "allow-repreparation",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_success_retains_exact_device_local_owner_until_single_extraction",
+    "edits": [
+      [
+        "        if self.started {\n            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);\n        }",
+        "        if false && self.started {\n            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);\n        }"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 299,
+    "expected": [
+      "assertion failed: matches!",
+      "InvalidDeviceMemoryAuthority"
+    ]
+  },
+  {
+    "name": "lose-terminal-mapped-owner",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack",
+    "edits": [
+      [
+        "        } else {\n            engine\n                .terminal_device_initialization\n                .retain_allocation(self);\n        }",
+        "        } else {\n            self.lease = AllocationLeaseV1::None;\n            engine\n                .terminal_device_initialization\n                .retain_allocation(self);\n        }"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 844,
+    "expected": [
+      "assertion `left == right` failed",
+      "lease: None",
+      "lease: Some"
+    ]
+  },
+  {
+    "name": "expose-failed-output",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_complete_output_can_be_retained_without_reallocation_on_default_stack",
+    "edits": [
+      [
+        "        if !self.failed\n            && let AllocationLeaseV1::Mapped(lease) = &self.lease",
+        "        if true\n            && let AllocationLeaseV1::Mapped(lease) = &self.lease"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 845,
+    "expected": [
+      "assertion failed: terminal.completed().is_err()"
+    ]
+  },
+  {
+    "name": "allocation-ignores-occupied-slot",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_allocation.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite",
+    "edits": [
+      [
+        "            if engine.terminal_device_initialization.is_some() {\n                return engine.quarantine(MemorySessionError::SharedSessionQuarantined);\n            }",
+        "            if false && engine.terminal_device_initialization.is_some() {\n                return engine.quarantine(MemorySessionError::SharedSessionQuarantined);\n            }"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 905,
+    "expected": [
+      "assertion failed: matches!",
+      "prepare(&mut fixture",
+      "SharedSessionQuarantined"
+    ]
+  },
+  {
+    "name": "initialization-ignores-occupied-slot",
+    "path": "crates/fe2o3-kfd/src/shared_memory/device_initialization.rs",
+    "test": "shared_memory::tests::device_initialization::allocation_cases::device_allocator_mixed_terminal_kinds_block_each_other_without_overwrite",
+    "edits": [
+      [
+        "        if engine.terminal_device_initialization.is_some() {\n            return engine.quarantine(MemorySessionError::SharedSessionQuarantined);\n        }",
+        "        if false && engine.terminal_device_initialization.is_some() {\n            return engine.quarantine(MemorySessionError::SharedSessionQuarantined);\n        }"
+      ]
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/shared_memory/tests/device_allocation.rs",
+    "oracle_line": 912,
+    "expected": [
+      "assertion failed: matches!",
+      "Input::new(false, 17)",
+      "SharedSessionQuarantined"
+    ]
+  },
+  {
+    "name": "ignore-remembered-hole",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_uses_genuine_released_hole_before_append",
+    "edits": [
+      [
+        "DataInsertionIndexV1::HoleOrAppend => ledger.next.unwrap_or(ledger.identities.len()),",
+        "DataInsertionIndexV1::HoleOrAppend => ledger.identities.len(),"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs",
+    "oracle_line": 335
+  },
+  {
+    "name": "grant-initialized-authority",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_constructed_append_preserves_exact_uninitialized_identity",
+    "edits": [
+      [
+        ".map(Gfx942FixedDispatchDataV1::uninitialized)",
+        ".map(Gfx942FixedDispatchDataV1::initialized_after_dispatch)"
+      ]
+    ],
+    "expected": [
+      "assertion failed: !data.is_fully_initialized()"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs",
+    "oracle_line": 256
+  },
+  {
+    "name": "extract-before-commit-entry",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_complete_survives_retake_and_commit_failures",
+    "edits": [
+      [
+        "        let ledger = context.ledger();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, index);\n        *ledger.count = next_count;\n        let data = root\n            .take_data()\n            .expect(\"borrowed Complete remains rooted through ledger commit\");",
+        "        let data = root\n            .take_data()\n            .expect(\"borrowed Complete remains rooted through ledger commit\");\n        let ledger = context.ledger();\n        insert_detached_identity_at(ledger.identities, ledger.next, identity, index);\n        *ledger.count = next_count;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "lease: None",
+      "lease: Some"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs",
+    "oracle_line": 424
+  },
+  {
+    "name": "accept-missing-complete",
+    "path": "crates/fe2o3-kfd/src/queue_live/data_insertion.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_success_without_complete_cannot_commit",
+    "edits": [
+      [
+        "let identity = root.completed_identity()?;",
+        "let identity = root.completed_identity().unwrap_or_else(|_| context.ledger().identities[0]);"
+      ]
+    ],
+    "expected": [
+      "assertion failed: matches!",
+      "InvalidDeviceMemoryAuthority"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs",
+    "oracle_line": 560
+  },
+  {
+    "name": "replace-substrate-first-panic",
+    "path": "crates/fe2o3-kfd/src/queue_live/model_loan.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_operation_panic_wins_each_secondary_closing_failure",
+    "edits": [
+      [
+        "core::mem::forget(closing);\n            resume_unwind(payload)",
+        "match closing {\n                Err(secondary) => { core::mem::forget(payload); resume_unwind(secondary) }\n                other => { core::mem::forget(other); resume_unwind(payload) }\n            }"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: None",
+      "N2 native panic",
+      "map_gpu"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs",
+    "oracle_line": 775,
+    "reused_substrate": true
+  },
+  {
+    "name": "suppress-substrate-retake-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/model_loan.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::allocation_cases::device_allocation_insertion_operation_panic_wins_each_secondary_closing_failure",
+    "edits": [
+      [
+        "Ok(closing) => Ok((result, closing)),",
+        "Ok(_closing) => Ok((result, Ok(()))),"
+      ]
+    ],
+    "expected": [
+      "assertion failed: matches!",
+      "Contract(actual)"
+    ],
+    "oracle_path": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_uninitialized_device_insertion_tests.rs",
+    "oracle_line": 789,
+    "reused_substrate": true
+  }
+]

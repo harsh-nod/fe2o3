@@ -2,6 +2,7 @@
 
 mod allocation;
 mod coherent_initialization;
+mod device_allocation;
 mod device_initialization;
 mod dispatch_retention;
 mod transitions;
@@ -4560,6 +4561,46 @@ impl CoherentAllocationCustodyV1 {
     }
 }
 
+pub(crate) struct DeviceAllocationCustodyV1(device_allocation::DeviceAllocationCustodyV1);
+
+impl DeviceAllocationCustodyV1 {
+    pub(crate) fn new() -> Self {
+        Self(device_allocation::DeviceAllocationCustodyV1::new())
+    }
+
+    pub(crate) fn completed(
+        &self,
+    ) -> Result<&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
+        self.0.completed()
+    }
+
+    pub(crate) fn take_complete(
+        &mut self,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
+        self.0.take_complete()
+    }
+
+    pub(crate) fn requires_retention(&self) -> bool {
+        self.0.requires_retention()
+    }
+
+    fn prepare_with_engine<B: MemoryBackend>(
+        &mut self,
+        engine: &mut SharedMemoryEngine<B>,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<(), MemorySessionError> {
+        self.0
+            .prepare_in_place(engine, device, vm, requested_bytes, alignment)
+    }
+
+    fn retain_with_engine<B: MemoryBackend>(self, engine: &mut SharedMemoryEngine<B>) {
+        self.0.retain_live_failure(engine);
+    }
+}
+
 pub(crate) struct DeviceInitializationCustodyV1(
     device_initialization::DeviceInitializationCustodyV1,
 );
@@ -5027,6 +5068,25 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         root: DeviceInitializationCustodyV1,
     ) {
+        root.retain_with_engine(&mut self.engine);
+    }
+
+    pub(crate) fn prepare_device_allocation_in_place(
+        &mut self,
+        root: &mut DeviceAllocationCustodyV1,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<(), MemorySessionError> {
+        root.prepare_with_engine(
+            &mut self.engine,
+            self.model_device.model_key(),
+            self.vm,
+            requested_bytes,
+            alignment,
+        )
+    }
+
+    pub(crate) fn retain_device_allocation_failure(&mut self, root: DeviceAllocationCustodyV1) {
         root.retain_with_engine(&mut self.engine);
     }
 
@@ -6621,6 +6681,8 @@ const _: () = {
 
 #[cfg(test)]
 pub(crate) use tests::device_initialization::RootSnapshot as DeviceInitializationSnapshotV1;
+#[cfg(test)]
+pub(crate) use tests::device_initialization::allocation_cases::AllocationSnapshot as DeviceAllocationSnapshotV1;
 #[cfg(test)]
 pub(crate) use tests::live_coherent_insertion::{
     CoherentInsertionFaultV1, CoherentInsertionPrefixV1, CoherentPreparationTraceV1,

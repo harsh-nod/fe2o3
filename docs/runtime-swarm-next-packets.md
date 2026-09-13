@@ -1,7 +1,7 @@
 # Runtime Swarm: Remaining Packets
 
-Reviewed through R111's locally accepted source/test campaign,
-above accepted R110 `356523e6ea8c61c70c6812762aeaab33506de6e2`.
+Reviewed through R112's locally accepted source/test campaign,
+above accepted R111 `29505205cc54bab1885a67845aaceda8b22b3a9c`.
 [Issue #182](https://github.com/harsh-nod/fe2o3/issues/182) remains open; its GitHub
 API `updatedAt` is `2026-09-12T10:51:18Z`. A1/A2 are not complete.
 
@@ -19,6 +19,21 @@ These packets add no native, authenticated formal or performance qualification.
 The [full work orders](runtime-a1-a2-swarm-current.md) retain detailed contracts
 and historical evidence; this document is the short current assignment map.
 
+R112 locally accepts [N3-L3-D](runtime-uninitialized-device-insertion-custody-v1.md),
+with [retained evidence](evidence/local-r112-uninitialized-device-insertion-2026-09-13/README.md).
+All seventeen source gates, ten auxiliary checks and nine frozen/restored suites
+pass. GNU and musl each pass 2,683 tests with five ignored across 48 harnesses.
+Sixteen compiled negatives fail at exact behavioral oracles, with all 5,679
+source identities restored after each. The closed collector and independent
+archive review pass. The 263 raw artifacts preserve two preliminary failures
+and an excluded passing allocator child whose wrapper rejected a UTC rewind;
+a separately pinned continuation supplies its accepted rerun and later suites.
+R112 adds no native/formal/performance acceptance. Refreshed swarm
+reviews also confirm C1 and V2 remain independent next packets. V2's
+[membership contract](runtime-context-version-membership-v1.md) is frozen. Its
+isolated candidate passes 23 journal tests, 744 full-model tests with two ignored,
+and both strict lint configurations. It is not integrated or accepted.
+
 ## Swarm Ownership
 
 Three read-only review agents completed independent source-grounded handoffs.
@@ -30,11 +45,12 @@ bounded source/test changes; there are three worker slots plus Primary.
 The [R111 uninitialized-coherent packet](runtime-uninitialized-coherent-insertion-custody-v1.md)
 is now locally accepted after full/focused/auxiliary checks, fourteen compiled
 negatives, exact restoration and independent archive review. Refreshed read-only
-handoffs confirm that C1 and V2 remain independently ready; Native next takes L3-D.
+handoffs confirm that C1 and V2 remain independent next packets. Native now takes
+N4-R1; Primary integrates the next reviewed packet above accepted R112.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N3-L3-D uninitialized device allocation/map custody; independent N4-R cleanup | Reuse `fe2o3-kfd/src/queue_live/data_insertion.rs` settlement and existing borrowed lower cores; preserve uninitialized identity and actual incomplete owners |
+| Native: `native_replacement_handoff` | N4-R1 pristine control cleanup | Retain the active control before disposal callbacks; preserve exact mapped/unmapped/disposed custody and native progress |
 | Admission: `submission_identity_handoff` | C1 submission-identity test matrix | New `fe2o3-runtime/src/context/tests/submission_identity_tests.rs`; Primary owns Context wiring and the missing mock cancel-entry counter |
 | Resources: `r102_evidence_review` | V2 allocation membership and Begin | Existing `fe2o3-runtime-model/src/context_version_journal.rs` and separate membership tests; retain V1 regressions |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |
@@ -43,6 +59,38 @@ Crate paths in the tables are relative to `crates/`. Existing ordinary typed
 async launches, graph/drain, validators, budgets and decoder implementations
 must be extended, not replaced.
 
+## Execution Waves
+
+The user-requested swarm has three worker lanes and one integrating Primary.
+These are bounded assignments, not a promise that every downstream packet runs
+concurrently. Workers review source and return implementation/test handoffs;
+Primary owns edits under the current ownership policy. A completed review is
+not a completed implementation packet.
+
+| Wave | Native | Admission | Resources | Primary And Exit |
+| --- | --- | --- | --- | --- |
+| 0: independent starts after R112 | N4-R1 pristine active-control cleanup handoff | C1 identity matrix: 80 rejection cells plus valid controls | Qualify the isolated V2 membership candidate after passing preliminary model tests/review | Integrate and qualify one reviewed packet at a time above accepted R112 |
+| 1: cleanup, lifecycle and settlement | N4-R2 ordinary/returning controls, then data disposal; applicable N4-L and N4-Q paths | C2 generated descriptor identity and C3 retained-owner lifecycle coverage | V3 settlement; V4 proof work and M1/M2/M3 contracts can start incrementally | Serialize shared-file edits and builds; require exact ownership, failure-atomicity and negative-test evidence per packet |
+| 2: generated execution | N5 DATA-ADOPT, then joint I2 actual ISSUE | I2, C4 COMPLETE, C5 typed output and C6 GRAPH/DRAIN | Approve mutation-hook policy; integrate V5/V6 for journal-enabled paths | Join actual production ownership paths; fixtures do not supply external Worker/compiler authority |
+| 3: reuse and resource closure | Integrate compound backing/control/slot admission and native residency | Exercise reused generated graphs and bounded retained replies | V7 complete writers/recovery, V8 input leases; integrate M1-M4 total retained-memory limits | Cross-run reuse requires complete mutation coverage and exclusive graph reservation; kernel reuse also needs admitted effects |
+| Qualification, incremental throughout | Native depth, disposal, pressure and physical-overlap observations | Wake/cancel/drain and complete-output oracles | Version/accounting correspondence and retained-resource bounds | Q1 authenticated proofs, Q2 native evidence, Q3 matched HIP/HSA measurements remain separate acceptance gates |
+
+C1/C2/C3 extend coverage around existing validators and lifecycle machinery.
+Their proposed test files remain absent; ordinary async, graph and drain APIs
+already exist. I2/C4/C5/C6 compose the missing generated production path rather
+than replace those APIs. A first non-reusing generated launch does not wait for
+V7/V8, but a journal-enabled launch must have its production journal and hooks.
+
+M1 aggregate-domain design, M2 cost inventory and M3 host-image limits are
+independent preparation work, rotated through the Resources slot. Native cache
+residency and total retained-memory closure depend on actual backing/control
+ownership and journal/lease integration. V4/Q1 can start from accepted V1 now;
+neither an inventory check nor model tests count as authenticated solver runs.
+
+After A1/A2, rotate these same lanes through A3 local multi-GPU, A4 two-host
+execution, A5 transfers/collectives, A6 failure qualification and A7 matched
+performance. Their detailed owners remain in the later-milestone table below.
+
 ## Native Queue
 
 | Packet | Remaining Work | Dependency And Exit |
@@ -50,10 +98,13 @@ must be extended, not replaced.
 | N3-L1 / R109 | Locally accepted: initialized-device append, explicit insertion and remembered-hole replacement | Fourteen new test functions and eleven compiled negatives; original-engine scripted composition and concrete missing-engine facade coverage are separate. Native success and formal refinement remain unqualified. |
 | N3-L2 / R110 | Locally accepted: initialized coherent insertion/replacement | Nineteen new functions (eighteen dynamic and one routing guard), ten compiled negatives and unchanged R109 regressions. Complete survives retake/commit; earlier lower failure custody stays intact. No native success or formal refinement qualification. |
 | N3-L3-C / R111 | Locally accepted: uninitialized coherent insertion | Nineteen new functions, fourteen compiled negatives and unchanged initialized regressions. Shared settlement preserves explicit insertion and required-hole replacement, with no copy or initialized-content authority. Two direct APIs, no new facade APIs; native/formal qualification remains open. |
-| N3-L3-D | Uninitialized device allocation/map custody and insertion | Retain actual None/Unmapped/Mapped stages, per-call native attempt and map progress using borrowed lower cores. Preserve DEVICE_LOCAL backing and hole-or-append policy. C-first is scheduling, not a semantic dependency. |
-| N4-R | Lower control release/unmap/returning cleanup | Independently ready. Root the owner before validation; first/middle/last error or panic retains untouched owners. Confirmed disposal and failed model projection must not produce retry or duplicate refund. |
-| N4-L | Live detach and data/control release | Needs applicable N4-R contracts. Retain returned owners through retake; failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
-| N4-QA / N4-QP | Auxiliary destruction, then full/returning destruction | Needs applicable lower/live cleanup contracts. Keep the taken lane and parent through every prefix; cover attached/detached return modes. Slot reuse requires confirmed full disposal; QA-first is scheduling. |
+| N3-L3-D / R112 | Locally accepted: uninitialized device insertion | Actual None/Unmapped/Mapped custody, per-call native attempt and map progress use borrowed lower cores. DEVICE_LOCAL and hole-or-append policy remain intact. Twenty-six new functions, sixteen compiled negatives and full/focused/auxiliary/restoration/archive checks pass; native/formal/performance qualification remains open. |
+| N4-R1 | Pristine active-control cleanup | Design ready. Extend `queue_dispatch_binding/pristine_abort.rs` and borrowed lower cleanup cores. First/middle/last control failure retains actual mapped/unmapped/disposed custody and untouched data/continuation; disposal cannot be retried. |
+| N4-R2 | Ordinary and returning control cleanup | Reuse R1's borrowed cleanup contract. Root `DispatchResourceOwnerV1` before validation and reserve return capacity before disposal. Preserve forward code order, exact returned data and disposed receipts after failed model projection. |
+| N4-R: data extension | Lower data cleanup and mixed-roster release | Reuse the common cleanup contract; mixed rosters join R2. Cover all host/device and initialized/uninitialized variants. Exact records/charges and untouched owners survive every failed destructive prefix; no repeated free or duplicate refund. |
+| N4-L | Live detach and data/control release | Each route needs its applicable lower cleanup contract. Retain input, returned owners and disposed receipts outside the model loan through retake/commit. Failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
+| N4-QA | Auxiliary destruction | Needs applicable lower/live cleanup contracts. Keep the taken lane and parent through every queue/event/doorbell/resource/signal teardown prefix. Failed destruction cannot expose a reusable slot. |
+| N4-QP | Full and returning destruction | Needs applicable lower/live cleanup contracts; QA-first is scheduling. Cover Release, ReturnAttached, ReturnDetached, callbacks and optional SDMA owners. Return data and earlier disposal receipts survive later failures without repeated cleanup. |
 | N5 | Nonpublishing generated DATA-ADOPT | Needs required N3/N4 custody paths. Bind original bytes to exact lane/resources without publication; cover initial, auxiliary and reused lanes, partial failure, Stop/drain and exact abort/disposal. |
 
 R109 repaired the displaced session attributes and module-path wiring and added
@@ -85,7 +136,7 @@ authority described below.
 
 | Packet | Remaining Work | Dependency And Exit |
 | --- | --- | --- |
-| V2 | Preallocated allocation/member arenas, scratch and whole-roster Begin | Independent of Native/C1. Exact references, backlinks, cardinalities, acyclicity and free partitions; validate the full canonical roster before mutation. First/middle/last rejection leaves state and scratch unchanged. Freeze empty-roster and canonical ordering contracts before coding. |
+| V2 | Preallocated allocation/member arenas, scratch and whole-roster Begin | Independent of Native/C1. Isolated candidate and twelve new tests pass preliminary GNU model/lint checks. Independent map/set traces, full arena auditing, exact rejection snapshots and fixed-k work checks are implemented; immutable qualification and integration remain pending. |
 | V3 | Settlement and cost model | After V2: retained-roster success, exact NoEffect and sticky Unknown; no epoch rollback or release on dropped references. Count O(k) touched work independent of unrelated A/W; no commit-time growth. |
 | V4 | Authenticated journal proofs | Start stable V1 properties now; extend through V2/V3. Actual solver results and property-specific negatives, followed by production correspondence. Inventory is not proof execution. |
 | V5 | Production Context journal | Stable V1-V3 contracts; verified acceptance also needs V4/Q1. Private move-only tickets, authentic existing IDs and construction-only opt-in; no second ID allocator. |
@@ -164,14 +215,17 @@ in test auditors, not the production transition.
   no-loop source guard to the O(1) issuance operations and indexed helpers; give
   Begin its own O(k), no-unrelated-arena-scan checks. Expand complete snapshots
   and the auditor to every allocation/member/scratch arena, free stack, count and
-  storage pointer/capacity. Proposed semantics remain empty Pending retaining W,
-  MAX-1 to MAX as the final valid epoch increment, and full-allocation-key ordering
-  with exact device/extent validation; freeze them before implementation.
+  storage pointer/capacity. The frozen membership contract specifies empty
+  Pending retaining W, MAX-1 to MAX as the final valid epoch increment, and
+  full-allocation-key ordering with exact device/extent validation. The isolated
+  membership module adds twelve tests and 29,282 bounded differential traces;
+  preliminary journal/full-model/lint checks pass, without production acceptance.
 
 ## Qualification And Integration Order
 
-1. Advance N3-L3-D, C1 and V2 independently; N4-R, C2/C3 and M1/M2/M3 design work
-   need not wait for those packets. Primary serializes shared edits and builds.
+1. Advance N4-R1, C1 and the isolated V2 candidate independently above accepted R112;
+   C2/C3 and M1/M2/M3 design work need not wait for those packets. Primary
+   serializes shared edits and builds; V2 stays isolated until integration.
 2. Join required N3/N4 into N5; join N5 and C1/C2/C3 into I2, then C4/C5/C6.
    V7/V8 gate cross-run reuse, not the first non-reusing generated launch.
 3. Q1 runs incrementally: authenticate property-specific proofs and the actual
@@ -190,7 +244,7 @@ checks, decisive compiled negatives, exact source restoration and independent
 evidence review. Preserve failed attempts and immutable accepted archives.
 Keep CPU/source, authenticated formal, native and performance status separate.
 MI300X scheduling stays Primary-owned with task-owned staging/processes and
-cleanup; disruptive fault tests require an isolated window. R109-R111 ran local
+cleanup; disruptive fault tests require an isolated window. R109-R112 ran local
 source/test campaigns, not solver, SSH or GPU jobs.
 
 ## Later Rotations And External Owners

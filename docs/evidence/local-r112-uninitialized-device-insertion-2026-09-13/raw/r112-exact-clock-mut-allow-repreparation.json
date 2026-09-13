@@ -1,0 +1,69 @@
+{
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "source_map_sha256": "468febbb7d3438c58bead078bc8192f41870b4bd1a44c788b1ae1b711cc67c9f",
+  "manifest_sha256": "f724627804c86fd1521983d94c247e81cd7544928f11b0ca2ec63d4c220254ae",
+  "started_at": "2026-09-13T02:37:48.138Z",
+  "finished_at": "2026-09-13T02:38:23.950Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::device_initialization::allocation_cases::device_allocator_success_retains_exact_device_local_owner_until_single_extraction",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r112-exact-clock-mut-allow-repreparation.log",
+  "source": "/home/harsh/.codex-tmp/r112-exact-clock-mut-allow-repreparation-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 37.487309976,
+  "verification_elapsed_seconds": 0.269640763,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r112-exact-observed-utc-floor-v1",
+    "policy": {
+      "budget_ms": 10000,
+      "poll_ms": 10,
+      "max_samples": 1001
+    },
+    "kind": "run",
+    "predecessor": {
+      "name": "r112-exact-clock-restoration-discard-map-progress.json",
+      "sha256": "12f85e87004109016eb3ce7ed86890750a728d44a3111a2e9b62850a60a5f4ab",
+      "field": "verified_at",
+      "utc_ms": 1789267066988
+    },
+    "start": {
+      "floor_ms": 1789267066988,
+      "samples": [
+        {
+          "utc_ms": 1789267068138,
+          "monotonic_ns": "65245070676214"
+        }
+      ]
+    },
+    "finish": {
+      "utc_ms": 1789267103950,
+      "monotonic_ns": "65282557986190"
+    },
+    "source_verified": {
+      "utc_ms": 1789267104220,
+      "monotonic_ns": "65282827626953"
+    },
+    "error": null
+  }
+}

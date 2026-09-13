@@ -1,5 +1,6 @@
 //! Test observations only; every operation uses the original constructed engine.
 
+use super::device_initialization::allocation_cases::{AllocationSnapshot, allocation_snapshot};
 use super::device_initialization::{NativeSnapshot, RootSnapshot, root_snapshot, snapshot};
 use super::preparation::PreparationMemoryFixtureV1;
 use super::*;
@@ -13,6 +14,8 @@ pub(crate) struct DeviceInsertionMemorySnapshotV1 {
     pub(crate) calls: [usize; 5],
     pub(crate) operations: Vec<&'static str>,
     pub(crate) terminal: Option<RootSnapshot>,
+    pub(crate) allocation_terminal: Option<AllocationSnapshot>,
+    pub(crate) terminal_occupied: bool,
     pub(crate) account: Option<usize>,
     pub(crate) terminal_storage: (usize, usize),
     pub(crate) readback_calls: usize,
@@ -34,6 +37,63 @@ pub(crate) struct DeviceInsertionPrefixV1<'a> {
 impl DeviceInitializationCustodyV1 {
     pub(crate) fn insertion_snapshot_for_test(&self) -> RootSnapshot {
         root_snapshot(&self.0)
+    }
+}
+
+impl DeviceAllocationCustodyV1 {
+    pub(crate) fn insertion_snapshot_for_test(&self) -> AllocationSnapshot {
+        allocation_snapshot(&self.0)
+    }
+}
+
+enum InsertionRootRef<'a> {
+    Initialized(&'a crate::shared_memory::device_initialization::DeviceInitializationCustodyV1),
+    Allocation(&'a crate::shared_memory::device_allocation::DeviceAllocationCustodyV1),
+}
+
+#[test]
+fn device_allocator_partition_does_not_invent_pending_custody_after_extraction() {
+    use crate::queue::dispatch_binding::preparation::PreparationOwnerRefsV1;
+
+    for configured in [false, true] {
+        let mut memory = PreparationMemoryFixtureV1::new(configured);
+        let mut data = memory.roster();
+        let before = memory.insertion_memory_snapshot_v1();
+        let layout = device_memory_layout(17, 4096, KfdAllocMemoryFlags::DEVICE_LOCAL).unwrap();
+        let mut root = DeviceAllocationCustodyV1::new();
+        memory
+            .primary_prepare_device_allocation_v1(&mut root, 17, 4096)
+            .unwrap();
+        {
+            let mut refs = PreparationOwnerRefsV1::default();
+            refs.data(&data);
+            memory.insertion_assert_allocation_partition_v1(
+                &refs.device_leases,
+                &refs.device_authorities,
+                Some(&root),
+                before.next_id,
+                layout,
+                &[],
+            );
+        }
+        data.push(crate::Gfx942FixedDispatchDataV1::uninitialized(
+            root.take_complete().unwrap(),
+        ));
+        let state = root.insertion_snapshot_for_test();
+        assert!(state.started() && state.native_started() && !state.failed());
+        assert_eq!(state.lease(), None);
+        assert_eq!(state.progress(), (true, Some(true), Some(1)));
+        let mut refs = PreparationOwnerRefsV1::default();
+        refs.data(&data);
+        memory.insertion_assert_allocation_partition_v1(
+            &refs.device_leases,
+            &refs.device_authorities,
+            Some(&root),
+            before.next_id,
+            layout,
+            &[],
+        );
+        assert!(!memory.insertion_memory_snapshot_v1().terminal_occupied);
     }
 }
 
@@ -59,7 +119,30 @@ impl PreparationMemoryFixtureV1 {
         expected: DeviceInsertionPrefixV1<'_>,
         source: &[u8],
     ) {
+        let layout = device_memory_layout(
+            source.len() as u64,
+            4096,
+            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+        )
+        .unwrap();
+        self.insertion_assert_native_prefix_with_layout_v1(before, expected, layout, Some(source));
+    }
+
+    pub(crate) fn insertion_assert_native_prefix_with_layout_v1(
+        &self,
+        before: &DeviceInsertionMemorySnapshotV1,
+        expected: DeviceInsertionPrefixV1<'_>,
+        layout: Gfx942DeviceMemoryLayoutV1,
+        source: Option<&[u8]>,
+    ) {
         let after = self.insertion_memory_snapshot_v1();
+        if source.is_none() {
+            assert!(!expected.written);
+            assert_eq!(expected.calls[3], 0);
+            assert_eq!(expected.cpu_writable, None);
+            assert_eq!(after.readback_calls, before.readback_calls);
+            assert_eq!(after.initialized_bytes, before.initialized_bytes);
+        }
         assert_eq!(
             core::array::from_fn::<_, 5, _>(|i| after.calls[i] - before.calls[i]),
             expected.calls,
@@ -106,12 +189,6 @@ impl PreparationMemoryFixtureV1 {
         };
         let e = &self.fixture.engine;
         let record = e.device_memory.last().unwrap();
-        let layout = device_memory_layout(
-            source.len() as u64,
-            4096,
-            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
-        )
-        .unwrap();
         assert_eq!(
             (
                 record.id,
@@ -137,6 +214,7 @@ impl PreparationMemoryFixtureV1 {
         assert!(!record.free_attempted);
         if expected.handle {
             let output = e.backend.last_allocation_output.unwrap();
+            assert_eq!(output.flags, layout.uapi_flags());
             assert_eq!(
                 (
                     record.handle,
@@ -164,11 +242,13 @@ impl PreparationMemoryFixtureV1 {
             assert_eq!(mapping.bytes.len(), layout.backing_bytes() as usize);
             assert_eq!(mapping.byte_offset, 0);
             if expected.written {
+                let source = source.unwrap();
                 assert_eq!(&mapping.bytes[..source.len()], source);
             } else {
                 assert!(mapping.bytes.iter().all(|&b| b == 0));
             }
         } else if expected.written {
+            let source = source.unwrap();
             assert_eq!(
                 &after.initialized_bytes.as_ref().unwrap()[..source.len()],
                 source
@@ -199,6 +279,26 @@ impl PreparationMemoryFixtureV1 {
         root.prepare_with_engine(&mut f.engine, f.device.model_key(), f.vm, alignment)
     }
 
+    pub(crate) fn primary_prepare_device_allocation_v1(
+        &mut self,
+        root: &mut DeviceAllocationCustodyV1,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<(), MemorySessionError> {
+        let f = &mut self.fixture;
+        root.prepare_with_engine(
+            &mut f.engine,
+            f.device.model_key(),
+            f.vm,
+            requested_bytes,
+            alignment,
+        )
+    }
+
+    pub(crate) fn primary_retain_device_allocation_v1(&mut self, root: DeviceAllocationCustodyV1) {
+        root.retain_with_engine(&mut self.fixture.engine);
+    }
+
     pub(crate) fn primary_retain_device_initialization_v1(
         &mut self,
         root: DeviceInitializationCustodyV1,
@@ -220,6 +320,11 @@ impl PreparationMemoryFixtureV1 {
             ],
             operations: b.operations.clone(),
             terminal: e.terminal_device_initialization.as_ref().map(root_snapshot),
+            allocation_terminal: e
+                .terminal_device_initialization
+                .allocation_as_ref()
+                .map(allocation_snapshot),
+            terminal_occupied: e.terminal_device_initialization.is_some(),
             account: e
                 .device_backing_account
                 .as_ref()
@@ -234,11 +339,15 @@ impl PreparationMemoryFixtureV1 {
     }
 
     pub(crate) fn insertion_terminal_output_unavailable_v1(&self) -> bool {
-        self.fixture
-            .engine
-            .terminal_device_initialization
-            .as_ref()
-            .is_some_and(|root| root.completed().is_err())
+        let slot = &self.fixture.engine.terminal_device_initialization;
+        let initialized = slot.as_ref();
+        let allocation = slot.allocation_as_ref();
+        assert_eq!(
+            usize::from(initialized.is_some()) + usize::from(allocation.is_some()),
+            usize::from(slot.is_some())
+        );
+        initialized.is_some_and(|root| root.completed().is_err())
+            || allocation.is_some_and(|root| root.completed().is_err())
     }
 
     pub(crate) fn insertion_arm_currentness_v1(&mut self, offset: usize, panic: bool) {
@@ -282,13 +391,60 @@ impl PreparationMemoryFixtureV1 {
         expected_layout: Gfx942DeviceMemoryLayoutV1,
         released: &[Gfx942DeviceMemoryIdentityV1],
     ) {
+        self.insertion_assert_device_partition_with_root_v1(
+            leases,
+            authorities,
+            external.map(|r| InsertionRootRef::Initialized(&r.0)),
+            attempted_id,
+            expected_layout,
+            released,
+        );
+    }
+
+    pub(crate) fn insertion_assert_allocation_partition_v1(
+        &self,
+        leases: &[&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>],
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+        external: Option<&DeviceAllocationCustodyV1>,
+        attempted_id: u64,
+        expected_layout: Gfx942DeviceMemoryLayoutV1,
+        released: &[Gfx942DeviceMemoryIdentityV1],
+    ) {
+        self.insertion_assert_device_partition_with_root_v1(
+            leases,
+            authorities,
+            external.map(|r| InsertionRootRef::Allocation(&r.0)),
+            attempted_id,
+            expected_layout,
+            released,
+        );
+    }
+
+    fn insertion_assert_device_partition_with_root_v1(
+        &self,
+        leases: &[&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>],
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+        external: Option<InsertionRootRef<'_>>,
+        attempted_id: u64,
+        expected_layout: Gfx942DeviceMemoryLayoutV1,
+        released: &[Gfx942DeviceMemoryIdentityV1],
+    ) {
         let e = &self.fixture.engine;
-        let terminal = e.terminal_device_initialization.as_ref();
+        let slot = &e.terminal_device_initialization;
+        let initialized = slot.as_ref();
+        let allocation = slot.allocation_as_ref();
+        assert_eq!(
+            usize::from(initialized.is_some()) + usize::from(allocation.is_some()),
+            usize::from(slot.is_some())
+        );
+        let terminal = initialized
+            .map(InsertionRootRef::Initialized)
+            .or_else(|| allocation.map(InsertionRootRef::Allocation));
         assert!(
             !(external.is_some() && terminal.is_some()),
-            "initializer rooted in exactly one place"
+            "device custody rooted in exactly one place"
         );
-        let root = external.map(|r| &r.0).or(terminal);
+        let root = external.or(terminal);
         let mut owned = leases
             .iter()
             .map(|l| (l.storage_identity(), l.layout()))
@@ -307,22 +463,37 @@ impl PreparationMemoryFixtureV1 {
             );
             (l.storage_identity(), l.layout())
         }));
-        if let Some(root) = root {
-            match &root.lease {
-                InitializationLeaseV1::None => {}
-                InitializationLeaseV1::Unmapped(l) => {
-                    owned.push((l.storage_identity(), l.layout()))
+        let pending = match root {
+            Some(InsertionRootRef::Initialized(root)) => {
+                match &root.lease {
+                    InitializationLeaseV1::None => {}
+                    InitializationLeaseV1::Unmapped(l) => {
+                        owned.push((l.storage_identity(), l.layout()))
+                    }
+                    InitializationLeaseV1::Complete(output) => {
+                        owned.push((output.lease.storage_identity(), output.lease.layout()))
+                    }
                 }
-                InitializationLeaseV1::Complete(output) => {
-                    owned.push((output.lease.storage_identity(), output.lease.layout()))
-                }
+                root.native_started
+                    && root.stage == Stage::Allocate
+                    && matches!(root.lease, InitializationLeaseV1::None)
             }
-        }
-        let pending = root.is_some_and(|root| {
-            root.native_started
-                && root.stage == Stage::Allocate
-                && matches!(root.lease, InitializationLeaseV1::None)
-        });
+            Some(InsertionRootRef::Allocation(root)) => {
+                match &root.lease {
+                    device_allocation::AllocationLeaseV1::None => {}
+                    device_allocation::AllocationLeaseV1::Unmapped(l) => {
+                        owned.push((l.storage_identity(), l.layout()))
+                    }
+                    device_allocation::AllocationLeaseV1::Mapped(l) => {
+                        owned.push((l.storage_identity(), l.layout()))
+                    }
+                }
+                root.native_started
+                    && !root.progress.attempted
+                    && matches!(root.lease, device_allocation::AllocationLeaseV1::None)
+            }
+            None => false,
+        };
         let mut pending_records = 0;
         for record in &e.device_memory {
             let identity = Gfx942DeviceMemoryIdentityV1 {

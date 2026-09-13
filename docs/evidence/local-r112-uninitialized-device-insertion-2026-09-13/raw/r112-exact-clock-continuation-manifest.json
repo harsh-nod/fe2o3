@@ -1,0 +1,1066 @@
+{
+  "contract": "r112-raw-utc-boot-monotonic-continuation-v1",
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "source_map_sha256": "66ed13f9569839c03db1cc625b4214d4b632156f43f12a0e17969c070f0c11b8",
+  "original_manifest_sha256": "f724627804c86fd1521983d94c247e81cd7544928f11b0ca2ec63d4c220254ae",
+  "helpers": [
+    {
+      "name": "r112-exact-clock-continuation-evidence.js",
+      "sha256": "35077d7b706f241e50db6358aaec637c2a958846e0d12be6c321a1a71fa6a489"
+    },
+    {
+      "name": "r112-exact-clock-continuation-evidence-tests.js",
+      "sha256": "4e3d745dd3944832e90a95dd8b4e6f442e7f8b5f1069f2c2f4d8f7c051c83378"
+    },
+    {
+      "name": "r112-exact-clock-continuation-prepare.js",
+      "sha256": "2b5a6a247b92e901e5cdf4b202c285899744eb9ef379a0e450f7bb1e5f5e1d89"
+    },
+    {
+      "name": "r112-exact-clock-continuation-run.js",
+      "sha256": "34e0864a678047e9db6e2c5dfd07f8ef1cc3f99fe9f981eac65f7a807266e70c"
+    },
+    {
+      "name": "r112-exact-clock-continuation-retain-local.js",
+      "sha256": "5f26307a75408e084e8d528de8e38cee85ce30b45703943cf9946c6d1de606e6"
+    }
+  ],
+  "prior_artifacts": [
+    {
+      "name": "r112-assert-frozen.js",
+      "sha256": "bd015584bb2909550f9f916c89cf8fc3cf7c062606037d6774f10e3f54fc61c6"
+    },
+    {
+      "name": "r112-auxiliary-campaign-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-auxiliary-campaign.json",
+      "sha256": "4dcd70d462e3625829325e42188f847c4594f769aab6b0bde4e6d01915b8ae40"
+    },
+    {
+      "name": "r112-auxiliary-campaign.log",
+      "sha256": "1f4448468965b96afb66d9cc5ac64f6d23dd9d3c6610da18ca45e565631ae2fa"
+    },
+    {
+      "name": "r112-auxiliary-complete.json",
+      "sha256": "a58f7070008fd36353262ffcb079df53102ac3e4b13efe7e6d825375ebd3f7a6"
+    },
+    {
+      "name": "r112-auxiliary-gates.py",
+      "sha256": "9355c5e6f1f1752ae01b48462f5dd884026598c80798fea361a728f0a4ff029f"
+    },
+    {
+      "name": "r112-auxiliary-results.json",
+      "sha256": "2adda2552ff1bc93a3e863982f1a3049d8628c8a175423c3b033febe5173a3e8"
+    },
+    {
+      "name": "r112-auxiliary-source-after.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-auxiliary-source-inputs.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-bind.log",
+      "sha256": "b742239f3e298d504c93a900fa2acfd3fcb0a5fee84fb93ec5c5a040b75b0bdd"
+    },
+    {
+      "name": "r112-campaign-run.js",
+      "sha256": "321c33f780b83733935e4f756825cbe29446fcc745419ccfe36dc14c829ae34f"
+    },
+    {
+      "name": "r112-environment.json",
+      "sha256": "1e7e1a6f2b13d5b186b5364c7aac3519d315372ccfeeaa39f382e67f883aafc7"
+    },
+    {
+      "name": "r112-exact-clock-check-mutation.js",
+      "sha256": "aedbdb839065c0aa2e6634d3642fe13701f9d4faba81b2195b17c2f39077ea35"
+    },
+    {
+      "name": "r112-exact-clock-contract-tests-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-exact-clock-contract-tests.json",
+      "sha256": "45cdf824c36465bf2b3abee151e3efb2294941f8b644e0c62232a818a6f986f3"
+    },
+    {
+      "name": "r112-exact-clock-contract-tests.log",
+      "sha256": "c62f43d7d1cc8328f1b878f70e3cd48125f7693aa3f4851398bbf1a2643365c2"
+    },
+    {
+      "name": "r112-exact-clock-evidence-tests.js",
+      "sha256": "18e2bdbbf47a70b33608877a587bfa30ca300f9e8173c2c21ff0f81ef0930c78"
+    },
+    {
+      "name": "r112-exact-clock-evidence.js",
+      "sha256": "a84aba4e4cc1c7c65d0938d5b363cdc0f3eb5419759083d843be065081aa31b9"
+    },
+    {
+      "name": "r112-exact-clock-manifest.json",
+      "sha256": "f724627804c86fd1521983d94c247e81cd7544928f11b0ca2ec63d4c220254ae"
+    },
+    {
+      "name": "r112-exact-clock-mut-accept-missing-complete-source.json",
+      "sha256": "ee4e2fffec942859fddcad378e971154c6858ecc8bc8fb662075c3afbba32eba"
+    },
+    {
+      "name": "r112-exact-clock-mut-accept-missing-complete.json",
+      "sha256": "4f6219075702fcdf102465fcfd3c6deeb87b6ee342c4b017c4ac6d028773f049"
+    },
+    {
+      "name": "r112-exact-clock-mut-accept-missing-complete.log",
+      "sha256": "0a6a3135b41d09b7d398c76a6be905e9dc07b43172e5b9a618dc70a3c3ca4414"
+    },
+    {
+      "name": "r112-exact-clock-mut-allocation-ignores-occupied-slot-source.json",
+      "sha256": "7af3c36bd279e1f41f28fa6603b28deb959da8dc1a3d04bd0eaea43d5b54b384"
+    },
+    {
+      "name": "r112-exact-clock-mut-allocation-ignores-occupied-slot.json",
+      "sha256": "d1383d6d3eaade7f37b3510da7aaff8e2d55be7acddeb12e5345fd9dc1f8094e"
+    },
+    {
+      "name": "r112-exact-clock-mut-allocation-ignores-occupied-slot.log",
+      "sha256": "5c8002d440ebf6326e7c85b232efda3ef263547e77d81832f3fa6fedf2bd98cf"
+    },
+    {
+      "name": "r112-exact-clock-mut-allow-repreparation-source.json",
+      "sha256": "63939d245a8ab851bb3a6707e41ef62d1d91c27d56ca34805e1accc6b38dbc64"
+    },
+    {
+      "name": "r112-exact-clock-mut-allow-repreparation.json",
+      "sha256": "4edf5dd2be36d4c60bfa316a2ddb6476e400d48e87473a0417df4bcb2236efed"
+    },
+    {
+      "name": "r112-exact-clock-mut-allow-repreparation.log",
+      "sha256": "1726183dc9fc2dc5dd4d9c72c19753be91064ed787ad8e62787fe0b7947c8808"
+    },
+    {
+      "name": "r112-exact-clock-mut-discard-map-progress-source.json",
+      "sha256": "51a0f0c38a8e7f463ee439f1aff237b2156b13287b630b25ab73bbef07964031"
+    },
+    {
+      "name": "r112-exact-clock-mut-discard-map-progress.json",
+      "sha256": "a89ce4a4f3bee9155c7f161b68150f017132c08fb1f3c34ebd96a6394075c159"
+    },
+    {
+      "name": "r112-exact-clock-mut-discard-map-progress.log",
+      "sha256": "ef9c7ac44ad046dffc9aff8512340a19925795011848d1988996858170bfbf7e"
+    },
+    {
+      "name": "r112-exact-clock-mut-expose-failed-output-source.json",
+      "sha256": "d24a669f7b3baa198fdba16e06cbaa224aa1fdc43b407c94243774adb6bc9b6e"
+    },
+    {
+      "name": "r112-exact-clock-mut-expose-failed-output.json",
+      "sha256": "288089d2843d796cdfb9e22d2be4cbc1259f56c1a0e26fd679df4351fff9c122"
+    },
+    {
+      "name": "r112-exact-clock-mut-expose-failed-output.log",
+      "sha256": "a054699398ba8c723a5d6ffda850551be43b5dba148078cc2e9d8009e4e18385"
+    },
+    {
+      "name": "r112-exact-clock-mut-extract-before-commit-entry-source.json",
+      "sha256": "bfb3df017f3c7a66f9cf67d532f9500993d16dbac045cea30585c4a70941b733"
+    },
+    {
+      "name": "r112-exact-clock-mut-extract-before-commit-entry.json",
+      "sha256": "555554c6c916c93c9dea26427dacf1be1aa6204b010ece2ddf0dce5a08d1420e"
+    },
+    {
+      "name": "r112-exact-clock-mut-extract-before-commit-entry.log",
+      "sha256": "b2b28a2b85158e233c08b4a1077e3ea983513bdb4ee68c96887f187df8ad6630"
+    },
+    {
+      "name": "r112-exact-clock-mut-grant-initialized-authority-source.json",
+      "sha256": "49707f14db9b9d330ffc58c030e6889b6d71ca4d41bc6a8a1312197bef447185"
+    },
+    {
+      "name": "r112-exact-clock-mut-grant-initialized-authority.json",
+      "sha256": "6bce7f71728fcfe0e31b5cbfed83911c872eb67dc1fa73335a12f7cd32ae1a8b"
+    },
+    {
+      "name": "r112-exact-clock-mut-grant-initialized-authority.log",
+      "sha256": "c634d90f2ffbcde02a89a5a4b8e13fdc6f7b22191846105f3cf74b124f6e675d"
+    },
+    {
+      "name": "r112-exact-clock-mut-historical-admission-source.json",
+      "sha256": "0a188b10f8b3834ebd793a08ee8da22bb8218732563bad59d8e518ad5a6f20f3"
+    },
+    {
+      "name": "r112-exact-clock-mut-historical-admission.json",
+      "sha256": "42a652eb6469e50e05955b7d1a5c22512de5287fc088d186101bce0f21a85a36"
+    },
+    {
+      "name": "r112-exact-clock-mut-historical-admission.log",
+      "sha256": "0ffaf10648e83476bc1a8f4bbded4f2683c5e54ed79380457495733caf86f9d2"
+    },
+    {
+      "name": "r112-exact-clock-mut-ignore-remembered-hole-source.json",
+      "sha256": "d9ba3f66e2da96b49b080c8b230ad9062155735f4ed1376594c1596329636fe5"
+    },
+    {
+      "name": "r112-exact-clock-mut-ignore-remembered-hole.json",
+      "sha256": "1b0512323df7ab208422a0f0e4cae14566356bb4c48dae40b35b9d800f0364c6"
+    },
+    {
+      "name": "r112-exact-clock-mut-ignore-remembered-hole.log",
+      "sha256": "34e05ddf1e634a688b85faa01d1a0a3f5edd75623846c5542d8cb187f3fe2d52"
+    },
+    {
+      "name": "r112-exact-clock-mut-initialization-ignores-occupied-slot-source.json",
+      "sha256": "1d522492ea23d4dfc301826be0533d353bd3009e8ffd1bf918e17fb63bf483c1"
+    },
+    {
+      "name": "r112-exact-clock-mut-initialization-ignores-occupied-slot.json",
+      "sha256": "a680271c6f9236a350cd7b6a27a61146d437fcc13d8a3dc2a34f14f463959496"
+    },
+    {
+      "name": "r112-exact-clock-mut-initialization-ignores-occupied-slot.log",
+      "sha256": "811b90e162722e88ba95ef74fa0917ccb5fafd0d718e91730697f40497e6a940"
+    },
+    {
+      "name": "r112-exact-clock-mut-lose-terminal-mapped-owner-source.json",
+      "sha256": "8054580606e0f3099112932654f3dc3db0ec0acfe41b80bad08239fee773929b"
+    },
+    {
+      "name": "r112-exact-clock-mut-lose-terminal-mapped-owner.json",
+      "sha256": "2a0e3965af06bc6c7bff58f30c6e79c776851c9ae0801231c2017a5b2052117d"
+    },
+    {
+      "name": "r112-exact-clock-mut-lose-terminal-mapped-owner.log",
+      "sha256": "b395954021934fe3e6d3fd4939d8bb21d40ff4ea5d5c6a168a79b94d3830aac4"
+    },
+    {
+      "name": "r112-exact-clock-mut-lose-unmapped-owner-source.json",
+      "sha256": "2c821cc681c5a501228a9777e4246c8e4d8f4cbfa09523771490d72ba56d3b59"
+    },
+    {
+      "name": "r112-exact-clock-mut-lose-unmapped-owner.json",
+      "sha256": "df12c1bf1e0ded47decf35385710ef56bbc4b01cf094bfc8aee421403004206c"
+    },
+    {
+      "name": "r112-exact-clock-mut-lose-unmapped-owner.log",
+      "sha256": "0af52fddbb31bf8442e662d30838f747c3a57c694989c8848ed940d4acc4a0ba"
+    },
+    {
+      "name": "r112-exact-clock-mut-omit-immediate-quarantine-source.json",
+      "sha256": "c095ceeefcd2c8d59ba2343b7645e85f3ea0ed5c43e5781b3d8dc4ba8e184889"
+    },
+    {
+      "name": "r112-exact-clock-mut-omit-immediate-quarantine.json",
+      "sha256": "f1619aacb75b9f278b7fe19ce12be4b9faec683c3ad3efc3d5297878a5231e18"
+    },
+    {
+      "name": "r112-exact-clock-mut-omit-immediate-quarantine.log",
+      "sha256": "54092b466123349e66b5b58623ae99f15cdd2bd6204c5465c0688d265b79ae05"
+    },
+    {
+      "name": "r112-exact-clock-mut-public-instead-of-device-local-source.json",
+      "sha256": "c33bc6a14475e28fbd8dcc3755e40d4d115bad42ef0f13dfe90602bdaf642be4"
+    },
+    {
+      "name": "r112-exact-clock-mut-public-instead-of-device-local.json",
+      "sha256": "1f7878d2a9e144446fb4992820222b02496a79276690ae1b85f73f97b8850728"
+    },
+    {
+      "name": "r112-exact-clock-mut-public-instead-of-device-local.log",
+      "sha256": "f732888329112f8eb59938d0e8b592ee8d59b84413389932cf54201e7d7002fb"
+    },
+    {
+      "name": "r112-exact-clock-mut-replace-substrate-first-panic-source.json",
+      "sha256": "60bd712d7069fabaaa05ff18ef443cb93755f327768074043e19beb8a2dac9ab"
+    },
+    {
+      "name": "r112-exact-clock-mut-replace-substrate-first-panic.json",
+      "sha256": "badeeb45e45e7bcf9433fa5bc14a927fafe632b2e06b69016bc1ee5cac25a4dd"
+    },
+    {
+      "name": "r112-exact-clock-mut-replace-substrate-first-panic.log",
+      "sha256": "a96e93dab417c100ce67af2d94c3ea9dc4cebb5bc2b1cacfa75c85c8f3394e15"
+    },
+    {
+      "name": "r112-exact-clock-mut-suppress-substrate-retake-error-source.json",
+      "sha256": "f9f6849a4ecd05d2ba0354061dcb693ae133e66eb13a857a1d438a44a345a1ee"
+    },
+    {
+      "name": "r112-exact-clock-mut-suppress-substrate-retake-error.json",
+      "sha256": "aa211f5ed8292edbe20a6cf63e842efe832589c97bda04d825474007f691510c"
+    },
+    {
+      "name": "r112-exact-clock-mut-suppress-substrate-retake-error.log",
+      "sha256": "968c4ca36c7992e35345fe1c93247873fd142f5e5a311a8c1ade6494a8a7c9fc"
+    },
+    {
+      "name": "r112-exact-clock-prepare.js",
+      "sha256": "a6f7792b88f961a8ce2fa2d660adbb5912783735540b8321708a7774a6214e0a"
+    },
+    {
+      "name": "r112-exact-clock-restoration-accept-missing-complete.json",
+      "sha256": "58b3e335c7816a718ad8245afc541288252ce1620e41c386be0439f05b6899f9"
+    },
+    {
+      "name": "r112-exact-clock-restoration-allocation-ignores-occupied-slot.json",
+      "sha256": "5eba95a83d38810edb64976f02684b468a2829aceafbaa4f445e31d08347a3c9"
+    },
+    {
+      "name": "r112-exact-clock-restoration-allow-repreparation.json",
+      "sha256": "5c42273133ae00a7ad745b65b5fdc4d1056ae8ac6add5ab10c69979b5c5660b1"
+    },
+    {
+      "name": "r112-exact-clock-restoration-discard-map-progress.json",
+      "sha256": "12f85e87004109016eb3ce7ed86890750a728d44a3111a2e9b62850a60a5f4ab"
+    },
+    {
+      "name": "r112-exact-clock-restoration-expose-failed-output.json",
+      "sha256": "531f57d3970fa1b84acfc896b87535aaa3f986e0afa853d54df58eb7ce2f8782"
+    },
+    {
+      "name": "r112-exact-clock-restoration-extract-before-commit-entry.json",
+      "sha256": "7a22ca707b334477913ba5dade671249caca246d1279a6862a8dea108f4587b9"
+    },
+    {
+      "name": "r112-exact-clock-restoration-grant-initialized-authority.json",
+      "sha256": "e9f3300ce1afa20050112e701cf1ad173e4a4b762f545923dacbc01b993730bf"
+    },
+    {
+      "name": "r112-exact-clock-restoration-historical-admission.json",
+      "sha256": "5f2d54e4dafe3d2c14832698b857d5ab9f8f90d6217be86b862d5df42d5adaa3"
+    },
+    {
+      "name": "r112-exact-clock-restoration-ignore-remembered-hole.json",
+      "sha256": "8d671ae13b765bd37024ec5ebd1199c54852a7fbcb5f6b45e6fb8408cb4c5328"
+    },
+    {
+      "name": "r112-exact-clock-restoration-initialization-ignores-occupied-slot.json",
+      "sha256": "814d9009e650db29210d01d067505d909e9b0870465e3dc2b8a81833ea05ab50"
+    },
+    {
+      "name": "r112-exact-clock-restoration-lose-terminal-mapped-owner.json",
+      "sha256": "76f9b76bfae15e1d248e05baa699d17d92ebee9080c78ae0f86e1013c48612f3"
+    },
+    {
+      "name": "r112-exact-clock-restoration-lose-unmapped-owner.json",
+      "sha256": "c53a53941d88101ddf880c246ddc3264cb675d4fd8902307fb1881f601d2b804"
+    },
+    {
+      "name": "r112-exact-clock-restoration-omit-immediate-quarantine.json",
+      "sha256": "291fde39b89359c71d8c2c426f5ed9cf0cd7012992af8a6e7bd13dd3421bd2ba"
+    },
+    {
+      "name": "r112-exact-clock-restoration-public-instead-of-device-local.json",
+      "sha256": "d04450b483d854226552324344526ce119bd84c0595cc9fa0cef8bfc6a7daecf"
+    },
+    {
+      "name": "r112-exact-clock-restoration-replace-substrate-first-panic.json",
+      "sha256": "d943559e737fae57c6d7875ad8ca93701622570edb566d885a9493be71b28cbe"
+    },
+    {
+      "name": "r112-exact-clock-restoration-suppress-substrate-retake-error.json",
+      "sha256": "b1224b7a048e7d337b6925bc1b099ca4358f3e1a49848d44e2fdb6408907c513"
+    },
+    {
+      "name": "r112-exact-clock-restoration.js",
+      "sha256": "cdcd42bb037d1d1f1a6cf8d3d1a983fe266a204bd02d1f9bda904ebe9a74df66"
+    },
+    {
+      "name": "r112-exact-clock-restored-allocator-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-exact-clock-restored-allocator.json",
+      "sha256": "8a1ac6729317f1d29044a400b59533f538bbf0e7eb28a6fc6a5a7f83acb0f619"
+    },
+    {
+      "name": "r112-exact-clock-restored-allocator.log",
+      "sha256": "1bf149492869596eb6270aa4abab6a9597a396904e53df70509bb2135b4183e3"
+    },
+    {
+      "name": "r112-exact-clock-restored-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-exact-clock-restored-insertion.json",
+      "sha256": "eb3e768ef5f068206697561bb384dc93929262319ee88c08c09b9faf1fa56f52"
+    },
+    {
+      "name": "r112-exact-clock-restored-insertion.log",
+      "sha256": "eb66e61edc37f579fc255d306366ec53131d3f8e5ca19a1297aea36f114fa39c"
+    },
+    {
+      "name": "r112-exact-clock-retain-local.js",
+      "sha256": "9b06b937b57b1085724c24e37cf3f4d4ebe6fa4386b5bff29ac6c376048a3bb1"
+    },
+    {
+      "name": "r112-exact-clock-run.js",
+      "sha256": "1498b73a814a037edafeebe59f8d0e99fdcdc207db50ecef27ca180587476961"
+    },
+    {
+      "name": "r112-exact-mutations.json",
+      "sha256": "3592b623c89ab237c767ddad033116d6a56eed52776500521de05f374e082ac7"
+    },
+    {
+      "name": "r112-exact-qualification-plan.js",
+      "sha256": "f33a92c52beda473a41086ac0b03aa5ab91302421c7555539067ecf8a4271cac"
+    },
+    {
+      "name": "r112-final-ci-test-gate.log",
+      "sha256": "7614173c0974c8aa8202f60f5fc9a9ed8691211147a0004dab9299a3555f5b9b"
+    },
+    {
+      "name": "r112-final-clippy-all.log",
+      "sha256": "1cd38eede290e43b1f0f295ec3a82c6c414d3761653057ac0caf478838bf26e2"
+    },
+    {
+      "name": "r112-final-clippy-production.log",
+      "sha256": "64db89ad97e61c58048257b5f5516893954def9b86ec7d1c76f026b693ce6aa0"
+    },
+    {
+      "name": "r112-final-complete.json",
+      "sha256": "d130748a8ef4280fdf1f1df0583b090a1c9d078b7106fc385fd22a47169b1cb4"
+    },
+    {
+      "name": "r112-final-dependency-policy.log",
+      "sha256": "e4909791d89201a88e23213fca74159a2d5b8e869b5227635acbe74c893d6e25"
+    },
+    {
+      "name": "r112-final-dependency-tests.log",
+      "sha256": "75ff54e727b57e4bd7b88956ed0c92c4b9a416e6f0976707e8fb54aa385ac0bd"
+    },
+    {
+      "name": "r112-final-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-format-check-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-format-check.json",
+      "sha256": "a5983966896c09cd8901410e56d210ec783d008b5edf378ef969b32d85a8978b"
+    },
+    {
+      "name": "r112-final-format-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-gnu-docs.log",
+      "sha256": "4711c28386e75777976d5c4d4a7561377982f0619f1449b170d88d1c5d0c5f3a"
+    },
+    {
+      "name": "r112-final-gnu-host.log",
+      "sha256": "6f89cc6b3f5d864fadc6ecdd3a1a4a5aae4bbcabf7ea41568dfd1a905b184a8d"
+    },
+    {
+      "name": "r112-final-gnu-tests.log",
+      "sha256": "409bdc0c64da5d52fd6755b23aa58bd684c870a0d5cb8bc471eaa33a5f4d3d95"
+    },
+    {
+      "name": "r112-final-guard-allocator-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-allocator.json",
+      "sha256": "9ab122cbf94a606fec070289726051466885893db3d48387e9adc8ceb3fe0388"
+    },
+    {
+      "name": "r112-final-guard-allocator.log",
+      "sha256": "6b03028ac5c31a092d5e4063a8e32c8facad39e3b39b243930bf93fd34d390fc"
+    },
+    {
+      "name": "r112-final-guard-clippy-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-clippy.json",
+      "sha256": "648f1a80475472027e997858bf48c40afaebb0aefd571e57ed08018db2754ebe"
+    },
+    {
+      "name": "r112-final-guard-clippy.log",
+      "sha256": "5a5716ce863e20b6d41eb03369ec547bd29aa98cc806d3cb9a68e5fe1d0a5c36"
+    },
+    {
+      "name": "r112-final-guard-format-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-format.json",
+      "sha256": "7f8fa62bf54e28ab3d2531479da43cb1398a327f7c0b7640ca9dea2ac5a9ce29"
+    },
+    {
+      "name": "r112-final-guard-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-guard-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-guard-insertion.json",
+      "sha256": "122bb4d03edd39d25eba92675cc3d0fd45c77bc6fae6512a4f40fc4ca7782ab1"
+    },
+    {
+      "name": "r112-final-guard-insertion.log",
+      "sha256": "8e37ba705fc3cb5632341aaab797d16c7346778e4d4d55133cac2e2759dbb8a9"
+    },
+    {
+      "name": "r112-final-macro-fixtures.log",
+      "sha256": "ba829cdb4c94ae879069406ce6089fadc75d0bc547609f43bd117a83c3de7f55"
+    },
+    {
+      "name": "r112-final-musl-docs.log",
+      "sha256": "3f9d1fe93ee1507cf6777ed8018da3412392260d12e27915b3d23a02dabb89f9"
+    },
+    {
+      "name": "r112-final-musl-host-docs.log",
+      "sha256": "32074044ffe94b63d422e1ac00317ad77ce46f393004d16e473aed217877303d"
+    },
+    {
+      "name": "r112-final-musl-host.log",
+      "sha256": "20439a37a74c0cbdee2604c8046ad4e7b3c40c4103e9418adbd8daa71e23ebdb"
+    },
+    {
+      "name": "r112-final-musl-tests.log",
+      "sha256": "76f44499de1ad074f5992c08b1b80ce9c3aa36a498640da8aabd6474e486d3ad"
+    },
+    {
+      "name": "r112-final-python.log",
+      "sha256": "942f668a3a906dfcdd02f6dc1af9f8f58c1c44e449aab520bc31ad0fd24a6c56"
+    },
+    {
+      "name": "r112-final-source-after.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-final-source-gate.json",
+      "sha256": "222130618c0bdf5d120ebac64ed458d6f8fe1b162511814fe903a9830f1221c1"
+    },
+    {
+      "name": "r112-final-source-inputs.json",
+      "sha256": "334932cb0a5b71006c5634ab8a92f2e690f3dd43e894f7a6fbc92d91b26ecc27"
+    },
+    {
+      "name": "r112-final-standalone-lockfiles.log",
+      "sha256": "192a90ed1f437f0cc1b070e66c2061a491c34346df88f5da05cf21234c4bf430"
+    },
+    {
+      "name": "r112-final-whitespace-check-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-final-whitespace-check.json",
+      "sha256": "5bd8f8fe8b92c111de08e97c25167a721fd34e12c9593cf80c56648a511ca3aa"
+    },
+    {
+      "name": "r112-final-whitespace-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-final-whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-freeze.js",
+      "sha256": "fe7a23425b51dc6bed84dec50b687458de6fc74a93ebe4cb7c63a23d389209d7"
+    },
+    {
+      "name": "r112-frozen-allocator-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-allocator.json",
+      "sha256": "68ea434dab2d6e34e565a7bdf6825c94fb2c8fcf018cbf944376b1a59a1a5a30"
+    },
+    {
+      "name": "r112-frozen-allocator.log",
+      "sha256": "d9dd2bce98f66c5660e68abacd3f7d6361c62ba061242f7a6209f30d7dffa03e"
+    },
+    {
+      "name": "r112-frozen-borrowed-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-borrowed.json",
+      "sha256": "c45cf8821d294dde22c5fb7cf2ca13898c4f6dfa161bc72f3c106463249315f8"
+    },
+    {
+      "name": "r112-frozen-borrowed.log",
+      "sha256": "b524610396c81861f5e2c86fa8e5a7dc43296cfb941638fb1be6634469677438"
+    },
+    {
+      "name": "r112-frozen-coherent-allocation-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-coherent-allocation.json",
+      "sha256": "be783207c662d64223834ddaabd941a7d15ec6f8f9d2a70c6a0938c8de204012"
+    },
+    {
+      "name": "r112-frozen-coherent-allocation.log",
+      "sha256": "29a84e5e0a71f7ed1c36f030e132f14e1339c825b4771e5c34b53700e394e4ed"
+    },
+    {
+      "name": "r112-frozen-coherent-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-coherent-insertion.json",
+      "sha256": "74853291e925b5971df853041f704d94de48bee7381f12ecfde8884204131fe4"
+    },
+    {
+      "name": "r112-frozen-coherent-insertion.log",
+      "sha256": "bd3adf4a894f04bb13f5e86249ca02a5818bfb1f6ef6e704bdfca23ff7576cfb"
+    },
+    {
+      "name": "r112-frozen-device-initializer-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-device-initializer.json",
+      "sha256": "1e1a1ef14e69b2b3ffb2bf5b0dadabf87087e48844d9ecf978034972382bc2b8"
+    },
+    {
+      "name": "r112-frozen-device-initializer.log",
+      "sha256": "208cf604300d4700c08fe9015d7049e46e41f394612822d3bdc0acd6a9f62717"
+    },
+    {
+      "name": "r112-frozen-device-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-device-insertion.json",
+      "sha256": "423161ed0ee2e4bab1579621e442ed851d3fc8be021901f62caa0a3d2cdc3129"
+    },
+    {
+      "name": "r112-frozen-device-insertion.log",
+      "sha256": "ea2eed892ad22e47f4f0babecfa4eab697d65e4c1389b320a6aeea92fee13a5b"
+    },
+    {
+      "name": "r112-frozen-initializer-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-initializer.json",
+      "sha256": "14d1b993a61be299fa6194b5e5f4531f9013d5903380b8bed682d66cf802554c"
+    },
+    {
+      "name": "r112-frozen-initializer.log",
+      "sha256": "8d770b491fcff211a47001be963fe3b727bae3b47218f2cfb8438445f15c116a"
+    },
+    {
+      "name": "r112-frozen-insertion-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-insertion.json",
+      "sha256": "8ed0849860a625e361bd8340c9df3a1ac072341da741bf17e41ff21453891966"
+    },
+    {
+      "name": "r112-frozen-insertion.log",
+      "sha256": "6892be0d8ba5da14ad0518b6e1bcaaec8d5ff65929f131902325867646fd3a3c"
+    },
+    {
+      "name": "r112-frozen-model-loan-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-frozen-model-loan.json",
+      "sha256": "582a0bd01fe049bbc0d58f219a1db226902d6356fbfd061fc7aa7ccd2e6aa1b7"
+    },
+    {
+      "name": "r112-frozen-model-loan.log",
+      "sha256": "d8e69ec678f365eae5a801c71233b3640d5227cff73fca8d48fa37c6264aebac"
+    },
+    {
+      "name": "r112-frozen-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-initial-build-source.json",
+      "sha256": "ecb90844e04c567bea354a6b287fce69c099185bc16746d8c7437a3751b6ce71"
+    },
+    {
+      "name": "r112-initial-build.json",
+      "sha256": "70c20d468e3e1caf3c3ab5cf6c41067d9fac06539e4880b5ae29ec2899e8b855"
+    },
+    {
+      "name": "r112-initial-build.log",
+      "sha256": "5e997b230eff37a3fa58660e25e33832910cd6cce97b24b20103f52741212e07"
+    },
+    {
+      "name": "r112-initial-format-source.json",
+      "sha256": "b7816cdbf3b38a8734cddb96dbce0af00017fe274b863847d280740d8dc99a09"
+    },
+    {
+      "name": "r112-initial-format.json",
+      "sha256": "21664189b70894ba27152637e0c29a10a040bde34b24d293e221e68efecd314c"
+    },
+    {
+      "name": "r112-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-initialization.log",
+      "sha256": "1e6364c7405528319b21bce6f860f5e4c1468aade702c0d837c34eb35a027ff8"
+    },
+    {
+      "name": "r112-integrated-format-corrected-source.json",
+      "sha256": "ae5e9b4f12685bf22d74069d40162204542e2e39bd1d96da1f709c4fb0cf68e3"
+    },
+    {
+      "name": "r112-integrated-format-corrected.json",
+      "sha256": "70ba2260e42b651aa9217945707090253d7373478781386138f340bddac42bdc"
+    },
+    {
+      "name": "r112-integrated-format-corrected.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-integrated-format-source.json",
+      "sha256": "85389ffe69a632e766e09c1fdcecc56bd3f81368fa73963b36dbe099dbbb3e62"
+    },
+    {
+      "name": "r112-integrated-format.json",
+      "sha256": "15b4f4e3ef39c0d05e1c6dca001436dfb7a4341ab1865f9112eb46551f403281"
+    },
+    {
+      "name": "r112-integrated-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-integrated-tests-corrected-source.json",
+      "sha256": "7b85a76326bf4862e0db916c213ef1577811f0e3a52a40c33334058fca00eb1d"
+    },
+    {
+      "name": "r112-integrated-tests-corrected.json",
+      "sha256": "a2c078724a2e7d1a3d1f9b8e82e05d7c335af12df2b449e01357b166314398c8"
+    },
+    {
+      "name": "r112-integrated-tests-corrected.log",
+      "sha256": "3cf67ae71d068e540a346e127c17b971a7b25ea7a80a4e2bdc8e4841cfa6f2dd"
+    },
+    {
+      "name": "r112-integrated-tests-source.json",
+      "sha256": "498cee8d1596f1ab2a1c0ccfdcee8497846929e0b08695eaf9b4b90829f203e1"
+    },
+    {
+      "name": "r112-integrated-tests.json",
+      "sha256": "ff5e1d279617953bf8b2117d13efb4243d7e71fae5a9b2ebf8a4493c61ce5116"
+    },
+    {
+      "name": "r112-integrated-tests.log",
+      "sha256": "4d6596ba3ab863d082af7854cf5afcaebdec6c2da158b7d2b90736b5bc8cae56"
+    },
+    {
+      "name": "r112-issue-status.json",
+      "sha256": "e538a64c335eecce0489ed42949545bd658b673520d6f4d5fc6eb580fd784fd9"
+    },
+    {
+      "name": "r112-lint-cleanup-format-source.json",
+      "sha256": "66ab6a00feb4dabf25f3b2b2b90e6f66bd02df4ff304991411ebfeed8e226839"
+    },
+    {
+      "name": "r112-lint-cleanup-format.json",
+      "sha256": "1ab29708a3fcea88e433183db4153a934ea0e40f6daaa285712a7441cd9ebf0d"
+    },
+    {
+      "name": "r112-lint-cleanup-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-linux-helpers.log",
+      "sha256": "05245f0b6aa978259798261bafaa1b33cc154009a9e5fb57b39a0c7e5ab946ad"
+    },
+    {
+      "name": "r112-low-level-format-source.json",
+      "sha256": "d0b0f0620a1c8db58d5ceb748ee624c9b2ffe2d2bb965006b3408c8bb8bf2202"
+    },
+    {
+      "name": "r112-low-level-format.json",
+      "sha256": "f34e63c7cec942b07f7c40f9d2c95039ec30e6cd95b7626bcb0b70cdf58ca9cf"
+    },
+    {
+      "name": "r112-low-level-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-low-level-tests-source.json",
+      "sha256": "2e9d68df6056df870640f29a86785dedc3a0d962a34273594c7974f6eac31b02"
+    },
+    {
+      "name": "r112-low-level-tests.json",
+      "sha256": "cdf4fbbdbdb6cfb9fa0357c1145a4d85d2120bd228ed934625b3bedf9e571e1f"
+    },
+    {
+      "name": "r112-low-level-tests.log",
+      "sha256": "2c41297ad44a1a414e9e8b6b2fcde16238ecc03be0cff037dbb89a13c9d25c25"
+    },
+    {
+      "name": "r112-ordinary.log",
+      "sha256": "5b2f89d3762ffb6c0e50c0c7da3accca0f2965e427d9780fc9ae1603c2b36b89"
+    },
+    {
+      "name": "r112-preparation.log",
+      "sha256": "7461a21c78fef508e46eb6b297d3598b1f3500f54d51e5de3117d0cb7251cdf2"
+    },
+    {
+      "name": "r112-production-audit.log",
+      "sha256": "400860e866d558eb288fcb5fa535c2f1df7461ba462f0c21f77e3b96009a228c"
+    },
+    {
+      "name": "r112-production-metadata.log",
+      "sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+    },
+    {
+      "name": "r112-production-metadata.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-proof-inventory.log",
+      "sha256": "71666f9ef118d670089a13bab3ca328ec739b8b3870abc98706f4b572884f2e5"
+    },
+    {
+      "name": "r112-registration.log",
+      "sha256": "40ddabc9f2ddbbaeecc516f1882d7a4e1d6e71dd1c54d30ea8c672eb144bf4b1"
+    },
+    {
+      "name": "r112-review-clippy-corrected-source.json",
+      "sha256": "24382371f605d1c689d24252fbc69382d41bd49cfb63e44f5104d48057f58a44"
+    },
+    {
+      "name": "r112-review-clippy-corrected.json",
+      "sha256": "a355c71faa831af29370eeeadaab3b8ec140c83fa3b7eb145edc2d85d02a3efc"
+    },
+    {
+      "name": "r112-review-clippy-corrected.log",
+      "sha256": "f973183e0bad45e5421935fa4c077c40c45f7e63f7a7bbf8556df0dc0be9d138"
+    },
+    {
+      "name": "r112-review-clippy-source.json",
+      "sha256": "1085249295dd7c36a753a8aa2aae1200ce8fa214bb846564c641a966a0d46dc1"
+    },
+    {
+      "name": "r112-review-clippy.json",
+      "sha256": "5fa300b1b4832518188e00c94b6e0f1b337062e74e85f004b4950fd8863a58b0"
+    },
+    {
+      "name": "r112-review-clippy.log",
+      "sha256": "2b04b234b7a6658e439f70a6592921216ae4a29e86809ecb5ab57d7deed460c0"
+    },
+    {
+      "name": "r112-review-format-source.json",
+      "sha256": "735bc35e77e846f12341b4bc1f049569838deac05830fc43c8447c332ef00bed"
+    },
+    {
+      "name": "r112-review-format.json",
+      "sha256": "dd4ac35c55182160c88bd48011cec08427b3da729d430c0ee48e123a6bc54b01"
+    },
+    {
+      "name": "r112-review-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r112-review-kfd-all-targets-source.json",
+      "sha256": "24382371f605d1c689d24252fbc69382d41bd49cfb63e44f5104d48057f58a44"
+    },
+    {
+      "name": "r112-review-kfd-all-targets.json",
+      "sha256": "8f40bd21e723f01b175390063d05a1159a37f41c896170fe158bd3b91eb96c1e"
+    },
+    {
+      "name": "r112-review-kfd-all-targets.log",
+      "sha256": "201d9a1d2286a87691608b1097537f23da22729a846fc88c180396bf0901b1ce"
+    },
+    {
+      "name": "r112-run.js",
+      "sha256": "910dce4f7e8ebed2202ed5845645fa1324504e36b1b4cfdaf2d348fa30580aa3"
+    },
+    {
+      "name": "r112-source-campaign-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    },
+    {
+      "name": "r112-source-campaign.json",
+      "sha256": "46f14c31ce2910db386a0f0c7fe7690d584ca8a8d9e05c3817177f8eacfbff82"
+    },
+    {
+      "name": "r112-source-campaign.log",
+      "sha256": "e115a861b2466ffb543834dfa29080a524c69c17b759a321137c8e11443029da"
+    },
+    {
+      "name": "r112-source-gate.py",
+      "sha256": "4837fb0d7b45726ecc1774ab49845150fc3f0f708c5faa9a05f2616595cca23b"
+    },
+    {
+      "name": "r112-transitions.log",
+      "sha256": "f900410f4ce5b253c2d9d088b5c5e0e526c1c8785651792224bc6f43f4470813"
+    }
+  ],
+  "contract_tests": [
+    {
+      "name": "r112-exact-clock-continuation-contract-tests.json",
+      "sha256": "9a52173c7955f9da4aaaf6d908924245e4b61691e3bd8cefb5faef666c8893eb"
+    },
+    {
+      "name": "r112-exact-clock-continuation-contract-tests.log",
+      "sha256": "783c3111179c838dfba4018d378b528487bd5fb85e525dddb4628389eee6a20e"
+    },
+    {
+      "name": "r112-exact-clock-continuation-contract-tests-source.json",
+      "sha256": "ff379734b0018d418168df12e6085c46a73f02fb5eb1a5e3d52fd3fbd84ec876"
+    }
+  ],
+  "excluded": {
+    "name": "r112-exact-clock-restored-allocator",
+    "child_returncode": 0,
+    "wrapper_exit_code": 125,
+    "reason": "AssertionError [ERR_ASSERTION]: raw child-close UTC regression"
+  },
+  "bridge": "Exact closed original artifacts and freshly checked frozen source; no retroactive boot binding for original records.",
+  "unchanged": {
+    "child_deadline_ms": 1800000,
+    "source_tests": true,
+    "original_helpers": true,
+    "original_manifest": true
+  },
+  "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+  "entries": {
+    "r112-exact-clock-continuation-restored-allocator.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_allocator_"
+      ],
+      "predecessor": "r112-exact-clock-continuation-manifest.json"
+    },
+    "r112-exact-clock-continuation-restored-device-initializer.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_initializer_"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-allocator.json"
+    },
+    "r112-exact-clock-continuation-restored-coherent-allocation.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "coherent_allocation_insertion_"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-device-initializer.json"
+    },
+    "r112-exact-clock-continuation-restored-coherent-insertion.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "coherent_insertion_"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-coherent-allocation.json"
+    },
+    "r112-exact-clock-continuation-restored-device-insertion.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "device_insertion_"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-coherent-insertion.json"
+    },
+    "r112-exact-clock-continuation-restored-initializer.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::transitions::coherent_initialization::"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-device-insertion.json"
+    },
+    "r112-exact-clock-continuation-restored-borrowed.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "borrowed_initialization_"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-initializer.json"
+    },
+    "r112-exact-clock-continuation-restored-model-loan.json": {
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::model_loan::tests::"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-borrowed.json"
+    },
+    "r112-exact-clock-continuation-collector-validation.json": {
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r112-exact-clock-continuation-retain-local.js",
+        "--check"
+      ],
+      "predecessor": "r112-exact-clock-continuation-restored-model-loan.json"
+    }
+  },
+  "observation": {
+    "utc_ms": 1789268412408,
+    "monotonic_ns": "66661731415157",
+    "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+    "clock_source": "node-process-hrtime-linux-monotonic"
+  }
+}
