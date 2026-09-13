@@ -84,6 +84,8 @@ use super::{
 
 mod semantic_reads_v1;
 use semantic_reads_v1::RankedSemanticReadsV1;
+mod materialization_v1;
+use materialization_v1::{RankedLocalValuesV1, RankedOperationScheduleV1};
 
 /// Compiler-derived provenance retained for one cooperative tensor call.
 ///
@@ -2021,89 +2023,59 @@ impl ProductionRankedKernelV1 {
                 actual: self.blocks.len(),
             });
         }
-        let tensor_sites = self
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .filter(|operation| {
-                matches!(operation, ProductionRankedOperationV1::TensorLayout { .. })
-            })
-            .count();
-        let tensor_claims = self
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .filter(|operation| {
-                matches!(
-                    operation,
-                    ProductionRankedOperationV1::RequireTensorRefinement { .. }
-                        | ProductionRankedOperationV1::RequestTensorRefinement { .. }
-                )
-            })
-            .count();
-        validate_tensor_refinement_resource_counts_v1(tensor_sites, tensor_claims)?;
-        for expression in self.blocks.iter().flat_map(|block| {
-            block
-                .operations
-                .iter()
-                .filter_map(|operation| match operation {
-                    ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
-                        Some(expression)
-                    }
-                    _ => None,
+        let check_count = |actual| {
+            if actual > MAX_RANKED_BOUNDS_OPERATIONS {
+                Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource: "operation",
+                    limit: MAX_RANKED_BOUNDS_OPERATIONS,
+                    actual,
                 })
-        }) {
-            expression
-                .validate()
-                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
-            validate_live_semantic_loads(self, expression)?;
-        }
-        // Each load occurrence was counted as a leaf. Sharing one producer per
-        // source site only reduces this operation bound; it adds no local slot.
-        let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
-            let materialized = block
-                .operations
-                .iter()
-                .try_fold(0_usize, |count, operation| {
-                    count.checked_add(match operation {
-                        ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
-                            expression.validate().ok()?.nodes.checked_add(1)?
-                        }
-                        _ if matches!(
-                            operation,
-                            ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
-                                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-                                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
-                                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
-                                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
-                                | ProductionRankedOperationV1::RequestTensorRefinement { .. }
-                        ) => 3,
-                        _ => 1,
-                    })
-                })?;
-            total
-                .checked_add(materialized.checked_add(1)?)?
-                .checked_add(usize::from(matches!(
-                    block.terminator,
-                    ProductionRankedTerminatorV1::BranchArgsAdd { .. }
-                        | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
-                )))
-        });
-        let Some(operation_count) = operation_count else {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
-                resource: "operation",
-                limit: MAX_RANKED_BOUNDS_OPERATIONS,
-                actual: usize::MAX,
-            });
+            } else {
+                Ok(())
+            }
         };
-        if operation_count > MAX_RANKED_BOUNDS_OPERATIONS {
-            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
-                resource: "operation",
-                limit: MAX_RANKED_BOUNDS_OPERATIONS,
-                actual: operation_count,
-            });
+        // Reject aggregate size before walking operation or expression contents.
+        check_count(self.blocks.iter().fold(self.blocks.len(), |total, block| {
+            total.saturating_add(block.operations.len())
+        }))?;
+        let mut operation_count = 0usize;
+        let mut tensor_sites = 0;
+        let mut tensor_claims = 0;
+        for block in &self.blocks {
+            operation_count += 1 + usize::from(matches!(
+                block.terminator,
+                ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+                    | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
+            ));
+            check_count(operation_count)?;
+            for operation in &block.operations {
+                use ProductionRankedOperationV1 as O;
+                tensor_sites += usize::from(matches!(operation, O::TensorLayout { .. }));
+                tensor_claims += usize::from(matches!(
+                    operation,
+                    O::RequireTensorRefinement { .. } | O::RequestTensorRefinement { .. }
+                ));
+                validate_tensor_refinement_resource_counts_v1(tensor_sites, tensor_claims)?;
+                operation_count += match operation {
+                    O::SemanticExpression { expression, .. } => {
+                        expression
+                            .validate()
+                            .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?
+                            .nodes
+                            + 1
+                    }
+                    O::RequireAuthenticatedReferenceEquivalent { .. }
+                    | O::RequireEffectRefinement { .. }
+                    | O::RequestAuthenticatedReferenceEquivalent { .. }
+                    | O::RequestEffectRefinement { .. }
+                    | O::RequireNumericalRefinement { .. }
+                    | O::RequestNumericalRefinement { .. }
+                    | O::RequireTensorRefinement { .. }
+                    | O::RequestTensorRefinement { .. } => 3,
+                    _ => 1,
+                };
+                check_count(operation_count)?;
+            }
         }
         let tree_work = ranked_tree_work(self.blocks.len(), operation_count).ok_or(
             ProductionRankedKernelErrorV1::ResourceLimit {
@@ -2120,6 +2092,10 @@ impl ProductionRankedKernelV1 {
             });
         }
 
+        {
+            let reads = RankedSemanticReadsV1::new(self)?;
+            RankedOperationScheduleV1::new(self, &reads)?;
+        }
         let mut locals = Vec::new();
         let mut local_definition_blocks = Vec::new();
         let mut saw_execution_layout = false;
@@ -2466,93 +2442,6 @@ mod unsigned_cast_recipe_tests {
                 ),
                 Err(ProductionRankedKernelErrorV1::UndefinedValue(source)),
             );
-        }
-    }
-}
-
-fn validate_live_semantic_loads(
-    kernel: &ProductionRankedKernelV1,
-    expression: &ProductionSemanticExpressionV2,
-) -> Result<(), ProductionRankedKernelErrorV1> {
-    match expression {
-        ProductionSemanticExpressionV2::Load(load) => {
-            let operation = kernel
-                .blocks()
-                .get(load.block as usize)
-                .and_then(|block| block.operations().get(load.operation as usize));
-            let Some(ProductionRankedOperationV1::Access {
-                kind,
-                view,
-                indices,
-            }) = operation
-            else {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-            };
-            if *kind != AccessKindAttr::Read
-                || *view != load.view
-                || indices.as_slice() != load.indices.as_ref()
-            {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-            }
-            let ProductionRankedValueV1::Local(view_identity) = load.view else {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-            };
-            let mut definitions = kernel
-                .blocks()
-                .iter()
-                .flat_map(|block| block.operations())
-                .filter_map(|operation| match operation {
-                    ProductionRankedOperationV1::ViewInSpace {
-                        result,
-                        element_width,
-                        allocation_origin,
-                        memory_space,
-                        ..
-                    } if *result == view_identity => {
-                        Some((*element_width, *allocation_origin, *memory_space))
-                    }
-                    ProductionRankedOperationV1::View {
-                        result,
-                        element_width,
-                        allocation_origin,
-                        ..
-                    } if *result == view_identity => {
-                        Some((*element_width, *allocation_origin, MemorySpaceAttr::Global))
-                    }
-                    _ => None,
-                });
-            let Some((element_width, allocation_origin, memory_space)) = definitions.next() else {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-            };
-            if definitions.next().is_some()
-                || memory_space != MemorySpaceAttr::Global
-                || allocation_origin != load.allocation_origin
-                || element_width != u32::from(load.scalar.bit_width())
-            {
-                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-            }
-            Ok(())
-        }
-        ProductionSemanticExpressionV2::Symbol { .. }
-        | ProductionSemanticExpressionV2::Constant { .. } => Ok(()),
-        ProductionSemanticExpressionV2::Unary { operand, .. }
-        | ProductionSemanticExpressionV2::Cast { operand, .. } => {
-            validate_live_semantic_loads(kernel, operand)
-        }
-        ProductionSemanticExpressionV2::Binary { lhs, rhs, .. }
-        | ProductionSemanticExpressionV2::Compare { lhs, rhs, .. } => {
-            validate_live_semantic_loads(kernel, lhs)?;
-            validate_live_semantic_loads(kernel, rhs)
-        }
-        ProductionSemanticExpressionV2::Select {
-            condition,
-            when_true,
-            when_false,
-            ..
-        } => {
-            validate_live_semantic_loads(kernel, condition)?;
-            validate_live_semantic_loads(kernel, when_true)?;
-            validate_live_semantic_loads(kernel, when_false)
         }
     }
 }
@@ -3739,8 +3628,15 @@ fn validate_scoped_operation_values_v1(
     blocks: &[ProductionRankedBlockV1],
     local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let validate =
-        |value| validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks);
+    visit_operation_values_v1(operation, |value| {
+        validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks)
+    })
+}
+
+fn visit_operation_values_v1(
+    operation: &ProductionRankedOperationV1,
+    mut validate: impl FnMut(ProductionRankedValueV1) -> Result<(), ProductionRankedKernelErrorV1>,
+) -> Result<(), ProductionRankedKernelErrorV1> {
     match operation {
         ProductionRankedOperationV1::View {
             dynamic_extents, ..
@@ -3968,8 +3864,15 @@ fn validate_scoped_terminator_values_v1(
     blocks: &[ProductionRankedBlockV1],
     local_definition_blocks: &[usize],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let validate =
-        |value| validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks);
+    visit_terminator_values_v1(terminator, |value| {
+        validate_scoped_value_v1(value, current_block, blocks, local_definition_blocks)
+    })
+}
+
+fn visit_terminator_values_v1(
+    terminator: &ProductionRankedTerminatorV1,
+    mut validate: impl FnMut(ProductionRankedValueV1) -> Result<(), ProductionRankedKernelErrorV1>,
+) -> Result<(), ProductionRankedKernelErrorV1> {
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
         | ProductionRankedTerminatorV1::IndexEqual { lhs, rhs, .. }
@@ -4531,8 +4434,10 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
-        let mut reads =
+        let reads =
             RankedSemanticReadsV1::new(&kernel).map_err(ProductionSessionErrorV1::RankedRecipe)?;
+        let schedule = RankedOperationScheduleV1::new(&kernel, &reads)
+            .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         let operation = self
             .inner
             .create_module(root_name)
@@ -4564,74 +4469,15 @@ impl ProductionPlironSessionV1 {
         let function = FuncOp::new(&mut self.inner.context, function_name, function_type);
         module.append_operation(&mut self.inner.context, function.get_operation(), 0);
 
-        let mut blocks = vec![function.get_entry_block(&self.inner.context)];
-        for block_index in 1..kernel.blocks.len() {
-            let label: Identifier =
-                format!("bb{block_index}")
-                    .as_str()
-                    .try_into()
-                    .map_err(|_| {
-                        ProductionSessionErrorV1::RankedRecipe(
-                            ProductionRankedKernelErrorV1::Materialization(
-                                "generated block label could not be interned",
-                            ),
-                        )
-                    })?;
-            let block = BasicBlock::new(
-                &mut self.inner.context,
-                Some(label),
-                vec![index; kernel.blocks[block_index].index_argument_count as usize],
-            );
-            block.insert_at_back(
-                function.get_region(&self.inner.context),
-                &self.inner.context,
-            );
-            blocks.push(block);
-        }
-
-        let arguments = blocks[0]
-            .deref(&self.inner.context)
-            .arguments()
-            .collect::<Vec<_>>();
-        let mut block_arguments = HashMap::new();
-        for (block_index, block) in blocks.iter().copied().enumerate().skip(1) {
-            for (argument_index, argument) in
-                block.deref(&self.inner.context).arguments().enumerate()
-            {
-                block_arguments.insert((block_index as u32, argument_index as u32), argument);
-            }
-        }
-        let mut locals = Vec::new();
-        for (block_index, recipe_block) in kernel.blocks.iter().enumerate() {
-            let block = blocks[block_index];
-            for (operation_index, recipe) in recipe_block.operations.iter().enumerate() {
-                materialize_operation(
-                    &mut self.inner.context,
-                    block,
-                    recipe,
-                    &arguments,
-                    &mut locals,
-                    &block_arguments,
-                    &policy_checked_refinement_staging,
-                    (block_index as u32, operation_index as u32),
-                    &mut reads,
-                )
-                .map_err(ProductionSessionErrorV1::RankedRecipe)?;
-            }
-            materialize_terminator(
-                &mut self.inner.context,
-                block,
-                &recipe_block.terminator,
-                &blocks,
-                &arguments,
-                &locals,
-                &block_arguments,
-            )
-            .map_err(ProductionSessionErrorV1::RankedRecipe)?;
-        }
-        reads
-            .finish()
-            .map_err(ProductionSessionErrorV1::RankedRecipe)?;
+        let locals = materialization_v1::materialize_body(
+            &mut self.inner.context,
+            &function,
+            &kernel,
+            &schedule,
+            reads,
+            &policy_checked_refinement_staging,
+        )
+        .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         self.inner
             .finish_internal_root_construction(&operation, transaction)
             .map_err(ProductionSessionErrorV1::Operation)?;
@@ -5000,7 +4846,7 @@ fn production_pipeline_check_error(
 fn resolve_value(
     value: ProductionRankedValueV1,
     arguments: &[Value],
-    locals: &[Value],
+    locals: &RankedLocalValuesV1,
     block_arguments: &HashMap<(u32, u32), Value>,
 ) -> Result<Value, ProductionRankedKernelErrorV1> {
     match value {
@@ -5010,7 +4856,6 @@ fn resolve_value(
             .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
         ProductionRankedValueV1::Local(identity) => locals
             .get(identity.get() as usize)
-            .copied()
             .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
         ProductionRankedValueV1::BlockArgument { block, argument } => block_arguments
             .get(&(block, argument))
@@ -5062,7 +4907,7 @@ fn materialize_operation(
     block: Ptr<BasicBlock>,
     recipe: &ProductionRankedOperationV1,
     arguments: &[Value],
-    locals: &mut Vec<Value>,
+    locals: &mut RankedLocalValuesV1,
     block_arguments: &HashMap<(u32, u32), Value>,
     policy_checked_refinement_staging: &[ProductionPolicyCheckedRefinementStagingV2],
     source_site: (u32, u32),
@@ -5193,19 +5038,19 @@ fn materialize_operation(
                     *elements_per_lane,
                 ],
             );
-            if result.get() as usize != locals.len()
-                || success.get() != result.get().saturating_add(1)
-            {
+            if success.get() != result.get().saturating_add(1) {
                 return Err(ProductionRankedKernelErrorV1::Materialization(
                     "validated predicated checked results changed order",
                 ));
             }
-            locals.push(op.result(context));
-            locals.push(op.success(context).ok_or(
-                ProductionRankedKernelErrorV1::Materialization(
-                    "predicated tiled operation omitted its success result",
-                ),
-            )?);
+            locals.bind(*result, op.result(context))?;
+            locals.bind(
+                *success,
+                op.success(context)
+                    .ok_or(ProductionRankedKernelErrorV1::Materialization(
+                        "predicated tiled operation omitted its success result",
+                    ))?,
+            )?;
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
@@ -5230,19 +5075,19 @@ fn materialize_operation(
                 resolve_value(*physical_extent, arguments, locals, block_arguments)?,
                 [*lanes_per_row, *elements_per_lane],
             );
-            if result.get() as usize != locals.len()
-                || success.get() != result.get().saturating_add(1)
-            {
+            if success.get() != result.get().saturating_add(1) {
                 return Err(ProductionRankedKernelErrorV1::Materialization(
                     "validated predicated checked results changed order",
                 ));
             }
-            locals.push(op.result(context));
-            locals.push(op.success(context).ok_or(
-                ProductionRankedKernelErrorV1::Materialization(
-                    "predicated row-striped operation omitted its success result",
-                ),
-            )?);
+            locals.bind(*result, op.result(context))?;
+            locals.bind(
+                *success,
+                op.success(context)
+                    .ok_or(ProductionRankedKernelErrorV1::Materialization(
+                        "predicated row-striped operation omitted its success result",
+                    ))?,
+            )?;
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
@@ -5857,12 +5702,7 @@ fn materialize_operation(
         block_arguments,
     )?;
     if let Some((identity, value)) = result {
-        if identity.get() as usize != locals.len() {
-            return Err(ProductionRankedKernelErrorV1::Materialization(
-                "validated local value order changed before materialization",
-            ));
-        }
-        locals.push(value);
+        locals.bind(identity, value)?;
     }
     Ok(())
 }
@@ -6194,7 +6034,7 @@ fn materialize_terminator(
     terminator: &ProductionRankedTerminatorV1,
     blocks: &[Ptr<BasicBlock>],
     arguments: &[Value],
-    locals: &[Value],
+    locals: &RankedLocalValuesV1,
     block_arguments: &HashMap<(u32, u32), Value>,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let operation = match terminator {

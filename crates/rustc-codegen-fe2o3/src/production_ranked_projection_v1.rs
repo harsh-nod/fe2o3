@@ -23365,6 +23365,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
+    include!("production_ranked_projection_v1/semantic_read_scheduling_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {

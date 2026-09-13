@@ -197,7 +197,12 @@ Ranked semantic load leaves now refer to one `SemanticTypedReadOp` immediately
 after their original ranked access, rather than free scalar symbols. Repeated
 uses share that SSA result; distinct source reads remain distinct. The producer
 retains exact view, indices, allocation, scalar type and source volatility.
-Native verification still checks dominance, and unavailable producers reject.
+Construction uses a bounded dependency schedule and single-assignment local
+slots, so a producer may be listed after its consumer's block. The resulting
+graph retains the original block order, per-block operation order, numbered
+locals, and source sites. Read address operands are checked at their original
+access, not at the consumer. Native verification checks the completed CFG:
+construction readiness is not dominance, and missing or cyclic producers reject.
 
 Mandatory bounds admission now checks that each producer has an adjacent ordinary
 read with exactly the same SSA view and ordered indices. Both volatility modes
@@ -209,6 +214,13 @@ Original access bounds and the remaining safety and semantic checks still apply;
 live read-value semantics and volatile call-result binding remain unsupported
 here. Read labels and expression commitments alone never establish CPU/GPU
 equality or an error bound.
+
+Scheduling and source-MIR regression tests establish construction behavior only.
+They do not authenticate a Rust callback or prove final output equivalence. In
+particular, some cross-block index bounds remain unproved and reject before the
+semantic gate. Approximate math still requires explicit finite absolute and
+relative limits, a checked input domain, and compiler-proved composition into
+the final output error; construction does not relax that contract.
 
 ## Remaining trusted surfaces
 

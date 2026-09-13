@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "scheduling_tests.rs"]
+mod scheduling;
+
 type O = ProductionRankedOperationV1;
 type X = ProductionSemanticExpressionV2;
 type Mode = ProductionSemanticReadModeV2;
@@ -190,17 +193,15 @@ fn one_source_site_cannot_have_conflicting_read_modes() {
     let mut recipe = kernel(Mode::UnorderedNonVolatile);
     operands(&mut recipe).1.read_mode = Mode::UnorderedVolatile;
     assert!(matches!(
-        construct(recipe),
-        Err(ProductionSessionErrorV1::RankedRecipe(
-            ProductionRankedKernelErrorV1::Materialization(
-                "one source read site has conflicting load metadata"
-            )
+        recipe.validate(),
+        Err(ProductionRankedKernelErrorV1::Materialization(
+            "one source read site has conflicting load metadata"
         ))
     ));
 }
 
 #[test]
-fn owner_rejects_an_unavailable_producer_instead_of_inventing_a_symbol() {
+fn a_later_producer_must_still_dominate_its_consumer() {
     let mut recipe = kernel(Mode::UnorderedNonVolatile);
     let (lhs, rhs) = operands(&mut recipe);
     for load in [lhs, rhs] {
@@ -216,12 +217,32 @@ fn owner_rejects_an_unavailable_producer_instead_of_inventing_a_symbol() {
     recipe.tree_work = recipe.validate().unwrap();
     assert!(matches!(
         construct(recipe),
-        Err(ProductionSessionErrorV1::RankedRecipe(
-            ProductionRankedKernelErrorV1::Materialization(
-                "semantic load has no dominating exact source SSA producer"
-            )
+        Err(ProductionSessionErrorV1::Operation(
+            OperationHandleError::OperationVerificationRejected
         ))
     ));
+}
+
+#[test]
+fn missing_read_block_is_a_source_correspondence_error_not_a_cfg_target() {
+    for block in [1, 4095, 4096, u32::MAX] {
+        let mut recipe = kernel(Mode::UnorderedNonVolatile);
+        let (lhs, rhs) = operands(&mut recipe);
+        for load in [lhs, rhs] {
+            load.block = block;
+        }
+        let error = if block < 4096 {
+            ProductionRankedKernelErrorV1::InvalidReferenceContract
+        } else {
+            ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                crate::ProductionSemanticExpressionErrorV2::UnboundLoad,
+            )
+        };
+        assert_eq!(
+            ProductionRankedKernelV1::new("missing_read", 0, recipe.blocks),
+            Err(error)
+        );
+    }
 }
 
 #[test]

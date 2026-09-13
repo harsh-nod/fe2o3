@@ -7,6 +7,7 @@ use dialect_kernel::{SemanticReadOrderingAttr, SemanticReadVolatilityAttr, Seman
 struct ReadSite<'a> {
     load: &'a ProductionSemanticLoadV2,
     result: Option<Value>,
+    consumers: Vec<(u32, u32)>,
 }
 
 pub(super) struct RankedSemanticReadsV1<'a> {
@@ -76,8 +77,16 @@ impl<'a> RankedSemanticReadsV1<'a> {
                     if previous.load != load {
                         return Err(reject("one source read site has conflicting load metadata"));
                     }
+                    previous.consumers.push((block, operation));
                 } else {
-                    self.sites.insert(site, ReadSite { load, result: None });
+                    self.sites.insert(
+                        site,
+                        ReadSite {
+                            load,
+                            result: None,
+                            consumers: vec![(block, operation)],
+                        },
+                    );
                 }
                 Ok(())
             }
@@ -115,7 +124,7 @@ impl<'a> RankedSemanticReadsV1<'a> {
         source_site: (u32, u32),
         operation: Ptr<Operation>,
         arguments: &[Value],
-        locals: &[Value],
+        locals: &RankedLocalValuesV1,
         block_arguments: &HashMap<(u32, u32), Value>,
     ) -> Result<(), ProductionRankedKernelErrorV1> {
         let Some(site) = self.sites.get_mut(&source_site) else {
@@ -194,6 +203,20 @@ impl<'a> RankedSemanticReadsV1<'a> {
             .filter(|site| site.load == load)
             .and_then(|site| site.result)
             .ok_or_else(|| reject("semantic load has no dominating exact source SSA producer"))
+    }
+
+    pub(super) fn loads(&self) -> impl Iterator<Item = &'a ProductionSemanticLoadV2> + '_ {
+        self.sites.values().map(|site| site.load)
+    }
+
+    pub(super) fn work(&self) -> usize {
+        self.work
+    }
+
+    pub(super) fn dependencies(&self) -> impl Iterator<Item = ((u32, u32), (u32, u32))> + '_ {
+        self.sites
+            .iter()
+            .flat_map(|(source, read)| read.consumers.iter().map(|consumer| (*source, *consumer)))
     }
 
     pub(super) fn finish(&self) -> Result<(), ProductionRankedKernelErrorV1> {
