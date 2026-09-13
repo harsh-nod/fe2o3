@@ -2659,6 +2659,30 @@ fn take_after_auxiliary_destroy_preflight_v1<T>(
     Ok(state.take().expect("preflight retained auxiliary lane"))
 }
 
+fn admit_auxiliary_destroy_dispatch_ledger_v1(
+    dispatch_attached: bool,
+    detached_data_count: usize,
+    detached_dispatch_generation: Option<u64>,
+    detached_identity_count: usize,
+    detached_next_insertion_index: Option<usize>,
+) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    if detached_data_count != 0 || detached_identity_count != 0 {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "detached dispatch data must be rebound or released before destroy",
+        ));
+    }
+    let valid_phase = if dispatch_attached {
+        detached_dispatch_generation.is_none() && detached_next_insertion_index.is_none()
+    } else {
+        detached_dispatch_generation.is_some_and(|generation| generation != 0)
+            && detached_next_insertion_index.is_none_or(|index| index == 0)
+    };
+    if !valid_phase {
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+    }
+    Ok(())
+}
+
 /// Narrow fixed-dispatch access to one admitted compute lane.
 ///
 /// Session-global transitions such as SDMA creation are deliberately absent.
@@ -3624,11 +3648,16 @@ impl ComputeAqlQueueSessionV1 {
             &mut self.auxiliary_compute_lanes[index].state,
             |state| {
                 state.completion_owner.ensure_releasable()?;
-                state
-                    .dispatch
-                    .as_ref()
-                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
-                    .ensure_releasable()?;
+                admit_auxiliary_destroy_dispatch_ledger_v1(
+                    state.dispatch.is_some(),
+                    state.detached_data_count,
+                    state.detached_dispatch_generation,
+                    state.detached_data_identities.len(),
+                    state.detached_next_insertion_index,
+                )?;
+                if let Some(dispatch) = state.dispatch.as_ref() {
+                    dispatch.ensure_releasable()?;
+                }
                 Ok(())
             },
         )?;
@@ -3673,16 +3702,15 @@ impl ComputeAqlQueueSessionV1 {
                     .expect("checked queue engine")
                     .release_destroyed_resources(state.key)
                     .map_err(map_native)?;
-                let dispatch = state
-                    .dispatch
-                    .take()
-                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+                let dispatch = state.dispatch.take();
                 let completion_signals = state.completion_signals.take().ok_or(
                     ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
                 )?;
                 self.with_live_queue_memory_model(move |memory| {
                     release_resource_authority(memory, authority, shadow_release)?;
-                    dispatch.release(memory)?;
+                    if let Some(dispatch) = dispatch {
+                        dispatch.release(memory)?;
+                    }
                     let completion_signals =
                         memory.unmap_from_gpu(completion_signals.into_token())?;
                     memory.release(completion_signals)?;
@@ -11323,6 +11351,134 @@ mod tests {
         let released = take_after_auxiliary_destroy_preflight_v1(&mut state, |_| Ok(())).unwrap();
         assert!(!released.leased);
         assert!(state.is_none());
+    }
+
+    #[test]
+    fn auxiliary_destroy_requires_retired_dispatch_ledger_before_taking_custody() {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        struct Ledger {
+            attached: bool,
+            count: usize,
+            generation: Option<u64>,
+            identities: usize,
+            cursor: Option<usize>,
+        }
+
+        struct TestLane<'a> {
+            ledger: Ledger,
+            drops: &'a core::cell::Cell<usize>,
+        }
+
+        impl Drop for TestLane<'_> {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+
+        fn preflight(lane: &TestLane<'_>) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+            let ledger = lane.ledger;
+            admit_auxiliary_destroy_dispatch_ledger_v1(
+                ledger.attached,
+                ledger.count,
+                ledger.generation,
+                ledger.identities,
+                ledger.cursor,
+            )
+        }
+
+        let attached = Ledger {
+            attached: true,
+            count: 0,
+            generation: None,
+            identities: 0,
+            cursor: None,
+        };
+        let detached = Ledger {
+            attached: false,
+            generation: Some(1),
+            ..attached
+        };
+        let retired = Ledger {
+            cursor: Some(0),
+            ..detached
+        };
+        for ledger in [attached, detached, retired] {
+            let drops = core::cell::Cell::new(0);
+            let mut state = Some(TestLane {
+                ledger,
+                drops: &drops,
+            });
+            let released = take_after_auxiliary_destroy_preflight_v1(&mut state, preflight)
+                .expect("attached or fully retired dispatch may be destroyed");
+            assert!(state.is_none());
+            assert_eq!(released.ledger, ledger);
+            assert_eq!(drops.get(), 0);
+            drop(released);
+            assert_eq!(drops.get(), 1);
+        }
+
+        let outstanding = Ledger {
+            count: 1,
+            identities: 1,
+            ..detached
+        };
+        for ledger in [
+            outstanding,
+            Ledger {
+                identities: 1,
+                ..detached
+            },
+            Ledger {
+                count: 1,
+                ..detached
+            },
+            Ledger {
+                generation: None,
+                ..detached
+            },
+            Ledger {
+                generation: Some(0),
+                ..detached
+            },
+            Ledger {
+                cursor: Some(1),
+                ..detached
+            },
+            Ledger {
+                generation: Some(1),
+                ..attached
+            },
+            Ledger {
+                cursor: Some(0),
+                ..attached
+            },
+            Ledger {
+                count: 1,
+                identities: 1,
+                ..attached
+            },
+        ] {
+            let drops = core::cell::Cell::new(0);
+            let mut state = Some(TestLane {
+                ledger,
+                drops: &drops,
+            });
+            assert!(take_after_auxiliary_destroy_preflight_v1(&mut state, preflight).is_err());
+            assert_eq!(state.as_ref().unwrap().ledger, ledger);
+            assert_eq!(drops.get(), 0);
+            if ledger == outstanding {
+                // Model the final detached-data release, then retry the same custody path.
+                state.as_mut().unwrap().ledger = retired;
+                let released = take_after_auxiliary_destroy_preflight_v1(&mut state, preflight)
+                    .expect("retiring the last detached allocation permits destruction");
+                assert!(state.is_none());
+                assert_eq!(drops.get(), 0);
+                drop(released);
+            } else {
+                drop(state);
+            }
+            assert_eq!(drops.get(), 1);
+        }
     }
 
     #[test]
