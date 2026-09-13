@@ -527,6 +527,7 @@ fn clean() -> HierarchicalOwnershipReportV1 {
         findings: Vec::new(),
         regions: Vec::new(),
         coverage_summary: HierarchicalCoverageProofSummaryV1::default(),
+        conditional_prefix: None,
     }
 }
 
@@ -542,6 +543,7 @@ fn one_with_summary(
         findings: vec![finding],
         regions: Vec::new(),
         coverage_summary,
+        conditional_prefix: None,
     }
 }
 

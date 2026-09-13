@@ -90,3 +90,35 @@ fn run_and_record_scoped_barrier_v1(
         },
     )
 }
+
+#[allow(clippy::result_large_err)]
+fn run_and_record_scoped_ownership_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    preservation: &mut PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>>,
+    validation: &mut ProductionAnalysisReportValidationSessionV1<'_>,
+    producing_phase_upper_bound: ProductionAnalysisResourceUpperBoundV1,
+) -> Result<
+    Result<HierarchicalOwnershipReportV1, HierarchicalOwnershipCheckErrorV1>,
+    ProductionPlironPreloweringErrorV2,
+> {
+    run_and_record_production_analysis_invocation_v1(
+        context,
+        function,
+        analyses,
+        preservation,
+        validation,
+        ProductionAnalysisStageV1 {
+            pass: KernelCheckPassKindV1::HierarchicalOwnership,
+            producing_phase:
+                crate::production_analysis::ProductionAnalysisResourcePhaseV1::HierarchicalOwnership,
+            producing_phase_upper_bound,
+        },
+        |preservation, _pass, limits, analyses| {
+            preservation.run_scoped_ownership_with_resource_limits_v1(limits, |input| {
+                require_pliron_hierarchical_ownership_with_scoped_input_v1(input, analyses)
+            })
+        },
+    )
+}

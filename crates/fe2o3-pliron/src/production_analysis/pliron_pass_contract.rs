@@ -1092,5 +1092,6 @@ where
 }
 
 include!("pliron_pass_contract/scoped_progress_input_v67.rs");
+include!("pliron_pass_contract/scoped_ownership_input_v1.rs");
 include!("pliron_pass_contract/resource_tests.rs");
 include!("pliron_pass_contract/scoped_progress_input_v67_tests.rs");

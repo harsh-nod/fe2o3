@@ -247,6 +247,35 @@ equivalence. Existing ownership, reference evidence and numerical requirements
 remain mandatory. In particular, test agreement is not a compiler-proved error
 bound and a clean effect report grants no artifact or launch authority.
 
+### Conditional dynamic output coverage
+
+The production ownership pass can now derive a conditional coverage record
+from its existing verified graph snapshot. The supported slice is a rank-one,
+acyclic prefix kernel with one output write, guarded read-only inputs, exact
+invocation indexing and a retained nontrapping scalar value DAG. No additional
+raw-graph entry point or independent structural verifier is introduced.
+
+For `out[i] = a[i] + b[i]`, guarded by all three lengths, it records
+`out.len <= a.len`, `out.len <= b.len`, and
+`out.len <= actual_global_workitems`. The record retains the exact branch
+conditions, graph identity and mutation epoch. Each ranked view still needs
+a compiler-owned binding to the physical allocation extent; the launch needs
+a binding to the actual dispatch. Ranked argument ordinals are not ABI indices.
+
+These are outstanding conditions, not runtime observations or unconditional
+ownership. The original ownership failure, findings and proved counts remain
+unchanged. Bounds and race checks still run first. Unsupported control flow,
+potentially trapping arithmetic and missing stored values fail closed. A
+conditional record does not admit code generation or grant launch authority.
+
+The intended numerical contract is separately explicit:
+`abs(GPU - CPU) <= A + R * abs(CPU)` for finite nonnegative limits `A` and `R`
+over a checked input domain. Both implementations' errors, rounding and
+accumulation must compose into each final output; exceptional values require
+an explicit policy or exclusion. There is no default tolerance. The production
+`ErrorBounded` path is still unsupported: this coverage work does not prove
+CPU/GPU `exp` implementations equivalent or supply a final-output error bound.
+
 ## Remaining trusted surfaces
 
 `DialectRegistrationHook` no longer receives `&mut Context`; all eight current

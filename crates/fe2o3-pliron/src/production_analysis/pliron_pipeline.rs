@@ -31,7 +31,7 @@ use crate::production_analysis::pliron_barrier::{
 use crate::production_analysis::pliron_effect_refinement::preflight_effect_refinement_resource_upper_bound_v1;
 use crate::production_analysis::pliron_hierarchical_ownership::{
     preflight_hierarchical_ownership_resource_upper_bound_v1,
-    require_pliron_hierarchical_ownership_with_analyses_v1,
+    require_pliron_hierarchical_ownership_with_scoped_input_v1,
 };
 use crate::production_analysis::pliron_invocation_trace::{
     preflight_execution_layout_resource_upper_bound_v1,
@@ -950,20 +950,13 @@ fn require_production_pliron_checks_v2(
         race_upper_bound,
     )
     .map_err(resource_upper_bound_error_v1)?;
-    let ownership = run_and_record_production_analysis_stage_v1(
+    let ownership = run_and_record_scoped_ownership_v1(
         context,
         function,
         &mut analyses,
         &mut preservation,
         &mut report_validation,
-        ProductionAnalysisStageV1 {
-            pass: KernelCheckPassKindV1::HierarchicalOwnership,
-            producing_phase: crate::production_analysis::ProductionAnalysisResourcePhaseV1::HierarchicalOwnership,
-            producing_phase_upper_bound: ownership_upper_bound,
-        },
-        |analyses| {
-            require_pliron_hierarchical_ownership_with_analyses_v1(context, function, analyses)
-        },
+        ownership_upper_bound,
     )?
     .map_err(ProductionPlironPreloweringErrorV2::Ownership)?;
     let simt_protocol_upper_bound = preflight_simt_protocol_resource_upper_bound_v1(

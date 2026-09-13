@@ -135,9 +135,34 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
             ScopedVerifiedProgressInputV1<'scope, BARRIER>,
         ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
     ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
-        let pass = scoped_progress_pass_v1::<BARRIER>();
-        let limits = limits.into();
         let scope_bound = scoped_progress_input_resource_upper_bound_v1()?;
+        self.run_scoped_analysis_with_resource_limits_v1(
+            scoped_progress_pass_v1::<BARRIER>(),
+            scope_bound,
+            limits,
+            |context, function, mutation_epoch, _snapshot| {
+                execute(ScopedVerifiedProgressInputV1 {
+                    context,
+                    function,
+                    mutation_epoch,
+                })
+            },
+        )
+    }
+
+    fn run_scoped_analysis_with_resource_limits_v1<T, E>(
+        &mut self,
+        pass: KernelCheckPassKindV1,
+        scope_bound: ProductionAnalysisResourceUpperBoundV1,
+        limits: impl Into<ProductionAnalysisReplacementLimitsV1>,
+        execute: impl for<'scope> FnOnce(
+            &'scope Context,
+            &'scope FuncOp,
+            u64,
+            &'scope crate::production_analysis::pliron_ir_identity::BuiltIdentityV1,
+        ) -> Result<Result<T, E>, PlironPassPreservationErrorV1>,
+    ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
+        let limits = limits.into();
         let input_limits = limits
             .input
             .remaining_after_retained(
@@ -154,21 +179,17 @@ impl PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>> {
             .map_err(preservation_resource_error_v1)?;
         self.require_pass_can_begin(pass)?;
         self.begin_pass_with_resource_limits_v1(pass, false, input_limits)?;
-        let mutation_epoch = self
-            .pending
-            .as_ref()
-            .ok_or(PlironPassPreservationErrorV1::InvalidSessionState {
-                detail: "the scoped analysis pass has no active checkpoint",
-            })?
-            .mutation_epoch;
+        let pending =
+            self.pending
+                .as_ref()
+                .ok_or(PlironPassPreservationErrorV1::InvalidSessionState {
+                    detail: "the scoped analysis pass has no active checkpoint",
+                })?;
         let result = {
             let (context, function) = self.provider.scoped_endpoints_v1();
-            let input = ScopedVerifiedProgressInputV1 {
-                context,
-                function,
-                mutation_epoch,
-            };
-            catch_unwind(AssertUnwindSafe(|| execute(input)))
+            catch_unwind(AssertUnwindSafe(|| {
+                execute(context, function, pending.mutation_epoch, &pending.before)
+            }))
         };
         match result {
             Err(_) => Err(PlironPassPreservationErrorV1::AnalysisPanicked { pass }),

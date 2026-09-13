@@ -385,6 +385,12 @@ pub(crate) struct BuiltIdentityV1 {
     input_census: ProductionAnalysisInputCensusV1,
 }
 
+impl BuiltIdentityV1 {
+    pub(crate) const fn structural_identity_v1(&self) -> &PlironIrStructuralIdentityV1 {
+        &self.identity
+    }
+}
+
 pub(crate) struct LivePlironStructuralIdentityProviderV1<'a> {
     context: &'a Context,
     function: &'a FuncOp,

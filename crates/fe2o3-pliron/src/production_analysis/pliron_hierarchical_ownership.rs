@@ -37,6 +37,19 @@ use crate::production_analysis::pliron_resource_envelope::{
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 use crate::{PresburgerCoverageDecisionV1, PresburgerFiniteImageV1};
 
+#[path = "pliron_conditional_prefix_ownership_v1.rs"]
+mod conditional_prefix_v1;
+pub use conditional_prefix_v1::{
+    ConditionalPrefixConditionV1, ConditionalPrefixCoverageV1, ConditionalPrefixDerivationErrorV1,
+    ConditionalPrefixExtentSourceV1, ConditionalPrefixExtentV1, ConditionalPrefixGuardAtomV1,
+    ConditionalPrefixHostBindingObligationV1, ConditionalPrefixLaunchV1, ConditionalPrefixSiteV1,
+    MAX_CONDITIONAL_PREFIX_ARGUMENTS_V1, MAX_CONDITIONAL_PREFIX_ATTRIBUTE_TEXT_BYTES_V1,
+    MAX_CONDITIONAL_PREFIX_ATTRIBUTES_PER_ENTITY_V1, MAX_CONDITIONAL_PREFIX_BLOCKS_V1,
+    MAX_CONDITIONAL_PREFIX_DNF_TERMS_V1, MAX_CONDITIONAL_PREFIX_GUARD_ATOMS_V1,
+    MAX_CONDITIONAL_PREFIX_INPUTS_V1, MAX_CONDITIONAL_PREFIX_OPERATIONS_V1,
+    MAX_CONDITIONAL_PREFIX_WORK_V1,
+};
+
 /// Maximum logical output elements materialized by one exact coverage proof.
 pub const MAX_HIERARCHICAL_OWNERSHIP_ELEMENTS_V1: usize = 1_048_576;
 /// Maximum independently contracted output views in one function.
@@ -173,6 +186,10 @@ pub(crate) fn preflight_hierarchical_ownership_resource_upper_bound_v1(
         work,
         checked_ownership_sum_v1(&[retained_regions, retained_findings])?,
         temporary,
+    )?;
+    let bound = bound.checked_then_retain(
+        conditional_prefix_v1::resource_upper_bound_v1(census)?,
+        ProductionAnalysisResourcePhaseV1::HierarchicalOwnership,
     )?;
     limits.require(
         ProductionAnalysisResourcePhaseV1::HierarchicalOwnership,
@@ -734,6 +751,8 @@ pub struct HierarchicalOwnershipReportV1 {
     findings: Vec<HierarchicalOwnershipFindingV1>,
     regions: Vec<HierarchicalOwnershipRegionV1>,
     coverage_summary: HierarchicalCoverageProofSummaryV1,
+    conditional_prefix:
+        Option<Result<ConditionalPrefixCoverageV1, ConditionalPrefixDerivationErrorV1>>,
 }
 
 impl HierarchicalOwnershipReportV1 {
@@ -759,6 +778,15 @@ impl HierarchicalOwnershipReportV1 {
 
     pub const fn coverage_summary(&self) -> HierarchicalCoverageProofSummaryV1 {
         self.coverage_summary
+    }
+
+    /// Outstanding conditions; presence does not change status or proved counts.
+    pub fn conditional_prefix_coverage(&self) -> Option<&ConditionalPrefixCoverageV1> {
+        self.conditional_prefix.as_ref()?.as_ref().ok()
+    }
+
+    pub fn conditional_prefix_failure(&self) -> Option<&ConditionalPrefixDerivationErrorV1> {
+        self.conditional_prefix.as_ref()?.as_ref().err()
     }
 
     /// True only for a clean report containing at least one proved total-view

@@ -220,6 +220,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         findings,
         regions,
         coverage_summary,
+        conditional_prefix: None,
     }
 }
 
@@ -304,16 +305,25 @@ fn first_unmodeled_or_aliasing_observable_write(
     None
 }
 
-pub(crate) fn require_pliron_hierarchical_ownership_with_analyses_v1(
-    context: &Context,
-    function: &FuncOp,
+pub(crate) fn require_pliron_hierarchical_ownership_with_scoped_input_v1(
+    input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedOwnershipInputV1<'_>,
     analyses: &mut PlironAnalysisManagerV1,
-) -> Result<HierarchicalOwnershipReportV1, HierarchicalOwnershipCheckErrorV1> {
-    let report =
+) -> Result<
+    Result<HierarchicalOwnershipReportV1, HierarchicalOwnershipCheckErrorV1>,
+    crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
+> {
+    let (context, function) = input.endpoints()?;
+    let mut report =
         run_pliron_hierarchical_ownership_check_with_analyses_v1(context, function, analyses);
-    if report.is_clean() {
+    if report.status() == KernelCheckStatusV1::Incomplete
+        && report.coverage_summary.total_view_declared != 0
+    {
+        report.conditional_prefix =
+            Some(conditional_prefix_v1::derive_with_scoped_input_v1(&input)?);
+    }
+    Ok(if report.is_clean() {
         Ok(report)
     } else {
         Err(HierarchicalOwnershipCheckErrorV1 { report })
-    }
+    })
 }

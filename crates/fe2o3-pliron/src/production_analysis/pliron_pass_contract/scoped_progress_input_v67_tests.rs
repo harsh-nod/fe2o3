@@ -465,4 +465,5 @@ mod scoped_progress_input_v67_tests {
         assert!(scope.checked_then_retain(overflow, phase).is_err());
     }
     include!("scoped_barrier_v1_tests.rs");
+    include!("scoped_ownership_v1_tests.rs");
 }

@@ -6,6 +6,9 @@ mod scheduling;
 #[path = "stored_value_tests.rs"]
 mod stored_values;
 
+#[path = "conditional_prefix_tests.rs"]
+mod conditional_prefix;
+
 type O = ProductionRankedOperationV1;
 type X = ProductionSemanticExpressionV2;
 type Mode = ProductionSemanticReadModeV2;
