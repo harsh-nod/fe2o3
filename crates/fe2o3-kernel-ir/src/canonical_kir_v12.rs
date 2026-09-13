@@ -46,6 +46,66 @@ pub struct VerifiedCanonicalKernelIrV12 {
     identity: VerifiedCanonicalKernelIrIdentityV12,
 }
 
+/// Move-only custody of exact canonical V12 bytes and their freshly decoded,
+/// semantically verified Module. Neither representation can be mutated or
+/// separated through this API.
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<VerifiedCanonicalKernelIrModuleV12>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
+/// fn mutate(owner: &mut VerifiedCanonicalKernelIrModuleV12) {
+///     owner.module().functions.clear();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12;
+/// fn separate(owner: VerifiedCanonicalKernelIrModuleV12) {
+///     let _ = owner.into_parts();
+/// }
+/// ```
+#[derive(Debug, Eq, PartialEq)]
+pub struct VerifiedCanonicalKernelIrModuleV12 {
+    canonical: VerifiedCanonicalKernelIrV12,
+    module: Module,
+}
+
+impl VerifiedCanonicalKernelIrModuleV12 {
+    /// Freshly encodes, inverse-decodes, verifies, compares and hashes the source
+    /// under one shared ledger. The source is borrowed, never cloned or retained.
+    ///
+    /// The returned receipt transfers both canonical and decoded ownership:
+    /// before another allocation, reserve its retained payload while this owner
+    /// lives. All Result paths restore the caller's storage floor and preserve
+    /// work, peak and first-failure histories. Failed construction drops its
+    /// canonical and decoded owners before restoring that floor; owned semantic
+    /// diagnostics, when returned, transfer to the caller as in bytes-only
+    /// admission. Decoder tree bounds remain conservative payload bounds, not RSS.
+    pub fn from_module_ref_with_verification_budget_v12(
+        module: &Module,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(Self, CanonicalKernelIrReplayStorageV12), CanonicalKernelIrReplayAdmissionErrorV12>
+    {
+        let floor = budget.storage_checkpoint();
+        let result = canonical_module_inner(module, budget);
+        budget.rollback_storage(floor)?;
+        result
+    }
+
+    pub const fn module(&self) -> &Module {
+        &self.module
+    }
+
+    pub const fn canonical(&self) -> &VerifiedCanonicalKernelIrV12 {
+        &self.canonical
+    }
+}
+
 impl VerifiedCanonicalKernelIrV12 {
     pub fn from_module(module: Module) -> Result<Self, VerifiedCanonicalKernelIrErrorV12> {
         let canonical_bytes =
@@ -513,6 +573,64 @@ fn canonical_inner(
     module: &Module,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<VerifiedCanonicalKernelIrV12, AdmissionError> {
+    let inverse = canonical_verified_inverse(module, budget, std::mem::size_of::<Module>())?;
+    drop(inverse.module);
+    budget.rollback_storage(inverse.storage_floor)?;
+    VerifiedCanonicalKernelIrV12::from_validated_bytes_with_work_v1(
+        inverse.canonical_bytes,
+        budget.work_budget_v1(),
+    )
+    .map_err(AdmissionError::Canonical)
+}
+
+fn canonical_module_inner(
+    module: &Module,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<
+    (
+        VerifiedCanonicalKernelIrModuleV12,
+        CanonicalKernelIrReplayStorageV12,
+    ),
+    AdmissionError,
+> {
+    let floor = budget.storage_checkpoint();
+    // Include any aggregate padding in the retained header without changing
+    // the established bytes-only owner's reservation order or units.
+    let inverse_inline_payload = std::mem::size_of::<VerifiedCanonicalKernelIrModuleV12>()
+        .checked_sub(std::mem::size_of::<VerifiedCanonicalKernelIrV12>())
+        .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+    let inverse = canonical_verified_inverse(module, budget, inverse_inline_payload)?;
+    let canonical = VerifiedCanonicalKernelIrV12::from_validated_bytes_with_work_v1(
+        inverse.canonical_bytes,
+        budget.work_budget_v1(),
+    )
+    .map_err(AdmissionError::Canonical)?;
+    // Decoder temporaries and verifier scratch have already been released.
+    // Transfer the admitted inverse payload without rewalking or cloning it.
+    let retained = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Accounting)?;
+    Ok((
+        VerifiedCanonicalKernelIrModuleV12 {
+            canonical,
+            module: inverse.module,
+        },
+        CanonicalKernelIrReplayStorageV12 { retained },
+    ))
+}
+
+struct CanonicalVerifiedInverseV12 {
+    canonical_bytes: Vec<u8>,
+    module: Module,
+    storage_floor: usize,
+}
+
+fn canonical_verified_inverse(
+    module: &Module,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    inverse_inline_payload: usize,
+) -> Result<CanonicalVerifiedInverseV12, AdmissionError> {
     let extent = count_module_v12_wire_extent_with_work_v1(module, budget.work_budget_v1())
         .map_err(AdmissionError::Encode)?;
     let retained = extent
@@ -533,7 +651,7 @@ fn canonical_inner(
         return Err(AdmissionError::CanonicalMismatch);
     }
     let inverse_floor = budget.storage_checkpoint();
-    budget.reserve_storage(std::mem::size_of::<Module>())?;
+    budget.reserve_storage(inverse_inline_payload)?;
     let decoded = crate::wire::decode_module_v12_with_allocation_budget_v1(&encoded, budget)
         .map_err(AdmissionError::Decode)?;
     verify_exact_decoded_module_with_budget_v1(&decoded, None, budget).map_err(
@@ -548,14 +666,16 @@ fn canonical_inner(
     if &decoded != module {
         return Err(AdmissionError::CanonicalMismatch);
     }
-    drop(decoded);
-    budget.rollback_storage(inverse_floor)?;
-    VerifiedCanonicalKernelIrV12::from_validated_bytes_with_work_v1(
-        encoded,
-        budget.work_budget_v1(),
-    )
-    .map_err(AdmissionError::Canonical)
+    Ok(CanonicalVerifiedInverseV12 {
+        canonical_bytes: encoded,
+        module: decoded,
+        storage_floor: inverse_floor,
+    })
 }
+
+#[cfg(test)]
+#[path = "canonical_kir_v12_module_tests.rs"]
+mod module_tests;
 
 #[cfg(test)]
 #[path = "canonical_kir_v12_allocation_tests.rs"]

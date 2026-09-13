@@ -54,6 +54,8 @@
 //! target-neutral operation families. Its separate schema and payload-bearing
 //! instance codecs do not alter or extend any frozen module wire format.
 
+mod canonical_graph_visitors_v1;
+mod canonical_kir_coordinates_v1;
 mod canonical_kir_v10;
 mod canonical_kir_v11;
 mod canonical_kir_v12;
@@ -114,6 +116,8 @@ mod verify;
 mod wave_operations;
 mod wire;
 
+pub use canonical_graph_visitors_v1::*;
+pub use canonical_kir_coordinates_v1::*;
 pub use canonical_kir_v5::*;
 pub use canonical_kir_v6::*;
 pub use canonical_kir_v7::*;
