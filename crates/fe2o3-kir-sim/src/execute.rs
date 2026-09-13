@@ -6804,7 +6804,11 @@ fn execute_operation(
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
         | OperationKind::Gfx950LdsTranspose(_)
-        | OperationKind::InlineAssembly(_) => Err(engine.at(
+        | OperationKind::InlineAssembly(_)
+        | OperationKind::VectorLoad(_)
+        | OperationKind::VectorStore(_)
+        | OperationKind::VectorLayoutConvert(_)
+        | OperationKind::VerificationContract(_) => Err(engine.at(
             site,
             SimulationExecutionErrorKindV1::InternalInvariant(
                 "unsupported operation passed preflight",

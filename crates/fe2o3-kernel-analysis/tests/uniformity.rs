@@ -3446,6 +3446,100 @@ fn nested_context_free_scalar_helpers_preserve_uniform_actuals() {
 }
 
 #[test]
+fn inert_v12_ordered_helper_is_not_a_uniform_call_summary() {
+    use fe2o3_kernel_ir::{
+        VerificationContractKeyV12, VerificationContractOperationV12, WorkgroupPipelineEventKindV12,
+    };
+    let mut helper_block = returning(0);
+    helper_block
+        .operations
+        .push(constant(10, Constant::Index(0)));
+    helper_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+    let helper = Function::internal_helper(
+        "ordered_helper",
+        Signature::new(vec![], vec![Type::INDEX]),
+        vec![],
+        vec![helper_block],
+    );
+    let mut entry = returning(0);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(1), Type::INDEX),
+        OperationKind::Call {
+            callee: helper.id.clone(),
+            arguments: vec![],
+        },
+    ));
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("inert_v12_uniformity");
+    module.functions = vec![kernel.clone(), helper];
+    assert_eq!(
+        analyze_kernel_entry(&module, &kernel).value(ValueId(1)),
+        Variation::GridUniform
+    );
+    module.functions[1].body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(Operation::new(
+            vec![],
+            OperationKind::VerificationContract(
+                VerificationContractOperationV12::WorkgroupPipelineEvent {
+                    contract: VerificationContractKeyV12::new(0),
+                    kind: WorkgroupPipelineEventKindV12::Stage,
+                    storage: ValueId(10),
+                    epoch: ValueId(10),
+                },
+            ),
+        ));
+    assert_eq!(
+        analyze_kernel_entry(&module, &kernel).value(ValueId(1)),
+        Variation::Varying
+    );
+}
+
+#[test]
+fn inert_v12_vector_load_stays_varying_through_layout_conversion() {
+    use fe2o3_kernel_ir::{
+        FixedVectorTypeV12, VectorLayoutConversionV12, VectorLayoutV12, VectorLoadOperationV12,
+        VectorMemoryAccessV12,
+    };
+    let vector = FixedVectorTypeV12::new(ScalarType::F32, 4, VectorLayoutV12::Contiguous);
+    let mut entry = returning(0);
+    entry.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::vector(vector)),
+            OperationKind::VectorLoad(VectorLoadOperationV12::new(
+                ValueId(0),
+                VectorMemoryAccessV12::new(vector, MemoryAccess::new(AddressSpace::Global, 16)),
+            )),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), Type::vector(vector)),
+            OperationKind::VectorLayoutConvert(VectorLayoutConversionV12::new(
+                ValueId(1),
+                vector.layout,
+            )),
+        ),
+    ];
+    let function = Function::internal_helper(
+        "vector_load",
+        Signature::new(
+            vec![Type::pointer(
+                Type::F32,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            )],
+            vec![],
+        ),
+        vec![ValueId(0)],
+        vec![entry],
+    );
+    let report = analyze_kernel_entry(&Module::new("vector_analysis"), &function);
+    assert_eq!(report.value(ValueId(1)), Variation::Varying);
+    assert_eq!(report.value(ValueId(2)), Variation::Varying);
+}
+
+#[test]
 fn pure_helper_with_workitem_source_is_not_a_uniform_call_summary() {
     let mut helper_block = returning(0);
     helper_block.operations.push(intrinsic(

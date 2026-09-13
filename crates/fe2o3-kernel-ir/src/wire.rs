@@ -3,6 +3,13 @@ use std::fmt;
 use std::str;
 
 use crate::{
+    FixedVectorTypeV12, MAX_FIXED_VECTOR_LANES_V12, VectorAccessProvenanceV12,
+    VectorLayoutConversionV12, VectorLayoutV12, VectorLoadOperationV12, VectorMemoryAccessV12,
+    VectorStoreOperationV12, VerificationContractKeyV12, VerificationContractOperationV12,
+    WorkgroupPipelineEventKindV12,
+};
+
+use crate::{
     AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperand,
     AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, Atomic, AtomicKind, Axis, Barrier,
     BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
@@ -47,6 +54,8 @@ pub const KERNEL_IR_VERSION_V9: u16 = 9;
 pub const KERNEL_IR_VERSION_V10: u16 = 10;
 /// Kernel IR V11 adds one-way pointer access restriction casts.
 pub const KERNEL_IR_VERSION_V11: u16 = 11;
+/// Kernel IR V12 adds vectors and ordered, physically inert verification events.
+pub const KERNEL_IR_VERSION_V12: u16 = 12;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
@@ -61,6 +70,8 @@ pub const KERNEL_IR_DOMAIN_V9: &[u8] = b"FE2O3/KERNEL-IR/V9\0";
 pub const KERNEL_IR_DOMAIN_V10: &[u8] = b"FE2O3/KERNEL-IR/V10\0";
 /// Domain separator for identities derived from canonical Kernel IR V11 bytes.
 pub const KERNEL_IR_DOMAIN_V11: &[u8] = b"FE2O3/KERNEL-IR/V11\0";
+/// Domain separator for identities derived from canonical Kernel IR V12 bytes.
+pub const KERNEL_IR_DOMAIN_V12: &[u8] = b"FE2O3/KERNEL-IR/V12\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -293,6 +304,11 @@ pub fn encode_module_v11(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V11)
 }
 
+/// Encodes inert V12 carriers. Successful encoding grants no semantic authority.
+pub fn encode_module_v12(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V12)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -382,6 +398,13 @@ pub fn decode_module_v10(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V11 bytes using the latest bounded reader.
 pub fn decode_module_v11(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V11, true)
+}
+
+/// Decodes canonical V1 through V12 bytes, establishing only wire well-formedness.
+///
+/// V12 vectors and verification events are not yet admitted by the semantic verifier.
+pub fn decode_module_v12(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V12, true)
 }
 
 fn decode_module(
@@ -712,6 +735,48 @@ fn encode_operation_kind(
     operation: &OperationKind,
 ) -> Result<(), KernelIrEncodeError> {
     match operation {
+        OperationKind::VerificationContract(
+            VerificationContractOperationV12::WorkgroupPipelineEvent {
+                contract,
+                kind,
+                storage,
+                epoch,
+            },
+        ) => {
+            require_v12(writer, "verification contract")?;
+            writer.u8(30)?;
+            writer.u8(1)?;
+            writer.u32(contract.index())?;
+            writer.u8(match kind {
+                WorkgroupPipelineEventKindV12::Stage => 1,
+                WorkgroupPipelineEventKindV12::Commit => 2,
+                WorkgroupPipelineEventKindV12::Wait => 3,
+                WorkgroupPipelineEventKindV12::Consume => 4,
+                WorkgroupPipelineEventKindV12::Discard => 5,
+                WorkgroupPipelineEventKindV12::Release => 6,
+            })?;
+            writer.u32(storage.0)?;
+            writer.u32(epoch.0)?;
+        }
+        OperationKind::VectorLoad(load) => {
+            require_v12(writer, "fixed-vector load")?;
+            writer.u8(27)?;
+            encode_vector_provenance_v12(writer, load.provenance)?;
+            encode_vector_memory_access_v12(writer, load.access)?;
+        }
+        OperationKind::VectorStore(store) => {
+            require_v12(writer, "fixed-vector store")?;
+            writer.u8(28)?;
+            encode_vector_provenance_v12(writer, store.provenance)?;
+            writer.u32(store.value.0)?;
+            encode_vector_memory_access_v12(writer, store.access)?;
+        }
+        OperationKind::VectorLayoutConvert(conversion) => {
+            require_v12(writer, "fixed-vector layout conversion")?;
+            writer.u8(29)?;
+            writer.u32(conversion.value.0)?;
+            encode_vector_layout_v12(writer, conversion.to)?;
+        }
         OperationKind::Constant(value) => {
             writer.u8(1)?;
             encode_constant(writer, value)?;
@@ -885,6 +950,57 @@ fn encode_operation_kind(
 
 fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
+        30 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            let family = reader.u8()?;
+            if family != 1 {
+                return Err(KernelIrDecodeError::UnknownTag {
+                    kind: "verification contract",
+                    tag: family,
+                });
+            }
+            let contract = VerificationContractKeyV12::new(reader.u32()?);
+            let kind = match reader.u8()? {
+                1 => WorkgroupPipelineEventKindV12::Stage,
+                2 => WorkgroupPipelineEventKindV12::Commit,
+                3 => WorkgroupPipelineEventKindV12::Wait,
+                4 => WorkgroupPipelineEventKindV12::Consume,
+                5 => WorkgroupPipelineEventKindV12::Discard,
+                6 => WorkgroupPipelineEventKindV12::Release,
+                tag => {
+                    return Err(KernelIrDecodeError::UnknownTag {
+                        kind: "pipeline event",
+                        tag,
+                    });
+                }
+            };
+            OperationKind::VerificationContract(
+                VerificationContractOperationV12::WorkgroupPipelineEvent {
+                    contract,
+                    kind,
+                    storage: ValueId(reader.u32()?),
+                    epoch: ValueId(reader.u32()?),
+                },
+            )
+        }
+        27 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            OperationKind::VectorLoad(VectorLoadOperationV12 {
+                provenance: decode_vector_provenance_v12(reader)?,
+                access: decode_vector_memory_access_v12(reader)?,
+            })
+        }
+        28 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            OperationKind::VectorStore(VectorStoreOperationV12 {
+                provenance: decode_vector_provenance_v12(reader)?,
+                value: ValueId(reader.u32()?),
+                access: decode_vector_memory_access_v12(reader)?,
+            })
+        }
+        29 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            OperationKind::VectorLayoutConvert(VectorLayoutConversionV12 {
+                value: ValueId(reader.u32()?),
+                to: decode_vector_layout_v12(reader)?,
+            })
+        }
         1 => OperationKind::Constant(decode_constant(reader)?),
         2 => OperationKind::Intrinsic(decode_intrinsic(reader)?),
         3 => OperationKind::Unary {
@@ -1294,6 +1410,11 @@ fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), Kerne
             writer.u8(2)?;
             writer.u8(scalar_type_tag(*scalar))?;
         }
+        Type::Vector(vector) => {
+            require_v12(writer, "fixed-lane vector type")?;
+            writer.u8(5)?;
+            encode_fixed_vector_type_v12(writer, *vector)?;
+        }
         Type::Pointer(pointer) => {
             writer.u8(3)?;
             writer.u8(address_space_tag(pointer.address_space))?;
@@ -1342,8 +1463,115 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
             let element = decode_type(reader, depth + 1)?;
             Type::Slice(SliceType::new(element, address_space, access))
         }
+        5 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            Type::Vector(decode_fixed_vector_type_v12(reader)?)
+        }
         tag => return Err(KernelIrDecodeError::UnknownTag { kind: "type", tag }),
     })
+}
+
+fn encode_fixed_vector_type_v12(
+    writer: &mut Writer,
+    vector: FixedVectorTypeV12,
+) -> Result<(), KernelIrEncodeError> {
+    if vector.lanes > MAX_FIXED_VECTOR_LANES_V12 {
+        return Err(KernelIrEncodeError::LimitExceeded {
+            field: "fixed vector lanes",
+            actual: usize::from(vector.lanes),
+            max: usize::from(MAX_FIXED_VECTOR_LANES_V12),
+        });
+    }
+    writer.u8(scalar_type_tag(vector.element))?;
+    writer.u16(vector.lanes)?;
+    encode_vector_layout_v12(writer, vector.layout)
+}
+
+fn decode_fixed_vector_type_v12(
+    reader: &mut Reader<'_>,
+) -> Result<FixedVectorTypeV12, KernelIrDecodeError> {
+    let element = decode_scalar_type(reader.u8()?)?;
+    let lanes = reader.u16()?;
+    if lanes > MAX_FIXED_VECTOR_LANES_V12 {
+        return Err(KernelIrDecodeError::LimitExceeded {
+            field: "fixed vector lanes",
+            actual: usize::from(lanes),
+            max: usize::from(MAX_FIXED_VECTOR_LANES_V12),
+        });
+    }
+    Ok(FixedVectorTypeV12::new(
+        element,
+        lanes,
+        decode_vector_layout_v12(reader)?,
+    ))
+}
+
+fn encode_vector_layout_v12(
+    writer: &mut Writer,
+    layout: VectorLayoutV12,
+) -> Result<(), KernelIrEncodeError> {
+    match layout {
+        VectorLayoutV12::Contiguous => writer.u8(1),
+        VectorLayoutV12::Interleaved { factor } => {
+            writer.u8(2)?;
+            writer.u16(factor)
+        }
+    }
+}
+
+fn decode_vector_layout_v12(
+    reader: &mut Reader<'_>,
+) -> Result<VectorLayoutV12, KernelIrDecodeError> {
+    match reader.u8()? {
+        1 => Ok(VectorLayoutV12::Contiguous),
+        2 => Ok(VectorLayoutV12::Interleaved {
+            factor: reader.u16()?,
+        }),
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "vector layout",
+            tag,
+        }),
+    }
+}
+
+fn encode_vector_provenance_v12(
+    writer: &mut Writer,
+    provenance: VectorAccessProvenanceV12,
+) -> Result<(), KernelIrEncodeError> {
+    match provenance {
+        VectorAccessProvenanceV12::Pointer(pointer) => {
+            writer.u8(1)?;
+            writer.u32(pointer.0)
+        }
+    }
+}
+
+fn decode_vector_provenance_v12(
+    reader: &mut Reader<'_>,
+) -> Result<VectorAccessProvenanceV12, KernelIrDecodeError> {
+    match reader.u8()? {
+        1 => Ok(VectorAccessProvenanceV12::Pointer(ValueId(reader.u32()?))),
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "vector access provenance",
+            tag,
+        }),
+    }
+}
+
+fn encode_vector_memory_access_v12(
+    writer: &mut Writer,
+    access: VectorMemoryAccessV12,
+) -> Result<(), KernelIrEncodeError> {
+    encode_fixed_vector_type_v12(writer, access.vector)?;
+    encode_memory_access(writer, access.memory)
+}
+
+fn decode_vector_memory_access_v12(
+    reader: &mut Reader<'_>,
+) -> Result<VectorMemoryAccessV12, KernelIrDecodeError> {
+    Ok(VectorMemoryAccessV12::new(
+        decode_fixed_vector_type_v12(reader)?,
+        decode_memory_access(reader)?,
+    ))
 }
 
 fn encode_intrinsic(
@@ -3095,6 +3323,17 @@ fn require_v9(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v10(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V10 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v12(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V12 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

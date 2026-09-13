@@ -752,7 +752,11 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                         }
                     }
                 }
-                OperationKind::Alloca { .. }
+                OperationKind::VerificationContract(_)
+                | OperationKind::VectorLoad(_)
+                | OperationKind::VectorStore(_)
+                | OperationKind::VectorLayoutConvert(_)
+                | OperationKind::Alloca { .. }
                 | OperationKind::Barrier(_)
                 | OperationKind::Fence(_)
                 | OperationKind::Matrix(_)

@@ -1982,6 +1982,11 @@ fn validate_compiler_packing_plan_v2(
             }
             Type::Pointer(_) => (8, 8, None),
             Type::Slice(_) => (8, 8, Some(8)),
+            Type::Vector(_) => {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "vector KIR parameters have no admitted physical slot".to_owned(),
+                ));
+            }
             Type::Unit => {
                 return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
                     "unit KIR parameters have no exact physical slot".to_owned(),

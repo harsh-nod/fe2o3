@@ -24,6 +24,22 @@ impl OperationKind {
         mut visitor: impl FnMut(ValueId) -> Result<(), E>,
     ) -> Result<(), E> {
         match self {
+            Self::VerificationContract(
+                crate::VerificationContractOperationV12::WorkgroupPipelineEvent {
+                    storage,
+                    epoch,
+                    ..
+                },
+            ) => {
+                visitor(*storage)?;
+                visitor(*epoch)?;
+            }
+            Self::VectorLoad(load) => visitor(load.provenance.pointer())?,
+            Self::VectorStore(store) => {
+                visitor(store.provenance.pointer())?;
+                visitor(store.value)?;
+            }
+            Self::VectorLayoutConvert(conversion) => visitor(conversion.value)?,
             Self::Constant(_)
             | Self::Intrinsic(_)
             | Self::Barrier(_)

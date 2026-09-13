@@ -785,6 +785,7 @@ fn to_u32(value: usize) -> Result<u32, KirBridgeErrorV1> {
 
 fn preflight_type(ty: &Type) -> Result<(), KirBridgeErrorV1> {
     match ty {
+        Type::Vector(_) => Err(KirBridgeErrorV1::UnsupportedType),
         Type::Unit | Type::Scalar(_) => Ok(()),
         Type::Pointer(pointer) => {
             preflight_address_space(pointer.address_space)?;
@@ -804,9 +805,15 @@ fn preflight_address_space(address_space: AddressSpace) -> Result<(), KirBridgeE
 
 fn preflight_operation(
     operation: &KirOperation,
-    _coordinate: KirBridgeCoordinateV1,
+    coordinate: KirBridgeCoordinateV1,
 ) -> Result<(), KirBridgeErrorV1> {
     match &operation.kind {
+        OperationKind::VerificationContract(_)
+        | OperationKind::VectorLoad(_)
+        | OperationKind::VectorStore(_)
+        | OperationKind::VectorLayoutConvert(_) => {
+            Err(KirBridgeErrorV1::UnsupportedOperation { coordinate })
+        }
         OperationKind::Constant(_)
         | OperationKind::Intrinsic(_)
         | OperationKind::MemoryIntrinsic(_)
@@ -1390,6 +1397,7 @@ pub(crate) fn ranked_data_type_node_is_supported_v2(ty: &dyn pliron::r#type::Typ
 
 fn type_to_pliron(context: &Context, ty: &Type) -> Result<TypeHandle, KirBridgeErrorV1> {
     Ok(match ty {
+        Type::Vector(_) => return Err(KirBridgeErrorV1::UnsupportedType),
         Type::Unit => UnitType::get(context).into(),
         Type::Scalar(ScalarType::Bool) => IntegerType::get(context, 1, Signedness::Signless).into(),
         Type::Scalar(ScalarType::I8) => IntegerType::get(context, 8, Signedness::Signed).into(),
@@ -2650,7 +2658,11 @@ fn remap_preserved_operation(
         | OperationKind::SliceData { .. }
         | OperationKind::GetElementPointer { .. }
         | OperationKind::Load { .. }
-        | OperationKind::Store { .. } => return Err(KirBridgeErrorV1::MalformedGraph),
+        | OperationKind::Store { .. }
+        | OperationKind::VerificationContract(_)
+        | OperationKind::VectorLoad(_)
+        | OperationKind::VectorStore(_)
+        | OperationKind::VectorLayoutConvert(_) => return Err(KirBridgeErrorV1::MalformedGraph),
     }
     Ok(kind)
 }
@@ -3005,6 +3017,90 @@ mod tests {
             vec![entry, exit],
         ));
         module
+    }
+
+    #[test]
+    fn inert_v12_preflight_rejects_before_creating_a_live_graph() {
+        use fe2o3_kernel_ir::{
+            FixedVectorTypeV12, VectorLayoutConversionV12, VectorLayoutV12, VectorLoadOperationV12,
+            VectorMemoryAccessV12, VectorStoreOperationV12, VerificationContractKeyV12,
+            VerificationContractOperationV12, WorkgroupPipelineEventKindV12,
+        };
+        let vector = FixedVectorTypeV12::new(ScalarType::F32, 4, VectorLayoutV12::Contiguous);
+        let access = VectorMemoryAccessV12::new(
+            vector,
+            fe2o3_kernel_ir::MemoryAccess::new(AddressSpace::Global, 16),
+        );
+        let mut session = session();
+        let before = session.operations.len();
+        let coordinate = KirBridgeCoordinateV1::Operation {
+            function: 0,
+            block: 0,
+            operation: 0,
+        };
+        for kind in [
+            OperationKind::VectorLoad(VectorLoadOperationV12::new(ValueId(0), access)),
+            OperationKind::VectorStore(VectorStoreOperationV12::new(
+                ValueId(0),
+                ValueId(1),
+                access,
+            )),
+            OperationKind::VectorLayoutConvert(VectorLayoutConversionV12::new(
+                ValueId(0),
+                vector.layout,
+            )),
+            OperationKind::VerificationContract(
+                VerificationContractOperationV12::WorkgroupPipelineEvent {
+                    contract: VerificationContractKeyV12::new(0),
+                    kind: WorkgroupPipelineEventKindV12::Stage,
+                    storage: ValueId(0),
+                    epoch: ValueId(1),
+                },
+            ),
+        ] {
+            let operation = KirOperation::new(vec![], kind);
+            assert!(matches!(preflight_operation(&operation, coordinate),
+                Err(KirBridgeErrorV1::UnsupportedOperation { coordinate: found }) if found == coordinate));
+            let mut module = capacity_module(0);
+            module.functions[0].body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(operation);
+            assert!(
+                matches!(import_module(&mut session, b"", KirBridgeCanonicalVersionV1::V11, module),
+                Err(KirBridgeErrorV1::UnsupportedOperation { coordinate: found }) if found == coordinate)
+            );
+            assert_eq!(session.operations.len(), before);
+            assert!(!session.poisoned);
+        }
+        for ty in [
+            Type::vector(vector),
+            Type::pointer(
+                Type::slice(
+                    Type::vector(vector),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+        ] {
+            assert!(matches!(
+                preflight_type(&ty),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+            assert!(matches!(
+                type_to_pliron(&session.context, &ty),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+            let mut module = capacity_module(0);
+            module.functions[0].signature.parameters.push(ty);
+            assert!(matches!(
+                import_module(&mut session, b"", KirBridgeCanonicalVersionV1::V11, module),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+            assert_eq!(session.operations.len(), before);
+            assert!(!session.poisoned);
+        }
     }
 
     fn pointer_restriction_module() -> Module {

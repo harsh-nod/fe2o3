@@ -17,6 +17,74 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[test]
+fn inert_v12_is_rejected_before_llvm_emission_on_every_public_target() {
+    use fe2o3_amdgcn_model::{
+        lower_compiler_module_to_gfx942_xnack_minus_llvm_ir, lower_compiler_module_to_llvm_ir,
+    };
+    let vector = FixedVectorTypeV12::new(ScalarType::F32, 4, VectorLayoutV12::Contiguous);
+    let access = VectorMemoryAccessV12::new(vector, MemoryAccess::new(AddressSpace::Global, 16));
+    let mut modules = vec![];
+    for kind in [
+        OperationKind::VectorLoad(VectorLoadOperationV12::new(ValueId(0), access)),
+        OperationKind::VectorStore(VectorStoreOperationV12::new(ValueId(0), ValueId(0), access)),
+        OperationKind::VectorLayoutConvert(VectorLayoutConversionV12::new(
+            ValueId(0),
+            vector.layout,
+        )),
+        OperationKind::VerificationContract(
+            VerificationContractOperationV12::WorkgroupPipelineEvent {
+                contract: VerificationContractKeyV12::new(0),
+                kind: WorkgroupPipelineEventKindV12::Stage,
+                storage: ValueId(0),
+                epoch: ValueId(0),
+            },
+        ),
+    ] {
+        let mut module = fill_module();
+        let mut dead = BasicBlock::new(BlockId(99));
+        dead.operations.push(Operation::new(vec![], kind));
+        dead.terminator = Some(Terminator::Return { values: vec![] });
+        module.functions.push(Function::internal_helper(
+            "uncalled_v12",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![dead],
+        ));
+        modules.push(module);
+    }
+    let mut module = fill_module();
+    module.functions.push(Function::external_import(
+        "unused_vector",
+        Signature::new(
+            vec![Type::slice(
+                Type::vector(vector),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            )],
+            vec![],
+        ),
+    ));
+    modules.push(module);
+    for module in modules {
+        let kernel = KernelId::new("fill");
+        for result in [
+            lower_kernel_to_llvm_ir(&module, &kernel),
+            lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &kernel),
+            lower_kernel_to_gfx950_xnack_minus_llvm_ir(&module, &kernel),
+            lower_compiler_module_to_llvm_ir(&module),
+            lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&module),
+            lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module),
+        ] {
+            let errors = result.unwrap_err();
+            assert!(errors.diagnostics().iter().any(|diagnostic| diagnostic.code
+                == LoweringDiagnosticCode::InputVerification(
+                    DiagnosticCode::InvalidSemanticOperation
+                )));
+        }
+    }
+}
+
 fn anchor_v8(module: &Module) -> fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1 {
     let owner = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
     fe2o3_amdgcn_model::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)

@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use crate::FixedVectorTypeV12;
+
 /// A memory address space with target-independent semantics.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AddressSpace {
@@ -127,6 +129,8 @@ impl SliceType {
 pub enum Type {
     Unit,
     Scalar(ScalarType),
+    /// A first-class fixed-lane vector available in canonical Kernel IR V12.
+    Vector(FixedVectorTypeV12),
     Pointer(PointerType),
     Slice(SliceType),
 }
@@ -143,6 +147,10 @@ impl Type {
 
     pub fn slice(element: Type, address_space: AddressSpace, access: AccessMode) -> Self {
         Self::Slice(SliceType::new(element, address_space, access))
+    }
+
+    pub const fn vector(vector: FixedVectorTypeV12) -> Self {
+        Self::Vector(vector)
     }
 
     pub const fn as_scalar(&self) -> Option<ScalarType> {

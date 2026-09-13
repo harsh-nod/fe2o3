@@ -975,6 +975,7 @@ fn hash_type(digest: &mut Sha256, ty: &Type, depth: usize) -> Result<(), Simulat
     match ty {
         Type::Unit => digest.update([0]),
         Type::Scalar(scalar) => digest.update([1, scalar_tag(*scalar)]),
+        Type::Vector(_) => return Err(SimulationBundleErrorV1::InvalidKernelAbi),
         Type::Pointer(pointer) => {
             digest.update([
                 2,

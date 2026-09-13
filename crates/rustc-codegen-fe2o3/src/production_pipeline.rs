@@ -2554,6 +2554,11 @@ fn compiler_semantic_storage_map_v2(
             }
             fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
             fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
+            fe2o3_kernel_ir::Type::Vector(_) => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "vector KIR parameters have no admitted physical simulator slot",
+                ));
+            }
             fe2o3_kernel_ir::Type::Unit => {
                 return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                     "unit KIR parameters have no physical simulator slot",
@@ -2775,7 +2780,7 @@ fn compiler_component_storage_v2(
             fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionSlice,
             true,
         ),
-        Some(fe2o3_kernel_ir::Type::Unit) | None => {
+        Some(fe2o3_kernel_ir::Type::Unit | fe2o3_kernel_ir::Type::Vector(_)) | None => {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 MAP_ERROR,
             ));

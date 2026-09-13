@@ -62,6 +62,36 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
 }
 
 #[test]
+fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
+    use SimulationOperationSurfaceV1 as Surface;
+    assert_eq!(Surface::Constant as u8, 0);
+    assert_eq!(Surface::Unreachable as u8, 31);
+    assert_eq!(Surface::DynamicWorkgroupMemoryRequest as u8, 32);
+    let surfaces = [
+        Surface::VectorLoad,
+        Surface::VectorStore,
+        Surface::VectorLayoutConvert,
+        Surface::VerificationContract,
+    ];
+    let matrix = semantic_capability_matrix_v1();
+    for (ordinal, surface) in surfaces.into_iter().enumerate() {
+        assert_eq!(surface as usize, 33 + ordinal);
+        let rows: Vec<_> = matrix
+            .top_level_rows
+            .iter()
+            .filter(|row| row.operation == surface)
+            .collect();
+        assert_eq!(rows.len(), 16);
+        for row in rows {
+            assert!(matches!(&row.capability,
+                SimulationCapabilityDispositionV1::Unsupported { reason }
+                    if *reason == SimulationUnsupportedReasonCodeV1::InertV12Carrier
+            ));
+        }
+    }
+}
+
+#[test]
 fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
     let matrix = semantic_capability_matrix_v1();
     for profile in matrix

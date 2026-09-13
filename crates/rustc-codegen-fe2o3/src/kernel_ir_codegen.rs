@@ -643,7 +643,7 @@ fn check_type_depth(ty: &Type, depth: usize) -> Result<(), CompilerModuleConstru
     match ty {
         Type::Pointer(pointer) => check_type_depth(&pointer.pointee, depth + 1),
         Type::Slice(slice) => check_type_depth(&slice.element, depth + 1),
-        Type::Unit | Type::Scalar(_) => Ok(()),
+        Type::Unit | Type::Scalar(_) | Type::Vector(_) => Ok(()),
     }
 }
 

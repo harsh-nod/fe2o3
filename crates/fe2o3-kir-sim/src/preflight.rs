@@ -38,6 +38,7 @@ pub const MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1: usize = 1 << 20;
 /// A feature deliberately outside the first deterministic execution profile.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UnsupportedFeatureV1 {
+    InertV12Carrier,
     FloatType(ScalarType),
     UnsupportedType,
     MemoryIntrinsic,
@@ -1812,6 +1813,10 @@ fn scan_operation(
         OperationKind::Wave(_) => {}
         OperationKind::Gfx950LdsTranspose(_) => {}
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
+        OperationKind::VectorLoad(_)
+        | OperationKind::VectorStore(_)
+        | OperationKind::VectorLayoutConvert(_)
+        | OperationKind::VerificationContract(_) => reject!(UnsupportedFeatureV1::InertV12Carrier),
     }
     Ok(())
 }
@@ -2286,6 +2291,80 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inert_v12_raw_preflight_has_no_execution_plan() {
+        use fe2o3_kernel_ir::{
+            FixedVectorTypeV12, MemoryAccess, VectorLayoutConversionV12, VectorLayoutV12,
+            VectorLoadOperationV12, VectorMemoryAccessV12, VectorStoreOperationV12,
+            VerificationContractKeyV12, VerificationContractOperationV12,
+            WorkgroupPipelineEventKindV12,
+        };
+        let vector = FixedVectorTypeV12::new(ScalarType::F32, 4, VectorLayoutV12::Contiguous);
+        let access =
+            VectorMemoryAccessV12::new(vector, MemoryAccess::new(AddressSpace::Global, 16));
+        for kind in [
+            OperationKind::VectorLoad(VectorLoadOperationV12::new(ValueId(0), access)),
+            OperationKind::VectorStore(VectorStoreOperationV12::new(
+                ValueId(0),
+                ValueId(0),
+                access,
+            )),
+            OperationKind::VectorLayoutConvert(VectorLayoutConversionV12::new(
+                ValueId(0),
+                vector.layout,
+            )),
+            OperationKind::VerificationContract(
+                VerificationContractOperationV12::WorkgroupPipelineEvent {
+                    contract: VerificationContractKeyV12::new(0),
+                    kind: WorkgroupPipelineEventKindV12::Stage,
+                    storage: ValueId(0),
+                    epoch: ValueId(0),
+                },
+            ),
+        ] {
+            let mut module = Module::new("inert_v12");
+            let mut function = call_depth_test_function("entry", &[], true);
+            function.body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::new(vec![], kind));
+            module.functions.push(function);
+            let mut kernel = fe2o3_kernel_ir::Kernel::new(
+                "entry",
+                "entry",
+                fe2o3_kernel_ir::LaunchDomain::D1 {
+                    x: LaunchExtent::Static(1),
+                },
+            );
+            kernel.workgroup_size = Some(fe2o3_kernel_ir::WorkgroupSize::new(1, 1, 1));
+            module.kernels.push(kernel);
+            let request = SimulationRequestV1::new("entry", [1, 1, 1], [1, 1, 1], vec![]);
+            let error = match preflight(
+                &module,
+                0,
+                &request,
+                None,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("inert V12 cannot produce an execution plan"),
+            };
+            let SimulationPreflightErrorV1::Unsupported(report) = error else {
+                panic!("expected unsupported-carrier diagnostic, got {error:?}");
+            };
+            assert_eq!(report.total_findings(), 1);
+            assert_eq!(
+                report.findings(),
+                &[UnsupportedSimulationSiteV1 {
+                    function: FunctionId::new("entry"),
+                    block: Some(BlockId(0)),
+                    operation: Some(0),
+                    feature: UnsupportedFeatureV1::InertV12Carrier,
+                }]
+            );
+        }
+    }
 
     fn call_depth_test_function(name: &str, callees: &[&str], kernel: bool) -> Function {
         let mut block = fe2o3_kernel_ir::BasicBlock::new(BlockId(0));

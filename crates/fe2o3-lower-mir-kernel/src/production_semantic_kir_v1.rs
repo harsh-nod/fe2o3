@@ -1788,6 +1788,8 @@ fn module_requires_kernel_ir_v9_v1(module: &Module) -> bool {
 
 fn type_requires_kernel_ir_v9_v1(ty: &Type) -> bool {
     match ty {
+        // Vectors require a newer wire; neither frozen V8 nor V9 admits them.
+        Type::Vector(_) => true,
         Type::Pointer(pointer) => {
             pointer.access == AccessMode::WriteOnly
                 || type_requires_kernel_ir_v9_v1(&pointer.pointee)

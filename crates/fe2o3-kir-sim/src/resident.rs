@@ -266,7 +266,11 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::GuardedStore { .. }
         | OperationKind::Atomic(_)
         | OperationKind::Gfx950LdsTranspose(_)
-        | OperationKind::Wave(_) => Some(()),
+        | OperationKind::Wave(_)
+        | OperationKind::VectorLoad(_)
+        | OperationKind::VectorStore(_)
+        | OperationKind::VectorLayoutConvert(_)
+        | OperationKind::VerificationContract(_) => Some(()),
     }
 }
 
@@ -282,7 +286,7 @@ fn add_type_boxes(resident: &mut ResidentLedger, ty: &Type) -> Option<()> {
                 resident.add_box::<Type>()?;
                 &slice.element
             }
-            Type::Unit | Type::Scalar(_) => return Some(()),
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) => return Some(()),
         };
     }
 }

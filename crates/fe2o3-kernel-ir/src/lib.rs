@@ -20,8 +20,11 @@
 //! [`encode_module_v9`] adds gfx950 collectives and LDS transpose operations;
 //! [`encode_module_v10`] adds exact typed memory intrinsics without changing V1-V9;
 //! [`encode_module_v11`] adds one-way pointer access restriction casts without changing V1-V10.
+//! [`encode_module_v12`] adds inert vector and ordered verification-contract
+//! carriers. These carriers round-trip but are not yet admitted by semantic
+//! verification, optimization, simulation, or production lowering.
 //! Decoding establishes wire well-formedness only.
-//! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V10
+//! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V12
 //! reconstruct kernel-entry and import roles from their legacy records; they
 //! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
@@ -84,6 +87,8 @@ mod simulation_bundle_v6;
 mod standard_atomics;
 mod terminator_operands_v1;
 mod types;
+mod vector_v12;
+mod verification_contract_v12;
 mod verify;
 mod wave_operations;
 mod wire;
@@ -135,6 +140,8 @@ pub use simulation_bundle_v5::*;
 pub use simulation_bundle_v6::*;
 pub use standard_atomics::*;
 pub use types::*;
+pub use vector_v12::*;
+pub use verification_contract_v12::*;
 pub use verify::*;
 pub use wave_operations::*;
 pub use wire::*;

@@ -94,6 +94,10 @@ fn assert_frozen_fixture(version: u16, golden_hex: &str, expected: Option<&Modul
     let latest = decode_module_v5(&golden).expect("V5 must continue to read every old fixture");
     assert_eq!(latest, decoded);
     assert_eq!(
+        decode_module_v12(&golden).expect("V12 must continue to read every old fixture"),
+        decoded,
+    );
+    assert_eq!(
         encode(&latest).expect("latest-decoded fixture must remain encodable"),
         golden,
         "V{version} changed after migration through the latest public model"

@@ -4,7 +4,9 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, Axis, BarrierSemantics, Gfx950LdsTransposeOperationV1, LaunchDomain,
     MatrixOperation, MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation,
-    SynchronizationScope, TargetCapability, Type, WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
+    SynchronizationScope, TargetCapability, Type, VectorLayoutConversionV12,
+    VectorLoadOperationV12, VectorStoreOperationV12, VerificationContractOperationV12,
+    WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
 };
 
 #[path = "operation_operands_v1.rs"]
@@ -413,6 +415,9 @@ impl Operation {
                 vec![MemoryEffect::Allocate(*address_space)]
             }
             OperationKind::Load { access, .. } => vec![MemoryEffect::Read(access.address_space)],
+            OperationKind::VectorLoad(load) => {
+                vec![MemoryEffect::Read(load.access.memory.address_space)]
+            }
             OperationKind::GuardedLoad { access, .. } => {
                 vec![MemoryEffect::Read(access.address_space)]
             }
@@ -420,6 +425,9 @@ impl Operation {
                 vec![MemoryEffect::Write(access.address_space)]
             }
             OperationKind::Store { access, .. } => vec![MemoryEffect::Write(access.address_space)],
+            OperationKind::VectorStore(store) => {
+                vec![MemoryEffect::Write(store.access.memory.address_space)]
+            }
             OperationKind::Atomic(atomic) => vec![MemoryEffect::Atomic {
                 address_space: atomic.access.address_space,
                 scope: atomic.scope,
@@ -563,6 +571,12 @@ fn add_synchronized_memory_capabilities(
     reason = "boxing a public IR operation would change its established ownership and API shape"
 )]
 pub enum OperationKind {
+    /// Ordered compiler event whose catalog key alone grants no proof authority.
+    VerificationContract(VerificationContractOperationV12),
+    /// Fixed-lane vector operations, encoded only by Kernel IR V12 or later.
+    VectorLoad(VectorLoadOperationV12),
+    VectorStore(VectorStoreOperationV12),
+    VectorLayoutConvert(VectorLayoutConversionV12),
     Constant(Constant),
     Intrinsic(IntrinsicOperation),
     MemoryIntrinsic(MemoryIntrinsicOperation),

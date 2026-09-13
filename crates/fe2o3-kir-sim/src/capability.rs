@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_779_513;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_788_969;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -160,10 +160,14 @@ pub enum SimulationOperationSurfaceV1 {
     Unreachable = 31,
     /// Additive launch surface for one exact reachable dynamic LDS base.
     DynamicWorkgroupMemoryRequest = 32,
+    VectorLoad = 33,
+    VectorStore = 34,
+    VectorLayoutConvert = 35,
+    VerificationContract = 36,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 33] = [
+    const ALL: [Self; 37] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -197,8 +201,12 @@ impl SimulationOperationSurfaceV1 {
         Self::Return,
         Self::Unreachable,
         Self::DynamicWorkgroupMemoryRequest,
+        Self::VectorLoad,
+        Self::VectorStore,
+        Self::VectorLayoutConvert,
+        Self::VerificationContract,
     ];
-    const COUNT: usize = Self::DynamicWorkgroupMemoryRequest as usize + 1;
+    const COUNT: usize = Self::VerificationContract as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -251,11 +259,13 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     DynamicWorkgroupMemoryAmbiguousBases,
     DynamicWorkgroupMemoryAuthenticatedMinimum,
     DynamicWorkgroupMemoryExtentLayout,
+    InertV12Carrier,
 }
 
 impl UnsupportedFeatureV1 {
     pub const fn reason_code(&self) -> SimulationUnsupportedReasonCodeV1 {
         match self {
+            Self::InertV12Carrier => SimulationUnsupportedReasonCodeV1::InertV12Carrier,
             Self::FloatType(_) => SimulationUnsupportedReasonCodeV1::FloatType,
             Self::UnsupportedType => SimulationUnsupportedReasonCodeV1::UnsupportedType,
             Self::MemoryIntrinsic => SimulationUnsupportedReasonCodeV1::MemoryIntrinsic,
@@ -627,6 +637,10 @@ fn top_level_capability(
         }
         Surface::Wave => owned(Owner::WaveCooperative, &[]),
         Surface::InlineAssembly => unsupported(Reason::InlineAssembly),
+        Surface::VectorLoad
+        | Surface::VectorStore
+        | Surface::VectorLayoutConvert
+        | Surface::VerificationContract => unsupported(Reason::InertV12Carrier),
         Surface::Branch | Surface::ConditionalBranch | Surface::Return | Surface::Unreachable => {
             owned(Owner::ControlFlow, &[])
         }
@@ -640,6 +654,12 @@ fn top_level_capability(
 
 pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOperationSurfaceV1 {
     match operation {
+        OperationKind::VectorLoad(_) => SimulationOperationSurfaceV1::VectorLoad,
+        OperationKind::VectorStore(_) => SimulationOperationSurfaceV1::VectorStore,
+        OperationKind::VectorLayoutConvert(_) => SimulationOperationSurfaceV1::VectorLayoutConvert,
+        OperationKind::VerificationContract(_) => {
+            SimulationOperationSurfaceV1::VerificationContract
+        }
         OperationKind::Constant(_) => SimulationOperationSurfaceV1::Constant,
         OperationKind::Intrinsic(_) => SimulationOperationSurfaceV1::Intrinsic,
         OperationKind::MemoryIntrinsic(_) => SimulationOperationSurfaceV1::MemoryIntrinsic,

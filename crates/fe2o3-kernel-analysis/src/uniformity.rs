@@ -287,7 +287,8 @@ fn collect_uniform_helper_candidate(
                         candidate.structurally_supported = false;
                     }
                 },
-                OperationKind::Alloca { .. }
+                OperationKind::VerificationContract(_)
+                | OperationKind::Alloca { .. }
                 | OperationKind::Atomic(_)
                 | OperationKind::Barrier(_)
                 | OperationKind::Fence(_)
@@ -788,6 +789,12 @@ impl<'a> Analyzer<'a> {
 
     fn operation_variation(&self, operation: &Operation) -> Variation {
         match &operation.kind {
+            OperationKind::VerificationContract(_)
+            | OperationKind::VectorLoad(_)
+            | OperationKind::VectorStore(_) => Variation::Varying,
+            OperationKind::VectorLayoutConvert(_) => {
+                join_values(operation.kind.operands(), &self.report.values)
+            }
             OperationKind::Constant(_) => Variation::GridUniform,
             OperationKind::Intrinsic(intrinsic) => match intrinsic.kind {
                 IntrinsicKind::LaunchExtent { .. } => Variation::GridUniform,

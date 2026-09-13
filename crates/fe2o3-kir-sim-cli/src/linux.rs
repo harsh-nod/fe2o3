@@ -87,6 +87,7 @@ const _: () = assert!(MAX_CLI_EXPLORATION_ENVELOPE_BYTES < MAX_SUCCESS_BYTES);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum UnsupportedFeatureCode {
+    InertV12Carrier,
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
@@ -3383,6 +3384,7 @@ fn wave_mask(width: WaveWidth, mask: u64) -> String {
 
 fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
     match feature {
+        UnsupportedFeatureV1::InertV12Carrier => UnsupportedFeatureCode::InertV12Carrier,
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,

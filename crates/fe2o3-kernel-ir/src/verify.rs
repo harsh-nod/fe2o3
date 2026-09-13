@@ -253,6 +253,65 @@ fn verify_module_impl(
     }
 }
 
+const INERT_V12_REJECTION: &str =
+    "Kernel IR V12 vector and verification-contract carriers are not admitted by this verifier";
+
+fn contains_v12_vector(mut ty: &Type) -> bool {
+    loop {
+        match ty {
+            Type::Vector(_) => return true,
+            Type::Pointer(pointer) => ty = &pointer.pointee,
+            Type::Slice(slice) => ty = &slice.element,
+            Type::Unit | Type::Scalar(_) => return false,
+        }
+    }
+}
+
+fn v12_rejection_location(module: &Module, function: &Function) -> Option<DiagnosticLocation> {
+    let location = || DiagnosticLocation::function(module, function);
+    if function
+        .signature
+        .parameters
+        .iter()
+        .chain(&function.signature.results)
+        .any(contains_v12_vector)
+    {
+        return Some(location());
+    }
+    for block in &function.body.as_ref()?.blocks {
+        if block
+            .parameters
+            .iter()
+            .any(|value| contains_v12_vector(&value.ty))
+        {
+            return Some(location().at_block(block.id));
+        }
+        for (ordinal, operation) in block.operations.iter().enumerate() {
+            let rejected = match &operation.kind {
+                OperationKind::VerificationContract(_)
+                | OperationKind::VectorLoad(_)
+                | OperationKind::VectorStore(_)
+                | OperationKind::VectorLayoutConvert(_) => true,
+                OperationKind::Intrinsic(op) => contains_v12_vector(&op.result_type),
+                OperationKind::Cast { to, .. } | OperationKind::Alloca { element: to, .. } => {
+                    contains_v12_vector(to)
+                }
+                OperationKind::WorkgroupMemory(memory) => contains_v12_vector(&memory.element),
+                _ => false,
+            };
+            if rejected
+                || operation
+                    .results
+                    .iter()
+                    .any(|value| contains_v12_vector(&value.ty))
+            {
+                return Some(location().at_block(block.id).at_operation(ordinal));
+            }
+        }
+    }
+    None
+}
+
 struct ModuleVerifier<'module, 'capabilities> {
     module: &'module Module,
     diagnostics: Vec<Diagnostic>,
@@ -344,6 +403,14 @@ impl<'module, 'capabilities> ModuleVerifier<'module, 'capabilities> {
     }
 
     fn verify_function(&mut self, function: &Function) {
+        if let Some(location) = v12_rejection_location(self.module, function) {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidSemanticOperation,
+                INERT_V12_REJECTION,
+            );
+            return;
+        }
         let location = DiagnosticLocation::function(self.module, function);
         self.verify_capabilities(&function.required_capabilities, location.clone());
 
@@ -900,6 +967,16 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         }
 
         match &operation.kind {
+            OperationKind::VerificationContract(_)
+            | OperationKind::VectorLoad(_)
+            | OperationKind::VectorStore(_)
+            | OperationKind::VectorLayoutConvert(_) => {
+                self.emit(
+                    location,
+                    DiagnosticCode::InvalidSemanticOperation,
+                    INERT_V12_REJECTION,
+                );
+            }
             OperationKind::Constant(constant) => {
                 self.expect_results(operation, &[constant.ty()], location);
             }

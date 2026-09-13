@@ -4391,7 +4391,7 @@ impl<'a> FunctionLowerer<'a> {
             Type::Scalar(scalar) => Some(*scalar),
             Type::Pointer(pointer) => pointer.pointee.as_scalar(),
             Type::Slice(slice) => slice.element.as_scalar(),
-            Type::Unit => None,
+            Type::Unit | Type::Vector(_) => None,
         };
         let required = match scalar {
             Some(ScalarType::F16) => Some(TargetCapability::Float16),
@@ -4747,7 +4747,12 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
-            OperationKind::Intrinsic(_) | OperationKind::Alloca { .. } => {
+            OperationKind::Intrinsic(_)
+            | OperationKind::Alloca { .. }
+            | OperationKind::VerificationContract(_)
+            | OperationKind::VectorLoad(_)
+            | OperationKind::VectorStore(_)
+            | OperationKind::VectorLayoutConvert(_) => {
                 return Err(LoweringErrors::one(
                     location,
                     LoweringDiagnosticCode::UnsupportedOperation,
@@ -9139,7 +9144,9 @@ fn llvm_type(ty: &Type) -> &'static str {
             "ptr addrspace(5)"
         }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
-        Type::Unit | Type::Slice(_) => unreachable!("type is not a first-class G1 LLVM value"),
+        Type::Unit | Type::Slice(_) | Type::Vector(_) => {
+            unreachable!("type is not a first-class G1 LLVM value")
+        }
     }
 }
 
