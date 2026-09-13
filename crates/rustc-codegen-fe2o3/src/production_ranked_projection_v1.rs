@@ -30,7 +30,10 @@ use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionReceiptV1;
 use fe2o3_lower_mir_kernel::{
     ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectOriginV1,
-    ProductionRankedExecutableEffectSourceV1,
+    ProductionRankedExecutableEffectSourceV1, ProductionSourceExecutionLayoutV1,
+    ProductionSourceLaunchErrorV1, ProductionSourceLaunchInputV1,
+    ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
+    ProductionSourceLaunchRosterV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
@@ -49,17 +52,16 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
     SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
     SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
-    SemanticSwitchTargetsV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
-    SemanticWorkgroupScanKindV1, SemanticWriteOnlyDisjointWriteKindV1,
-    exact_transparent_scalar_carrier_field_v1,
+    SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
+    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
+    SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
+    SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
 };
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAxisV1, SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1,
     SemanticFunctionSafetyV1, SemanticRustTypeKindV1, SemanticRustcVariantsV1,
-    SemanticTypeLayoutDetailsV1,
+    SemanticTargetArchitectureV1, SemanticTypeLayoutDetailsV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -2817,7 +2819,18 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         semantic.functions(),
         semantic.callables(),
     )?;
-    let matched_roots = match_ranked_semantic_root_roster_v1(semantic, root_inputs)?;
+    if root_inputs.is_empty() || root_inputs.len() != semantic.roots().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete typed/semantic ranked root roster",
+        ));
+    }
+    let launch_inputs = root_inputs
+        .iter()
+        .map(source_launch_root_input_v1)
+        .collect::<Vec<_>>();
+    let source_launch_roster = ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs)
+        .map_err(source_launch_projection_error_v1)?;
+    drop(launch_inputs);
     let root_logical_names = root_inputs
         .iter()
         .map(|input| input.logical_name.as_str())
@@ -2849,11 +2862,12 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
 
     let mut roots = Vec::with_capacity(root_inputs.len());
-    for ((input, semantic_root), root_references) in root_inputs
+    for ((input, source_root), root_references) in root_inputs
         .iter()
-        .zip(matched_roots)
+        .zip(source_launch_roster.roots())
         .zip(root_reference_bindings.iter())
     {
+        let semantic_root = source_root.selected_root();
         let selection = semantic
             .select_kernel_body_for_root_v1(semantic_root)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -2865,6 +2879,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             selection,
             &input.logical_name,
             &input.source_launch,
+            *source_root,
             root_references,
         )?;
         if root.kernel_binding != input.kernel_binding {
@@ -2892,79 +2907,17 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     })
 }
 
-fn match_ranked_semantic_root_roster_v1(
-    semantic: &AdmittedInertSemanticMirV1,
-    root_inputs: &[ProductionRankedRootInputV1],
-) -> Result<Vec<SemanticFunctionIdV1>, ProductionRankedProjectionErrorV1> {
-    let mut semantic_roots = Vec::with_capacity(semantic.roots().len());
-    for root in semantic.roots() {
-        let function = semantic.functions().get(root.index() as usize).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported("an out-of-range semantic kernel root"),
-        )?;
-        if function.role() != SemanticFunctionRoleV1::KernelRoot {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a rooted semantic function without the KernelRoot role",
-            ));
-        }
-        let entry =
-            function
-                .kernel_entry()
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a semantic KernelRoot without an authenticated kernel entry",
-                ))?;
-        semantic_roots.push((*entry.kernel_binding_identity().as_bytes(), *root));
-    }
-
-    match_ranked_root_bindings_v1(root_inputs, semantic_roots.as_slice())
-}
-
+#[cfg(test)]
 fn match_ranked_root_bindings_v1(
     root_inputs: &[ProductionRankedRootInputV1],
     semantic_roots: &[([u8; 32], SemanticFunctionIdV1)],
 ) -> Result<Vec<SemanticFunctionIdV1>, ProductionRankedProjectionErrorV1> {
-    if root_inputs.is_empty() || root_inputs.len() != semantic_roots.len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "an incomplete typed/semantic ranked root roster",
-        ));
-    }
-    let mut logical_names = BTreeSet::new();
-    if root_inputs
+    let inputs = root_inputs
         .iter()
-        .any(|input| !logical_names.insert(input.logical_name.as_str()))
-    {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "duplicate typed logical roots in the ranked roster",
-        ));
-    }
-
-    let mut semantic_bindings = BTreeSet::new();
-    for (binding, _) in semantic_roots {
-        if !semantic_bindings.insert(*binding) {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "duplicate semantic kernel bindings in the ranked roster",
-            ));
-        }
-    }
-    let mut typed_bindings = BTreeSet::new();
-    for input in root_inputs {
-        if !typed_bindings.insert(input.kernel_binding) {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "duplicate typed kernel bindings in the ranked roster",
-            ));
-        }
-    }
-    root_inputs
-        .iter()
-        .zip(semantic_roots)
-        .map(|(input, (binding, root))| {
-            if input.kernel_binding != *binding {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a reordered or substituted typed/semantic kernel binding in the ranked roster",
-                ));
-            }
-            Ok(*root)
-        })
-        .collect()
+        .map(source_launch_root_input_v1)
+        .collect::<Vec<_>>();
+    fe2o3_lower_mir_kernel::match_production_source_launch_root_bindings_v1(&inputs, semantic_roots)
+        .map_err(source_launch_projection_error_v1)
 }
 
 fn project_and_verify_ranked_root_v1(
@@ -2973,6 +2926,7 @@ fn project_and_verify_ranked_root_v1(
     selection: SemanticKernelBodySelectionV1,
     logical_name: &str,
     source_launch: &LaunchContract,
+    source_root: ProductionSourceLaunchRootV1,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let semantic_u32_induction =
@@ -3003,12 +2957,17 @@ fn project_and_verify_ranked_root_v1(
         .kernel_binding_identity()
         .as_bytes();
 
+    if source_root.selected_root() != selection.root()
+        || source_root.semantic_root_identity() != root_function.identity()
+        || source_root.kernel_binding() != kernel_binding
+        || source_root.source_launch() != source_launch_input_v1(source_launch)
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "source launch roster root changed before ranked projection",
+        ));
+    }
     let constants = constant_locals(function)?;
-    let mut entry_operations = vec![source_execution_layout_v1(
-        semantic.target().architecture(),
-        root_function,
-        source_launch,
-    )?];
+    let mut entry_operations = vec![ranked_execution_layout_v1(source_root.layout())];
     let mut next_value = 0_u32;
     let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
         None
@@ -17584,87 +17543,67 @@ fn require_index_scalar_custody_v1(
     Ok(())
 }
 
+fn source_launch_input_v1(source_launch: &LaunchContract) -> ProductionSourceLaunchInputV1 {
+    let exact_workgroup = match source_launch.block_size() {
+        BlockSize::Exact(block) => Some([block.x(), block.y(), block.z()]),
+        BlockSize::Any | BlockSize::AtMost(_) => None,
+    };
+    let grid = source_launch.max_grid();
+    ProductionSourceLaunchInputV1::new(
+        source_launch.rank(),
+        exact_workgroup,
+        [grid.x(), grid.y(), grid.z()],
+    )
+}
+
+fn source_launch_root_input_v1(
+    root: &ProductionRankedRootInputV1,
+) -> ProductionSourceLaunchRootInputV1<'_> {
+    ProductionSourceLaunchRootInputV1::new(
+        &root.logical_name,
+        root.kernel_binding,
+        source_launch_input_v1(&root.source_launch),
+    )
+}
+
+fn source_launch_projection_error_v1(
+    error: ProductionSourceLaunchErrorV1,
+) -> ProductionRankedProjectionErrorV1 {
+    match error {
+        ProductionSourceLaunchErrorV1::Unsupported(detail) => {
+            ProductionRankedProjectionErrorV1::Unsupported(detail)
+        }
+        ProductionSourceLaunchErrorV1::Incomplete(detail) => {
+            ProductionRankedProjectionErrorV1::Incomplete(detail)
+        }
+    }
+}
+
+fn ranked_execution_layout_v1(
+    layout: ProductionSourceExecutionLayoutV1,
+) -> ProductionRankedOperationV1 {
+    ProductionRankedOperationV1::ExecutionLayout {
+        grid_identity: layout.grid_identity(),
+        global_extents: layout.global_extents(),
+        workgroup_extents: layout.workgroup_extents(),
+        subgroup_size: layout.subgroup_size(),
+        full_physical_workgroups: layout.full_physical_workgroups(),
+    }
+}
+
+#[cfg(test)]
 fn source_execution_layout_v1(
     architecture: SemanticTargetArchitectureV1,
     function: &SemanticFunctionDeclV1,
     source_launch: &LaunchContract,
 ) -> Result<ProductionRankedOperationV1, ProductionRankedProjectionErrorV1> {
-    let entry = function
-        .kernel_entry()
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "a semantic kernel root is missing its authenticated entry contract",
-        ))?;
-    let required = entry
-        .source_contract()
-        .launch()
-        .and_then(|launch| launch.required())
-        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "concurrency verification requires exact source workgroup dimensions",
-        ))?
-        .as_array();
-    let BlockSize::Exact(source_block) = source_launch.block_size() else {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "concurrency verification requires an exact authenticated LaunchContract workgroup",
-        ));
-    };
-    let source_workgroup = [source_block.x(), source_block.y(), source_block.z()];
-    if source_workgroup != required {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "authenticated LaunchContract workgroup disagrees with semantic source workgroup",
-        ));
-    }
-    let source_rank = source_launch.rank();
-    match source_rank {
-        1 if required[1] == 1 && required[2] == 1 => {}
-        2 if required[2] == 1 => {}
-        3 => {}
-        _ => {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "authenticated launch rank disagrees with source workgroup axes",
-            ));
-        }
-    }
-    let workgroup_extents = required.map(u64::from);
-    let max_grid = source_launch.max_grid();
-    let max_grid = [max_grid.x(), max_grid.y(), max_grid.z()].map(u64::from);
-    let dynamic_grid_limits = match (architecture, source_rank) {
-        (SemanticTargetArchitectureV1::AmdGpuGfx942, 1) => [u32::MAX, 1, 1],
-        (SemanticTargetArchitectureV1::AmdGpuGfx942, 2) => [u32::MAX, u32::MAX, 1],
-        (SemanticTargetArchitectureV1::AmdGpuGfx942, 3) => {
-            [u32::MAX, u32::from(u16::MAX), u32::from(u16::MAX)]
-        }
-        _ => {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "authenticated launch rank has no production grid-limit profile",
-            ));
-        }
-    };
-    let mut global_extents = [1_u64; 3];
-    for axis in 0..usize::from(source_rank) {
-        global_extents[axis] = checked_global_extent_v1(
-            max_grid[axis],
-            workgroup_extents[axis],
-            u64::from(dynamic_grid_limits[axis]),
-        )?;
-    }
-    let subgroup_size = match architecture {
-        SemanticTargetArchitectureV1::AmdGpuGfx942 => 64,
-    };
-    let identity = entry.kernel_binding_identity().as_bytes()[..8]
-        .try_into()
-        .map(u64::from_le_bytes)
-        .map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "the authenticated kernel identity cannot form a grid identity",
-            )
-        })?;
-    Ok(ProductionRankedOperationV1::ExecutionLayout {
-        grid_identity: identity,
-        global_extents,
-        workgroup_extents,
-        subgroup_size,
-        full_physical_workgroups: true,
-    })
+    ProductionSourceExecutionLayoutV1::try_from_source(
+        architecture,
+        function,
+        source_launch_input_v1(source_launch),
+    )
+    .map(ranked_execution_layout_v1)
+    .map_err(source_launch_projection_error_v1)
 }
 
 fn bounded_linear_launch_extent_v1(source_launch: &LaunchContract) -> Option<u64> {
@@ -17679,21 +17618,6 @@ fn bounded_linear_launch_extent_v1(source_launch: &LaunchContract) -> Option<u64
         return None;
     }
     u64::from(block.x()).checked_mul(u64::from(max_grid))
-}
-
-fn checked_global_extent_v1(
-    max_grid: u64,
-    required_workgroup: u64,
-    dynamic_grid_limit: u64,
-) -> Result<u64, ProductionRankedProjectionErrorV1> {
-    if max_grid == dynamic_grid_limit {
-        return Ok(DYNAMIC_EXTENT);
-    }
-    max_grid
-        .checked_mul(required_workgroup)
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "authenticated finite grid extent overflows u64",
-        ))
 }
 
 #[cfg(test)]

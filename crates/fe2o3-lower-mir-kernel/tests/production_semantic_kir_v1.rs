@@ -26,6 +26,9 @@ use fe2o3_pliron::{
     ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
 };
 
+#[path = "production_semantic_kir_v1/source_launch_roster_v1.rs"]
+mod source_launch_roster_v1;
+
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }

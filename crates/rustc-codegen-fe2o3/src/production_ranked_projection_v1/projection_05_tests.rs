@@ -318,6 +318,8 @@
         }
     }
 
+    include!("source_launch_v1_tests.rs");
+
     #[test]
     fn source_execution_layout_derives_active_grid_axes_from_xyz_workgroup() {
         for (rank, workgroup, max_grid, global_extents) in [
@@ -453,12 +455,6 @@
                 workgroup_extents: [64, 1, 1],
                 ..
             })
-        ));
-        assert!(matches!(
-            checked_global_extent_v1(u64::MAX, 2, u64::from(u32::MAX)),
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "authenticated finite grid extent overflows u64"
-            ))
         ));
         assert!(
             LaunchContract::new(

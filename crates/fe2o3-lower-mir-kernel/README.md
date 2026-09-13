@@ -42,3 +42,29 @@ The internal lowering core materializes detached operations outside the source
 root, which is not a legal in-tree pass rewrite. Tests use the versioned
 pointer-independent conformance facade; production compilation uses the
 separate semantic KIR APIs exported by this crate.
+
+## Production Source Launch Facts
+
+`ProductionSourceLaunchRosterV1` checks the complete ordered kernel-root
+association and exact required workgroups before ranked operations are built.
+It retains the semantic module identity, full root bindings and source-derived
+execution layouts, including finite grid extents and the existing dynamic
+sentinels. Logical names need not equal export symbols. Root association uses
+ordered sets, with O(R log R) comparisons and O(R) storage for R roots, plus the
+cost of comparing logical-name bytes.
+
+The backend adapts its validated `LaunchContract` into detached input fields and
+retains the original contract. Semantic MIR supplies root identity and required
+workgroups; it does not independently authenticate the supplied grid limits.
+The roster grants no artifact or launch authority. A later stage must retain
+the originating contracts and bind the aggregate semantic identity, not treat
+a copied row as authentication of another module.
+
+This factoring removes launch-layout computation from ranked construction.
+It does not yet move executable KIR materialization before ranked verification
+or replace ranked analyses with views of the optimized graph; those remain
+part of [issue #271](https://github.com/harsh-nod/fe2o3/issues/271).
+
+The `production_semantic_kir_v1` integration target covers source launch
+agreement without ranked IR, including sparse roots with reachable helpers,
+full-binding substitutions, per-root workgroup failures and retained identity.
