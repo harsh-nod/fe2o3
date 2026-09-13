@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.cast
+builtin.func @native_data_wrong_index_cast: builtin.function <(kernel.index) -> ()>
+{
+  ^entry(index: kernel.index):
+    physical = gpu.cast (index) [] [gpu_cast_kind: gpu.cast_kind Bitcast]: <(kernel.index) -> (gpu.index)>;
+    kernel.return () [] []: <() -> ()>
+}

@@ -1453,13 +1453,13 @@ fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1
 #[cfg(test)]
 mod tests {
     use super::require_overflow_free_static_latch_v1;
+    use crate::PlironProgressFindingV1;
     use crate::{
         ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
         ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
         ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSessionErrorV1,
         ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
     };
-    use fe2o3_kernel_analysis::PlironProgressFindingV1;
 
     #[test]
     fn static_loop_latch_requires_an_overflow_free_final_transition() {

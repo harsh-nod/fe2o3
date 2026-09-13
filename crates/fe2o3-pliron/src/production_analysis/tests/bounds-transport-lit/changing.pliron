@@ -1,0 +1,15 @@
+// RUN: fe2o3-pliron-lit --passes=memory-bounds %s
+// EXPECT: UNPROVED
+builtin.func @bounds_transport_changing: builtin.function <(kernel.index, kernel.index) -> ()>
+{
+  ^entry(i: kernel.index, n: kernel.index):
+    one = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index)>;
+    kernel.index_lt_br_args (i, n, i, n) [^loop, ^exit] []: <(kernel.index, kernel.index, kernel.index, kernel.index) -> ()>
+  ^loop(x: kernel.index, m: kernel.index):
+    view = kernel.ranked_view (m) [] [kernel_memory_space: kernel.memory_space Global]: <(kernel.index) -> (kernel.ranked_view <32,false,[0]>)>;
+    kernel.access (view, x) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[0]>, kernel.index) -> ()>;
+    next = kernel.index_binary (x, one) [] [kernel_index_binary_kind: kernel.index_binary_kind Add]: <(kernel.index, kernel.index) -> (kernel.index)>;
+    kernel.index_eq_br_args (x, m, next, m) [^loop, ^exit] []: <(kernel.index, kernel.index, kernel.index, kernel.index) -> ()>
+  ^exit():
+    kernel.return () [] []: <() -> ()>
+}

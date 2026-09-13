@@ -7,6 +7,9 @@ use std::{
     fmt,
 };
 
+use crate::{
+    HierarchicalOwnershipLevelV1, HierarchicalOwnershipRegionV1, HierarchicalRegionIdentityV1,
+};
 use dialect_kernel::OwnershipCoverageAttr;
 use fe2o3_functional_proof::{
     COMPLETE_GPU_HIERARCHY_V1, MirPlironSemanticContractV1, ParallelFoldOrderV1,
@@ -15,9 +18,6 @@ use fe2o3_functional_proof::{
     SemanticCollectiveContractV1, SemanticCollectiveKindV1, SemanticEvaluationOrderV1,
     SemanticFiniteExtentV1, SemanticNumericalPolicyV1, SemanticOutputContractV1,
     SemanticScalarTypeV1, SemanticTypedRootV1,
-};
-use fe2o3_kernel_analysis::{
-    HierarchicalOwnershipLevelV1, HierarchicalOwnershipRegionV1, HierarchicalRegionIdentityV1,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};

@@ -1,0 +1,1114 @@
+//! Epoch-aware verification for target-neutral staged workgroup pipelines.
+//!
+//! Constant schedules are interpreted exactly. Runtime-bounded canonical
+//! loops are proved from a finite epoch-window invariant, so verification
+//! never unrolls a dynamic trip count.
+
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
+
+use dialect_kernel::{
+    AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, DeterministicJoinOp,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexLessThanBranchArgsOp, IndexUnsignedCastOp, PipelineCreateOp, PipelineEventKindAttr,
+    PipelineEventOp, RankedAccessOp, RankedViewOp,
+};
+use dialect_proof::RequireEffectRefinementOp;
+use pliron::{
+    basic_block::BasicBlock,
+    builtin::ops::FuncOp,
+    common_traits::Named,
+    context::{Context, Ptr},
+    operation::Operation,
+    value::Value,
+};
+
+use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::production_analysis::pliron_function_inventory::{
+    BoundedPlironFunctionInventoryV1, PlironOperationSiteV1,
+};
+use crate::production_analysis::pliron_resource_envelope::{
+    ProductionAnalysisInputCensusV1, ProductionAnalysisResourceLimitV1,
+    ProductionAnalysisResourceLimitsV1, ProductionAnalysisResourcePhaseV1,
+    ProductionAnalysisResourceUpperBoundV1,
+};
+use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
+
+pub const MAX_PLIRON_PIPELINE_FINDINGS_V1: usize = 4_096;
+const MAX_PLIRON_PIPELINE_VALUE_NAME_BYTES_V1: usize = 240;
+const MAX_PLIRON_PIPELINE_DIAGNOSTIC_BYTES_V1: usize = 512;
+const MAX_EQUIVALENCE_WORK_V1: usize = 256;
+const EQUIVALENCE_REJECTING_ATTEMPTS_V1: usize = MAX_EQUIVALENCE_WORK_V1 + 1;
+
+include!("pliron_pipeline_protocol/resources_v1.rs");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlironPipelineProtocolFindingV1 {
+    AnalysisIncomplete {
+        detail: String,
+    },
+    OrphanEvent {
+        block: usize,
+        operation: usize,
+    },
+    AliasedStorage {
+        first_block: usize,
+        first_operation: usize,
+        second_block: usize,
+        second_operation: usize,
+    },
+    InvalidSchedule {
+        pipeline_block: usize,
+        pipeline_operation: usize,
+        event_block: Option<usize>,
+        event_operation: Option<usize>,
+        detail: String,
+    },
+    FindingLimitExceeded,
+}
+
+impl PlironPipelineProtocolFindingV1 {
+    pub const fn status(&self) -> KernelCheckStatusV1 {
+        match self {
+            Self::AnalysisIncomplete { .. } | Self::FindingLimitExceeded => {
+                KernelCheckStatusV1::Incomplete
+            }
+            Self::OrphanEvent { .. }
+            | Self::AliasedStorage { .. }
+            | Self::InvalidSchedule { .. } => KernelCheckStatusV1::Rejected,
+        }
+    }
+}
+
+impl fmt::Display for PlironPipelineProtocolFindingV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AnalysisIncomplete { detail } => write!(
+                formatter,
+                "error[FE2O3-PIPELINE-003]: cannot prove staged pipeline safety: {detail}"
+            ),
+            Self::OrphanEvent { block, operation } => write!(
+                formatter,
+                "error[FE2O3-PIPELINE-001]: pipeline event at block {block} op {operation} does not use a pipeline created by kernel.pipeline_create; help: bind the event to the pipeline that owns the staged workgroup view"
+            ),
+            Self::AliasedStorage {
+                first_block,
+                first_operation,
+                second_block,
+                second_operation,
+            } => write!(
+                formatter,
+                "error[FE2O3-PIPELINE-001]: pipeline at block {second_block} op {second_operation} may alias staged storage already owned by pipeline block {first_block} op {first_operation}; help: use one lifecycle for that view or provide compiler-derived disjoint allocation provenance"
+            ),
+            Self::InvalidSchedule {
+                pipeline_block,
+                pipeline_operation,
+                event_block,
+                event_operation,
+                detail,
+            } => {
+                write!(
+                    formatter,
+                    "error[FE2O3-PIPELINE-001]: invalid staged pipeline created at block {pipeline_block} op {pipeline_operation}"
+                )?;
+                if let (Some(block), Some(operation)) = (event_block, event_operation) {
+                    write!(formatter, ", detected at block {block} op {operation}")?;
+                }
+                write!(
+                    formatter,
+                    ": {detail}; help: stage then commit each future epoch, wait then consume or discard it, release it exactly once, and use slot = epoch % buffer_count"
+                )
+            }
+            Self::FindingLimitExceeded => formatter
+                .write_str("error[FE2O3-PIPELINE-003]: staged-pipeline finding limit exceeded"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EpochAwareLoopSummaryV1 {
+    prologue: usize,
+    prologue_blocks: Vec<usize>,
+    header: usize,
+    body: Vec<usize>,
+    exit: usize,
+    drain_blocks: Vec<usize>,
+    induction: String,
+    bound: String,
+    step: u64,
+    prefetched_epochs: u32,
+    live_epoch_window: u32,
+    drained_epochs: u32,
+}
+
+impl EpochAwareLoopSummaryV1 {
+    pub const fn prologue(&self) -> usize {
+        self.prologue
+    }
+    pub const fn header(&self) -> usize {
+        self.header
+    }
+    pub fn prologue_blocks(&self) -> &[usize] {
+        &self.prologue_blocks
+    }
+    pub fn body(&self) -> &[usize] {
+        &self.body
+    }
+    pub const fn exit(&self) -> usize {
+        self.exit
+    }
+    pub fn drain_blocks(&self) -> &[usize] {
+        &self.drain_blocks
+    }
+    pub fn induction(&self) -> &str {
+        &self.induction
+    }
+    pub fn bound(&self) -> &str {
+        &self.bound
+    }
+    pub const fn step(&self) -> u64 {
+        self.step
+    }
+    pub const fn prefetched_epochs(&self) -> u32 {
+        self.prefetched_epochs
+    }
+    pub const fn live_epoch_window(&self) -> u32 {
+        self.live_epoch_window
+    }
+    pub const fn drained_epochs(&self) -> u32 {
+        self.drained_epochs
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlironPipelineProtocolCertificateV1 {
+    pipeline_block: usize,
+    pipeline_operation: usize,
+    buffers: u32,
+    prefetch_distance: u32,
+    dynamic_loop: Option<EpochAwareLoopSummaryV1>,
+    concrete_epochs: usize,
+    staged_writes: usize,
+    consuming_reads: usize,
+    access_refinement_proven: bool,
+}
+
+impl PlironPipelineProtocolCertificateV1 {
+    pub const fn pipeline_block(&self) -> usize {
+        self.pipeline_block
+    }
+    pub const fn pipeline_operation(&self) -> usize {
+        self.pipeline_operation
+    }
+    pub const fn buffers(&self) -> u32 {
+        self.buffers
+    }
+    pub const fn prefetch_distance(&self) -> u32 {
+        self.prefetch_distance
+    }
+    pub const fn dynamic_loop(&self) -> Option<&EpochAwareLoopSummaryV1> {
+        self.dynamic_loop.as_ref()
+    }
+    pub const fn concrete_epochs(&self) -> usize {
+        self.concrete_epochs
+    }
+    pub const fn staged_writes(&self) -> usize {
+        self.staged_writes
+    }
+    pub const fn consuming_reads(&self) -> usize {
+        self.consuming_reads
+    }
+    pub const fn access_refinement_proven(&self) -> bool {
+        self.access_refinement_proven
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlironPipelineProtocolReportV1 {
+    findings: Vec<PlironPipelineProtocolFindingV1>,
+    certificates: Vec<PlironPipelineProtocolCertificateV1>,
+}
+
+impl PlironPipelineProtocolReportV1 {
+    pub const fn pass(&self) -> KernelCheckPassKindV1 {
+        KernelCheckPassKindV1::PipelineProtocol
+    }
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
+    }
+    pub fn is_clean(&self) -> bool {
+        self.status() == KernelCheckStatusV1::Clean
+    }
+    pub fn findings(&self) -> &[PlironPipelineProtocolFindingV1] {
+        &self.findings
+    }
+    pub fn certificates(&self) -> &[PlironPipelineProtocolCertificateV1] {
+        &self.certificates
+    }
+    pub const fn grants_compiler_refinement_authority(&self) -> bool {
+        false
+    }
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlironPipelineProtocolCheckErrorV1 {
+    report: PlironPipelineProtocolReportV1,
+}
+
+impl PlironPipelineProtocolCheckErrorV1 {
+    pub fn report(&self) -> &PlironPipelineProtocolReportV1 {
+        &self.report
+    }
+}
+
+impl fmt::Display for PlironPipelineProtocolCheckErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, finding) in self.report.findings.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str("\n")?;
+            }
+            finding.fmt(formatter)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for PlironPipelineProtocolCheckErrorV1 {}
+
+#[cfg(test)]
+pub(crate) fn run_pliron_pipeline_protocol_check_v1(
+    context: &Context,
+    function: &FuncOp,
+) -> PlironPipelineProtocolReportV1 {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, &mut analyses)
+}
+
+pub(crate) fn require_pliron_pipeline_protocol_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<PlironPipelineProtocolReportV1, PlironPipelineProtocolCheckErrorV1> {
+    let report = run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, analyses);
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(PlironPipelineProtocolCheckErrorV1 { report })
+    }
+}
+
+pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> PlironPipelineProtocolReportV1 {
+    let authenticated_census = analyses.input_census();
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => {
+            return report(PlironPipelineProtocolFindingV1::AnalysisIncomplete {
+                detail: "the bounded function inventory limit was exceeded".to_owned(),
+            });
+        }
+    };
+    let census = match authenticated_census
+        .or_else(|| pipeline_protocol_inventory_census_v1(context, &inventory))
+    {
+        Some(census) => census,
+        None => return equivalence_resource_failure_report_v1(),
+    };
+    if census.pipeline_creates == 0 {
+        let mut findings = Vec::new();
+        for site in inventory.operations() {
+            let operation = Operation::get_op_dyn(site.pointer(), context);
+            if operation.downcast_ref::<PipelineEventOp>().is_some() {
+                push_finding(
+                    &mut findings,
+                    PlironPipelineProtocolFindingV1::OrphanEvent {
+                        block: site.block(),
+                        operation: site.operation(),
+                    },
+                );
+            }
+        }
+        return PlironPipelineProtocolReportV1 {
+            findings,
+            certificates: Vec::new(),
+        };
+    }
+    let unique_pair_limit = match pipeline_equivalence_unique_pair_upper_bound_v1(census) {
+        Ok(limit) => limit,
+        Err(_) => return equivalence_resource_failure_report_v1(),
+    };
+    let mut equivalence_resources = match pipeline_equivalence_query_upper_bound_v1(census)
+        .map_err(|_| EquivalenceVisitLimitV1)
+        .and_then(|query_limit| EquivalenceResourceMeterV1::new(query_limit, unique_pair_limit))
+    {
+        Ok(resources) => resources,
+        Err(_) => return equivalence_resource_failure_report_v1(),
+    };
+    let loop_discovery = discover_epoch_loops(context, &inventory, &mut equivalence_resources);
+    if equivalence_resources.exhausted() {
+        return equivalence_resource_failure_report_v1();
+    }
+    let uniform_roots = function
+        .get_entry_block(context)
+        .deref(context)
+        .arguments()
+        .collect::<HashSet<_>>();
+    let mut creates = Vec::new();
+    let mut create_owners = HashSet::new();
+    let mut first_storage_owner = None;
+    let mut unknown_class_owner = None;
+    let mut view_owners = HashMap::<Value, PlironOperationSiteV1>::new();
+    let mut origin_owners = HashMap::<u64, PlironOperationSiteV1>::new();
+    let mut class_owners = HashMap::<u64, PlironOperationSiteV1>::new();
+    let mut findings = Vec::new();
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(create) = operation.downcast_ref::<PipelineCreateOp>() else {
+            continue;
+        };
+        let view = create.view(context);
+        let (origin, noalias_class) = pipeline_storage_contract(context, view);
+        let first = view_owners
+            .get(&view)
+            .or_else(|| origin.and_then(|origin| origin_owners.get(&origin)))
+            .or_else(|| noalias_class.and_then(|class| class_owners.get(&class)))
+            .or(match noalias_class {
+                Some(_) => unknown_class_owner.as_ref(),
+                None => first_storage_owner.as_ref(),
+            })
+            .copied();
+        if let Some(first) = first {
+            push_finding(
+                &mut findings,
+                PlironPipelineProtocolFindingV1::AliasedStorage {
+                    first_block: first.block(),
+                    first_operation: first.operation(),
+                    second_block: site.block(),
+                    second_operation: site.operation(),
+                },
+            );
+        }
+        first_storage_owner.get_or_insert(*site);
+        view_owners.entry(view).or_insert(*site);
+        if let Some(origin) = origin {
+            origin_owners.entry(origin).or_insert(*site);
+        }
+        if let Some(noalias_class) = noalias_class {
+            class_owners.entry(noalias_class).or_insert(*site);
+        } else {
+            unknown_class_owner.get_or_insert(*site);
+        }
+        creates.push((site.pointer(), *site, create.pipeline_type(context), view));
+        create_owners.insert(site.pointer());
+    }
+    let mut events = HashMap::<Ptr<Operation>, Vec<EventSiteV1>>::new();
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(event) = operation.downcast_ref::<PipelineEventOp>() else {
+            continue;
+        };
+        let Some(owner) = event.pipeline(context).defining_op() else {
+            push_finding(
+                &mut findings,
+                PlironPipelineProtocolFindingV1::OrphanEvent {
+                    block: site.block(),
+                    operation: site.operation(),
+                },
+            );
+            continue;
+        };
+        if !create_owners.contains(&owner) {
+            push_finding(
+                &mut findings,
+                PlironPipelineProtocolFindingV1::OrphanEvent {
+                    block: site.block(),
+                    operation: site.operation(),
+                },
+            );
+            continue;
+        }
+        events.entry(owner).or_default().push(EventSiteV1 {
+            site: *site,
+            kind: event.kind(context),
+            epoch: event.epoch(context),
+            slot: event.slot(context),
+        });
+    }
+    let mut accesses = HashMap::<Value, Vec<AccessSiteV1>>::new();
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        let Some(kind) = access.kind(context) else {
+            continue;
+        };
+        let indices = access.indices(context);
+        let Some(slot) = indices.first().copied() else {
+            continue;
+        };
+        accesses
+            .entry(access.view(context))
+            .or_default()
+            .push(AccessSiteV1 {
+                site: *site,
+                kind,
+                slot,
+                indices,
+            });
+    }
+    let mut certificates = Vec::new();
+    let uniformity_visit_limit = inventory.operations().len();
+    for (pointer, site, pipeline_type, view) in creates {
+        let Some(pipeline_type) = pipeline_type else {
+            push_finding(
+                &mut findings,
+                invalid(site, None, "pipeline configuration type is malformed"),
+            );
+            continue;
+        };
+        let pipeline_type = pipeline_type.deref(context);
+        let schedule = events.remove(&pointer).unwrap_or_default();
+        if schedule.is_empty() {
+            push_finding(
+                &mut findings,
+                invalid(site, None, "pipeline has no lifecycle events"),
+            );
+            continue;
+        }
+        match verify_one_pipeline(
+            context,
+            &loop_discovery.dominators,
+            site,
+            pipeline_type.buffers(),
+            pipeline_type.prefetch_distance(),
+            &schedule,
+            accesses.get(&view).map_or(&[], Vec::as_slice),
+            &loop_discovery.loops,
+            &uniform_roots,
+            uniformity_visit_limit,
+            &mut equivalence_resources,
+        ) {
+            Ok(certificate) => certificates.push(certificate),
+            Err(finding) => push_finding(&mut findings, finding),
+        }
+        if equivalence_resources.exhausted() {
+            return equivalence_resource_failure_report_v1();
+        }
+    }
+    PlironPipelineProtocolReportV1 {
+        findings,
+        certificates,
+    }
+}
+
+fn pipeline_protocol_inventory_census_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+) -> Option<ProductionAnalysisInputCensusV1> {
+    let mut operands = 0_usize;
+    let mut max_operation_arity = 0_usize;
+    let mut results = 0_usize;
+    let mut pipeline_creates = 0_usize;
+    let mut pipeline_events = 0_usize;
+    let mut ranked_accesses = 0_usize;
+    let mut allocation_effects = 0_usize;
+    let mut effect_refinement_contracts = 0_usize;
+    let mut index_lt_branch_candidates = 0_usize;
+    for site in inventory.operations() {
+        let raw = site.pointer().deref(context);
+        let operand_arity = raw.get_num_operands();
+        let arity = operand_arity.checked_add(raw.get_num_results())?;
+        operands = operands.checked_add(operand_arity)?;
+        results = results.checked_add(raw.get_num_results())?;
+        max_operation_arity = max_operation_arity.max(arity);
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        pipeline_creates += usize::from(operation.downcast_ref::<PipelineCreateOp>().is_some());
+        pipeline_events += usize::from(operation.downcast_ref::<PipelineEventOp>().is_some());
+        ranked_accesses += usize::from(operation.downcast_ref::<RankedAccessOp>().is_some());
+        allocation_effects += usize::from(operation.downcast_ref::<AllocationEffectOp>().is_some());
+        effect_refinement_contracts += usize::from(
+            operation
+                .downcast_ref::<RequireEffectRefinementOp>()
+                .is_some(),
+        );
+        index_lt_branch_candidates += usize::from(
+            operation
+                .downcast_ref::<IndexLessThanBranchArgsOp>()
+                .is_some(),
+        );
+    }
+    let block_arguments = inventory
+        .blocks()
+        .iter()
+        .try_fold(0_usize, |total, block| {
+            total.checked_add(block.deref(context).get_num_arguments())
+        })?;
+    Some(ProductionAnalysisInputCensusV1 {
+        blocks: inventory.blocks().len(),
+        operations: inventory.operations().len(),
+        operands,
+        results,
+        block_arguments,
+        max_operation_arity,
+        pipeline_creates,
+        pipeline_events,
+        ranked_accesses,
+        allocation_effects,
+        effect_refinement_contracts,
+        index_lt_branch_candidates,
+        ..ProductionAnalysisInputCensusV1::default()
+    })
+}
+
+fn equivalence_resource_failure_report_v1() -> PlironPipelineProtocolReportV1 {
+    report(PlironPipelineProtocolFindingV1::AnalysisIncomplete {
+        detail: "pipeline expression equivalence exceeded its authenticated resource limit"
+            .to_owned(),
+    })
+}
+
+fn pipeline_storage_contract(context: &Context, view: Value) -> (Option<u64>, Option<u64>) {
+    let contract = view.defining_op().and_then(|definition| {
+        Operation::get_op_dyn(definition, context)
+            .downcast_ref::<RankedViewOp>()
+            .map(|view| (view.allocation_origin(context), view.noalias_class(context)))
+    });
+    contract.map_or((None, None), |(origin, noalias_class)| {
+        (
+            origin.filter(|origin| *origin != 0),
+            noalias_class.filter(|class| *class != 0),
+        )
+    })
+}
+
+#[derive(Clone, Copy)]
+struct EventSiteV1 {
+    site: PlironOperationSiteV1,
+    kind: Option<PipelineEventKindAttr>,
+    epoch: Value,
+    slot: Value,
+}
+
+#[derive(Clone)]
+struct AccessSiteV1 {
+    site: PlironOperationSiteV1,
+    kind: AccessKindAttr,
+    slot: Value,
+    indices: Vec<Value>,
+}
+
+#[derive(Clone)]
+struct CanonicalEpochLoopV1 {
+    prologue: Vec<usize>,
+    header: usize,
+    body: Vec<usize>,
+    body_members: HashSet<usize>,
+    drain: Vec<usize>,
+    inductions: HashMap<usize, Value>,
+    header_induction: Value,
+    bound: Value,
+}
+
+struct EpochLoopDiscoveryV1 {
+    loops: Vec<CanonicalEpochLoopV1>,
+    dominators: Vec<HashSet<usize>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_one_pipeline(
+    context: &Context,
+    dominators: &[HashSet<usize>],
+    pipeline: PlironOperationSiteV1,
+    buffers: u32,
+    distance: u32,
+    schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
+    loops: &[CanonicalEpochLoopV1],
+    uniform_roots: &HashSet<Value>,
+    uniformity_visit_limit: usize,
+    equivalence_resources: &mut EquivalenceResourceMeterV1,
+) -> Result<PlironPipelineProtocolCertificateV1, PlironPipelineProtocolFindingV1> {
+    let mut containing = loops
+        .iter()
+        .filter(|summary| {
+            schedule
+                .iter()
+                .any(|event| summary.body_members.contains(&event.site.block()))
+        })
+        .collect::<Vec<_>>();
+    if containing.is_empty() {
+        let (epochs, staged_writes, consuming_reads, access_refinement_proven) =
+            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses)?;
+        return Ok(PlironPipelineProtocolCertificateV1 {
+            pipeline_block: pipeline.block(),
+            pipeline_operation: pipeline.operation(),
+            buffers,
+            prefetch_distance: distance,
+            dynamic_loop: None,
+            concrete_epochs: epochs,
+            staged_writes,
+            consuming_reads,
+            access_refinement_proven,
+        });
+    }
+    containing.sort_by_key(|summary| summary.body.len());
+    let Some(summary) = containing.first().copied() else {
+        unreachable!("the empty case returned above")
+    };
+    if containing[1..].iter().any(|outer| {
+        !summary
+            .body_members
+            .iter()
+            .all(|block| outer.body_members.contains(block))
+    }) {
+        return Err(invalid(
+            pipeline,
+            None,
+            "one pipeline lifecycle crosses non-nested dynamic loops",
+        ));
+    }
+    if summary.body_members.contains(&pipeline.block())
+        || summary.header == pipeline.block()
+        || !pipeline_creation_dominates_schedule(dominators, pipeline, schedule, accesses)
+    {
+        return Err(invalid(
+            pipeline,
+            None,
+            "the dynamic pipeline creation does not execute once and dominate its complete lifecycle",
+        ));
+    }
+    let mut prologue_blocks = Vec::with_capacity(summary.prologue.len() + 1);
+    prologue_blocks.push(pipeline.block());
+    prologue_blocks.extend(
+        summary
+            .prologue
+            .iter()
+            .copied()
+            .filter(|block| *block != pipeline.block()),
+    );
+    let uniform_bound = is_uniform_value(
+        context,
+        summary.bound,
+        uniform_roots,
+        uniformity_visit_limit,
+    );
+    if uniform_bound != Ok(true) {
+        let detail = if uniform_bound.is_err() {
+            "the runtime loop bound uniformity proof exceeded its authenticated operation visit limit"
+        } else {
+            "the runtime loop bound is not proved workgroup-uniform"
+        };
+        return Err(invalid(pipeline, None, detail));
+    }
+    let (staged_writes, consuming_reads, access_refinement_proven) = verify_dynamic_schedule(
+        context,
+        pipeline,
+        buffers,
+        distance,
+        DynamicScheduleInputV1 {
+            schedule,
+            accesses,
+            summary,
+        },
+        equivalence_resources,
+    )?;
+    Ok(PlironPipelineProtocolCertificateV1 {
+        pipeline_block: pipeline.block(),
+        pipeline_operation: pipeline.operation(),
+        buffers,
+        prefetch_distance: distance,
+        dynamic_loop: Some(EpochAwareLoopSummaryV1 {
+            prologue: pipeline.block(),
+            prologue_blocks,
+            header: summary.header,
+            body: summary.body.clone(),
+            exit: summary.drain[0],
+            drain_blocks: summary.drain.clone(),
+            induction: bounded_pipeline_value_name_v1(summary.header_induction, context),
+            bound: bounded_pipeline_value_name_v1(summary.bound, context),
+            step: 1,
+            prefetched_epochs: distance,
+            live_epoch_window: distance + 1,
+            drained_epochs: distance,
+        }),
+        concrete_epochs: 0,
+        staged_writes,
+        consuming_reads,
+        access_refinement_proven,
+    })
+}
+
+fn bounded_pipeline_value_name_v1(value: Value, context: &Context) -> String {
+    let identifier = value.unique_name(context);
+    let source = identifier.as_ref();
+    if source.len() <= MAX_PLIRON_PIPELINE_VALUE_NAME_BYTES_V1 {
+        return source.to_owned();
+    }
+    let mut end = MAX_PLIRON_PIPELINE_VALUE_NAME_BYTES_V1;
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = String::with_capacity(end + 3);
+    bounded.push_str(&source[..end]);
+    bounded.push_str("...");
+    bounded
+}
+
+fn pipeline_creation_dominates_schedule(
+    dominators: &[HashSet<usize>],
+    pipeline: PlironOperationSiteV1,
+    schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
+) -> bool {
+    schedule
+        .iter()
+        .map(|event| event.site)
+        .chain(accesses.iter().map(|access| access.site))
+        .all(|site| {
+            if site.block() == pipeline.block() {
+                return site.operation() > pipeline.operation();
+            }
+            dominators
+                .get(site.block())
+                .is_some_and(|target| target.contains(&pipeline.block()))
+        })
+}
+
+enum UniformityFrameV1 {
+    Enter(Value),
+    Evaluate {
+        value: Value,
+        inputs: Vec<Value>,
+        next: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UniformityVisitLimitV1;
+
+fn is_uniform_value(
+    context: &Context,
+    value: Value,
+    uniform_roots: &HashSet<Value>,
+    visit_limit: usize,
+) -> Result<bool, UniformityVisitLimitV1> {
+    let mut visits = 0_usize;
+    let mut memo = HashMap::<Value, bool>::new();
+    let mut active = HashSet::<Value>::new();
+    let mut pending = vec![UniformityFrameV1::Enter(value)];
+    while let Some(frame) = pending.pop() {
+        match frame {
+            UniformityFrameV1::Enter(value) => {
+                if uniform_roots.contains(&value) {
+                    memo.insert(value, true);
+                    continue;
+                }
+                if memo.contains_key(&value) {
+                    continue;
+                }
+                visits = visits.checked_add(1).ok_or(UniformityVisitLimitV1)?;
+                if visits > visit_limit {
+                    return Err(UniformityVisitLimitV1);
+                }
+                if !active.insert(value) {
+                    memo.insert(value, false);
+                    continue;
+                }
+                let Some(definition) = value.defining_op() else {
+                    active.remove(&value);
+                    memo.insert(value, false);
+                    continue;
+                };
+                let operation = Operation::get_op_dyn(definition, context);
+                let inputs = if operation.downcast_ref::<IndexConstantOp>().is_some() {
+                    active.remove(&value);
+                    memo.insert(value, true);
+                    continue;
+                } else if let Some(binary) = operation.downcast_ref::<IndexBinaryOp>() {
+                    vec![binary.lhs(context), binary.rhs(context)]
+                } else if let Some(cast) = operation.downcast_ref::<IndexUnsignedCastOp>() {
+                    vec![cast.source(context)]
+                } else if let Some(join) = operation.downcast_ref::<DeterministicJoinOp>() {
+                    let dependencies = join.dependencies(context);
+                    if dependencies.is_empty() {
+                        active.remove(&value);
+                        memo.insert(value, false);
+                        continue;
+                    }
+                    dependencies
+                } else {
+                    active.remove(&value);
+                    memo.insert(value, false);
+                    continue;
+                };
+                pending.push(UniformityFrameV1::Evaluate {
+                    value,
+                    inputs,
+                    next: 0,
+                });
+            }
+            UniformityFrameV1::Evaluate {
+                value,
+                inputs,
+                next,
+            } if next < inputs.len() => {
+                let input = inputs[next];
+                pending.push(UniformityFrameV1::Evaluate {
+                    value,
+                    inputs,
+                    next: next + 1,
+                });
+                pending.push(UniformityFrameV1::Enter(input));
+            }
+            UniformityFrameV1::Evaluate { value, inputs, .. } => {
+                active.remove(&value);
+                let uniform = memo.get(&value) != Some(&false)
+                    && inputs.iter().all(|input| memo.get(input) == Some(&true));
+                memo.insert(value, uniform);
+            }
+        }
+    }
+    Ok(memo.get(&value) == Some(&true))
+}
+
+include!("pliron_pipeline_protocol/dynamic_schedule_v1.rs");
+
+fn verify_concrete_schedule(
+    context: &Context,
+    pipeline: PlironOperationSiteV1,
+    buffers: u32,
+    schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
+) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
+    let first_block = schedule[0].site.block();
+    if first_block != pipeline.block() {
+        return Err(invalid(
+            pipeline,
+            None,
+            "a straight-line pipeline lifecycle is not in its creation block, so per-entry lifecycle ownership is unproved",
+        ));
+    }
+    if schedule
+        .iter()
+        .any(|event| event.site.block() != first_block)
+    {
+        return Err(invalid(
+            pipeline,
+            None,
+            "non-loop pipeline events span multiple blocks, so execution order is not unique",
+        ));
+    }
+    let mut ordered = schedule.to_vec();
+    ordered.sort_by_key(|event| event.site.operation());
+    let mut slots = vec![SlotStateV1::Free; buffers as usize];
+    let mut epochs = HashSet::new();
+    let mut ordered_accesses = accesses.to_vec();
+    ordered_accesses.sort_by_key(|access| access.site.operation());
+    let mut next_event = 0;
+    let mut next_access = 0;
+    let mut staged_writes = 0;
+    let mut consuming_reads = 0;
+    let mut initialized = HashMap::<u64, HashSet<Vec<Value>>>::new();
+    while next_event < ordered.len() || next_access < ordered_accesses.len() {
+        let event_precedes = next_access == ordered_accesses.len()
+            || (next_event < ordered.len()
+                && ordered[next_event].site.operation()
+                    < ordered_accesses[next_access].site.operation());
+        if !event_precedes {
+            let access = ordered_accesses[next_access].clone();
+            next_access += 1;
+            if access.site.block() != first_block {
+                return Err(invalid(
+                    pipeline,
+                    Some(access.site),
+                    "a straight-line pipeline access is outside the entry block",
+                ));
+            }
+            let Some(slot) = index_constant(context, access.slot) else {
+                return Err(invalid(
+                    pipeline,
+                    Some(access.site),
+                    "a straight-line pipeline access has a symbolic ring slot",
+                ));
+            };
+            let Some(state) = usize::try_from(slot)
+                .ok()
+                .and_then(|slot| slots.get(slot))
+                .copied()
+            else {
+                return Err(invalid(
+                    pipeline,
+                    Some(access.site),
+                    &format!("pipeline access slot {slot} is outside {buffers} buffers"),
+                ));
+            };
+            match access.kind {
+                AccessKindAttr::Write if matches!(state, SlotStateV1::Staged(_)) => {
+                    let SlotStateV1::Staged(epoch) = state else {
+                        unreachable!("the guarded state is staged")
+                    };
+                    initialized
+                        .entry(epoch)
+                        .or_default()
+                        .insert(access.indices[1..].to_vec());
+                    staged_writes += 1;
+                }
+                AccessKindAttr::Read if matches!(state, SlotStateV1::Consuming(_)) => {
+                    let SlotStateV1::Consuming(epoch) = state else {
+                        unreachable!("the guarded state is consuming")
+                    };
+                    if !initialized
+                        .get(&epoch)
+                        .is_some_and(|writes| writes.contains(&access.indices[1..]))
+                    {
+                        return Err(invalid(
+                            pipeline,
+                            Some(access.site),
+                            "pipeline read coordinate was not initialized in the same epoch",
+                        ));
+                    }
+                    consuming_reads += 1;
+                }
+                _ => {
+                    return Err(invalid(
+                        pipeline,
+                        Some(access.site),
+                        &format!(
+                            "{:?} access to slot {slot} occurs while that slot is {state:?}",
+                            access.kind
+                        ),
+                    ));
+                }
+            }
+            continue;
+        }
+        let event = ordered[next_event];
+        next_event += 1;
+        let Some(kind) = event.kind else {
+            return Err(invalid(
+                pipeline,
+                Some(event.site),
+                "event kind is malformed",
+            ));
+        };
+        let Some(epoch) = index_constant(context, event.epoch) else {
+            return Err(invalid(
+                pipeline,
+                Some(event.site),
+                "symbolic event is not enclosed by a supported runtime-bounded loop",
+            ));
+        };
+        let Some(slot) = index_constant(context, event.slot) else {
+            return Err(invalid(
+                pipeline,
+                Some(event.site),
+                "constant epoch has a non-constant ring slot",
+            ));
+        };
+        if slot != epoch % u64::from(buffers) {
+            return Err(invalid(
+                pipeline,
+                Some(event.site),
+                &format!("slot {slot} is not epoch {epoch} % {buffers}"),
+            ));
+        }
+        let state = &mut slots[slot as usize];
+        let next = match (kind, *state) {
+            (PipelineEventKindAttr::Stage, SlotStateV1::Free) => {
+                epochs.insert(epoch);
+                SlotStateV1::Staged(epoch)
+            }
+            (PipelineEventKindAttr::Commit, SlotStateV1::Staged(current)) if current == epoch => {
+                SlotStateV1::Committed(epoch)
+            }
+            (PipelineEventKindAttr::Wait, SlotStateV1::Committed(current)) if current == epoch => {
+                SlotStateV1::Ready(epoch)
+            }
+            (PipelineEventKindAttr::Consume, SlotStateV1::Ready(current)) if current == epoch => {
+                SlotStateV1::Consuming(epoch)
+            }
+            (PipelineEventKindAttr::Discard, SlotStateV1::Ready(current)) if current == epoch => {
+                SlotStateV1::Discarding(epoch)
+            }
+            (PipelineEventKindAttr::Release, SlotStateV1::Consuming(current))
+            | (PipelineEventKindAttr::Release, SlotStateV1::Discarding(current))
+                if current == epoch =>
+            {
+                SlotStateV1::Free
+            }
+            _ => {
+                return Err(invalid(
+                    pipeline,
+                    Some(event.site),
+                    &format!(
+                        "{kind:?} for epoch {epoch} is illegal while slot {slot} is {state:?}"
+                    ),
+                ));
+            }
+        };
+        *state = next;
+    }
+    if slots.iter().any(|state| *state != SlotStateV1::Free) {
+        return Err(invalid(
+            pipeline,
+            None,
+            "pipeline exits with committed or consuming epochs that were not released",
+        ));
+    }
+    Ok((epochs.len(), staged_writes, consuming_reads, true))
+}
+
+include!("pliron_pipeline_protocol/epoch_loops_v1.rs");
+
+include!("pliron_pipeline_protocol/index_equivalence_v1.rs");
+
+fn invalid(
+    pipeline: PlironOperationSiteV1,
+    event: Option<PlironOperationSiteV1>,
+    detail: &str,
+) -> PlironPipelineProtocolFindingV1 {
+    PlironPipelineProtocolFindingV1::InvalidSchedule {
+        pipeline_block: pipeline.block(),
+        pipeline_operation: pipeline.operation(),
+        event_block: event.map(PlironOperationSiteV1::block),
+        event_operation: event.map(PlironOperationSiteV1::operation),
+        detail: detail.to_owned(),
+    }
+}
+
+fn push_finding(
+    findings: &mut Vec<PlironPipelineProtocolFindingV1>,
+    finding: PlironPipelineProtocolFindingV1,
+) {
+    if findings.len() < MAX_PLIRON_PIPELINE_FINDINGS_V1 {
+        findings.push(finding);
+    } else if !matches!(
+        findings.last(),
+        Some(PlironPipelineProtocolFindingV1::FindingLimitExceeded)
+    ) {
+        findings.push(PlironPipelineProtocolFindingV1::FindingLimitExceeded);
+    }
+}
+
+fn report(finding: PlironPipelineProtocolFindingV1) -> PlironPipelineProtocolReportV1 {
+    PlironPipelineProtocolReportV1 {
+        findings: vec![finding],
+        certificates: Vec::new(),
+    }
+}
+
+include!("pliron_pipeline_protocol/resource_tests.rs");

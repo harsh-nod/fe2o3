@@ -1274,13 +1274,8 @@ dependencies = [
 name = "fe2o3-kernel-analysis"
 version = "0.1.0"
 dependencies = [
- "dialect-gpu",
- "dialect-kernel",
- "dialect-proof",
  "fe2o3-artifact-transaction",
  "fe2o3-kernel-ir",
- "fe2o3-pliron-owner-core",
- "pliron",
  "rustc_apfloat",
  "rustix",
  "sha2 0.11.0",
@@ -1473,10 +1468,14 @@ dependencies = [
 name = "fe2o3-pliron"
 version = "0.1.0"
 dependencies = [
+ "dialect-autotune",
+ "dialect-dispatch",
  "dialect-gpu",
  "dialect-kernel",
  "dialect-mir",
  "dialect-proof",
+ "dialect-schedule",
+ "dialect-tile",
  "ed25519-dalek",
  "fe2o3-functional-proof",
  "fe2o3-kernel-analysis",
@@ -1486,6 +1485,7 @@ dependencies = [
  "fe2o3-proof-contracts",
  "pliron",
  "sha2 0.11.0",
+ "syn 2.0.119",
  "trybuild",
 ]
 
@@ -2748,7 +2748,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd#9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd"
 dependencies = [
  "awint",
  "combine",
@@ -2775,7 +2775,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd#9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd"
 dependencies = [
  "combine",
  "convert_case",
@@ -2789,7 +2789,7 @@ dependencies = [
 [[package]]
 name = "pliron-llvm"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd#9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd"
 dependencies = [
  "bitflags",
  "log",

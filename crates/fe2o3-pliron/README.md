@@ -8,12 +8,14 @@ workspace. It provides:
   store rather than transferable auxiliary marker data;
 - opaque operation handles whose upstream pointers remain in a private
   session registry;
+- exact graph snapshots, mutation epochs, and session-owned analysis caches;
 - byte- and tree-guarded textual operation import that requires exact
   end-of-input and recursive verification before returning an owner handle;
 - owner-scoped dialect-registration services with bounded typed actions;
 - deterministic, bounded pass plans over real Pliron `Pass` values;
 - a typed canonical-KIR bridge for executable `gpu.*` SSA; and
-- a sealed optimizer executor for the fixed fe2o3 pass vocabulary.
+- a sealed optimizer executor for the fixed fe2o3 pass vocabulary; and
+- the fixed production analysis pipeline, with no public raw-graph entry point.
 
 The context identity and typed dialect-registration primitives are implemented
 once in the lower-level `fe2o3-pliron-owner-core` crate. Admitted dialect
@@ -22,9 +24,10 @@ depends on the core and publicly re-exports its existing API for downstream
 compatibility.
 
 The dependency is pinned to reviewed Pliron v0.17.0 fork commit
-`5bdf861bf03e7f20242b25717fb653336d02e487`. It is a strict descendant of
+`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`. It is a strict descendant of
 upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and adds
-the bounded mutation-attempt epoch used by the production analysis boundary.
+private context provenance on upstream pointers and the mutation-attempt epoch
+used by the production analysis boundary.
 The `pliron-derive` dependency used by `pliron` is sourced from that same Git
 workspace revision and retains the reviewed source-tree identity. This crate
 does not construct or lower LLVM operations. The workspace pins `pliron-llvm`
@@ -47,7 +50,9 @@ compiler, publish artifacts, grant proof or launch authority, or use COMGR. It
 does execute a closed, owner-authenticated optimization plan selected by
 `fe2o3-kernel-opt`; it never accepts an arbitrary caller-provided pass.
 Pliron pointers, arena identities, printer text, and diagnostics are never
-used as canonical fe2o3 identities.
+used as durable canonical fe2o3 identities. A session-local presentation digest
+detects graph drift; its replay projection is diagnostic optimizer metadata,
+not artifact, proof, or launch authority.
 
 The shell bounds registration count before collecting caller input, each
 dialect hook to 128 typed registration actions, pass-plan count, names, and
@@ -84,7 +89,7 @@ allocation. Handle identities and their debug representations are not
 canonical data.
 
 The crate does not execute a generic pass plan. Invoking an arbitrary
-caller-provided Pliron `Pass` would give that pass a contextless pointer and
+caller-provided Pliron `Pass` would give that pass a raw pointer and
 `&mut Context`. `PlironOptimizationPlanV1` instead accepts only the closed
 fe2o3 pass enum, authenticates the root, bounds structural work, recursively
 verifies every changed checkpoint, and poisons the private session on failure.
@@ -94,10 +99,10 @@ remain contained by the session-construction boundary.
 
 Context identities protect fe2o3-owned envelopes and results from being
 validated against a different context, including when public Pliron auxiliary
-marker boxes are moved between contexts. They do not add provenance to
-upstream Pliron `Ptr<T>` values. Raw pointers remain contextless arena indexes
-inside the Pliron trusted computing base and must not be exposed as a safe
-cross-context capability. `ContextIdentity` intentionally hides its numeric
+marker boxes are moved between contexts. The pinned upstream `Ptr<T>` also
+retains private context provenance; equal arena slots from different contexts
+do not compare equal. fe2o3 keeps those pointers inside the trusted compiler
+boundary and exposes only owner-scoped handles. `ContextIdentity` intentionally hides its numeric
 debug value but remains only process-local in-memory provenance; equality or
 hashing must never become an artifact, cache, proof, publication, or runtime
 identity.
@@ -124,6 +129,12 @@ these ceilings, but no public limit value can exceed them.
 
 ## Closed generic kernel-check production path
 
+The implementation lives in private `src/production_analysis/` modules. The
+public surface exports reports and model types, not functions accepting raw
+`Context`, `FuncOp`, or operation pointers. `fe2o3-kernel-analysis` retains the
+Pliron-independent optimizer analyses and Presburger math; the live-IR
+Presburger adapter lives beside the other production analyses here.
+
 `compile_ranked_kernel_for_lowering_v1` is the single closed owner path for the
 target-neutral ranked-memory schema. It admits only bounded data recipes,
 constructs the module and function inside `ProductionPlironSessionV1`, performs
@@ -140,6 +151,30 @@ that aggregate transition can create the move-only
 `ProductionRankedKernelLoweringInputV1`; an empty module, a foreign root, a
 same-session substituted root, a changed graph, or any rejected report cannot
 be relabeled as verified.
+
+The aggregate transition binds its reports to the exact owner, root, graph
+epoch, and canonical ranked recipe. Lowering preparation independently runs
+the checks again and compares the retained reports and resource receipts.
+It reserves the first run's retained storage and the report-comparison cost
+before admitting the second run. Ordinary optimizer passes begin and commit
+checked graph mutations; changed graphs advance the epoch and invalidate
+cached analyses, while verified no-op passes preserve them.
+
+The resource receipts cover the implemented phase policies, not a complete
+worst-case proof for every upstream operation. In particular, generic verifier
+allocation, retained hash-table behavior, and same-block ordering scans still
+need resource closure. A fresh scoped dominance tree avoids repeated tree
+construction during one production structural capture, but does not establish
+formal compiler verification. Native Switch and vector memory operations are
+not admitted by this migration.
+
+The relocated textual suites are under `src/production_analysis/tests/lit/`
+and `src/production_analysis/tests/protocol-lit/`. Run them with:
+
+```sh
+cargo test -p fe2o3-pliron --lib textual_pliron_lit_suite
+cargo test -p fe2o3-pliron --lib pliron_protocol_lit
+```
 
 The current `compile_ranked_kernel_for_lowering_v1` entry has no authenticated
 target-context owner, so an atomic recipe deliberately stops as `Incomplete`.
@@ -166,13 +201,13 @@ integration boundaries:
 - `ensure_context_identity` and `require_context_identity` accept a caller-held
   Pliron context so existing owner-aware envelopes and detached services can
   authenticate their raw upstream handles.
-- `with_context_mut` exists only behind the disabled-by-default
-  `internal-test-context-access` feature for cross-crate conformance tests.
+- Cross-crate conformance uses owner-scoped facades. There is no
+  `with_context_mut` method or feature that restores raw session access.
 - Dialect crates retain legacy `register_dialect` or `register_mir_dialect`
   functions for direct-context lowering, bridge, compiler, and dialect-test
   callers that have not migrated to session-owned construction.
 - Existing dialect builders, verifiers, and detached lowering services still
-  accept raw contexts and, in some cases, contextless upstream pointers.
+  accept caller-owned raw contexts and upstream pointers.
 
 These are compiler-internal trusted-computing-base surfaces, not production
 operation capabilities. The registration migration does not broaden them and
@@ -197,7 +232,7 @@ owner-authenticated handles.
   cooperative work or cancellation budget. fe2o3 now authenticates roots in
   its own session registry, but restoring execution still requires sealed pass
   access plus pass-work accounting or process containment.
-- Upstream, hook, registration-input, pointer-access, and test-context callback
+- Upstream, hook, registration-input, and pointer-access
   unwinds are converted to typed errors under unwind-enabled builds. The
   registration action bound does not bound arbitrary computation inside a
   hook. As with all `catch_unwind` boundaries, `panic=abort`, allocator aborts,

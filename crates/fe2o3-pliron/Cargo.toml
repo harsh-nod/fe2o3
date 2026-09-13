@@ -11,7 +11,8 @@ publish = false
 
 [features]
 default = []
-internal-test-context-access = []
+# Private observer for bounded compiler diagnostics; never proof authority.
+internal-bounds-cost-trace = []
 # Exposes policy-checked receipt staging to the workspace verifier and hostile
 # tests. The staged graph remains non-authoritative until aggregate replay.
 internal-proof-staging = ["fe2o3-functional-proof/internal-proof-staging"]
@@ -22,7 +23,7 @@ dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 dialect-proof.workspace = true
 fe2o3-functional-proof.workspace = true
-fe2o3-kernel-analysis = { workspace = true, features = ["pliron-analysis"] }
+fe2o3-kernel-analysis.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-mir-model.workspace = true
 fe2o3-pliron-owner-core.workspace = true
@@ -31,5 +32,10 @@ pliron.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+dialect-autotune.workspace = true
+dialect-dispatch.workspace = true
+dialect-schedule.workspace = true
+dialect-tile.workspace = true
 ed25519-dalek = { version = "2.2.0", features = ["fast", "zeroize"] }
+syn.workspace = true
 trybuild = "1"

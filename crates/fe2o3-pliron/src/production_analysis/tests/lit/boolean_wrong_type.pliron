@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: Forwarded operand at 0 is of type
+builtin.func @boolean_wrong_type: builtin.function <(builtin.integer i1) -> ()>
+{
+  ^entry(b: builtin.integer i1):
+    gpu.cond_branch (b, b, b) [^exit, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, builtin.integer i1, builtin.integer i1) -> ()>
+  ^exit(i: kernel.index):
+    kernel.return () [] []: <() -> ()>
+}

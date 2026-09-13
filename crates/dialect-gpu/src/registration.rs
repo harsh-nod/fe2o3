@@ -14,6 +14,7 @@ use crate::{
         PreservedTerminatorOp, ReturnOp, SelectOp, SliceDataOp, SliceLengthOp, SliceType, StoreOp,
         UnaryKindAttr, UnaryOp, VolatileAttr,
     },
+    vector_v12::{FixedVectorTypeV12, VectorLaneCountAttrV12, VectorLayoutAttrV12},
 };
 
 fn registration_hook(
@@ -39,12 +40,18 @@ fn registration_hook(
     service.register_attribute::<VolatileAttr>()?;
     service.register_attribute::<PreservedOperationKindAttr>()?;
     service.register_attribute::<PreservedTerminatorKindAttr>()?;
+    service.register_attribute::<crate::switch_v3::SwitchKeyKindAttrV3>()?;
+    service.register_attribute::<crate::switch_v3::SwitchCaseBitsAttrV3>()?;
+    service.register_attribute::<crate::switch_v3::SwitchSuccessorOffsetsAttrV3>()?;
+    service.register_attribute::<VectorLaneCountAttrV12>()?;
+    service.register_attribute::<VectorLayoutAttrV12>()?;
     service.register_type::<HierarchyIndexType>()?;
     service.register_type::<MemorySpaceType>()?;
     service.register_type::<IndexType>()?;
     service.register_type::<BFloat16Type>()?;
     service.register_type::<PointerType>()?;
     service.register_type::<SliceType>()?;
+    service.register_type::<FixedVectorTypeV12>()?;
     service.register_operation::<HierarchyIdOp>()?;
     service.register_operation::<ExecutionLayoutOp>()?;
     service.register_operation::<MemorySpaceOp>()?;
@@ -67,6 +74,7 @@ fn registration_hook(
     service.register_operation::<StoreOp>()?;
     service.register_operation::<PreservedOperationOp>()?;
     service.register_operation::<PreservedTerminatorOp>()?;
+    service.register_operation::<crate::switch_v3::SwitchOpV3>()?;
     Ok(())
 }
 

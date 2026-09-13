@@ -10,8 +10,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::{SparseIndexAnalysisV1, SparseIndexFactV1};
-
 pub const MAX_PRESBURGER_VARIABLES_V1: usize = 16;
 pub const MAX_PRESBURGER_CONSTRAINTS_V1: usize = 256;
 pub const MAX_PRESBURGER_OUTPUTS_V1: usize = 16;
@@ -941,109 +939,5 @@ impl PresburgerBudgetV1 {
         }
         self.work = actual;
         Ok(())
-    }
-}
-
-/// Per-function adapter from sparse PLIRON index facts to Presburger maps.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PlironPresburgerAnalysisV1 {
-    launch_extents: Vec<u64>,
-}
-
-impl PlironPresburgerAnalysisV1 {
-    pub fn from_sparse(sparse: &SparseIndexAnalysisV1) -> Self {
-        Self::for_launch_extents(sparse.launch_extents().to_vec())
-    }
-
-    pub fn for_launch_extents(launch_extents: Vec<u64>) -> Self {
-        Self { launch_extents }
-    }
-
-    pub fn launch_extents(&self) -> &[u64] {
-        &self.launch_extents
-    }
-
-    pub fn map_for_facts(
-        &self,
-        facts: &[SparseIndexFactV1],
-    ) -> Result<PresburgerMapV1, PresburgerFailureV1> {
-        self.map_for_facts_over_extents(facts, &self.launch_extents)
-    }
-
-    pub fn map_for_facts_over_extents(
-        &self,
-        facts: &[SparseIndexFactV1],
-        launch_extents: &[u64],
-    ) -> Result<PresburgerMapV1, PresburgerFailureV1> {
-        if launch_extents.contains(&0) {
-            return Err(PresburgerFailureV1::Unsupported {
-                detail: "a dynamic launch extent has no finite compiler bound",
-            });
-        }
-        let domain = PresburgerSetV1::box_only(PresburgerBoxV1::zero_based(launch_extents)?);
-        let outputs = facts
-            .iter()
-            .map(|fact| self.map_expr_for_fact_over_extents(fact, launch_extents))
-            .collect::<Result<Vec<_>, _>>()?;
-        PresburgerMapV1::new(domain, outputs)
-    }
-
-    pub fn map_expr_for_fact(
-        &self,
-        fact: &SparseIndexFactV1,
-    ) -> Result<PresburgerMapExprV1, PresburgerFailureV1> {
-        self.map_expr_for_fact_over_extents(fact, &self.launch_extents)
-    }
-
-    fn map_expr_for_fact_over_extents(
-        &self,
-        fact: &SparseIndexFactV1,
-        launch_extents: &[u64],
-    ) -> Result<PresburgerMapExprV1, PresburgerFailureV1> {
-        let affine = |constant: u64, coefficients: &[u64]| {
-            if coefficients
-                .iter()
-                .skip(launch_extents.len())
-                .any(|coefficient| *coefficient != 0)
-            {
-                return Err(PresburgerFailureV1::Unsupported {
-                    detail: "an affine index depends on an undeclared invocation dimension",
-                });
-            }
-            PresburgerAffineExprV1::new(
-                i128::from(constant),
-                coefficients
-                    .iter()
-                    .take(launch_extents.len())
-                    .map(|coefficient| i128::from(*coefficient))
-                    .collect(),
-            )
-        };
-        match fact {
-            SparseIndexFactV1::Affine(expression) => Ok(PresburgerMapExprV1::Affine(affine(
-                expression.constant_term(),
-                expression.coefficients(),
-            )?)),
-            SparseIndexFactV1::Remainder { dividend, modulus } if *modulus != 0 => {
-                Ok(PresburgerMapExprV1::Remainder {
-                    dividend: affine(dividend.constant_term(), dividend.coefficients())?,
-                    modulus: i128::from(*modulus),
-                })
-            }
-            SparseIndexFactV1::Remainder { .. } => Err(PresburgerFailureV1::InvalidModel {
-                detail: "sparse remainder has a zero modulus",
-            }),
-            SparseIndexFactV1::MachineOverflow(_) => {
-                Err(PresburgerFailureV1::MachineIntegerOverflow {
-                    bits: 64,
-                    signed: false,
-                })
-            }
-            SparseIndexFactV1::Unknown
-            | SparseIndexFactV1::CheckedTiled2D(_)
-            | SparseIndexFactV1::CheckedRowStriped2D(_) => Err(PresburgerFailureV1::Unsupported {
-                detail: "index fact is outside the affine/remainder Presburger fragment",
-            }),
-        }
     }
 }

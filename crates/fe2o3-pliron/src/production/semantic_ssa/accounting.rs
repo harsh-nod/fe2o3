@@ -37,8 +37,6 @@ pub(super) fn retained_cross_edge_variables_v1(
             }
         }
     }
-    drop(mention);
-
     // Kahn elimination leaves cyclic blocks and blocks whose execution depends
     // on a cycle. A retained local mentioned there may carry state across a
     // backedge even when it is mentioned in only one source block.

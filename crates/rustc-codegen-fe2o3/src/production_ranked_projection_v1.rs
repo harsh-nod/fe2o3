@@ -26,9 +26,6 @@ use dialect_kernel::{
     PipelineEventKindAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_artifacts::{BlockSize, LaunchContract};
-use fe2o3_kernel_analysis::{
-    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
-};
 #[cfg(test)]
 use fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionReceiptV1;
 use fe2o3_lower_mir_kernel::{
@@ -67,6 +64,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
+};
+use fe2o3_pliron::{
+    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -1753,12 +1753,12 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 ) = error
                 {
                     for finding in bounds.report().findings() {
-                        if let fe2o3_kernel_analysis::RankedBoundsFindingV1::StaticOutOfBounds {
+                        if let fe2o3_pliron::RankedBoundsFindingV1::StaticOutOfBounds {
                             block,
                             operation,
                             ..
                         }
-                        | fe2o3_kernel_analysis::RankedBoundsFindingV1::UnprovedBound {
+                        | fe2o3_pliron::RankedBoundsFindingV1::UnprovedBound {
                             block,
                             operation,
                             ..
@@ -19219,7 +19219,7 @@ fn build_ranked_cfg(
                 "semantic CFG block count overflow",
             ))?;
     }
-    if block_count > fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_BLOCKS {
+    if block_count > fe2o3_pliron::MAX_RANKED_BOUNDS_BLOCKS {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "semantic CFG projection exceeds the ranked block limit",
         ));

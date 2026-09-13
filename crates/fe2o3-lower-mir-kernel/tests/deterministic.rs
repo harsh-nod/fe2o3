@@ -1,16 +1,8 @@
-use dialect_kernel::AlgorithmOp;
-use dialect_mir::{
-    MirTypeId,
-    pliron::{MirDialectLimits, MirModuleOp},
-};
+use dialect_mir::MirTypeId;
 use fe2o3_lower_mir_kernel::{
-    DIALECT_REGISTRATION_ORDER, LoweringConfig, LoweringLimits, LoweringResult,
-    MirKernelLoweringPass, PassRegistrationOutcome, SourceOperationEvidence, register_pass,
-};
-use pliron::{
-    context::Context,
-    op::Op,
-    operation::{Operation, verify_operation},
+    DIALECT_REGISTRATION_ORDER, LoweringConfig, LoweringLimits,
+    MirKernelLoweringConformanceFunctionV1, MirKernelLoweringConformanceInputV1,
+    MirKernelLoweringConformanceV1, SourceOperationEvidence,
 };
 
 fn config() -> LoweringConfig {
@@ -21,61 +13,36 @@ fn config() -> LoweringConfig {
     .expect("bounded rank")
 }
 
-fn source(context: &mut Context) -> MirModuleOp {
-    let source_limits = MirDialectLimits::new(4, 4, 128).expect("bounded MIR limits");
-    let module = MirModuleOp::try_new(context, "crate::kernels", source_limits)
-        .expect("valid source module");
-    let first = module
-        .append_function(
-            context,
-            "crate::kernels::zeta",
-            &[MirTypeId(7), MirTypeId(2)],
-        )
-        .expect("valid first function");
-    first.append_block(context).expect("valid second block");
-    module
-        .append_function(context, "crate::kernels::alpha", &[])
-        .expect("valid second function");
-    module
-}
-
-fn lower() -> (Context, LoweringResult) {
-    let mut context = Context::new();
-    register_pass(&mut context).expect("explicit registration");
-    let source = source(&mut context);
-    let mut pass = MirKernelLoweringPass::new(config());
-    pass.run_checked(source.get_operation(), &mut context)
-        .expect("supported lowering");
-    let result = pass.take_result().expect("successful result");
-    (context, result)
+fn input() -> MirKernelLoweringConformanceInputV1 {
+    MirKernelLoweringConformanceInputV1::new(
+        "crate::kernels",
+        vec![
+            MirKernelLoweringConformanceFunctionV1::new(
+                "crate::kernels::zeta",
+                vec![MirTypeId(7), MirTypeId(2)],
+            )
+            .with_block_count(2),
+            MirKernelLoweringConformanceFunctionV1::new("crate::kernels::alpha", vec![]),
+        ],
+    )
 }
 
 #[test]
-fn registration_is_explicit_idempotent_and_ordered() {
+fn registration_order_remains_fixed_inside_the_facade() {
     assert_eq!(DIALECT_REGISTRATION_ORDER, ["mir", "kernel"]);
-
-    let mut context = Context::new();
-    assert_eq!(
-        register_pass(&mut context),
-        Ok(PassRegistrationOutcome::Registered)
-    );
-    assert_eq!(
-        register_pass(&mut context),
-        Ok(PassRegistrationOutcome::AlreadyRegistered)
-    );
-
-    let module = source(&mut context);
-    verify_operation(module.get_operation(), &context).expect("MIR dialect is registered");
-    let algorithm = AlgorithmOp::new(&mut context, 2).expect("kernel dialect entity");
-    verify_operation(algorithm.get_operation(), &context).expect("kernel dialect is registered");
 }
 
 #[test]
 fn lowering_record_is_deterministic_and_preserves_source_evidence() {
-    let (left_context, left) = lower();
-    let (right_context, right) = lower();
+    let left = MirKernelLoweringConformanceV1
+        .run(&input(), config())
+        .expect("supported lowering");
+    let right = MirKernelLoweringConformanceV1
+        .run(&input(), config())
+        .expect("supported lowering");
 
-    assert_eq!(left.record(), right.record());
+    assert_eq!(left, right);
+    assert_eq!(left.config(), &config());
     assert_eq!(left.record().source().identity(), "crate::kernels");
     assert_eq!(left.record().source().block_count(), 3);
     assert_eq!(left.record().source().operation_count(), 9);
@@ -100,19 +67,8 @@ fn lowering_record_is_deterministic_and_preserves_source_evidence() {
     );
     assert_eq!(functions[1].identity(), "crate::kernels::alpha");
 
-    for (index, operation) in left.operations().iter().enumerate() {
-        verify_operation(*operation, &left_context).expect("verified kernel output");
-        let algorithm = Operation::get_op::<AlgorithmOp>(*operation, &left_context)
-            .expect("kernel algorithm root");
-        assert_eq!(algorithm.iteration_domain(&left_context).unwrap().rank(), 2);
-        assert_eq!(
-            left.record().steps()[index].source_function_ordinal(),
-            index
-        );
-        assert_eq!(left.record().steps()[index].iteration_rank(), 2);
+    for (index, step) in left.record().steps().iter().enumerate() {
+        assert_eq!(step.source_function_ordinal(), index);
+        assert_eq!(step.iteration_rank(), 2);
     }
-    left.validate(&left_context).expect("left postconditions");
-    right
-        .validate(&right_context)
-        .expect("right postconditions");
 }

@@ -505,7 +505,8 @@ continue to point downward according to the machine-checked
 | `fe2o3-mir-model` | Pliron-independent semantic MIR types, executable schema/wire, control-flow analysis, mem2reg, and bounded generic SSA construction plans | Pliron handles, AMD lowering, runtime handles |
 | `dialect-mir` | Historical MIR compatibility facade; optional bounded Pliron `mir.*` shell behind feature `pliron` | Durable MIR identity, production selection, target lowering |
 | `fe2o3-kernel-ir` | Canonical target-neutral Kernel IR, SIMT domains, effects, address spaces, barriers, atomics, and capabilities | Pliron identity, Rust compiler types, HIP calls |
-| `fe2o3-pliron` | Pinned Pliron context, private context identities, registration, and bounded pass-plan validation | Generic pass execution over contextless pointers, fe2o3 dialect semantics, production selection, artifact authority |
+| `fe2o3-pliron` | Pinned Pliron context, private identities, graph epochs, owner-scoped optimization, and private production analyses | Public raw-context analysis, caller-selected production passes, compiler selection, artifact authority |
+| `fe2o3-kernel-analysis` | Neutral KIR analyses and pointer-independent Presburger models/solvers | Pliron graph custody, raw production analysis entry points, artifact authority |
 | `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`, `dialect-proof`, `dialect-dispatch`, `dialect-autotune` | Bounded target-neutral Pliron representation shells | Target legalization, compiler selection, proof or runtime authority |
 | Production KIR custody | Canonical KIR remains owned by the sole compiler transaction | Accepting detached raw Pliron modules, reconstructing KIR from text, target or artifact authority |
 | `fe2o3-lower-mir-kernel` | Narrow deterministic MIR-to-kernel conformance service with context-bound results and terminal unsupported errors | In-tree Pliron pass semantics, production selection, AMD lowering, artifact production, fallback |
@@ -717,14 +718,16 @@ future MLIR lower half without changing the source API, artifact manifest, or
 verification model.
 
 The current implementation pins Pliron v0.17.0 commit
-`5bdf861bf03e7f20242b25717fb653336d02e487` and provides a bounded context,
-private context-identity, registration, and pass-plan shell. Generic pass
-execution is intentionally absent because upstream `Ptr<T>` values do not
-carry owner provenance; [#140](https://github.com/harsh-nod/fe2o3/issues/140)
-tracks that prerequisite. Seven target-neutral operation-family shells and the feature-gated
-`dialect-mir` shell construct and verify in-memory Pliron values. They do not
-yet import general rustc MIR, run the target pipeline above, lower to AMDGPU,
-or emit an executable. Separately, the closed scalar slice constructs real
+`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd` and provides a bounded context,
+private context-identity, registration, and pass-plan shell. The reviewed
+upstream pointers carry context provenance, and fe2o3 additionally authenticates
+owner, stage, root, and graph epoch. Production analysis is private to the
+session; generic caller-supplied pass execution remains unavailable.
+[#140](https://github.com/harsh-nod/fe2o3/issues/140) tracks the wider owner boundary.
+The existing rustc route uses ranked production checks, but the single canonical
+optimized-and-verified emitter architecture above remains work under #271.
+The target-neutral operation-family shells and feature-gated `dialect-mir`
+representation do not independently select or publish a compiler. The closed scalar slice constructs real
 `pliron-llvm` operations and derives a canonical executable handoff from their
 live graph; that bounded path is not a general MIR-to-AMDGPU pipeline.
 

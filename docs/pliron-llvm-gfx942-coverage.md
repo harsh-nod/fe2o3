@@ -6,9 +6,10 @@ the commit published as `pliron`/`pliron-llvm` v0.17.0. fe2o3 implementation
 status includes one bounded backend-fixture-to-MI300X scalar closure at
 `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
 `228c88ed9`. The active dependency is reviewed fork commit
-[`5bdf861bf03e7f20242b25717fb653336d02e487`](https://github.com/harsh-nod/pliron/tree/5bdf861bf03e7f20242b25717fb653336d02e487),
-a strict descendant that adds mutation-attempt epochs without changing the
-audited `pliron-llvm` surface below.
+[`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`](https://github.com/harsh-nod/pliron/tree/9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd),
+a strict descendant that adds mutation-attempt epochs and context-owner
+provenance. The tables below retain their cited upstream v0.17.0 audit baseline;
+this dependency update is not a fresh LLVM-surface qualification.
 
 ## Scope and conclusion
 

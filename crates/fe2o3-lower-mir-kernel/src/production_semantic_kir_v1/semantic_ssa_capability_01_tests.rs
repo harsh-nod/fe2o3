@@ -797,25 +797,25 @@
         let malformed = [
             vec![
                 projection(SemanticProjectionKindV1::Downcast(0), some),
-                valid[1].clone(),
+                valid[1],
             ],
             vec![
-                valid[0].clone(),
+                valid[0],
                 projection(SemanticProjectionKindV1::Field(1), witness),
             ],
             vec![
-                valid[0].clone(),
+                valid[0],
                 projection(SemanticProjectionKindV1::Field(0), u32_ty),
             ],
             vec![
                 projection(SemanticProjectionKindV1::Downcast(1), some),
-                valid[1].clone(),
+                valid[1],
             ],
             vec![
                 projection(SemanticProjectionKindV1::Downcast(1), u32_ty),
-                valid[1].clone(),
+                valid[1],
             ],
-            vec![valid[0].clone()],
+            vec![valid[0]],
         ];
         for projections in malformed {
             assert_eq!(

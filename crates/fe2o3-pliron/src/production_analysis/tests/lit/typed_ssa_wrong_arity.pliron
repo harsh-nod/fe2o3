@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: operation requires 1 operands but has 0
+builtin.func @typed_ssa_wrong_arity: builtin.function <() -> ()>
+{
+  ^entry():
+    kernel.br_args () [^exit] []: <() -> ()>
+  ^exit(b: builtin.integer i1):
+    kernel.return () [] []: <() -> ()>
+}

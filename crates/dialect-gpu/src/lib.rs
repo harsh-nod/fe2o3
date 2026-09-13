@@ -29,6 +29,8 @@ mod registration;
 
 pub mod cse_v1;
 pub mod optimization_v1;
+pub mod switch_v3;
+pub mod vector_v12;
 
 pub use registration::dialect_registration;
 
@@ -895,12 +897,28 @@ pub fn register_dialect(
     <optimization_v1::PreservedTerminatorKindAttr as Attribute>::register::<
         optimization_v1::PreservedTerminatorKindAttr,
     >(context);
+    <switch_v3::SwitchKeyKindAttrV3 as Attribute>::register::<switch_v3::SwitchKeyKindAttrV3>(
+        context,
+    );
+    <switch_v3::SwitchCaseBitsAttrV3 as Attribute>::register::<switch_v3::SwitchCaseBitsAttrV3>(
+        context,
+    );
+    <switch_v3::SwitchSuccessorOffsetsAttrV3 as Attribute>::register::<
+        switch_v3::SwitchSuccessorOffsetsAttrV3,
+    >(context);
+    <vector_v12::VectorLaneCountAttrV12 as Attribute>::register::<vector_v12::VectorLaneCountAttrV12>(
+        context,
+    );
+    <vector_v12::VectorLayoutAttrV12 as Attribute>::register::<vector_v12::VectorLayoutAttrV12>(
+        context,
+    );
     <HierarchyIndexType as Type>::register(context);
     <MemorySpaceType as Type>::register(context);
     <optimization_v1::IndexType as Type>::register(context);
     <optimization_v1::BFloat16Type as Type>::register(context);
     <optimization_v1::PointerType as Type>::register(context);
     <optimization_v1::SliceType as Type>::register(context);
+    <vector_v12::FixedVectorTypeV12 as Type>::register(context);
     <HierarchyIdOp as Op>::register(context);
     <ExecutionLayoutOp as Op>::register(context);
     <MemorySpaceOp as Op>::register(context);
@@ -923,6 +941,7 @@ pub fn register_dialect(
     <optimization_v1::StoreOp as Op>::register(context);
     <optimization_v1::PreservedOperationOp as Op>::register(context);
     <optimization_v1::PreservedTerminatorOp as Op>::register(context);
+    <switch_v3::SwitchOpV3 as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context

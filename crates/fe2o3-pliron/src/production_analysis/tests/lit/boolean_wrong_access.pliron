@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: Forwarded operand at 0 is of type
+builtin.func @boolean_wrong_access: builtin.function <(builtin.integer i1, gpu.pointer <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(b: builtin.integer i1, p: gpu.pointer <builtin.integer ui32,Global,ReadOnly>):
+    gpu.cond_branch (b, p, p) [^exit, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 1, 1]]: <(builtin.integer i1, gpu.pointer <builtin.integer ui32,Global,ReadOnly>, gpu.pointer <builtin.integer ui32,Global,ReadOnly>) -> ()>
+  ^exit(q: gpu.pointer <builtin.integer ui32,Global,ReadWrite>):
+    kernel.return () [] []: <() -> ()>
+}

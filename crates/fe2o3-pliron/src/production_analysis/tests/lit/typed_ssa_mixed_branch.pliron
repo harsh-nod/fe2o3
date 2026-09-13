@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+// Exact ordinary SSA transport only; no pointer provenance or numeric claims.
+builtin.func @typed_ssa_mixed: builtin.function <(kernel.index, builtin.integer i1, gpu.pointer <builtin.integer ui32,Global,ReadOnly>, gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> ()>
+{
+  ^entry(i: kernel.index, b: builtin.integer i1, p: gpu.pointer <builtin.integer ui32,Global,ReadOnly>, s: gpu.slice <builtin.integer ui32,Global,ReadOnly>):
+    kernel.br_args (i, b, p, s) [^exit] []: <(kernel.index, builtin.integer i1, gpu.pointer <builtin.integer ui32,Global,ReadOnly>, gpu.slice <builtin.integer ui32,Global,ReadOnly>) -> ()>
+  ^exit(j: kernel.index, c: builtin.integer i1, q: gpu.pointer <builtin.integer ui32,Global,ReadOnly>, t: gpu.slice <builtin.integer ui32,Global,ReadOnly>):
+    kernel.return () [] []: <() -> ()>
+}

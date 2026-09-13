@@ -48,8 +48,7 @@ use pliron::{
 /// Stable detached lowering service name.
 pub const PASS_NAME: &str = "fe2o3-lower-mir-kernel";
 
-/// Context marker used by [`register_pass`].
-pub const PASS_REGISTRATION_MARKER_KEY: &str = "fe2o3_lower_mir_kernel_pass_registration_v1";
+const PASS_REGISTRATION_MARKER_KEY: &str = "fe2o3_lower_mir_kernel_pass_registration_v1";
 
 /// Deterministic source-then-target dialect registration order.
 pub const DIALECT_REGISTRATION_ORDER: [&str; 2] =
@@ -78,27 +77,18 @@ struct PassRegistrationMarker {
     context_identity: ContextIdentity,
 }
 
-/// Result of explicitly registering the pass and its source and target dialects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PassRegistrationOutcome {
-    /// All registration steps completed on this call.
+enum PassRegistrationOutcome {
     Registered,
-    /// The complete registration had already completed in this context.
     AlreadyRegistered,
 }
 
-/// Terminal failure while explicitly registering the lowering pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PassRegistrationError {
-    /// A foreign value claimed this crate's context marker.
+enum PassRegistrationError {
     MarkerCollision,
-    /// The marker map points at absent auxiliary data.
     CorruptMarker,
-    /// The process exhausted the private context-identity space.
     ContextIdentityExhausted,
-    /// A fixed source or target dialect name was rejected by Pliron.
     InvalidDialectName,
-    /// The kernel dialect rejected explicit registration.
     KernelDialect(dialect_kernel::RegistrationError),
 }
 
@@ -166,13 +156,7 @@ fn map_context_identity_error(error: ContextIdentityError) -> PassRegistrationEr
     }
 }
 
-/// Explicitly registers the MIR dialect, kernel dialect, and pass marker.
-///
-/// The pass marker is installed only after both dialect registrations finish.
-/// Repeated successful calls are side-effect free.
-pub fn register_pass(
-    context: &mut Context,
-) -> Result<PassRegistrationOutcome, PassRegistrationError> {
+fn register_pass(context: &mut Context) -> Result<PassRegistrationOutcome, PassRegistrationError> {
     match registration_state(context)? {
         RegistrationState::Registered(_) => {
             return Ok(PassRegistrationOutcome::AlreadyRegistered);
@@ -514,25 +498,17 @@ impl LoweringRecord {
     }
 }
 
-/// Successful bounded detached-lowering output.
+/// Pointer-independent observation of one successful bounded lowering.
+///
+/// This value contains no Pliron arena handle and can be retained, compared,
+/// or moved independently of the private conformance context that produced it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoweringResult {
-    source_root: Ptr<Operation>,
     config: LoweringConfig,
     record: LoweringRecord,
-    operations: Vec<Ptr<Operation>>,
-    context_identity: ContextIdentity,
 }
 
 impl LoweringResult {
-    /// Returns the exact in-memory source root consumed by this result.
-    ///
-    /// This contextless Pliron pointer is an internal TCB handle. It is valid
-    /// only with the context accepted by [`Self::validate`].
-    pub const fn source_root(&self) -> Ptr<Operation> {
-        self.source_root
-    }
-
     /// Returns the immutable configuration used to produce this result.
     pub const fn config(&self) -> &LoweringConfig {
         &self.config
@@ -543,21 +519,22 @@ impl LoweringResult {
         &self.record
     }
 
-    /// Returns unlinked Pliron roots for emitted `kernel.*` operations.
-    ///
-    /// These contextless Pliron pointers are internal TCB handles. They are
-    /// valid only with the context accepted by [`Self::validate`].
-    pub fn operations(&self) -> &[Ptr<Operation>] {
-        &self.operations
-    }
-
     /// This observation grants no proof, publication, target, or runtime authority.
     pub const fn grants_authority(&self) -> bool {
         false
     }
+}
 
-    /// Revalidates the live source evidence and every target operation.
-    pub fn validate(&self, context: &Context) -> Result<(), PostconditionError> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MaterializedLoweringResult {
+    source_root: Ptr<Operation>,
+    observation: LoweringResult,
+    operations: Vec<Ptr<Operation>>,
+    context_identity: ContextIdentity,
+}
+
+impl MaterializedLoweringResult {
+    fn validate(&self, context: &Context) -> Result<(), PostconditionError> {
         validate_postconditions(context, self)
     }
 }
@@ -641,7 +618,7 @@ pub enum SourceEntityKind {
 /// Terminal checked-lowering failure. No variant permits fallback execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoweringError {
-    /// [`register_pass`] did not complete in this context.
+    /// Private pass registration did not complete in this context.
     PassNotRegistered,
     /// The pass registration marker is foreign or corrupt.
     RegistrationCorrupt,
@@ -776,71 +753,7 @@ impl fmt::Display for LoweringError {
 
 impl Error for LoweringError {}
 
-/// Bounded target-neutral detached MIR-to-kernel lowering service.
-///
-/// The historical `Pass` suffix is retained for compatibility. This type does
-/// not implement Pliron's in-tree pass contract because its outputs are
-/// detached operations rather than rewrites beneath the supplied source root.
-#[derive(Clone, Debug)]
-pub struct MirKernelLoweringPass {
-    config: LoweringConfig,
-    last_result: Option<LoweringResult>,
-}
-
-impl MirKernelLoweringPass {
-    /// Creates a service with an already validated immutable configuration.
-    pub const fn new(config: LoweringConfig) -> Self {
-        Self {
-            config,
-            last_result: None,
-        }
-    }
-
-    /// Returns this service's immutable bounded configuration.
-    pub const fn config(&self) -> &LoweringConfig {
-        &self.config
-    }
-
-    /// Returns the most recent successful structured result.
-    pub const fn last_result(&self) -> Option<&LoweringResult> {
-        self.last_result.as_ref()
-    }
-
-    /// Takes ownership of the most recent successful structured result.
-    pub fn take_result(&mut self) -> Option<LoweringResult> {
-        self.last_result.take()
-    }
-
-    /// Runs bounded preflight, verification, materialization, and postconditions.
-    ///
-    /// Failure is terminal for this invocation, clears any prior result, and
-    /// never invokes another lowering path.
-    pub fn run_checked(
-        &mut self,
-        source: Ptr<Operation>,
-        context: &mut Context,
-    ) -> Result<&LoweringResult, LoweringError> {
-        self.last_result = None;
-        let context_identity = require_registration(context)?;
-        let source_evidence = inspect_source(context, source, &self.config)?;
-        let steps = build_steps(&source_evidence, &self.config)?;
-        let operations = materialize_steps(context, &steps)?;
-        let result = LoweringResult {
-            source_root: source,
-            config: self.config.clone(),
-            record: LoweringRecord {
-                source: source_evidence,
-                steps,
-            },
-            operations,
-            context_identity,
-        };
-        result
-            .validate(context)
-            .map_err(LoweringError::Postcondition)?;
-        Ok(self.last_result.insert(result))
-    }
-}
+include!("conformance_lowering_v1.rs");
 
 fn require_registration(context: &Context) -> Result<ContextIdentity, LoweringError> {
     match registration_state(context) {
@@ -1200,30 +1113,31 @@ fn materialize_steps(
 
 fn validate_postconditions(
     context: &Context,
-    result: &LoweringResult,
+    result: &MaterializedLoweringResult,
 ) -> Result<(), PostconditionError> {
     match registration_state(context) {
         Ok(RegistrationState::Registered(context_identity))
             if context_identity == result.context_identity => {}
         _ => return Err(PostconditionError::ContextMismatch),
     }
-    let source = inspect_source(context, result.source_root, &result.config)
+    let source = inspect_source(context, result.source_root, &result.observation.config)
         .map_err(|_| PostconditionError::SourceNoLongerValid)?;
-    if source != result.record.source {
+    if source != result.observation.record.source {
         return Err(PostconditionError::SourceEvidenceMismatch);
     }
-    if result.record.steps.len() != result.operations.len()
-        || result.record.steps.len() != result.record.source.functions.len()
+    if result.observation.record.steps.len() != result.operations.len()
+        || result.observation.record.steps.len() != result.observation.record.source.functions.len()
     {
         return Err(PostconditionError::OperationCountMismatch);
     }
-    if result.operations.len() > result.config.limits.max_rewrites
+    if result.operations.len() > result.observation.config.limits.max_rewrites
         || result.operations.len() > MAX_REWRITES
     {
         return Err(PostconditionError::RewriteBoundExceeded);
     }
 
     for (index, (step, operation)) in result
+        .observation
         .record
         .steps
         .iter()
@@ -1242,7 +1156,7 @@ fn validate_postconditions(
         }))
         .map_err(|_| PostconditionError::InvalidKernelOperation { index })?;
         if step.source_function_ordinal != index
-            || step.iteration_rank != result.config.iteration_rank
+            || step.iteration_rank != result.observation.config.iteration_rank
             || !matches
         {
             return Err(PostconditionError::UnexpectedKernelOperation { index });
@@ -1266,4 +1180,314 @@ fn kernel_operation_matches(context: &Context, operation: Ptr<Operation>, rank: 
         && algorithm
             .iteration_domain(context)
             .is_some_and(|domain| domain.rank() == rank)
+}
+
+#[cfg(test)]
+mod raw_owner_safety_tests {
+    use super::*;
+    use dialect_kernel::IterationDomainAttr;
+    use dialect_mir::{
+        MirBlockId,
+        pliron::{MirBlockIdAttr, MirDialectLimits, MirIdentityAttr, MirLimitsAttr},
+    };
+    use pliron::{
+        basic_block::BasicBlock,
+        builtin::{attributes::TypeAttr, types::FunctionType, types::UnitType},
+        r#type::TypeHandle,
+    };
+    use std::{any::Any, panic::AssertUnwindSafe};
+
+    fn config() -> LoweringConfig {
+        LoweringConfig::new(
+            LoweringLimits::new(1, 2, 2, 16, 2).expect("bounded limits"),
+            1,
+        )
+        .expect("bounded rank")
+    }
+
+    fn populated_context(identity: &str) -> (Context, MaterializedLoweringResult) {
+        let mut context = Context::new();
+        register_pass(&mut context).expect("private registration");
+        let input = MirKernelLoweringConformanceInputV1::new(
+            identity,
+            vec![MirKernelLoweringConformanceFunctionV1::new(
+                format!("{identity}::kernel"),
+                vec![MirTypeId(1)],
+            )],
+        );
+        let source = materialize_conformance_input_v1(&mut context, &input).expect("valid input");
+        let mut service = MirKernelLoweringPass::new(config());
+        service
+            .run_checked(source, &mut context)
+            .expect("private lowering");
+        let result = service.take_result().expect("materialized result");
+        (context, result)
+    }
+
+    fn module_with_functions(context: &mut Context, identity: &str, count: usize) -> MirModuleOp {
+        let limits = MirDialectLimits::new(count.max(1), 4, 128).expect("bounded MIR limits");
+        let module = MirModuleOp::try_new(context, identity, limits).expect("valid MIR module");
+        for index in 0..count {
+            module
+                .append_function(context, format!("{identity}::function_{index}"), &[])
+                .expect("valid MIR function");
+        }
+        module
+    }
+
+    fn raw_region_head(
+        operation: Ptr<Operation>,
+        context: &Context,
+    ) -> Ptr<pliron::basic_block::BasicBlock> {
+        operation
+            .deref(context)
+            .get_region(0)
+            .deref(context)
+            .get_head()
+            .expect("operation region has a head block")
+    }
+
+    fn raw_module_body(module: &MirModuleOp, context: &Context) -> Ptr<BasicBlock> {
+        raw_region_head(module.get_operation(), context)
+    }
+
+    fn raw_function_entry(function: &MirFunctionOp, context: &Context) -> Ptr<BasicBlock> {
+        raw_region_head(function.get_operation(), context)
+    }
+
+    fn take_registration_marker(context: &mut Context) -> Box<dyn Any> {
+        let key = registration_marker_key().expect("fixed key");
+        let index = context
+            .aux_data_map
+            .remove(&key)
+            .expect("marker is indexed");
+        context.aux_data.remove(index).expect("marker is live")
+    }
+
+    fn install_registration_marker(context: &mut Context, marker: Box<dyn Any>) {
+        let index = context.aux_data.insert(marker);
+        context
+            .aux_data_map
+            .insert(registration_marker_key().expect("fixed key"), index);
+    }
+
+    #[test]
+    fn equal_slot_foreign_context_rejects_result_before_pointer_dereference() {
+        let (owner_context, owner_result) = populated_context("owner");
+        let (foreign_context, foreign_result) = populated_context("foreign");
+
+        assert_eq!(
+            format!("{:?}", owner_result.source_root),
+            format!("{:?}", foreign_result.source_root)
+        );
+        assert_ne!(owner_result.source_root, foreign_result.source_root);
+        assert_eq!(
+            owner_result.operations.len(),
+            foreign_result.operations.len()
+        );
+        for (owner_operation, foreign_operation) in owner_result
+            .operations
+            .iter()
+            .zip(foreign_result.operations.iter())
+        {
+            assert_eq!(
+                format!("{owner_operation:?}"),
+                format!("{foreign_operation:?}")
+            );
+            assert_ne!(owner_operation, foreign_operation);
+        }
+        assert_eq!(owner_result.validate(&owner_context), Ok(()));
+        let rejection =
+            std::panic::catch_unwind(AssertUnwindSafe(|| owner_result.validate(&foreign_context)))
+                .expect("foreign validation must not unwind");
+        assert_eq!(rejection, Err(PostconditionError::ContextMismatch));
+    }
+
+    #[test]
+    fn transplanted_session_marker_cannot_transfer_result_ownership() {
+        let (mut owner_context, owner_result) = populated_context("owner");
+        let (mut foreign_context, _) = populated_context("foreign");
+        let owner_marker = take_registration_marker(&mut owner_context);
+        drop(take_registration_marker(&mut foreign_context));
+        install_registration_marker(&mut foreign_context, owner_marker);
+
+        assert_eq!(
+            registration_state(&foreign_context),
+            Err(PassRegistrationError::CorruptMarker)
+        );
+        let rejection =
+            std::panic::catch_unwind(AssertUnwindSafe(|| owner_result.validate(&foreign_context)))
+                .expect("transplanted-marker validation must not unwind");
+        assert_eq!(rejection, Err(PostconditionError::ContextMismatch));
+    }
+
+    #[test]
+    fn erased_private_handles_return_typed_errors_without_unwinding() {
+        let (mut source_context, source_result) = populated_context("source");
+        Operation::erase(source_result.source_root, &mut source_context);
+        let source_rejection =
+            std::panic::catch_unwind(AssertUnwindSafe(|| source_result.validate(&source_context)))
+                .expect("erased source validation must not unwind");
+        assert_eq!(
+            source_rejection,
+            Err(PostconditionError::SourceNoLongerValid)
+        );
+
+        let (mut output_context, output_result) = populated_context("output");
+        Operation::erase(output_result.operations[0], &mut output_context);
+        let output_rejection =
+            std::panic::catch_unwind(AssertUnwindSafe(|| output_result.validate(&output_context)))
+                .expect("erased output validation must not unwind");
+        assert_eq!(
+            output_rejection,
+            Err(PostconditionError::InvalidKernelOperation { index: 0 })
+        );
+    }
+
+    #[test]
+    fn registration_rejects_missing_colliding_and_corrupt_markers() {
+        let mut missing = Context::new();
+        let source = module_with_functions(&mut missing, "missing", 1);
+        let mut service = MirKernelLoweringPass::new(config());
+        assert_eq!(
+            service.run_checked(source.get_operation(), &mut missing),
+            Err(LoweringError::PassNotRegistered)
+        );
+
+        let mut collision = Context::new();
+        let key = registration_marker_key().expect("fixed key");
+        let hostile = collision.aux_data.insert(Box::new(17_u32));
+        collision.aux_data_map.insert(key, hostile);
+        assert_eq!(
+            register_pass(&mut collision),
+            Err(PassRegistrationError::MarkerCollision)
+        );
+        collision.aux_data.remove(hostile);
+        assert_eq!(
+            register_pass(&mut collision),
+            Err(PassRegistrationError::CorruptMarker)
+        );
+
+        let mut kernel_collision = Context::new();
+        let kernel_key: Identifier = "fe2o3_dialect_kernel_registration_v1"
+            .try_into()
+            .expect("fixed kernel marker key");
+        let hostile = kernel_collision.aux_data.insert(Box::new(23_u32));
+        kernel_collision.aux_data_map.insert(kernel_key, hostile);
+        assert_eq!(
+            register_pass(&mut kernel_collision),
+            Err(PassRegistrationError::KernelDialect(
+                dialect_kernel::RegistrationError::MarkerCollision
+            ))
+        );
+    }
+
+    #[test]
+    fn unsupported_raw_operations_and_foreign_argument_types_fail_closed() {
+        let mut context = Context::new();
+        register_pass(&mut context).expect("private registration");
+        let mut service = MirKernelLoweringPass::new(config());
+        let foreign = AlgorithmOp::new(&mut context, 1).expect("valid foreign operation");
+        assert_eq!(
+            service.run_checked(foreign.get_operation(), &mut context),
+            Err(LoweringError::UnsupportedSourceOperation)
+        );
+        assert!(service.last_result.is_none());
+
+        let limits = MirDialectLimits::new(1, 1, 64).expect("bounded MIR limits");
+        let module =
+            MirModuleOp::try_new(&mut context, "foreign-type", limits).expect("valid MIR module");
+        let unit: TypeHandle = UnitType::get(&context).into();
+        let signature = FunctionType::get(&context, vec![unit], vec![]);
+        let operation = Operation::new(
+            &mut context,
+            MirFunctionOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let function = MirFunctionOp::from_operation(operation);
+        function.set_attr_function_identity(&context, MirIdentityAttr::new("foreign-type::kernel"));
+        function.set_attr_function_limits(&context, MirLimitsAttr::new(limits));
+        function.set_attr_function_signature(&context, TypeAttr::new(signature.into()));
+        let entry = BasicBlock::new(
+            &mut context,
+            Some("bb0".try_into().expect("valid label")),
+            vec![unit],
+        );
+        entry.insert_at_front(operation.deref(&context).get_region(0), &context);
+        MirBlockOp::new(&mut context, MirBlockId(0))
+            .get_operation()
+            .insert_at_back(entry, &context);
+        MirReturnOp::new(&mut context)
+            .get_operation()
+            .insert_at_back(entry, &context);
+        operation.insert_at_back(raw_module_body(&module, &context), &context);
+
+        assert_eq!(
+            service.run_checked(module.get_operation(), &mut context),
+            Err(LoweringError::UnsupportedArgumentType {
+                function: 0,
+                argument: 0,
+            })
+        );
+        assert!(service.last_result.is_none());
+    }
+
+    #[test]
+    fn verifier_failure_clears_a_prior_success() {
+        let mut context = Context::new();
+        register_pass(&mut context).expect("private registration");
+        let source = module_with_functions(&mut context, "prior-success", 1);
+        let mut service = MirKernelLoweringPass::new(config());
+        service
+            .run_checked(source.get_operation(), &mut context)
+            .expect("initial lowering");
+        assert!(service.last_result.is_some());
+
+        let function = Operation::get_op::<MirFunctionOp>(
+            raw_module_body(&source, &context)
+                .deref(&context)
+                .get_head()
+                .expect("function"),
+            &context,
+        )
+        .expect("MIR function");
+        let marker = MirBlockOp::from_operation(
+            raw_function_entry(&function, &context)
+                .deref(&context)
+                .get_head()
+                .expect("block marker"),
+        );
+        marker.set_attr_block_id(&context, MirBlockIdAttr::new(MirBlockId(1)));
+
+        assert_eq!(
+            service.run_checked(source.get_operation(), &mut context),
+            Err(LoweringError::SourceVerificationFailed)
+        );
+        assert!(service.last_result.is_none());
+    }
+
+    #[test]
+    fn validation_rejects_stale_source_and_live_mutated_output() {
+        let (context, result) = populated_context("stale");
+        let source = MirModuleOp::from_operation(result.source_root);
+        source.set_attr_module_identity(&context, MirIdentityAttr::new("stale::changed"));
+        assert_eq!(
+            result.validate(&context),
+            Err(PostconditionError::SourceEvidenceMismatch)
+        );
+        source.set_attr_module_identity(&context, MirIdentityAttr::new("stale"));
+
+        let target = AlgorithmOp::from_operation(result.operations[0]);
+        target.set_iteration_domain(
+            &context,
+            IterationDomainAttr::new(2).expect("different valid rank"),
+        );
+        assert_eq!(
+            result.validate(&context),
+            Err(PostconditionError::InvalidKernelOperation { index: 0 })
+        );
+    }
 }

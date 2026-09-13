@@ -24,6 +24,7 @@ use dialect_gpu::{
         SliceDataOp, SliceLengthOp, SliceType as PlironSliceType, StoreOp, UnaryKindAttr,
         UnaryOp as PlironUnaryOp,
     },
+    vector_v12::FixedVectorTypeV12 as PlironFixedVectorTypeV12,
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, Constant, FunctionId, Module,
@@ -610,6 +611,7 @@ fn import_module(
     }
     session.require_internal_tree_capacity(tree_work)?;
     let root = session.create_module("kir_bridge_v1")?;
+    let transaction = session.begin_checked_operation_graph_mutation_v1(&root)?;
     let root_pointer = session
         .operations
         .get(&root.identity)
@@ -629,7 +631,7 @@ fn import_module(
             return Err(KirBridgeErrorV1::UpstreamPanicked);
         }
     };
-    session.finish_internal_root_construction(&root)?;
+    session.finish_internal_root_construction(&root, transaction)?;
     Ok(KirPlironGraphV1 {
         root,
         metadata: module,
@@ -1360,6 +1362,30 @@ fn build_terminator(
         }
         None => Err(KirBridgeErrorV1::MalformedGraph),
     }
+}
+
+// Allocation-free node profile for the identity walk. Child handles are checked
+// by that walk under its existing depth/node budget, not decoded into new KIR.
+pub(crate) fn ranked_data_type_node_is_supported_v2(ty: &dyn pliron::r#type::Type) -> bool {
+    if let Some(integer) = ty.downcast_ref::<IntegerType>() {
+        return matches!(
+            (integer.width(), integer.signedness()),
+            (1, Signedness::Signless)
+                | (
+                    8 | 16 | 32 | 64 | 128,
+                    Signedness::Signed | Signedness::Unsigned
+                )
+        );
+    }
+    ty.is::<UnitType>()
+        || ty.is::<IndexType>()
+        || ty.is::<FP16Type>()
+        || ty.is::<BFloat16Type>()
+        || ty.is::<FP32Type>()
+        || ty.is::<FP64Type>()
+        || ty.is::<PlironPointerType>()
+        || ty.is::<PlironSliceType>()
+        || ty.is::<PlironFixedVectorTypeV12>()
 }
 
 fn type_to_pliron(context: &Context, ty: &Type) -> Result<TypeHandle, KirBridgeErrorV1> {
@@ -3017,6 +3043,33 @@ mod tests {
             .expect("exact typed V11 extraction");
         assert_eq!(output.canonical_bytes(), input.canonical_bytes());
         assert_eq!(report.input(), report.output());
+    }
+
+    #[test]
+    fn bridge_import_commits_exact_graph_custody_before_v11_extraction() {
+        let input = VerifiedCanonicalKernelIrV11::from_module(capacity_module(2))
+            .expect("verified V11 input");
+        let mut session = session();
+        let graph = session
+            .import_canonical_kir_v11_o0(&input)
+            .expect("typed V11 import");
+        let snapshot = session
+            .operation_graph_snapshot_v1(&graph.root)
+            .expect("constructed graph has current custody");
+        assert_eq!(snapshot.epoch().sequence(), 2);
+        let analysis = session
+            .analyze_operation_graph_v1(&graph.root)
+            .expect("constructed graph verifies");
+        assert_eq!(analysis.snapshot(), snapshot);
+        assert_eq!(analysis.tree_work(), preflight(&graph.metadata).unwrap().0);
+        let (output, _) = session
+            .extract_canonical_kir_v11_o0(&graph)
+            .expect("exact typed V11 extraction");
+        assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+        session
+            .require_operation_graph_snapshot_v1(&graph.root, snapshot)
+            .expect("observation preserves imported graph custody");
+        assert!(!session.is_poisoned());
     }
 
     #[test]

@@ -17,12 +17,12 @@ use std::{
     num::NonZeroU64,
 };
 
-use fe2o3_kernel_analysis::PlironAtomicTargetContextV1;
+use crate::{PlironAtomicTargetContextV1, production_analysis::ProductionAnalysisResourceLimitsV1};
 use fe2o3_pliron_owner_core::{ContextIdentity, DialectRegistration, NameError};
 
 use super::{
-    ContextBuildError, ContextManifest, NameKind, OperationHandle, OperationHandleError,
-    OperationShapeV1, PlironSession, ShellLimits, validate_name,
+    ContextBuildError, ContextManifest, NameKind, OperationGraphSnapshotV1, OperationHandle,
+    OperationHandleError, OperationShapeV1, PlironSession, ShellLimits, validate_name,
 };
 
 mod middle_end_evidence_v4;
@@ -163,6 +163,28 @@ struct StageIdentityV1(NonZeroU64);
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RootIdentityV1(NonZeroU64);
 
+/// Canonical identity of the complete retained ranked recipe bound to a live graph view.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct ProductionExactGraphIdentityV1([u8; 32]);
+
+impl ProductionExactGraphIdentityV1 {
+    fn from_ranked(kernel: &ProductionRankedKernelV1) -> Self {
+        Self(middle_end_evidence_v4::derive_exact_ranked_graph_identity_v1(kernel))
+    }
+
+    pub const fn digest(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl fmt::Debug for ProductionExactGraphIdentityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProductionExactGraphIdentityV1")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Typestate for a recipe registered but not yet materialized in Pliron.
 #[derive(Debug)]
 pub struct ConstructionRegisteredStageV1 {
@@ -219,6 +241,8 @@ pub struct ProductionRootHandleV1<Stage> {
     stage: StageIdentityV1,
     identity: RootIdentityV1,
     operation: OperationHandle,
+    graph_snapshot: OperationGraphSnapshotV1,
+    exact_graph_identity: Option<ProductionExactGraphIdentityV1>,
     _stage: PhantomData<fn() -> Stage>,
 }
 
@@ -243,18 +267,23 @@ pub enum ProductionSessionErrorV1 {
     StageRootMismatch,
     WrongConstructionKind,
     RankedGraphChanged,
+    AnalysisResourceLimit {
+        phase: crate::ProductionAnalysisResourcePhaseV1,
+        producing_pass: Option<crate::KernelCheckPassKindV1>,
+        resource: &'static str,
+    },
     RankedRecipe(ProductionRankedKernelErrorV1),
-    RankedTensorLayout(fe2o3_kernel_analysis::PlironTensorLayoutCheckErrorV1),
-    RankedBounds(fe2o3_kernel_analysis::RankedBoundsCheckErrorV1),
-    RankedAtomic(fe2o3_kernel_analysis::PlironAtomicLegalityCheckErrorV1),
-    RankedRace(fe2o3_kernel_analysis::RankedRaceCheckErrorV1),
-    RankedOwnership(fe2o3_kernel_analysis::HierarchicalOwnershipCheckErrorV1),
-    RankedBarrier(fe2o3_kernel_analysis::PlironBarrierCheckErrorV1),
-    RankedPipeline(fe2o3_kernel_analysis::PlironPipelineProtocolCheckErrorV1),
-    RankedWorkgroup(fe2o3_kernel_analysis::PlironWorkgroupMemoryCheckErrorV1),
-    RankedSemantic(fe2o3_kernel_analysis::PlironSemanticRefinementCheckErrorV1),
-    RankedPassPreservation(fe2o3_kernel_analysis::PlironPassPreservationErrorV1),
-    RankedReportValidation(fe2o3_kernel_analysis::ProductionAnalysisReportValidationErrorV1),
+    RankedTensorLayout(crate::PlironTensorLayoutCheckErrorV1),
+    RankedBounds(crate::RankedBoundsCheckErrorV1),
+    RankedAtomic(crate::PlironAtomicLegalityCheckErrorV1),
+    RankedRace(crate::RankedRaceCheckErrorV1),
+    RankedOwnership(crate::HierarchicalOwnershipCheckErrorV1),
+    RankedBarrier(crate::PlironBarrierCheckErrorV1),
+    RankedPipeline(crate::PlironPipelineProtocolCheckErrorV1),
+    RankedWorkgroup(crate::PlironWorkgroupMemoryCheckErrorV1),
+    RankedSemantic(crate::PlironSemanticRefinementCheckErrorV1),
+    RankedPassPreservation(crate::PlironPassPreservationErrorV1),
+    RankedReportValidation(crate::ProductionAnalysisReportValidationErrorV1),
     Operation(OperationHandleError),
 }
 
@@ -262,51 +291,47 @@ impl ProductionSessionErrorV1 {
     /// Structured repairs for errors produced by the unified kernel-check
     /// pipeline. Session bookkeeping and construction errors are not source
     /// diagnostics and therefore do not fabricate kernel edits.
-    pub fn repair_hints(&self) -> Vec<fe2o3_kernel_analysis::KernelCheckRepairV1> {
-        use fe2o3_kernel_analysis::KernelCheckPassKindV1 as Pass;
+    pub fn repair_hints(&self) -> Vec<crate::KernelCheckRepairV1> {
+        use crate::KernelCheckPassKindV1 as Pass;
         match self {
             Self::RankedTensorLayout(error) => {
-                vec![fe2o3_kernel_analysis::tensor_layout_repair_for_error_v1(
-                    error,
-                )]
+                vec![crate::tensor_layout_repair_for_error_v1(error)]
             }
-            Self::RankedBounds(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
-                Pass::MemoryBounds,
-            )],
-            Self::RankedAtomic(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
-                Pass::AtomicLegality,
-            )],
-            Self::RankedRace(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
-                Pass::RaceFreedom,
-            )],
+            Self::RankedBounds(_) => {
+                vec![crate::kernel_check_repair_for_pass_v1(Pass::MemoryBounds)]
+            }
+            Self::RankedAtomic(_) => {
+                vec![crate::kernel_check_repair_for_pass_v1(Pass::AtomicLegality)]
+            }
+            Self::RankedRace(_) => vec![crate::kernel_check_repair_for_pass_v1(Pass::RaceFreedom)],
             Self::RankedOwnership(_) => {
-                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                vec![crate::kernel_check_repair_for_pass_v1(
                     Pass::HierarchicalOwnership,
                 )]
             }
-            Self::RankedBarrier(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+            Self::RankedBarrier(_) => vec![crate::kernel_check_repair_for_pass_v1(
                 Pass::BarrierConvergence,
             )],
             Self::RankedPipeline(_) => {
-                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                vec![crate::kernel_check_repair_for_pass_v1(
                     Pass::PipelineProtocol,
                 )]
             }
             Self::RankedWorkgroup(_) => {
-                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                vec![crate::kernel_check_repair_for_pass_v1(
                     Pass::WorkgroupMemory,
                 )]
             }
             Self::RankedSemantic(_) => {
-                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                vec![crate::kernel_check_repair_for_pass_v1(
                     Pass::SemanticRefinement,
                 )]
             }
             Self::RankedPassPreservation(error) => {
-                vec![fe2o3_kernel_analysis::pass_preservation_repair_for_error_v1(error)]
+                vec![crate::pass_preservation_repair_for_error_v1(error)]
             }
             Self::RankedReportValidation(error) => {
-                vec![fe2o3_kernel_analysis::report_validation_repair_for_error_v1(error)]
+                vec![crate::report_validation_repair_for_error_v1(error)]
             }
             _ => Vec::new(),
         }
@@ -341,6 +366,21 @@ impl fmt::Display for ProductionSessionErrorV1 {
             }
             Self::RankedGraphChanged => {
                 formatter.write_str("production ranked graph changed after safety verification")
+            }
+            Self::AnalysisResourceLimit {
+                phase,
+                producing_pass,
+                resource,
+            } => {
+                write!(
+                    formatter,
+                    "production analysis resource limit exceeded [{}]: {resource}",
+                    phase.code(),
+                )?;
+                if let Some(pass) = producing_pass {
+                    write!(formatter, " (producing pass: {})", pass.name())?;
+                }
+                Ok(())
             }
             Self::RankedRecipe(error) => {
                 write!(formatter, "production ranked recipe failed: {error}")
@@ -397,13 +437,14 @@ impl Error for ProductionSessionErrorV1 {
 /// use pliron::context::Context;
 ///
 /// fn escape(session: &mut ProductionPlironSessionV1) -> &mut Context {
-///     session.with_context_mut(|context| context)
+///     &mut session.inner.context
 /// }
 /// ```
 pub struct ProductionPlironSessionV1 {
     inner: PlironSession,
     atomic_target: Option<PlironAtomicTargetContextV1>,
     limits: ProductionSessionLimitsV1,
+    analysis_resource_limits: ProductionAnalysisResourceLimitsV1,
     registered: BTreeMap<StageIdentityV1, ProductionConstructionV1>,
     construction_names: BTreeSet<String>,
     constructed_roots: BTreeMap<StageIdentityV1, ConstructedRootV1>,
@@ -419,11 +460,24 @@ impl ProductionPlironSessionV1 {
         limits: ProductionSessionLimitsV1,
         registrations: impl IntoIterator<Item = DialectRegistration>,
     ) -> Result<Self, ContextBuildError> {
+        Self::new_with_analysis_resource_limits_v1(
+            limits,
+            registrations,
+            ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        )
+    }
+
+    pub(super) fn new_with_analysis_resource_limits_v1(
+        limits: ProductionSessionLimitsV1,
+        registrations: impl IntoIterator<Item = DialectRegistration>,
+        analysis_resource_limits: ProductionAnalysisResourceLimitsV1,
+    ) -> Result<Self, ContextBuildError> {
         let inner = PlironSession::new(limits.shell(), registrations)?;
         Ok(Self {
             inner,
             atomic_target: None,
             limits,
+            analysis_resource_limits,
             registered: BTreeMap::new(),
             construction_names: BTreeSet::new(),
             constructed_roots: BTreeMap::new(),
@@ -445,6 +499,10 @@ impl ProductionPlironSessionV1 {
 
     pub const fn limits(&self) -> ProductionSessionLimitsV1 {
         self.limits
+    }
+
+    pub(super) const fn analysis_resource_limits(&self) -> ProductionAnalysisResourceLimitsV1 {
+        self.analysis_resource_limits
     }
 
     pub const fn is_poisoned(&self) -> bool {
@@ -543,15 +601,31 @@ impl ProductionPlironSessionV1 {
             }
         }
 
+        let graph_snapshot = match self.inner.operation_graph_snapshot_v1(&operation) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(ProductionSessionErrorV1::Operation(error));
+            }
+        };
+        let exact_graph_identity = materialized
+            .ranked_kernel
+            .as_ref()
+            .map(ProductionExactGraphIdentityV1::from_ranked);
+
         self.constructed_roots.insert(
             stage.identity,
             ConstructedRootV1 {
                 identity: root_identity,
+                graph_snapshot,
+                exact_graph_identity,
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
                 ranked_view_names: materialized.ranked_view_names,
                 policy_checked_refinement_staging: materialized.policy_checked_refinement_staging,
                 production_pipeline_report: None,
+                production_analysis_resource_upper_bound: None,
+                ranked_analysis_binding: None,
             },
         );
         self.next_root = next_root;
@@ -567,6 +641,8 @@ impl ProductionPlironSessionV1 {
                 stage: stage.identity,
                 identity: root_identity,
                 operation,
+                graph_snapshot,
+                exact_graph_identity,
                 _stage: PhantomData,
             },
         ))
@@ -581,14 +657,26 @@ impl ProductionPlironSessionV1 {
         self.validate_live()?;
         self.authenticate_owner(stage.owner)?;
         self.authenticate_owner(root.owner)?;
-        let expected_root = self
+        let (expected_root, expected_snapshot, expected_identity) = self
             .constructed_roots
             .get(&stage.identity)
-            .map(|record| record.identity)
+            .map(|record| {
+                (
+                    record.identity,
+                    record.graph_snapshot,
+                    record.exact_graph_identity,
+                )
+            })
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        if root.stage != stage.identity || root.identity != expected_root {
+        if root.stage != stage.identity
+            || root.identity != expected_root
+            || root.graph_snapshot != expected_snapshot
+            || root.exact_graph_identity != expected_identity
+        {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
+
+        self.require_live_graph_snapshot_v1(&root.operation, root.graph_snapshot)?;
 
         match self.inner.operation_shape(&root.operation) {
             Ok(shape) => Ok(shape),
@@ -612,6 +700,23 @@ impl ProductionPlironSessionV1 {
             return Err(ProductionSessionErrorV1::ForeignSession);
         }
         Ok(())
+    }
+
+    fn require_live_graph_snapshot_v1(
+        &mut self,
+        operation: &OperationHandle,
+        snapshot: OperationGraphSnapshotV1,
+    ) -> Result<(), ProductionSessionErrorV1> {
+        match self
+            .inner
+            .require_operation_graph_snapshot_v1(operation, snapshot)
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.poisoned = true;
+                Err(ProductionSessionErrorV1::Operation(error))
+            }
+        }
     }
 }
 
@@ -677,6 +782,35 @@ mod tests {
         ProductionConstructionV1::ranked_kernel(name, kernel).expect("ranked construction")
     }
 
+    fn construct_ranked(
+        session: &mut ProductionPlironSessionV1,
+        name: &str,
+    ) -> (
+        ProductionStageHandleV1<ConstructedGraphStageV1>,
+        ProductionRootHandleV1<ConstructedGraphStageV1>,
+    ) {
+        let registered = session
+            .register_construction(ranked_construction(name))
+            .expect("ranked registration");
+        session
+            .construct_registered(registered)
+            .expect("ranked construction")
+    }
+
+    fn expect_injected_analysis_panic(
+        session: &mut ProductionPlironSessionV1,
+        stage: ProductionStageHandleV1<ConstructedGraphStageV1>,
+        root: ProductionRootHandleV1<ConstructedGraphStageV1>,
+    ) {
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(stage, root),
+            Err(ProductionSessionErrorV1::Operation(
+                OperationHandleError::UpstreamPanicked
+            ))
+        ));
+        assert!(session.is_poisoned());
+    }
+
     #[test]
     fn stale_private_operation_poisons_the_production_session() {
         let mut session = session();
@@ -704,6 +838,180 @@ mod tests {
             session.register_construction(
                 ProductionConstructionV1::builtin_module("later").expect("valid recipe")
             ),
+            Err(ProductionSessionErrorV1::SessionPoisoned)
+        ));
+    }
+
+    #[test]
+    fn equal_slot_foreign_analysis_handles_fail_before_raw_traversal() {
+        let mut owner = ranked_session();
+        let mut foreign = ranked_session();
+        let (owner_stage, owner_root) = construct_ranked(&mut owner, "owner");
+        let (foreign_stage, foreign_root) = construct_ranked(&mut foreign, "foreign");
+        let owner_function = owner.constructed_roots[&owner_stage.identity].ranked_function;
+        let foreign_function = foreign.constructed_roots[&foreign_stage.identity].ranked_function;
+        assert_eq!(
+            format!("{owner_function:?}"),
+            format!("{foreign_function:?}"),
+            "fresh contexts deliberately allocate the same upstream slot"
+        );
+        assert_ne!(
+            owner_function, foreign_function,
+            "owner-authenticated pointers must not compare equal across contexts"
+        );
+
+        crate::production_analysis::panic_next_production_analysis_for_test_v1();
+        assert!(matches!(
+            foreign.verify_production_ranked_kernel_pipeline(owner_stage, owner_root),
+            Err(ProductionSessionErrorV1::ForeignSession)
+        ));
+        assert!(!foreign.is_poisoned());
+        expect_injected_analysis_panic(&mut foreign, foreign_stage, foreign_root);
+    }
+
+    #[test]
+    fn stale_analysis_stage_fails_before_raw_traversal() {
+        let mut session = ranked_session();
+        let (stage, root) = construct_ranked(&mut session, "first");
+        let stale_stage = ProductionStageHandleV1::<ConstructedGraphStageV1> {
+            owner: stage.owner,
+            identity: stage.identity,
+            _stage: PhantomData,
+        };
+        let stale_root = ProductionRootHandleV1::<ConstructedGraphStageV1> {
+            owner: root.owner,
+            stage: root.stage,
+            identity: root.identity,
+            operation: root.operation.clone(),
+            graph_snapshot: root.graph_snapshot,
+            exact_graph_identity: root.exact_graph_identity,
+            _stage: PhantomData,
+        };
+        let _verified = session
+            .verify_production_ranked_kernel_pipeline(stage, root)
+            .expect("first verification");
+        let (live_stage, live_root) = construct_ranked(&mut session, "second");
+
+        crate::production_analysis::panic_next_production_analysis_for_test_v1();
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(stale_stage, stale_root),
+            Err(ProductionSessionErrorV1::StaleStage)
+        ));
+        assert!(!session.is_poisoned());
+        expect_injected_analysis_panic(&mut session, live_stage, live_root);
+    }
+
+    #[test]
+    fn transplanted_root_operation_fails_before_raw_traversal() {
+        let mut session = ranked_session();
+        let (first_stage, first_root) = construct_ranked(&mut session, "first");
+        let (_second_stage, second_root) = construct_ranked(&mut session, "second");
+        let transplanted = ProductionRootHandleV1::<ConstructedGraphStageV1> {
+            owner: first_root.owner,
+            stage: first_root.stage,
+            identity: first_root.identity,
+            operation: second_root.operation,
+            graph_snapshot: first_root.graph_snapshot,
+            exact_graph_identity: first_root.exact_graph_identity,
+            _stage: PhantomData,
+        };
+
+        crate::production_analysis::panic_next_production_analysis_for_test_v1();
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(first_stage, transplanted),
+            Err(ProductionSessionErrorV1::Operation(
+                OperationHandleError::OperationGraphSnapshotMismatch
+            ))
+        ));
+        assert!(session.is_poisoned());
+
+        let mut clean = ranked_session();
+        let (stage, root) = construct_ranked(&mut clean, "clean");
+        expect_injected_analysis_panic(&mut clean, stage, root);
+    }
+
+    #[test]
+    fn corrupt_context_marker_fails_before_raw_traversal() {
+        let mut session = ranked_session();
+        let (stage, root) = construct_ranked(&mut session, "corrupt");
+        let key: pliron::identifier::Identifier =
+            fe2o3_pliron_owner_core::CONTEXT_IDENTITY_MARKER_KEY
+                .try_into()
+                .expect("fixed marker key");
+        session.inner.context.aux_data_map.remove(&key);
+
+        crate::production_analysis::panic_next_production_analysis_for_test_v1();
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(stage, root),
+            Err(ProductionSessionErrorV1::Operation(
+                OperationHandleError::ContextIdentity(
+                    fe2o3_pliron_owner_core::ContextIdentityError::CorruptMarker
+                )
+            ))
+        ));
+        assert!(session.is_poisoned());
+
+        let mut clean = ranked_session();
+        let (stage, root) = construct_ranked(&mut clean, "clean");
+        expect_injected_analysis_panic(&mut clean, stage, root);
+    }
+
+    #[test]
+    fn raw_analysis_panic_is_contained_and_terminally_poisons_the_session() {
+        let mut session = ranked_session();
+        let (stage, root) = construct_ranked(&mut session, "panic");
+        crate::production_analysis::panic_next_analysis_manager_prepare_for_test_v1();
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(stage, root),
+            Err(ProductionSessionErrorV1::Operation(
+                OperationHandleError::UpstreamPanicked
+            ))
+        ));
+        assert!(session.is_poisoned());
+        assert!(matches!(
+            session.register_construction(ranked_construction("later")),
+            Err(ProductionSessionErrorV1::SessionPoisoned)
+        ));
+    }
+
+    #[test]
+    fn transient_analysis_mutation_terminally_poisons_the_session() {
+        let mut session = ranked_session();
+        let (stage, root) = construct_ranked(&mut session, "transient_mutation");
+        crate::production_analysis::transiently_mutate_next_production_analysis_for_test_v1();
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(stage, root),
+            Err(ProductionSessionErrorV1::RankedPassPreservation(
+                crate::PlironPassPreservationErrorV1::MutationAttempted {
+                    pass: Some(crate::KernelCheckPassKindV1::TensorLayout),
+                    ..
+                }
+            ))
+        ));
+        assert!(session.is_poisoned());
+        assert!(matches!(
+            session.register_construction(ranked_construction("later")),
+            Err(ProductionSessionErrorV1::SessionPoisoned)
+        ));
+    }
+
+    #[test]
+    fn structural_analysis_drift_terminally_poisons_the_session() {
+        let mut session = ranked_session();
+        let (stage, root) = construct_ranked(&mut session, "structural_drift");
+        crate::production_analysis::structurally_mutate_next_production_analysis_for_test_v1();
+        assert!(matches!(
+            session.verify_production_ranked_kernel_pipeline(stage, root),
+            Err(ProductionSessionErrorV1::RankedPassPreservation(
+                crate::PlironPassPreservationErrorV1::StructuralIdentityChanged {
+                    pass: crate::KernelCheckPassKindV1::TensorLayout,
+                    ..
+                }
+            ))
+        ));
+        assert!(session.is_poisoned());
+        assert!(matches!(
+            session.register_construction(ranked_construction("later")),
             Err(ProductionSessionErrorV1::SessionPoisoned)
         ));
     }
@@ -802,6 +1110,8 @@ mod tests {
             stage: root.stage,
             identity: root.identity,
             operation: root.operation,
+            graph_snapshot: root.graph_snapshot,
+            exact_graph_identity: root.exact_graph_identity,
             _stage: PhantomData,
         };
 
@@ -835,6 +1145,35 @@ mod tests {
             ))
         ));
     }
+
+    #[test]
+    fn ranked_analysis_binding_rejects_a_mismatched_exact_graph_identity() {
+        let mut session = ranked_session();
+        let registered = session
+            .register_construction(ranked_construction("root"))
+            .expect("registration");
+        let (stage, root) = session
+            .construct_registered(registered)
+            .expect("construction");
+        let (verified, mut root) = session
+            .verify_production_ranked_kernel_pipeline(stage, root)
+            .expect("generic kernel verification");
+        let hostile = ProductionExactGraphIdentityV1([0xa5; 32]);
+        session
+            .constructed_roots
+            .get_mut(&verified.identity)
+            .expect("live record")
+            .exact_graph_identity = Some(hostile);
+        root.exact_graph_identity = Some(hostile);
+
+        assert!(matches!(
+            session.prepare_ranked_lowering(verified, root),
+            Err(ProductionSessionErrorV1::RankedGraphChanged)
+        ));
+    }
+
+    include!("production/ranked/custody_mismatch_v1_tests.rs");
+    include!("production/ranked/cache_release_replay_v1_tests.rs");
 
     #[test]
     fn ranked_tree_capacity_rejects_before_allocation_without_poisoning() {

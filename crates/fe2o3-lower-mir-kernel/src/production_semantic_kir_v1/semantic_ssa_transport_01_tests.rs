@@ -984,10 +984,12 @@
         .unwrap();
         let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
         let plan = SemanticControlFlowSsaPlanV1::analyze(
-            &types,
-            &[],
-            &function,
-            semantic_function,
+            SemanticSsaTransportInputV1 {
+                types: &types,
+                callables: &[],
+                function: &function,
+                semantic_function,
+            },
             &semantic_ssa,
             &option_dominance,
             &BTreeMap::new(),

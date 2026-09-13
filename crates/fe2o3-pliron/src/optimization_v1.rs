@@ -22,8 +22,8 @@ use pliron::{
 
 use crate::{
     HARD_MAX_OPERATION_HANDLES, HARD_MAX_OPERATION_TREE_ITEMS, HARD_MAX_PASSES,
-    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, OperationHandle, OperationHandleError, PlironSession,
-    inspect_operation_tree_details,
+    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, OperationGraphEpochV1, OperationGraphReplayIdentityV1,
+    OperationHandle, OperationHandleError, PlironSession, inspect_operation_tree_details,
 };
 
 /// Maximum number of passes admitted by one closed optimization plan.
@@ -315,6 +315,10 @@ pub struct PlironOptimizationPassReportV1 {
     input_graph_work: usize,
     output_graph_work: usize,
     work_units: usize,
+    input_epoch: OperationGraphEpochV1,
+    output_epoch: OperationGraphEpochV1,
+    invalidated_analysis_count: usize,
+    preserved_analysis_count: usize,
 }
 
 impl PlironOptimizationPassReportV1 {
@@ -337,6 +341,22 @@ impl PlironOptimizationPassReportV1 {
     pub const fn work_units(self) -> usize {
         self.work_units
     }
+
+    pub const fn input_epoch(self) -> OperationGraphEpochV1 {
+        self.input_epoch
+    }
+
+    pub const fn output_epoch(self) -> OperationGraphEpochV1 {
+        self.output_epoch
+    }
+
+    pub const fn invalidated_analysis_count(self) -> usize {
+        self.invalidated_analysis_count
+    }
+
+    pub const fn preserved_analysis_count(self) -> usize {
+        self.preserved_analysis_count
+    }
 }
 
 /// Immutable report published only after every pass and reconciliation succeeds.
@@ -347,6 +367,7 @@ pub struct PlironOptimizationReportV1 {
     invalidated_handle_count: usize,
     work_units: usize,
     passes: Vec<PlironOptimizationPassReportV1>,
+    final_graph_identity: OperationGraphReplayIdentityV1,
 }
 
 impl PlironOptimizationReportV1 {
@@ -368,6 +389,10 @@ impl PlironOptimizationReportV1 {
 
     pub fn passes(&self) -> &[PlironOptimizationPassReportV1] {
         &self.passes
+    }
+
+    pub const fn final_graph_identity(&self) -> OperationGraphReplayIdentityV1 {
+        self.final_graph_identity
     }
 }
 
@@ -429,6 +454,7 @@ impl PlironSession {
             return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
         }
         self.verify_optimization_graph(pointer, None)?;
+        self.analyze_operation_graph_v1(root)?;
 
         let mut analyses = AnalysisManager::default();
         let mut current_graph_work = initial_graph_work;
@@ -439,6 +465,8 @@ impl PlironSession {
 
         for pass in plan.passes.iter().copied() {
             let input_graph_work = current_graph_work;
+            let input_snapshot = self.operation_graph_snapshot_v1(root)?;
+            let transaction = self.begin_checked_operation_graph_mutation_v1(root)?;
             let changed = match catch_unwind(AssertUnwindSafe(|| {
                 run_trusted_pass(pass, pointer, &mut self.context, &mut analyses)
             })) {
@@ -461,6 +489,10 @@ impl PlironSession {
                 plan.limits.max_graph_work,
             )?;
             self.verify_optimization_graph(pointer, Some(pass))?;
+            let commit = self
+                .commit_checked_operation_graph_mutation_v1(transaction, changed)
+                .map_err(PlironOptimizationErrorV1::Operation)?;
+            let output_snapshot = commit.snapshot();
 
             let pass_work = input_graph_work
                 .checked_add(output_graph_work.checked_mul(2).ok_or_else(|| {
@@ -481,6 +513,10 @@ impl PlironSession {
                 input_graph_work,
                 output_graph_work,
                 work_units: pass_work,
+                input_epoch: input_snapshot.epoch(),
+                output_epoch: output_snapshot.epoch(),
+                invalidated_analysis_count: commit.invalidated_analysis_count(),
+                preserved_analysis_count: commit.preserved_analysis_count(),
             });
             current_graph_work = output_graph_work;
             final_operations = operations;
@@ -511,6 +547,7 @@ impl PlironSession {
             current_graph_work,
             &final_operations,
         )?;
+        let final_graph_identity = self.analyze_operation_graph_v1(root)?.replay_identity();
 
         Ok(PlironOptimizationReportV1 {
             initial_graph_work,
@@ -518,6 +555,7 @@ impl PlironSession {
             invalidated_handle_count,
             work_units,
             passes: reports,
+            final_graph_identity,
         })
     }
 
@@ -680,3 +718,7 @@ fn run_trusted_pass(
 }
 
 struct TrustedPassFailure;
+
+#[cfg(test)]
+#[path = "optimization_v1/graph_custody_tests_v1.rs"]
+mod graph_custody_tests_v1;

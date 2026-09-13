@@ -1,12 +1,19 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod graph_analysis_v1;
 mod kir_bridge_v1;
 mod optimization_v1;
 mod production;
+mod production_analysis;
 
+pub use graph_analysis_v1::*;
 pub use kir_bridge_v1::*;
 pub use optimization_v1::*;
+pub use production_analysis::*;
+
+// Neutral models are private imports for the session-owned analysis implementation.
+pub(crate) use fe2o3_kernel_analysis::*;
 
 pub use production::{
     ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,
@@ -29,8 +36,8 @@ pub use production::{
     ProductionCheckedNonCanonicalLoopProofImportV1, ProductionCollectiveSemanticContractV1,
     ProductionCollectiveSemanticKindV1, ProductionConstructionV1,
     ProductionCooperativeTensorBindingV1, ProductionEffectRefinementContractV2,
-    ProductionFunctionalRefinementAdmissionErrorV2, ProductionGpuWriteSiteV2,
-    ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
+    ProductionExactGraphIdentityV1, ProductionFunctionalRefinementAdmissionErrorV2,
+    ProductionGpuWriteSiteV2, ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
     ProductionMiddleEndAssuranceV4, ProductionMiddleEndAssuranceV5,
     ProductionMiddleEndCoverageSummaryV5, ProductionMiddleEndEvidenceCodecErrorV4,
     ProductionMiddleEndEvidenceCodecErrorV5, ProductionMiddleEndEvidenceIdentityV4,
@@ -107,8 +114,7 @@ use pliron::{
     builtin::op_interfaces::SymbolOpInterface,
     builtin::ops::ModuleOp,
     combine::{Parser, eof},
-    context::Context,
-    context::Ptr,
+    context::{Context, ContextIdentityExhausted, Ptr},
     dialect::DialectName,
     identifier::Identifier,
     irfmt::parsers::spaced,
@@ -318,8 +324,15 @@ pub enum ContextBuildError {
     RegistrationInputPanicked,
     DuplicateDialect(String),
     UpstreamRejectedDialect(String),
+    UpstreamContextIdentityExhausted,
     ContextIdentity(ContextIdentityError),
     RegistrationFailed(Diagnostic),
+}
+
+fn map_context_creation(
+    result: Result<Context, ContextIdentityExhausted>,
+) -> Result<Context, ContextBuildError> {
+    result.map_err(|_| ContextBuildError::UpstreamContextIdentityExhausted)
 }
 
 /// Deterministic fe2o3 metadata about a fresh context.
@@ -360,6 +373,10 @@ pub struct PlironSession {
     operations: BTreeMap<OperationHandleIdentity, Ptr<Operation>>,
     operation_roots: BTreeMap<OperationHandleIdentity, OperationHandleIdentity>,
     owned_tree_work: BTreeMap<OperationHandleIdentity, usize>,
+    operation_graph_epochs: BTreeMap<OperationHandleIdentity, OperationGraphEpochV1>,
+    operation_graph_digests: BTreeMap<OperationHandleIdentity, [u8; 32]>,
+    operation_graph_analysis_cache:
+        BTreeMap<OperationHandleIdentity, CachedOperationGraphAnalysisV1>,
     operation_import_bytes: usize,
     operation_tree_work: usize,
     next_operation_handle: Option<NonZeroU64>,
@@ -452,6 +469,10 @@ pub enum OperationHandleError {
     SessionOperationImportLimitExceeded,
     OperationImportRejected,
     OperationVerificationRejected,
+    OperationGraphEpochSpaceExhausted,
+    OperationGraphSnapshotMismatch,
+    OperationGraphChangedOutsideTransaction,
+    OperationGraphMutationReportMismatch,
     ConstructionRecipeMismatch,
     OperationTreeLimitExceeded,
     SessionOperationTreeLimitExceeded,
@@ -502,6 +523,18 @@ impl fmt::Display for OperationHandleError {
             Self::OperationVerificationRejected => {
                 formatter.write_str("operation failed recursive verification")
             }
+            Self::OperationGraphEpochSpaceExhausted => {
+                formatter.write_str("operation graph epoch space is exhausted")
+            }
+            Self::OperationGraphSnapshotMismatch => {
+                formatter.write_str("operation graph snapshot is stale or mismatched")
+            }
+            Self::OperationGraphChangedOutsideTransaction => {
+                formatter.write_str("operation graph changed outside a checked transaction")
+            }
+            Self::OperationGraphMutationReportMismatch => {
+                formatter.write_str("operation graph mutation report contradicts the exact graph")
+            }
             Self::ConstructionRecipeMismatch => {
                 formatter.write_str("constructed operation does not match its production recipe")
             }
@@ -548,7 +581,7 @@ impl PlironSession {
             }
         }
 
-        let mut context = Context::new();
+        let mut context = map_context_creation(Context::try_new())?;
         let identity = catch_unwind(AssertUnwindSafe(|| ensure_context_identity(&mut context)))
             .map_err(|_| ContextBuildError::ContextIdentity(ContextIdentityError::CorruptMarker))?
             .map_err(ContextBuildError::ContextIdentity)?;
@@ -587,6 +620,9 @@ impl PlironSession {
             operations: BTreeMap::new(),
             operation_roots: BTreeMap::new(),
             owned_tree_work: BTreeMap::new(),
+            operation_graph_epochs: BTreeMap::new(),
+            operation_graph_digests: BTreeMap::new(),
+            operation_graph_analysis_cache: BTreeMap::new(),
             operation_import_bytes: 0,
             operation_tree_work: 0,
             next_operation_handle: NonZeroU64::new(1),
@@ -600,28 +636,6 @@ impl PlironSession {
 
     pub const fn is_poisoned(&self) -> bool {
         self.poisoned
-    }
-
-    /// Grants raw context access only to compiler-internal conformance tests.
-    ///
-    /// Production crates must use owner-aware handles. This test seam remains
-    /// feature-gated until all dialect builders operate through session-owned
-    /// services and is never enabled by the default feature set.
-    #[cfg(feature = "internal-test-context-access")]
-    pub fn with_context_mut<T>(
-        &mut self,
-        action: impl FnOnce(&mut Context) -> T,
-    ) -> Result<T, SessionPoisoned> {
-        if self.poisoned {
-            return Err(SessionPoisoned);
-        }
-        match catch_unwind(AssertUnwindSafe(|| action(&mut self.context))) {
-            Ok(result) => Ok(result),
-            Err(_) => {
-                self.poisoned = true;
-                Err(SessionPoisoned)
-            }
-        }
     }
 
     /// Creates an empty builtin module and returns only its owner-aware handle.
@@ -649,10 +663,12 @@ impl PlironSession {
         self.operation_roots.insert(identity, identity);
         self.owned_tree_work.insert(identity, 3);
         self.operation_tree_work = session_work;
-        Ok(OperationHandle {
+        let handle = OperationHandle {
             owner: self.identity,
             identity,
-        })
+        };
+        self.register_operation_graph_v1(&handle)?;
+        Ok(handle)
     }
 
     /// Reaccounts and recursively verifies a root after a closed internal builder
@@ -661,6 +677,7 @@ impl PlironSession {
     pub(crate) fn finish_internal_root_construction(
         &mut self,
         handle: &OperationHandle,
+        transaction: CheckedOperationGraphMutationV1,
     ) -> Result<(), OperationHandleError> {
         self.validate_identity()?;
         if handle.owner != self.identity {
@@ -713,6 +730,7 @@ impl PlironSession {
         }
         self.owned_tree_work.insert(handle.identity, tree_work);
         self.operation_tree_work = session_work;
+        self.commit_checked_operation_graph_mutation_v1(transaction, true)?;
         Ok(())
     }
 
@@ -824,10 +842,12 @@ impl PlironSession {
         self.owned_tree_work.insert(identity, tree_work);
         self.operation_import_bytes = session_import_bytes;
         self.operation_tree_work = session_work;
-        Ok(OperationHandle {
+        let handle = OperationHandle {
             owner: self.identity,
             identity,
-        })
+        };
+        self.register_operation_graph_v1(&handle)?;
+        Ok(handle)
     }
 
     /// Returns the operation's result count after authenticating its owner.
@@ -884,6 +904,7 @@ impl PlironSession {
         &mut self,
         handle: &OperationHandle,
     ) -> Result<(), OperationHandleError> {
+        let transaction = self.begin_checked_operation_graph_mutation_v1(handle)?;
         let (subtree_work, subtree) = self
             .with_operation(handle, inspect_operation_tree_details)
             .and_then(|inspection| inspection)?;
@@ -941,6 +962,11 @@ impl PlironSession {
             return Err(OperationHandleError::OperationGraphOwnershipMismatch);
         }
         self.operation_tree_work = remaining_session_work;
+        if handle.identity == root {
+            self.forget_operation_graph_v1(root);
+        } else {
+            self.commit_checked_operation_graph_mutation_v1(transaction, true)?;
+        }
         Ok(())
     }
 
@@ -1256,12 +1282,12 @@ struct PlannedPass {
 
 /// A bounded pass plan. Insertion order is preserved as plan metadata.
 ///
-/// This boundary intentionally exposes no generic execution method. Upstream
-/// Pliron operation pointers do not carry context provenance. Session-owned
-/// roots now do, but executing an arbitrary upstream [`Pass`] would hand that
-/// raw pointer and the owning context to caller-supplied code again. Execution
-/// therefore remains absent until compiler passes migrate to a sealed
-/// owner-aware service:
+/// This boundary intentionally exposes no generic execution method. Pinned
+/// Pliron operation pointers carry private context provenance, while fe2o3
+/// session roots additionally authenticate stage and snapshot custody. Running
+/// an arbitrary upstream [`Pass`] would still hand the raw pointer and owning
+/// context to caller-supplied code. Execution therefore remains restricted to
+/// the sealed owner-aware service:
 ///
 /// ```compile_fail
 /// use fe2o3_pliron::{OperationHandle, PassPlan, PlironSession};
@@ -1332,10 +1358,139 @@ impl PassPlan {
 #[cfg(test)]
 mod owner_handle_tests {
     use super::*;
-    use pliron::builtin::op_interfaces::SingleBlockRegionInterface;
+    use dialect_autotune::CandidateSetOp;
+    use dialect_dispatch::{
+        DispatchIdAttr, DispatchIntentOpInterface, DispatchModeAttr, GraphCapacityAttr,
+        GraphIntentOp,
+    };
+    use dialect_gpu::{HierarchyAttr, HierarchyIdOp, TargetNeutralGpuOpInterface};
+    use dialect_kernel::AlgorithmOp;
+    use dialect_mir::{MirTypeId, pliron::MirModuleOp};
+    use dialect_proof::{
+        CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ProofIdAttr,
+        ProofOverlayOpInterface, PropertyAttr,
+    };
+    use dialect_schedule::{NonExecutableScheduleOp, PlanOp};
+    use dialect_tile::MaterializeOp;
+    use pliron::{
+        builtin::op_interfaces::SingleBlockRegionInterface,
+        op::{Op, op_cast},
+        operation::verify_operation,
+    };
 
     fn session() -> PlironSession {
         PlironSession::new(ShellLimits::default(), []).expect("fresh session")
+    }
+
+    #[test]
+    fn production_context_construction_maps_upstream_identity_exhaustion() {
+        assert!(matches!(
+            map_context_creation(Err(ContextIdentityExhausted)),
+            Err(ContextBuildError::UpstreamContextIdentityExhausted)
+        ));
+    }
+
+    fn full_session(order: [&str; 8]) -> PlironSession {
+        let registration = |name| match name {
+            dialect_mir::DIALECT => dialect_mir::pliron::mir_dialect_registration().unwrap(),
+            dialect_kernel::DIALECT_NAME => dialect_kernel::dialect_registration().unwrap(),
+            dialect_schedule::DIALECT_NAME => dialect_schedule::dialect_registration().unwrap(),
+            dialect_tile::DIALECT_NAME => dialect_tile::dialect_registration().unwrap(),
+            dialect_gpu::DIALECT_NAME => dialect_gpu::dialect_registration().unwrap(),
+            dialect_proof::DIALECT_NAME => dialect_proof::dialect_registration().unwrap(),
+            dialect_dispatch::DIALECT_NAME => dialect_dispatch::dialect_registration().unwrap(),
+            dialect_autotune::DIALECT_NAME => dialect_autotune::dialect_registration().unwrap(),
+            _ => panic!("unknown test dialect"),
+        };
+        PlironSession::new(ShellLimits::default(), order.into_iter().map(registration))
+            .expect("all dialect registrations are bounded")
+    }
+
+    #[test]
+    fn private_context_surface_exercises_all_registered_dialects() {
+        let mut session = full_session([
+            dialect_mir::DIALECT,
+            dialect_kernel::DIALECT_NAME,
+            dialect_schedule::DIALECT_NAME,
+            dialect_tile::DIALECT_NAME,
+            dialect_gpu::DIALECT_NAME,
+            dialect_proof::DIALECT_NAME,
+            dialect_dispatch::DIALECT_NAME,
+            dialect_autotune::DIALECT_NAME,
+        ]);
+        let context = &mut session.context;
+        let mir = MirModuleOp::try_new(
+            context,
+            "surface",
+            dialect_mir::pliron::MirDialectLimits::new(4, 4, 128).unwrap(),
+        )
+        .unwrap();
+        mir.append_function(context, "surface::entry", &[MirTypeId(7), MirTypeId(2)])
+            .unwrap();
+        let kernel = AlgorithmOp::new(context, 2).unwrap();
+        let schedule = PlanOp::new(context, 2, 16, 2).unwrap();
+        let tile = MaterializeOp::new(context, 2, 32, 4).unwrap();
+        let gpu = HierarchyIdOp::new(context, HierarchyAttr::Grid);
+        let proof = EvidenceRefOp::new(
+            context,
+            ProofIdAttr::new([0, 0, 0, 1]),
+            ProofIdAttr::new([0, 0, 0, 2]),
+            PropertyAttr::Bounds,
+            EvidenceStatusAttr::Checked,
+            CoveredBoundaryAttr::TargetNeutralGpu,
+        );
+        let dispatch = GraphIntentOp::new(
+            context,
+            DispatchIdAttr::new([0, 0, 0, 1]),
+            GraphCapacityAttr::Nodes16,
+            DispatchModeAttr::UnfusedFinite,
+        );
+        let autotune = CandidateSetOp::new(context, 4, 8).unwrap();
+
+        for operation in [
+            mir.get_operation(),
+            kernel.get_operation(),
+            schedule.get_operation(),
+            tile.get_operation(),
+            gpu.get_operation(),
+            proof.get_operation(),
+            dispatch.get_operation(),
+            autotune.get_operation(),
+        ] {
+            verify_operation(operation, context).expect("registered operation verifies");
+        }
+        assert!(
+            !op_cast::<dyn NonExecutableScheduleOp>(&schedule)
+                .unwrap()
+                .is_executable()
+        );
+        assert!(
+            !op_cast::<dyn TargetNeutralGpuOpInterface>(&gpu)
+                .unwrap()
+                .grants_runtime_authority()
+        );
+        assert!(
+            !op_cast::<dyn ProofOverlayOpInterface>(&proof)
+                .unwrap()
+                .grants_authority()
+        );
+        assert!(
+            !op_cast::<dyn DispatchIntentOpInterface>(&dispatch)
+                .unwrap()
+                .grants_runtime_authority()
+        );
+        assert_eq!(mir.function_count(context), 1);
+        assert_eq!(kernel.iteration_domain(context).unwrap().rank(), 2);
+        assert_eq!(schedule.parameters(context).unwrap().rank(), 2);
+        assert_eq!(
+            tile.distribution(context)
+                .unwrap()
+                .total_elements()
+                .unwrap(),
+            128
+        );
+        assert_eq!(proof.status(context), Some(EvidenceStatusAttr::Checked));
+        assert_eq!(autotune.budget(context).unwrap().candidates(), 4);
     }
 
     fn context_identity_marker_key() -> Identifier {
@@ -1351,9 +1506,16 @@ mod owner_handle_tests {
         let owner_handle = owner.create_module("owner").expect("owner module");
         let foreign_handle = foreign.create_module("foreign").expect("foreign module");
 
+        let owner_operation = owner.operations[&owner_handle.identity];
+        let foreign_operation = foreign.operations[&foreign_handle.identity];
         assert_eq!(
-            owner.operations[&owner_handle.identity],
-            foreign.operations[&foreign_handle.identity]
+            format!("{owner_operation:?}"),
+            format!("{foreign_operation:?}"),
+            "fresh contexts deliberately allocate the same upstream slot"
+        );
+        assert_ne!(
+            owner_operation, foreign_operation,
+            "owner-authenticated pointers must not compare equal across contexts"
         );
         assert_eq!(
             foreign.operation_result_count(&owner_handle),
@@ -1752,19 +1914,5 @@ mod owner_handle_tests {
         );
         assert!(session.is_poisoned());
         assert!(session.operations.is_empty());
-    }
-
-    #[cfg(feature = "internal-test-context-access")]
-    #[test]
-    fn test_context_action_panics_are_contained_and_poison_the_session() {
-        let mut session = session();
-        let result = session.with_context_mut(|_| panic!("hostile test action"));
-
-        assert_eq!(result, Err(SessionPoisoned));
-        assert!(session.is_poisoned());
-        assert!(matches!(
-            session.create_module("owner"),
-            Err(OperationHandleError::SessionPoisoned)
-        ));
     }
 }

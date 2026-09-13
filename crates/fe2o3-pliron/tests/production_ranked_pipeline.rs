@@ -17,10 +17,9 @@ use fe2o3_functional_proof::{
     FunctionalRefinementSubjectsV2, ImportedFunctionalRefinementProofV2, SafeReferenceKindV2,
     UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
 };
-use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
-};
+use fe2o3_kernel_analysis::{KernelCheckPassKindV1, KernelCheckStatusV1};
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
+use fe2o3_pliron::PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2;
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS,
     PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2, ProductionConstructionV1,

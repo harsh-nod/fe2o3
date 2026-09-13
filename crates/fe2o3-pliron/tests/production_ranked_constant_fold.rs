@@ -1,5 +1,6 @@
 use dialect_kernel::{AccessKindAttr, IndexBinaryKindAttr};
-use fe2o3_kernel_analysis::{KernelCheckStatusV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2};
+use fe2o3_kernel_analysis::KernelCheckStatusV1;
+use fe2o3_pliron::PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2;
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
     ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,

@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// EXPECT-LOCAL: REJECT
+// CHECK: LOCAL-REJECT
+// CHECK: gpu.cond_branch condition must be i1
+builtin.func @boolean_wrong_condition: builtin.function <(kernel.index) -> ()>
+{
+  ^entry(i: kernel.index):
+    gpu.cond_branch (i) [^exit, ^exit] [operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(kernel.index) -> ()>
+  ^exit():
+    kernel.return () [] []: <() -> ()>
+}

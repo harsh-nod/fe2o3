@@ -15,6 +15,19 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+use crate::production_analysis::{
+    ProductionPlironPreloweringOutcomeV1,
+    require_production_pliron_checks_before_lowering_with_resource_limits_v1,
+    require_production_pliron_checks_with_atomic_target_and_resource_limits_v1,
+};
+use crate::{
+    HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
+    PlironAtomicLegalityReportV1, PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextErrorV1,
+    PlironAtomicTargetContextV1, PlironBarrierReportV1, PlironPipelineProtocolReportV1,
+    PlironSemanticRefinementReportV1, PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1,
+    ProductionPlironPreloweringErrorV2, ProductionPlironPreloweringReportV2, RankedBoundsReportV1,
+    RankedRaceReportV1,
+};
 use dialect_gpu::{
     AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr,
     MemoryOrderAttr, MemoryScopeAttr,
@@ -43,15 +56,6 @@ use dialect_proof::{
     AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
     ProofIdAttr, PropertyAttr, RelativeErrorF64BitsAttr, RequireEffectRefinementOp,
     RequireNumericalRefinementOp, RequireRefinementOp, RequireTensorRefinementOp,
-};
-use fe2o3_kernel_analysis::{
-    HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
-    PlironAtomicLegalityReportV1, PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextErrorV1,
-    PlironAtomicTargetContextV1, PlironBarrierReportV1, PlironPipelineProtocolReportV1,
-    PlironSemanticRefinementReportV1, PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1,
-    ProductionPlironPreloweringErrorV2, ProductionPlironPreloweringReportV2, RankedBoundsReportV1,
-    RankedRaceReportV1, require_production_pliron_checks_before_lowering_v2,
-    require_production_pliron_checks_with_atomic_target_before_lowering_v2,
 };
 use fe2o3_kernel_ir::{MatrixElement, TensorLayoutContractV1};
 use pliron::{
@@ -160,12 +164,13 @@ impl ProductionCooperativeTensorBindingV1 {
 use super::HARD_MAX_PRODUCTION_CONSTRUCTIONS;
 use super::{
     ConstructedGraphStageV1, KernelChecksVerifiedGraphStageV1, ProductionConstructionKindV1,
-    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
-    ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
+    ProductionConstructionV1, ProductionExactGraphIdentityV1, ProductionPlironSessionV1,
+    ProductionRootHandleV1, ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
 };
 use crate::{
-    ContextBuildError, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, NameError, NameKind, OperationHandle,
-    OperationHandleError, ProductionSessionLimitsV1, validate_name,
+    ContextBuildError, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, NameError, NameKind,
+    OperationGraphSnapshotV1, OperationHandle, OperationHandleError, ProductionSessionLimitsV1,
+    validate_name,
 };
 
 mod ranked_cfg_ssa_canonicalize_v1;
@@ -4215,11 +4220,22 @@ fn validate_terminator(
 
 pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
+    pub(super) graph_snapshot: OperationGraphSnapshotV1,
+    pub(super) exact_graph_identity: Option<ProductionExactGraphIdentityV1>,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
+    pub(super) production_analysis_resource_upper_bound:
+        Option<crate::production_analysis::ProductionAnalysisResourceUpperBoundV1>,
+    pub(super) ranked_analysis_binding: Option<ProductionRankedAnalysisBindingV1>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ProductionRankedAnalysisBindingV1 {
+    graph_snapshot: OperationGraphSnapshotV1,
+    exact_graph_identity: ProductionExactGraphIdentityV1,
 }
 
 pub(super) struct MaterializedConstructionV1 {
@@ -4228,6 +4244,121 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
+}
+
+fn pipeline_report_comparison_upper_bound_v1(
+    left: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    right: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+) -> Result<
+    crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    ProductionSessionErrorV1,
+> {
+    use crate::production_analysis::{
+        ProductionAnalysisResourcePhaseV1, ProductionAnalysisResourceUpperBoundV1,
+    };
+
+    // Report equality visits each inline byte at most once and each retained
+    // dynamic byte/item at most once on each side. The inline object byte size
+    // is a conservative, layout-derived bound for all fixed scalar/tag fields;
+    // each pipeline resource receipt already bounds its report's complete
+    // dynamically retained payload.
+    let fixed_comparison_work = std::mem::size_of::<ProductionPlironPreloweringReportV2>()
+        .checked_mul(2)
+        .ok_or(ProductionSessionErrorV1::AnalysisResourceLimit {
+            phase: ProductionAnalysisResourcePhaseV1::PipelineVerification,
+            producing_pass: None,
+            resource: "two-run report fixed-field comparison work upper bound",
+        })?;
+    let comparison_work = left
+        .retained_storage_upper_bound()
+        .checked_add(right.retained_storage_upper_bound())
+        .and_then(|work| work.checked_add(fixed_comparison_work))
+        .and_then(|work| work.checked_add(1))
+        .ok_or(ProductionSessionErrorV1::AnalysisResourceLimit {
+            phase: ProductionAnalysisResourcePhaseV1::PipelineVerification,
+            producing_pass: None,
+            resource: "two-run report comparison work upper bound",
+        })?;
+    ProductionAnalysisResourceUpperBoundV1::checked_phase(
+        ProductionAnalysisResourcePhaseV1::PipelineVerification,
+        comparison_work,
+        0,
+        0,
+    )
+    .map_err(production_analysis_resource_error_v1)
+}
+
+fn compose_pipeline_verification_runs_v1(
+    first: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    second: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    comparison: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
+) -> Result<
+    crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    ProductionSessionErrorV1,
+> {
+    use crate::production_analysis::ProductionAnalysisResourcePhaseV1;
+
+    first
+        .checked_then_retain(
+            second,
+            ProductionAnalysisResourcePhaseV1::PipelineVerification,
+        )
+        .and_then(|combined| {
+            combined.checked_then_discard(
+                comparison,
+                ProductionAnalysisResourcePhaseV1::PipelineVerification,
+            )
+        })
+        .and_then(|combined| {
+            limits.require(
+                ProductionAnalysisResourcePhaseV1::PipelineVerification,
+                combined,
+            )
+        })
+        .map_err(production_analysis_resource_error_v1)
+}
+
+fn production_analysis_resource_error_v1(
+    error: crate::production_analysis::ProductionAnalysisResourceLimitV1,
+) -> ProductionSessionErrorV1 {
+    ProductionSessionErrorV1::AnalysisResourceLimit {
+        phase: error.phase,
+        producing_pass: None,
+        resource: error.resource,
+    }
+}
+
+include!("ranked/custody_rejection_trace_v1.rs");
+
+fn classify_replay_failure_v1(error: ProductionSessionErrorV1) -> ProductionSessionErrorV1 {
+    match error {
+        error @ ProductionSessionErrorV1::AnalysisResourceLimit { .. } => error,
+        ProductionSessionErrorV1::RankedPassPreservation(
+            crate::PlironPassPreservationErrorV1::ResourceLimit { resource },
+        ) => ProductionSessionErrorV1::AnalysisResourceLimit {
+            phase: crate::production_analysis::ProductionAnalysisResourcePhaseV1::PassPreservation,
+            producing_pass: None,
+            resource,
+        },
+        ProductionSessionErrorV1::RankedReportValidation(
+            crate::ProductionAnalysisReportValidationErrorV1::ResourceLimit {
+                producing_pass,
+                resource,
+            },
+        ) => ProductionSessionErrorV1::AnalysisResourceLimit {
+            phase: crate::ProductionAnalysisResourcePhaseV1::ReportValidation,
+            producing_pass,
+            resource,
+        },
+        error => {
+            trace_ranked_custody_rejection_v1(
+                RankedCustodyRejectionV1::PrepareReplayError,
+                Some(&error),
+            );
+            ProductionSessionErrorV1::RankedGraphChanged
+        }
+    }
 }
 
 impl ProductionConstructionV1 {
@@ -4250,26 +4381,34 @@ impl ProductionPlironSessionV1 {
     fn run_production_pipeline_guarded(
         &mut self,
         function: Ptr<Operation>,
-    ) -> Result<ProductionPlironPreloweringReportV2, ProductionSessionErrorV1> {
+        resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
+    ) -> Result<ProductionPlironPreloweringOutcomeV1, ProductionSessionErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let function = FuncOp::from_operation(function);
             match self.atomic_target.as_ref() {
                 Some(target) => {
-                    require_production_pliron_checks_with_atomic_target_before_lowering_v2(
+                    require_production_pliron_checks_with_atomic_target_and_resource_limits_v1(
                         &self.inner.context,
                         &function,
                         target,
+                        resource_limits,
                     )
                 }
-                None => require_production_pliron_checks_before_lowering_v2(
+                None => require_production_pliron_checks_before_lowering_with_resource_limits_v1(
                     &self.inner.context,
                     &function,
+                    resource_limits,
                 ),
             }
         }));
         match result {
-            Ok(Ok(report)) => Ok(report),
-            Ok(Err(error)) => Err(production_pipeline_check_error(error)),
+            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Err(error)) => {
+                if matches!(&error, ProductionPlironPreloweringErrorV2::Preservation(_)) {
+                    self.poisoned = true;
+                }
+                Err(production_pipeline_check_error(error))
+            }
             Err(_) => {
                 self.poisoned = true;
                 Err(ProductionSessionErrorV1::Operation(
@@ -4391,6 +4530,10 @@ impl ProductionPlironSessionV1 {
             .inner
             .create_module(root_name)
             .map_err(ProductionSessionErrorV1::Operation)?;
+        let transaction = self
+            .inner
+            .begin_checked_operation_graph_mutation_v1(&operation)
+            .map_err(ProductionSessionErrorV1::Operation)?;
         let root_pointer = self
             .inner
             .operations
@@ -4478,7 +4621,7 @@ impl ProductionPlironSessionV1 {
             .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         }
         self.inner
-            .finish_internal_root_construction(&operation)
+            .finish_internal_root_construction(&operation, transaction)
             .map_err(ProductionSessionErrorV1::Operation)?;
         let ranked_view_names = kernel
             .blocks()
@@ -4538,34 +4681,65 @@ impl ProductionPlironSessionV1 {
         self.validate_live()?;
         self.authenticate_owner(stage.owner)?;
         self.authenticate_owner(root.owner)?;
-        let record = self
-            .constructed_roots
-            .get(&stage.identity)
-            .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        if root.stage != stage.identity || root.identity != record.identity {
-            return Err(ProductionSessionErrorV1::StageRootMismatch);
-        }
-        if record.production_pipeline_report.is_some() {
-            return Err(ProductionSessionErrorV1::StaleStage);
-        }
-        let function = record
-            .ranked_function
-            .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        let expected_typed_roots = expected_typed_root_commitments(
-            record
+        let (function, expected_typed_roots, graph_snapshot, exact_graph_identity) = {
+            let record = self
+                .constructed_roots
+                .get(&stage.identity)
+                .ok_or(ProductionSessionErrorV1::StaleStage)?;
+            if root.stage != stage.identity
+                || root.identity != record.identity
+                || root.graph_snapshot != record.graph_snapshot
+                || root.exact_graph_identity != record.exact_graph_identity
+            {
+                return Err(ProductionSessionErrorV1::StageRootMismatch);
+            }
+            if record.production_pipeline_report.is_some()
+                || record.production_analysis_resource_upper_bound.is_some()
+                || record.ranked_analysis_binding.is_some()
+            {
+                return Err(ProductionSessionErrorV1::StaleStage);
+            }
+            let kernel = record
                 .ranked_kernel
                 .as_ref()
-                .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
-        );
-        let report = self.run_production_pipeline_guarded(function)?;
-        if report.semantics().typed_root_commitments() != expected_typed_roots {
+                .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
+            let exact_graph_identity = record
+                .exact_graph_identity
+                .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
+            if ProductionExactGraphIdentityV1::from_ranked(kernel) != exact_graph_identity {
+                trace_ranked_custody_rejection_v1(
+                    RankedCustodyRejectionV1::VerifyRecipeIdentity,
+                    None,
+                );
+                return Err(ProductionSessionErrorV1::RankedGraphChanged);
+            }
+            (
+                record
+                    .ranked_function
+                    .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
+                expected_typed_root_commitments(kernel),
+                record.graph_snapshot,
+                exact_graph_identity,
+            )
+        };
+        self.require_live_graph_snapshot_v1(&root.operation, graph_snapshot)?;
+        let verifier_limits = self.analysis_resource_limits();
+        let outcome = self.run_production_pipeline_guarded(function, verifier_limits)?;
+        if outcome.report.semantics().typed_root_commitments() != expected_typed_roots {
+            trace_ranked_custody_rejection_v1(RankedCustodyRejectionV1::VerifyTypedRoots, None);
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
+        self.require_live_graph_snapshot_v1(&root.operation, graph_snapshot)?;
         let record = self
             .constructed_roots
             .get_mut(&stage.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        record.production_pipeline_report = Some(report);
+        record.production_pipeline_report = Some(outcome.report);
+        record.production_analysis_resource_upper_bound = Some(outcome.resource_upper_bound);
+        record.ranked_analysis_binding = Some(ProductionRankedAnalysisBindingV1 {
+            graph_snapshot,
+            exact_graph_identity,
+        });
         Ok((
             ProductionStageHandleV1 {
                 owner: stage.owner,
@@ -4577,6 +4751,8 @@ impl ProductionPlironSessionV1 {
                 stage: root.stage,
                 identity: root.identity,
                 operation: root.operation,
+                graph_snapshot: root.graph_snapshot,
+                exact_graph_identity: root.exact_graph_identity,
                 _stage: std::marker::PhantomData,
             },
         ))
@@ -4590,11 +4766,15 @@ impl ProductionPlironSessionV1 {
         self.validate_live()?;
         self.authenticate_owner(stage.owner)?;
         self.authenticate_owner(root.owner)?;
-        if let Err(error) = self.inner.operation_shape(&root.operation) {
-            self.poisoned = true;
-            return Err(ProductionSessionErrorV1::Operation(error));
-        }
-        let (expected_root, function, expected_report, expected_typed_roots) = {
+        let (
+            expected_root,
+            function,
+            has_expected_report,
+            expected_analysis_resource_upper_bound,
+            expected_snapshot,
+            expected_identity,
+            analysis_binding,
+        ) = {
             let record = self
                 .constructed_roots
                 .get(&stage.identity)
@@ -4602,50 +4782,131 @@ impl ProductionPlironSessionV1 {
             (
                 record.identity,
                 record.ranked_function,
-                record.production_pipeline_report.clone(),
-                expected_typed_root_commitments(
-                    record
-                        .ranked_kernel
-                        .as_ref()
-                        .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
-                ),
+                record.production_pipeline_report.is_some(),
+                record.production_analysis_resource_upper_bound,
+                record.graph_snapshot,
+                record.exact_graph_identity,
+                record.ranked_analysis_binding,
             )
         };
         if root.stage != stage.identity
             || root.identity != expected_root
-            || expected_report.is_none()
+            || root.graph_snapshot != expected_snapshot
+            || root.exact_graph_identity != expected_identity
+            || !has_expected_report
+            || expected_analysis_resource_upper_bound.is_none()
         {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
+        let expected_identity =
+            expected_identity.ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
+        if analysis_binding.is_none_or(|binding| {
+            binding.graph_snapshot != expected_snapshot
+                || binding.exact_graph_identity != expected_identity
+        }) {
+            self.poisoned = true;
+            trace_ranked_custody_rejection_v1(
+                RankedCustodyRejectionV1::PrepareAnalysisBinding,
+                None,
+            );
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
+        self.require_live_graph_snapshot_v1(&root.operation, expected_snapshot)?;
         let function = function.ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        let revalidated = match self.run_production_pipeline_guarded(function) {
-            Ok(report) => report,
-            Err(_) => {
+        let first_resource_upper_bound = expected_analysis_resource_upper_bound
+            .ok_or(ProductionSessionErrorV1::StageRootMismatch)?;
+        let comparison_upper_bound = pipeline_report_comparison_upper_bound_v1(
+            first_resource_upper_bound,
+            first_resource_upper_bound,
+        )?;
+        let first_with_reserved_comparison = first_resource_upper_bound
+            .checked_then_discard(
+                comparison_upper_bound,
+                crate::production_analysis::ProductionAnalysisResourcePhaseV1::PipelineVerification,
+            )
+            .map_err(production_analysis_resource_error_v1)?;
+        let verifier_limits = self.analysis_resource_limits();
+        let second_limits = verifier_limits
+            .remaining_after_retained(
+                crate::production_analysis::ProductionAnalysisResourcePhaseV1::PipelineVerification,
+                first_with_reserved_comparison,
+            )
+            .map_err(production_analysis_resource_error_v1)?;
+        let revalidated = match self.run_production_pipeline_guarded(function, second_limits) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let error = classify_replay_failure_v1(error);
+                if matches!(
+                    error,
+                    ProductionSessionErrorV1::AnalysisResourceLimit { .. }
+                ) {
+                    return Err(error);
+                }
                 self.poisoned = true;
-                return Err(ProductionSessionErrorV1::RankedGraphChanged);
+                return Err(error);
             }
         };
-        if revalidated.semantics().typed_root_commitments() != expected_typed_roots {
+        if first_resource_upper_bound != revalidated.resource_upper_bound {
             self.poisoned = true;
+            trace_ranked_custody_rejection_v1(
+                RankedCustodyRejectionV1::PrepareResourceReceipt,
+                None,
+            );
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
-        if expected_report.as_ref() != Some(&revalidated) {
+        let report_matches = self
+            .constructed_roots
+            .get(&stage.identity)
+            .and_then(|record| record.production_pipeline_report.as_ref())
+            == Some(&revalidated.report);
+        if !report_matches {
             self.poisoned = true;
+            trace_ranked_custody_rejection_v1(RankedCustodyRejectionV1::PrepareReport, None);
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
+        let production_analysis_resource_upper_bound = compose_pipeline_verification_runs_v1(
+            first_resource_upper_bound,
+            revalidated.resource_upper_bound,
+            comparison_upper_bound,
+            verifier_limits,
+        )?;
         let record = self
             .constructed_roots
             .remove(&stage.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        if root.stage != stage.identity || root.identity != record.identity {
+        if root.stage != stage.identity
+            || root.identity != record.identity
+            || root.graph_snapshot != record.graph_snapshot
+            || root.exact_graph_identity != record.exact_graph_identity
+        {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
         let kernel = record
             .ranked_kernel
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
+        if ProductionExactGraphIdentityV1::from_ranked(&kernel) != expected_identity {
+            self.poisoned = true;
+            trace_ranked_custody_rejection_v1(
+                RankedCustodyRejectionV1::PrepareRecipeIdentity,
+                None,
+            );
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
         let report = record
             .production_pipeline_report
             .ok_or(ProductionSessionErrorV1::StageRootMismatch)?;
+        let recorded_first_resource_upper_bound =
+            record
+                .production_analysis_resource_upper_bound
+                .ok_or(ProductionSessionErrorV1::StageRootMismatch)?;
+        if recorded_first_resource_upper_bound != first_resource_upper_bound {
+            self.poisoned = true;
+            trace_ranked_custody_rejection_v1(
+                RankedCustodyRejectionV1::PrepareRecordedReceipt,
+                None,
+            );
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
         if !report.is_clean() {
             return Err(ProductionSessionErrorV1::RankedRecipe(
                 ProductionRankedKernelErrorV1::Materialization(
@@ -4656,6 +4917,9 @@ impl ProductionPlironSessionV1 {
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
             production_pipeline_report: report,
+            production_analysis_resource_upper_bound,
+            graph_snapshot: expected_snapshot,
+            exact_graph_identity: expected_identity,
             ranked_view_names: record.ranked_view_names,
             policy_checked_refinement_staging: record.policy_checked_refinement_staging,
             _session: self,
@@ -4669,6 +4933,15 @@ fn production_pipeline_check_error(
     error: ProductionPlironPreloweringErrorV2,
 ) -> ProductionSessionErrorV1 {
     match error {
+        ProductionPlironPreloweringErrorV2::ResourceLimit {
+            phase,
+            producing_pass,
+            resource,
+        } => ProductionSessionErrorV1::AnalysisResourceLimit {
+            phase,
+            producing_pass,
+            resource,
+        },
         // Ranked recipe construction is target-agnostic. A target-contract
         // error can only enter through the separate targeted prelowering API.
         ProductionPlironPreloweringErrorV2::TargetContract(_) => {
@@ -6095,6 +6368,10 @@ fn materialize_terminator(
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
     production_pipeline_report: ProductionPlironPreloweringReportV2,
+    production_analysis_resource_upper_bound:
+        crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    graph_snapshot: OperationGraphSnapshotV1,
+    exact_graph_identity: ProductionExactGraphIdentityV1,
     ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     _session: ProductionPlironSessionV1,
@@ -6114,6 +6391,27 @@ impl fmt::Debug for ProductionRankedKernelLoweringInputV1 {
 }
 
 impl ProductionRankedKernelLoweringInputV1 {
+    /// Returns the work upper bound admitted for both deterministic production
+    /// verifier runs and their report comparison.
+    pub fn production_analysis_work_upper_bound_v1(&self) -> usize {
+        self.production_analysis_resource_upper_bound
+            .work_upper_bound()
+    }
+
+    /// Returns the storage retained after both deterministic production
+    /// verifier runs complete.
+    pub fn production_analysis_retained_storage_upper_bound_v1(&self) -> usize {
+        self.production_analysis_resource_upper_bound
+            .retained_storage_upper_bound()
+    }
+
+    /// Returns the peak storage upper bound admitted across both deterministic
+    /// production verifier runs and their report comparison.
+    pub fn production_analysis_peak_storage_upper_bound_v1(&self) -> usize {
+        self.production_analysis_resource_upper_bound
+            .peak_storage_upper_bound()
+    }
+
     pub(super) fn revalidate_structure(&self) -> Result<(), ProductionRankedKernelErrorV1> {
         let tree_work = self.kernel.validate()?;
         if tree_work != self.kernel.tree_work {
@@ -6126,6 +6424,16 @@ impl ProductionRankedKernelLoweringInputV1 {
 
     pub const fn kernel(&self) -> &ProductionRankedKernelV1 {
         &self.kernel
+    }
+
+    /// Exact canonical ranked identity verified for the live owner-held graph view.
+    pub const fn exact_graph_identity(&self) -> ProductionExactGraphIdentityV1 {
+        self.exact_graph_identity
+    }
+
+    /// Transient owner/session epoch under which the exact graph was verified.
+    pub const fn graph_snapshot(&self) -> OperationGraphSnapshotV1 {
+        self.graph_snapshot
     }
 
     /// Compiler-captured live PLIRON SSA identity for one stable ranked value.
@@ -6186,9 +6494,7 @@ impl ProductionRankedKernelLoweringInputV1 {
         self.production_pipeline_report.semantics()
     }
 
-    pub const fn pass_preservation_report(
-        &self,
-    ) -> &fe2o3_kernel_analysis::PlironPassPreservationReportV1 {
+    pub const fn pass_preservation_report(&self) -> &crate::PlironPassPreservationReportV1 {
         self.production_pipeline_report.preservation()
     }
 

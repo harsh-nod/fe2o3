@@ -10,8 +10,8 @@ use dialect_mir::{
     MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_TYPES, MirBlockId, MirTypeId,
     pliron::{
         MirBlockHandleError, MirBlockIdAttr, MirBlockOp, MirDialectBuildError, MirDialectLimitKind,
-        MirDialectLimits, MirFunctionOp, MirIdentityAttr, MirLimitsAttr, MirModuleOp, MirReturnOp,
-        MirTypeRef, mir_dialect_registration, register_mir_dialect,
+        MirDialectLimits, MirDialectVerifyError, MirFunctionOp, MirIdentityAttr, MirLimitsAttr,
+        MirModuleOp, MirReturnOp, MirTypeRef, mir_dialect_registration, register_mir_dialect,
     },
 };
 use fe2o3_pliron::{
@@ -84,22 +84,19 @@ fn transplant_marker(owner: &mut Context, foreign: &mut Context, key: &str) {
 #[test]
 fn explicit_registration_is_duplicate_safe_and_session_scoped() {
     let registration = mir_dialect_registration().expect("fixed MIR dialect name");
-    let mut session = PlironSession::new(ShellLimits::default(), [registration])
+    let session = PlironSession::new(ShellLimits::default(), [registration])
         .expect("explicit MIR registration");
     assert_eq!(session.manifest().pliron_revision(), PLIRON_REVISION);
     assert_eq!(session.manifest().registration_order(), &["mir".to_owned()]);
 
-    session
-        .with_context_mut(|context| {
-            register_mir_dialect(context);
-            register_mir_dialect(context);
+    let mut context = Context::new();
+    register_mir_dialect(&mut context);
+    register_mir_dialect(&mut context);
 
-            assert_eq!(MirModuleOp::get_opid_static().to_string(), "mir.module");
-            assert_eq!(MirFunctionOp::get_opid_static().to_string(), "mir.func");
-            assert_eq!(MirBlockOp::get_opid_static().to_string(), "mir.block");
-            assert_eq!(MirTypeRef::get_type_id_static().to_string(), "mir.type_ref");
-        })
-        .expect("healthy session");
+    assert_eq!(MirModuleOp::get_opid_static().to_string(), "mir.module");
+    assert_eq!(MirFunctionOp::get_opid_static().to_string(), "mir.func");
+    assert_eq!(MirBlockOp::get_opid_static().to_string(), "mir.block");
+    assert_eq!(MirTypeRef::get_type_id_static().to_string(), "mir.type_ref");
 }
 
 #[test]
@@ -242,10 +239,23 @@ fn verifier_rejects_duplicate_identities_and_hostile_attributes() {
             .get_head()
             .unwrap(),
     );
-    marker.set_attr_block_id(
-        &context,
-        MirBlockIdAttr::new(MirBlockId(MAX_EXECUTABLE_BLOCKS as u32)),
-    );
+    let invalid_id = MirBlockIdAttr::new(MirBlockId(MAX_EXECUTABLE_BLOCKS as u32));
+    let rejection = marker
+        .try_set_attr_block_id(&context, invalid_id)
+        .expect_err("the generated setter must reject an invalid attribute");
+    assert!(matches!(
+        rejection.err.downcast_ref::<MirDialectVerifyError>(),
+        Some(MirDialectVerifyError::InvalidBlockId(id)) if *id == MAX_EXECUTABLE_BLOCKS as u32
+    ));
+    assert_eq!(marker.block_id(&context), Some(MirBlockId(0)));
+    assert!(verify_operation(invalid_block.get_operation(), &context).is_ok());
+
+    // Bypass the setter only to exercise verification of malformed test IR.
+    marker
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(marker_key("block_id"), invalid_id);
     assert!(verify_operation(invalid_block.get_operation(), &context).is_err());
 }
 

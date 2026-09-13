@@ -23,7 +23,7 @@ use pliron::{
 };
 
 /// The only accepted reviewed Pliron workspace revision for Wave 0.
-pub const PLIRON_REVISION: &str = "5bdf861bf03e7f20242b25717fb653336d02e487";
+pub const PLIRON_REVISION: &str = "9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd";
 
 /// Hard byte cap for dialect names admitted by registration adapters.
 pub const HARD_MAX_NAME_BYTES: usize = 96;

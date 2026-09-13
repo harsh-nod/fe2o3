@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=memory-bounds %s
+// EXPECT: UNPROVED
+builtin.func @bounds_transport_parallel: builtin.function <(kernel.index, kernel.index) -> ()>
+{
+  ^entry(i: kernel.index, n: kernel.index):
+    kernel.index_lt_br_args (i, n, i, n, i, n) [^access, ^access] []: <(kernel.index, kernel.index, kernel.index, kernel.index, kernel.index, kernel.index) -> ()>
+  ^access(x: kernel.index, m: kernel.index):
+    view = kernel.ranked_view (m) [] [kernel_memory_space: kernel.memory_space Global]: <(kernel.index) -> (kernel.ranked_view <32,false,[0]>)>;
+    kernel.access (view, x) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[0]>, kernel.index) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

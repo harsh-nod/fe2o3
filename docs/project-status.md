@@ -608,18 +608,20 @@ target lowering, and host execution into explicit ownership boundaries:
   correlation reducer; load-ready recovery reports a typed evidence gap. Cargo
   exposes the sorted collection through a canonical bounded stderr record and
   keeps it outside artifact, publication, and pure-KFD runtime authority.
-- General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
-  Kernel IR sequence for structure, control flow, bounds obligations, race
-  freedom, barrier convergence, and workgroup-memory initialization/reuse.
-  The production MIR-to-Kernel-IR boundary runs the sequence for every kernel
-  and rejects concrete failures before transformation. `Incomplete` and
-  `Clean` reports remain non-authoritative; see the
+- General kernel checks: fixed ranked pre-lowering analyses live in private
+  `fe2o3-pliron::production_analysis`, entered through the owner-scoped
+  production session. `fe2o3-kernel-analysis` retains neutral KIR analyses and
+  pointer-independent Presburger models. Reports remain non-authoritative;
+  see the
   [V1 pipeline contract](general-kernel-check-pipeline-v1.md).
 - Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
   context-identity, pass-planning, and owner-held textual bridge over Pliron
   v0.17.0 at reviewed fork commit
-  `5bdf861bf03e7f20242b25717fb653336d02e487`, a strict descendant of the
+  `9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`, a strict descendant of the
   upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+  The analysis-owner migration does not complete the canonical production
+  emitter, generic resource-accounting closure, tutorial qualification, or
+  formal verification.
   The bridge recursively verifies imported operations and enforces bounded
   owner/session accounting, but arbitrary registered `Parsable` implementations
   remain trusted parser code and the bridge grants no compiler authority. Seven

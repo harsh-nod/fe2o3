@@ -152,20 +152,18 @@ fn snapshots_are_deterministic_across_independent_contexts() {
 #[test]
 fn dialect_registration_hook_installs_the_real_production_schema() {
     let registration = mir_dialect_registration().unwrap();
-    let mut session = PlironSession::new(ShellLimits::default(), [registration]).unwrap();
+    let _session = PlironSession::new(ShellLimits::default(), [registration]).unwrap();
     let expected = representative_module();
+    let mut context = Context::new();
+    register_mir_dialect(&mut context);
 
-    session
-        .with_context_mut(|context| {
-            let handle = MirProductionModuleHandleV1::try_new(
-                context,
-                expected.clone(),
-                MirProductionPlironLimitsV1::default(),
-            )
-            .unwrap();
-            assert_eq!(handle.snapshot(context).unwrap(), expected);
-        })
-        .unwrap();
+    let handle = MirProductionModuleHandleV1::try_new(
+        &mut context,
+        expected.clone(),
+        MirProductionPlironLimitsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(handle.snapshot(&context).unwrap(), expected);
 }
 
 #[test]

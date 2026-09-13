@@ -11384,6 +11384,10 @@ struct SemanticParameterBindingsV1<'a> {
 
 impl<'a> SemanticFunctionLoweringV1<'a> {
     #[cfg(test)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Test-only adapter mirrors the production lowering constructor"
+    )]
     fn new(
         types: &'a [SemanticTypeDeclV1],
         callables: &'a [SemanticCallableDeclV1],
@@ -11507,10 +11511,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
         next_value = next_value.max(parameter_floor);
         let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze(
-            types,
-            callables,
-            function,
-            semantic_function,
+            SemanticSsaTransportInputV1 {
+                types,
+                callables,
+                function,
+                semantic_function,
+            },
             semantic_ssa,
             &option_dominance,
             &direct_parameters,
@@ -27649,10 +27655,12 @@ mod resource_tests {
         let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
 
         let plan = SemanticControlFlowSsaPlanV1::analyze(
-            &types,
-            &[],
-            &function,
-            SemanticFunctionIdV1::from_index(0),
+            SemanticSsaTransportInputV1 {
+                types: &types,
+                callables: &[],
+                function: &function,
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+            },
             &semantic_ssa,
             &option_dominance,
             &BTreeMap::new(),

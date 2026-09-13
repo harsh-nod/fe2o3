@@ -486,7 +486,6 @@ fn validate_partial_move_terminator_v1(
             for argument in call.arguments() {
                 operand(argument)?;
             }
-            drop(operand);
             if let Some(destination) = call.destination()
                 && !destination.place().projections().is_empty()
             {
@@ -512,13 +511,11 @@ fn validate_partial_move_terminator_v1(
             condition, message, ..
         } => {
             operand(condition)?;
-            drop(operand);
             validate_partial_move_assert_message_v1(
                 function, types, message, location, state, budget,
             )
         }
         SemanticTerminatorKindV1::Return => {
-            drop(operand);
             if let Some(local) = return_local {
                 validate_partial_move_path_read_v1(local, &[], location, state, budget)?;
             }

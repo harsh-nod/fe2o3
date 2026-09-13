@@ -29,7 +29,7 @@ use ::pliron::{
     },
     combine::Parser,
     common_traits::Verify,
-    context::{Context, Ptr},
+    context::{Context, DanglingPtrDerefError, ForeignContextPtrDerefError, Ptr},
     derive::{op_interface_impl, pliron_attr, pliron_op, pliron_type},
     linked_list::{ContainsLinkedList, LinkedList},
     location::Located,
@@ -847,6 +847,20 @@ impl fmt::Display for MirBlockHandleError {
 }
 
 impl Error for MirBlockHandleError {}
+
+fn map_parent_pointer_error(error: ::pliron::result::Error) -> MirBlockHandleError {
+    if error
+        .err
+        .downcast_ref::<ForeignContextPtrDerefError>()
+        .is_some()
+    {
+        MirBlockHandleError::ForeignContext
+    } else if error.err.downcast_ref::<DanglingPtrDerefError>().is_some() {
+        MirBlockHandleError::StaleHandle
+    } else {
+        MirBlockHandleError::UpstreamPanicked
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MirBlockRole {
@@ -2550,6 +2564,9 @@ impl MirModuleOp {
     pub fn body(&self, context: &Context) -> Result<MirModuleBodyHandle, MirBlockHandleError> {
         let owner =
             require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
+        self.get_operation()
+            .try_deref(context)
+            .map_err(map_parent_pointer_error)?;
         let pointer = catch_unwind(AssertUnwindSafe(|| self.body_raw(context)))
             .map_err(|_| MirBlockHandleError::UpstreamPanicked)?;
         let parent = self.get_operation();
@@ -2735,6 +2752,9 @@ impl MirFunctionOp {
     pub fn entry_block(&self, context: &Context) -> Result<MirBlockHandle, MirBlockHandleError> {
         let owner =
             require_context_identity(context).map_err(MirBlockHandleError::ContextIdentity)?;
+        self.get_operation()
+            .try_deref(context)
+            .map_err(map_parent_pointer_error)?;
         let pointer = catch_unwind(AssertUnwindSafe(|| self.entry_block_raw(context)))
             .map_err(|_| MirBlockHandleError::UpstreamPanicked)?;
         let parent = self.get_operation();

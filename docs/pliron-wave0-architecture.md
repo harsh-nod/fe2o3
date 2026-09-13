@@ -28,9 +28,9 @@ printer output are not public source concepts, durable identities, or artifact
 authority.
 
 The Wave 0 dependency baseline is reviewed Pliron workspace fork commit
-`5bdf861bf03e7f20242b25717fb653336d02e487`, a strict descendant of upstream
+`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`, a strict descendant of upstream
 release `v0.17.0` commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` that adds
-the bounded mutation-attempt epoch. Every implementation dependency on
+mutation-attempt epochs and context-owner provenance. Every implementation dependency on
 `pliron` or `pliron-derive` MUST resolve to that same source revision through
 one centralized workspace configuration. The workspace pins `pliron-llvm` at
 that revision with
@@ -89,11 +89,17 @@ The following infrastructure is implemented:
 - `fe2o3-pliron` constructs a real bounded Pliron context with a private,
   process-local identity anchor and validates dialect registration and pass
   plans using v0.17.0 commit
-  `5bdf861bf03e7f20242b25717fb653336d02e487`. It does not expose generic pass
-  execution because upstream `Ptr<T>` values carry no owner provenance.
+  `9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`. Upstream pointers retain private
+  context provenance, while production execution additionally checks owner,
+  stage, root, and graph snapshot. Generic caller-supplied passes are unavailable.
   The workspace policy rejects another Pliron revision, duplicate Pliron
   package identities, unexpected packages from that source, `llvm-sys`, and
   COMGR. The exact dialect-only `pliron-llvm` package is now required.
+- `fe2o3-pliron::production_analysis` privately owns live-graph ranked checks.
+  Public reports do not expose raw traversal. `fe2o3-kernel-analysis` retains
+  neutral KIR analyses and Presburger math; the Pliron adapter lives with the
+  production owner. This migration does not complete issue #271's canonical
+  emitter, generic resource closure, or tutorial qualification.
 - Seven target-neutral Pliron shells implement bounded `kernel.*`,
   `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`
   types, attributes, operations, interfaces, registration, and verification.
@@ -598,7 +604,7 @@ D1-D11 production route is claimed complete by those crates.
 
 Input: this ADR, existing architecture/safety/evidence contracts, the pinned
 Rust/Verus/LLVM environment, and Pliron commit
-`5bdf861bf03e7f20242b25717fb653336d02e487`.
+`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`.
 
 Output: centralized exact Pliron dependencies; `fe2o3-pliron` context,
 identity, registration, and non-executing pass-plan shell; versioned GPU Rust conformance matrix,

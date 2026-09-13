@@ -118,6 +118,36 @@ fn body_and_entry_handles_reject_equal_slot_foreign_contexts_without_unwinding()
 }
 
 #[test]
+fn raw_typed_ops_cannot_launder_equal_slots_through_a_foreign_context() {
+    let mut owner = Context::new();
+    let (owner_module, owner_function) = module_and_function(&mut owner, "owner");
+    let mut foreign = Context::new();
+    let (foreign_module, foreign_function) = module_and_function(&mut foreign, "foreign");
+
+    assert_eq!(
+        format!("{:?}", owner_module.get_operation()),
+        format!("{:?}", foreign_module.get_operation())
+    );
+    assert_eq!(
+        format!("{:?}", owner_function.get_operation()),
+        format!("{:?}", foreign_function.get_operation())
+    );
+    assert_ne!(owner_module.get_operation(), foreign_module.get_operation());
+    assert_ne!(
+        owner_function.get_operation(),
+        foreign_function.get_operation()
+    );
+
+    let module_rejection = catch_unwind(AssertUnwindSafe(|| owner_module.body(&foreign)))
+        .expect("foreign module access must not unwind");
+    let function_rejection =
+        catch_unwind(AssertUnwindSafe(|| owner_function.entry_block(&foreign)))
+            .expect("foreign function access must not unwind");
+    assert_eq!(module_rejection, Err(MirBlockHandleError::ForeignContext));
+    assert_eq!(function_rejection, Err(MirBlockHandleError::ForeignContext));
+}
+
+#[test]
 fn erased_body_and_entry_handles_report_stale_without_unwinding() {
     let mut context = Context::new();
     let (module, function) = module_and_function(&mut context, "owner");

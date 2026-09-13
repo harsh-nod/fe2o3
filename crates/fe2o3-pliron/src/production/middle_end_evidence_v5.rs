@@ -7,7 +7,7 @@
 
 use std::{error::Error, fmt, ops::Range};
 
-use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2};
+use crate::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2};
 use sha2::{Digest, Sha256};
 
 use super::middle_end_evidence_v4::{

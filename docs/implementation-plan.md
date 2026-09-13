@@ -136,10 +136,11 @@ fe2o3 canonical V2 extraction, and fe2o3 deterministic LLVM assembly, not the
 upstream `pliron-llvm` LLVM-C exporter.
 
 The current D0 closure is Pliron v0.17.0 commit
-`5bdf861bf03e7f20242b25717fb653336d02e487`. `fe2o3-pliron` provides a real
+`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`. `fe2o3-pliron` provides a real
 context, private identity anchor, explicit bounded registration, and bounded
-pass-plan validation. It deliberately withholds generic pass execution because
-upstream pointers are contextless. The current graph admits `pliron-llvm` only
+pass-plan validation. The reviewed fork carries context-owner provenance;
+production analysis and transformation remain owner-scoped, with raw context
+traversal private. Generic caller-supplied passes remain unavailable. The current graph admits `pliron-llvm` only
 with `default-features = false`. The bounded scalar crate constructs and
 verifies real dialect operations, but no landed Pliron route completes a
 production kernel or replaces the direct upstream LLVM and in-process LLD
@@ -185,8 +186,10 @@ authority. The backend fixture is not Rust user source.
   transformations.
 - `dialect-mir`: compatibility facade over that model and a bounded
   feature-gated Pliron `mir.*` shell.
-- `fe2o3-pliron`: pinned context, private identity, registration, verifier, and
-  non-executing pass-plan shell.
+- `fe2o3-pliron`: pinned context, private identity, registration, closed
+  optimizer execution, and private `production_analysis` for ranked checks.
+- `fe2o3-kernel-analysis`: neutral KIR analyses, pointer-independent Presburger
+  models/solvers, and feature-gated machine analyses; no Pliron graph custody.
 - `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`,
   `dialect-proof`, `dialect-dispatch`, `dialect-autotune`: target-neutral,
   representation-only Pliron shells.

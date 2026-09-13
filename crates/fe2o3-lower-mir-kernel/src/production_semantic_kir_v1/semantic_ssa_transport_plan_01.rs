@@ -103,18 +103,28 @@ fn promoted_transport_descriptor_v1(
     }
 }
 
+struct SemanticSsaTransportInputV1<'a> {
+    types: &'a [SemanticTypeDeclV1],
+    callables: &'a [SemanticCallableDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    semantic_function: SemanticFunctionIdV1,
+}
+
 impl SemanticControlFlowSsaPlanV1 {
     fn analyze(
-        types: &[SemanticTypeDeclV1],
-        callables: &[SemanticCallableDeclV1],
-        function: &SemanticFunctionDeclV1,
-        semantic_function: SemanticFunctionIdV1,
+        input: SemanticSsaTransportInputV1<'_>,
         semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
         option_dominance: &SemanticOptionDominanceV1,
         direct_parameters: &BTreeMap<u32, Type>,
         max_analysis_work: usize,
         max_analysis_storage: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let SemanticSsaTransportInputV1 {
+            types,
+            callables,
+            function,
+            semantic_function,
+        } = input;
         if semantic_ssa.function() != semantic_function
             || semantic_ssa.function_identity() != function.identity()
         {
@@ -325,9 +335,7 @@ impl SemanticControlFlowSsaPlanV1 {
                 let definitions = shared
                     .edge_definitions(edge)
                     .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-                    .iter()
-                    .copied()
-                    .collect();
+                    .to_vec();
                 edge_definitions.insert((block.get(), ordinal as u32), definitions);
                 edge_arguments.insert((block.get(), ordinal as u32), arguments);
             }

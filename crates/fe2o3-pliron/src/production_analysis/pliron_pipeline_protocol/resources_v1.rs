@@ -1,0 +1,193 @@
+fn pipeline_resource_overflow_v1() -> ProductionAnalysisResourceLimitV1 {
+    ProductionAnalysisResourceLimitV1 {
+        phase: ProductionAnalysisResourcePhaseV1::PipelineProtocol,
+        resource: "pipeline protocol resource upper bound",
+    }
+}
+
+fn checked_pipeline_sum_v1(values: &[usize]) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    values.iter().try_fold(0_usize, |total, value| {
+        total
+            .checked_add(*value)
+            .ok_or_else(pipeline_resource_overflow_v1)
+    })
+}
+
+fn checked_pipeline_product_v1(
+    lhs: usize,
+    rhs: usize,
+) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(pipeline_resource_overflow_v1)
+}
+
+fn pipeline_equivalence_query_upper_bound_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    if census.pipeline_creates == 0 {
+        return Ok(0);
+    }
+    let accesses_squared =
+        checked_pipeline_product_v1(census.ranked_accesses, census.ranked_accesses)?;
+    // Coordinate comparison is bidirectional for every create. Aliased
+    // creations can each reuse the same access slice.
+    let coordinate_queries = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(
+            checked_pipeline_product_v1(census.pipeline_creates, accesses_squared)?,
+            census.max_operation_arity,
+        )?,
+        2,
+    )?;
+    // Every candidate header can perform B fixed-point rounds over all edge
+    // operands while propagating its induction value.
+    let loop_queries = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(census.index_lt_branch_candidates, census.blocks)?,
+        census.operands,
+    )?;
+    let loop_scalar_queries = checked_pipeline_product_v1(census.index_lt_branch_candidates, 3)?;
+    let event_queries = checked_pipeline_product_v1(census.pipeline_events, 4)?;
+    let dynamic_queries = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(census.pipeline_creates, census.ranked_accesses)?,
+        7,
+    )?;
+    checked_pipeline_sum_v1(&[
+        coordinate_queries,
+        loop_queries,
+        loop_scalar_queries,
+        event_queries,
+        dynamic_queries,
+    ])
+}
+
+fn pipeline_equivalence_unique_pair_upper_bound_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    let queries = pipeline_equivalence_query_upper_bound_v1(census)?;
+    let query_expansions = checked_pipeline_product_v1(queries, MAX_EQUIVALENCE_WORK_V1)?;
+    let values = census.results.saturating_add(census.block_arguments);
+    Ok(values.saturating_mul(values).min(query_expansions))
+}
+
+/// Preflights CFG loop discovery, dominance fixed points, per-pipeline
+/// schedule correlation, memoized uniformity proofs, and bounded
+/// expression-equivalence searches.
+pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    if census.pipeline_creates == 0 {
+        let findings = census
+            .pipeline_events
+            .min(MAX_PLIRON_PIPELINE_FINDINGS_V1 + 1);
+        let work = checked_pipeline_sum_v1(&[
+            checked_pipeline_product_v1(census.operations, 4)?,
+            checked_pipeline_product_v1(census.pipeline_events, 2)?,
+            1,
+        ])?;
+        let retained =
+            checked_pipeline_product_v1(findings, MAX_PLIRON_PIPELINE_DIAGNOSTIC_BYTES_V1 + 32)?;
+        let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            ProductionAnalysisResourcePhaseV1::PipelineProtocol,
+            work,
+            retained,
+            0,
+        )?;
+        return limits.require(ProductionAnalysisResourcePhaseV1::PipelineProtocol, bound);
+    }
+    let blocks_squared = checked_pipeline_product_v1(census.blocks, census.blocks)?;
+    let blocks_cubed = checked_pipeline_product_v1(blocks_squared, census.blocks.max(1))?;
+    let equivalence_queries = pipeline_equivalence_query_upper_bound_v1(census)?;
+    let equivalence_unique_pairs = pipeline_equivalence_unique_pair_upper_bound_v1(census)?;
+    // Every query charges setup plus a root lookup. A pass-wide memo ensures
+    // each ordered value pair schedules at most four children and four
+    // completion cursors once. The final unit is the checked rejection.
+    let equivalence_work = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(equivalence_queries, 2)?,
+        checked_pipeline_product_v1(equivalence_unique_pairs, 8)?,
+        1,
+    ])?;
+    // Each possible pipeline performs at most one memoized visit per defining
+    // operation, plus the rejecting visit that proves the bound was exceeded.
+    // Eight units per definition cover root/memo/active hash operations,
+    // defining-op inspection, and completion. Eight units per dependency cover
+    // operand collection, the explicit-frame push/pop, memo lookup, and the
+    // completion scan.
+    let uniformity_work_per_pipeline = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(
+            census
+                .operations
+                .checked_add(1)
+                .ok_or_else(pipeline_resource_overflow_v1)?,
+            8,
+        )?,
+        checked_pipeline_product_v1(census.operands, 8)?,
+    ])?;
+    let uniformity_work =
+        checked_pipeline_product_v1(census.pipeline_creates, uniformity_work_per_pipeline)?;
+    let work = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(census.operations, 8)?,
+        checked_pipeline_product_v1(census.block_arguments, 2)?,
+        checked_pipeline_product_v1(census.successors, census.blocks.max(1))?,
+        blocks_cubed,
+        equivalence_work,
+        uniformity_work,
+    ])?;
+    let certificates = census.pipeline_creates;
+    let findings = census
+        .operations
+        .checked_mul(2)
+        .ok_or_else(pipeline_resource_overflow_v1)?
+        .min(MAX_PLIRON_PIPELINE_FINDINGS_V1 + 1);
+    let retained = checked_pipeline_sum_v1(&[
+        // Dominators and every retained loop summary: prologue/body/drain,
+        // body membership, induction key/value pairs, and fixed metadata.
+        checked_pipeline_product_v1(blocks_squared, 8)?,
+        checked_pipeline_product_v1(
+            certificates,
+            census
+                .blocks
+                .checked_mul(3)
+                .and_then(|items| items.checked_add(16))
+                .ok_or_else(pipeline_resource_overflow_v1)?,
+        )?,
+        checked_pipeline_product_v1(
+            certificates,
+            (MAX_PLIRON_PIPELINE_VALUE_NAME_BYTES_V1 + 3) * 2,
+        )?,
+        checked_pipeline_product_v1(findings, MAX_PLIRON_PIPELINE_DIAGNOSTIC_BYTES_V1 + 32)?,
+    ])?;
+    let temporary = checked_pipeline_sum_v1(&[
+        // Dominator fixed points overlap CFG inventories and the current loop
+        // candidate's predecessor/member/frontier construction.
+        checked_pipeline_product_v1(blocks_squared, 6)?,
+        checked_pipeline_product_v1(census.blocks, 12)?,
+        checked_pipeline_product_v1(census.successors, 4)?,
+        census.block_arguments,
+        checked_pipeline_product_v1(
+            census.operations,
+            census
+                .max_operation_arity
+                .checked_mul(3)
+                .and_then(|items| items.checked_add(32))
+                .ok_or_else(pipeline_resource_overflow_v1)?,
+        )?,
+        // Memo result, active-set entry, and explicit DFS frame per operation,
+        // plus every operand roster owned by simultaneously live DFS frames.
+        checked_pipeline_sum_v1(&[
+            checked_pipeline_product_v1(census.operations, 3)?,
+            census.operands,
+        ])?,
+        // Three scalar slots per ordered-pair memo entry plus one live query's
+        // largest staged binary cursors and active pair keys.
+        checked_pipeline_product_v1(equivalence_unique_pairs, 3)?,
+        checked_pipeline_product_v1(EQUIVALENCE_REJECTING_ATTEMPTS_V1, 16)?,
+        1,
+    ])?;
+    let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+        ProductionAnalysisResourcePhaseV1::PipelineProtocol,
+        work,
+        retained,
+        temporary,
+    )?;
+    limits.require(ProductionAnalysisResourcePhaseV1::PipelineProtocol, bound)
+}

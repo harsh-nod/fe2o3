@@ -24,9 +24,12 @@ compiler enters one unselected production transaction inside
   only with its non-default `pliron` feature.
 - `fe2o3-compiler-api` defines bounded target-neutral contracts for one production request and output. `cargo-fe2o3` and `rustc-codegen-fe2o3` own the sole managed production composition, with no selector or fallback slot.
 - `fe2o3-pliron` pins Pliron v0.17.0 commit
-  `5bdf861bf03e7f20242b25717fb653336d02e487` and implements a bounded D0
+  `9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd` and implements a bounded D0
   context, private identity anchor, registration, verification, and pass-plan
-  shell. It does not expose generic pass execution over contextless pointers. Seven target-neutral
+  shell. Raw production analysis traversal is private and execution is
+  owner-scoped; generic caller-supplied passes remain unavailable. Private
+  `production_analysis` owns the ranked checks, while `fe2o3-kernel-analysis`
+  retains neutral KIR analyses and Presburger math. Seven target-neutral
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
   `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. They perform no connected
   lowering, target selection, artifact production, or launch.
