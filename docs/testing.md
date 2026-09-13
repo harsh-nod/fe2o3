@@ -231,6 +231,14 @@ The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
 The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces
 that separation in every generic CI run.
 
+## Kernel IR V12
+
+The [Kernel IR V12 verification regression targets](kernel-ir-v12-verification.md#regression-targets)
+cover the shared semantic engine, canonical admission, diagnostic work/storage,
+and unsupported-consumer boundaries. These tests are separate from production
+graph migration, tutorial-wide compilation, Verus qualification, and genuine
+fresh-compiler KFD execution.
+
 ## Parity evidence validation
 
 The generic lane runs legacy integrity checks plus signed row-evidence and

@@ -3,10 +3,10 @@ use std::fmt;
 use std::str;
 
 use crate::{
-    FixedVectorTypeV12, MAX_FIXED_VECTOR_LANES_V12, VectorAccessProvenanceV12,
-    VectorLayoutConversionV12, VectorLayoutV12, VectorLoadOperationV12, VectorMemoryAccessV12,
-    VectorStoreOperationV12, VerificationContractKeyV12, VerificationContractOperationV12,
-    WorkgroupPipelineEventKindV12,
+    CanonicalKernelIrWorkBudgetV1, CanonicalKernelIrWorkLimitV1, FixedVectorTypeV12,
+    MAX_FIXED_VECTOR_LANES_V12, VectorAccessProvenanceV12, VectorLayoutConversionV12,
+    VectorLayoutV12, VectorLoadOperationV12, VectorMemoryAccessV12, VectorStoreOperationV12,
+    VerificationContractKeyV12, VerificationContractOperationV12, WorkgroupPipelineEventKindV12,
 };
 
 use crate::{
@@ -20,14 +20,16 @@ use crate::{
     LaunchExtent, MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1, MatrixElement, MatrixLayout,
     MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MemoryAccess,
     MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
-    PointerType, ScalarType, SemanticOperation, SemanticOperationInstancePayloadV1, Signature,
-    SliceType, SwitchCase, SynchronizationScope, TargetCapability, TensorCoordinateExprV1,
-    TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
-    TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
-    TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, decode_semantic_operation_instance_id,
-    encode_semantic_operation_instance_id,
+    PointerType, ScalarType, SemanticOperationInstancePayloadV1, Signature, SliceType, SwitchCase,
+    SynchronizationScope, TargetCapability, TensorCoordinateExprV1, TensorElementPackingV1,
+    TensorFragmentLayoutV1, TensorInstructionProfileV1, TensorLayoutContractV1, TensorLdsSwizzleV1,
+    TensorMultiplicityV1, TensorOperandRoleV1, TensorSymbolicMapV1, TensorTailMaskV1, Terminator,
+    Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    decode_semantic_operation_instance_id, encode_semantic_operation_instance_id,
+    semantic_operation_instance_encoded_len_v1,
+    semantic_operation_instance_encoding_scratch_bytes_v1,
+    semantic_operation_instance_encoding_work_v1,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -132,6 +134,8 @@ pub enum KernelIrEncodeError {
     NonCanonical {
         field: &'static str,
     },
+    Allocation,
+    WorkLimit(CanonicalKernelIrWorkLimitV1),
 }
 
 impl fmt::Display for KernelIrEncodeError {
@@ -157,6 +161,8 @@ impl fmt::Display for KernelIrEncodeError {
             Self::NonCanonical { field } => {
                 write!(formatter, "{field} is not in canonical order")
             }
+            Self::Allocation => formatter.write_str("cannot allocate canonical Kernel IR bytes"),
+            Self::WorkLimit(error) => error.fmt(formatter),
         }
     }
 }
@@ -198,6 +204,9 @@ pub enum KernelIrDecodeError {
     NonCanonical,
     InvalidSemanticOperationInstance,
     Encode(KernelIrEncodeError),
+    WorkLimit(CanonicalKernelIrWorkLimitV1),
+    /// Opt-in full canonical admission rejected decoder-owned allocation.
+    Resource(crate::CanonicalKernelIrVerificationResourceErrorV1),
 }
 
 impl fmt::Display for KernelIrDecodeError {
@@ -233,6 +242,8 @@ impl fmt::Display for KernelIrDecodeError {
                 formatter.write_str("invalid semantic operation instance")
             }
             Self::Encode(error) => write!(formatter, "decoded kernel IR cannot re-encode: {error}"),
+            Self::WorkLimit(error) => error.fmt(formatter),
+            Self::Resource(error) => error.fmt(formatter),
         }
     }
 }
@@ -304,37 +315,119 @@ pub fn encode_module_v11(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V11)
 }
 
-/// Encodes inert V12 carriers. Successful encoding grants no semantic authority.
+/// Encodes V12 carriers. Successful encoding grants no semantic authority.
 pub fn encode_module_v12(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
     encode_module(module, KERNEL_IR_VERSION_V12)
 }
 
+/// Authority-free storage extents observed through the V12 encoding schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelIrV12WireExtentV1 {
+    wire_bytes: usize,
+    peak_auxiliary_bytes: usize,
+}
+
+impl KernelIrV12WireExtentV1 {
+    /// Exact number of bytes that the unchanged V12 schema would encode.
+    pub const fn wire_bytes(self) -> usize {
+        self.wire_bytes
+    }
+
+    /// Maximum producer-owned temporary payload, excluding wire and role checks.
+    pub const fn peak_auxiliary_bytes(self) -> usize {
+        self.peak_auxiliary_bytes
+    }
+}
+
+/// Counts the exact V12 wire and temporary-payload extents without allocating.
+///
+/// This uses the encoder's closed schema and charges one token per checked
+/// scalar or payload extent, including empty spans, without encoding integers
+/// or reading payload bytes. Producer-work and structural checks are retained.
+/// Function-role validation is deliberately omitted:
+/// roles do not affect the wire extent, and a nonencodable module may still
+/// have an extent. The returned length grants no verification or encoding
+/// authority; the encoder independently repeats its complete preflight.
+pub fn count_module_v12_wire_extent_with_work_v1(
+    module: &Module,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<KernelIrV12WireExtentV1, KernelIrEncodeError> {
+    count_module_with_work_v1(module, KERNEL_IR_VERSION_V12, budget, false)
+}
+
+pub(crate) fn encode_module_v12_with_work_v1(
+    module: &Module,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module_with_work_v1(module, KERNEL_IR_VERSION_V12, budget)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
-    let mut writer = Writer::new(version);
+    let mut writer = Writer::new(version, None);
+    write_module_v1(module, &mut writer, true)?;
+    writer.finish_module()
+}
+
+fn encode_module_with_work_v1(
+    module: &Module,
+    version: u16,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<Vec<u8>, KernelIrEncodeError> {
+    // Count through the same closed schema first so the metered writer can
+    // reserve its exact final byte extent and never relocate a live prefix.
+    // The counter charges checked schema extents without producing bytes;
+    // the later writer independently charges materialized bytes.
+    let extent = count_module_with_work_v1(module, version, budget, true)?;
+    let mut writer = Writer::with_exact_capacity(version, extent.wire_bytes(), budget)?;
+    write_module_v1(module, &mut writer, false)?;
+    writer.finish_module()
+}
+
+fn count_module_with_work_v1(
+    module: &Module,
+    version: u16,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+    validate_roles: bool,
+) -> Result<KernelIrV12WireExtentV1, KernelIrEncodeError> {
+    let mut counter = Writer::counter(version, budget);
+    write_module_v1(module, &mut counter, validate_roles)?;
+    Ok(KernelIrV12WireExtentV1 {
+        wire_bytes: counter.length(),
+        peak_auxiliary_bytes: counter.peak_auxiliary_bytes,
+    })
+}
+
+fn write_module_v1(
+    module: &Module,
+    writer: &mut Writer<'_>,
+    validate_roles: bool,
+) -> Result<(), KernelIrEncodeError> {
+    let version = writer.version;
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
     writer.u16(version)?;
     writer.u16(0)?;
-    writer.u32(0)?;
+    writer.module_length_placeholder()?;
     writer.u32(0)?;
 
     writer.text("module ID", module.id.as_str())?;
     writer.count("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
     writer.count("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
-    validate_legacy_function_roles(module, version)?;
-    encode_capabilities(&mut writer, &module.required_capabilities)?;
+    if validate_roles {
+        if let Some(budget) = writer.budget.as_deref_mut() {
+            charge_legacy_function_role_work_v1(module, budget)
+                .map_err(KernelIrEncodeError::WorkLimit)?;
+        }
+        validate_legacy_function_roles(module, version)?;
+    }
+    encode_capabilities(writer, &module.required_capabilities)?;
     for function in &module.functions {
-        encode_function(&mut writer, function)?;
+        encode_function(writer, function)?;
     }
     for kernel in &module.kernels {
-        encode_kernel(&mut writer, kernel)?;
+        encode_kernel(writer, kernel)?;
     }
 
-    let mut bytes = writer.finish();
-    let length = u32::try_from(bytes.len()).map_err(|_| KernelIrEncodeError::Overflow {
-        field: "module length",
-    })?;
-    bytes[12..16].copy_from_slice(&length.to_le_bytes());
-    Ok(bytes)
+    Ok(())
 }
 
 /// Decodes one bounded canonical kernel IR V1 module.
@@ -402,9 +495,21 @@ pub fn decode_module_v11(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 
 /// Decodes canonical V1 through V12 bytes, establishing only wire well-formedness.
 ///
-/// V12 vectors and verification events are not yet admitted by the semantic verifier.
+/// Consumers must separately verify the decoded module before relying on semantic invariants.
 pub fn decode_module_v12(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V12, true)
+}
+
+pub(crate) fn decode_module_v12_with_work_v1(
+    bytes: &[u8],
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V12,
+        true,
+        Some(DecodeBudgetV12::Work(budget)),
+    )
 }
 
 fn decode_module(
@@ -412,12 +517,21 @@ fn decode_module(
     maximum_version: u16,
     accept_older: bool,
 ) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(bytes, maximum_version, accept_older, None)
+}
+
+fn decode_module_impl_v1(
+    bytes: &[u8],
+    maximum_version: u16,
+    accept_older: bool,
+    budget: Option<DecodeBudgetV12<'_>>,
+) -> Result<Module, KernelIrDecodeError> {
     if bytes.len() > MAX_MODULE_BYTES_V1 {
         return Err(KernelIrDecodeError::TooLarge {
             max: MAX_MODULE_BYTES_V1,
         });
     }
-    let mut reader = Reader::new(bytes);
+    let mut reader = Reader::new(bytes, budget);
     if reader.fixed::<8>()? != KERNEL_IR_MAGIC_V1 {
         return Err(KernelIrDecodeError::InvalidMagic);
     }
@@ -448,31 +562,71 @@ fn decode_module(
     let function_count = reader.count("module functions", MAX_FUNCTIONS_V1)?;
     let kernel_count = reader.count("module kernels", MAX_KERNELS_V1)?;
     let required_capabilities = decode_capabilities(&mut reader)?;
-    let mut functions = Vec::with_capacity(function_count);
+    let mut functions = reader.vector(function_count)?;
     for _ in 0..function_count {
         functions.push(decode_function(&mut reader)?);
     }
-    let mut kernels = Vec::with_capacity(kernel_count);
+    let mut kernels = reader.vector(kernel_count)?;
     for _ in 0..kernel_count {
         kernels.push(decode_kernel(&mut reader)?);
     }
     if !reader.is_finished() {
         return Err(KernelIrDecodeError::TrailingBytes);
     }
+    let mut budget = reader.into_work_budget();
     let mut module = Module {
         id,
         functions,
         kernels,
         required_capabilities,
     };
+    if let Some(budget) = budget.as_mut() {
+        charge_legacy_function_role_work_v1(&module, budget.work_budget())
+            .map_err(KernelIrDecodeError::WorkLimit)?;
+    }
+    let allocation_scratch = if let Some(budget @ DecodeBudgetV12::Resources(_)) = budget.as_mut() {
+        let extent = count_module_v12_wire_extent_with_work_v1(&module, budget.work_budget())?;
+        let scratch = decoded_tree_payload_bound_v12::<&FunctionId>(module.kernels.len())?
+            .checked_add(extent.peak_auxiliary_bytes())
+            .ok_or(KernelIrDecodeError::Resource(
+                crate::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+            ))?;
+        budget.reserve(scratch)?;
+        scratch
+    } else {
+        0
+    };
     restore_legacy_function_roles(&mut module);
-    if encode_module(&module, version)? != bytes {
+    let compared = compare_module_encoding_v1(
+        &module,
+        version,
+        bytes,
+        budget.as_mut().map(DecodeBudgetV12::work_budget),
+    );
+    if let Some(budget) = budget.as_mut() {
+        budget.release(allocation_scratch)?;
+    }
+    if !compared? {
         return Err(KernelIrDecodeError::NonCanonical);
     }
     Ok(module)
 }
 
-fn encode_function(writer: &mut Writer, function: &Function) -> Result<(), KernelIrEncodeError> {
+pub(crate) fn compare_module_encoding_v1(
+    module: &Module,
+    version: u16,
+    expected: &[u8],
+    budget: Option<&mut CanonicalKernelIrWorkBudgetV1>,
+) -> Result<bool, KernelIrEncodeError> {
+    let mut writer = Writer::comparing(version, expected, budget);
+    write_module_v1(module, &mut writer, true)?;
+    writer.finish_comparison()
+}
+
+fn encode_function(
+    writer: &mut Writer<'_>,
+    function: &Function,
+) -> Result<(), KernelIrEncodeError> {
     writer.text("function ID", function.id.as_str())?;
     encode_signature(writer, &function.signature)?;
     match &function.body {
@@ -485,7 +639,7 @@ fn encode_function(writer: &mut Writer, function: &Function) -> Result<(), Kerne
     encode_capabilities(writer, &function.required_capabilities)
 }
 
-fn decode_function(reader: &mut Reader<'_>) -> Result<Function, KernelIrDecodeError> {
+fn decode_function(reader: &mut Reader<'_, '_>) -> Result<Function, KernelIrDecodeError> {
     let id = FunctionId::new(reader.text("function ID")?);
     let signature = decode_signature(reader)?;
     let body = if reader.option("function body")? {
@@ -514,7 +668,7 @@ fn validate_legacy_function_roles(
     let entries = module
         .kernels
         .iter()
-        .map(|kernel| kernel.entry.clone())
+        .map(|kernel| &kernel.entry)
         .collect::<BTreeSet<_>>();
     for function in &module.functions {
         let representable = match function.role {
@@ -539,11 +693,61 @@ fn validate_legacy_function_roles(
     Ok(())
 }
 
+fn charge_legacy_function_role_work_v1(
+    module: &Module,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<(), CanonicalKernelIrWorkLimitV1> {
+    let entry_count = module.kernels.len();
+    let function_count = module.functions.len();
+    let census_work = entry_count
+        .checked_add(function_count)
+        .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?;
+    budget.charge_work(census_work)?;
+    let key_width = module
+        .kernels
+        .iter()
+        .map(|kernel| kernel.entry.as_str().len())
+        .chain(
+            module
+                .functions
+                .iter()
+                .map(|function| function.id.as_str().len()),
+        )
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?;
+    // An ordered-set mutation/query cannot compare more than every retained
+    // key. Include one terminal-width margin and the borrowed-handle copy for each
+    // inserted kernel entry.
+    let insertion_queries = entry_count
+        .checked_mul(
+            entry_count
+                .checked_add(1)
+                .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?,
+        )
+        .and_then(|work| work.checked_div(2))
+        .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?;
+    let lookup_queries = function_count
+        .checked_mul(
+            entry_count
+                .checked_add(1)
+                .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?,
+        )
+        .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?;
+    let comparison_work = insertion_queries
+        .checked_add(lookup_queries)
+        .and_then(|queries| queries.checked_mul(key_width))
+        .and_then(|work| work.checked_add(entry_count))
+        .ok_or_else(|| CanonicalKernelIrWorkLimitV1::new(usize::MAX, budget.limit()))?;
+    budget.charge_work(comparison_work)
+}
+
 fn restore_legacy_function_roles(module: &mut Module) {
     let entries = module
         .kernels
         .iter()
-        .map(|kernel| kernel.entry.clone())
+        .map(|kernel| &kernel.entry)
         .collect::<BTreeSet<_>>();
     for function in &mut module.functions {
         function.role = if entries.contains(&function.id) {
@@ -556,7 +760,10 @@ fn restore_legacy_function_roles(module: &mut Module) {
     }
 }
 
-fn encode_signature(writer: &mut Writer, signature: &Signature) -> Result<(), KernelIrEncodeError> {
+fn encode_signature(
+    writer: &mut Writer<'_>,
+    signature: &Signature,
+) -> Result<(), KernelIrEncodeError> {
     writer.count(
         "signature parameters",
         signature.parameters.len(),
@@ -576,14 +783,14 @@ fn encode_signature(writer: &mut Writer, signature: &Signature) -> Result<(), Ke
     Ok(())
 }
 
-fn decode_signature(reader: &mut Reader<'_>) -> Result<Signature, KernelIrDecodeError> {
+fn decode_signature(reader: &mut Reader<'_, '_>) -> Result<Signature, KernelIrDecodeError> {
     let parameter_count = reader.count("signature parameters", MAX_SIGNATURE_TYPES_V1)?;
-    let mut parameters = Vec::with_capacity(parameter_count);
+    let mut parameters = reader.vector(parameter_count)?;
     for _ in 0..parameter_count {
         parameters.push(decode_type(reader, 0)?);
     }
     let result_count = reader.count("signature results", MAX_SIGNATURE_TYPES_V1)?;
-    let mut results = Vec::with_capacity(result_count);
+    let mut results = reader.vector(result_count)?;
     for _ in 0..result_count {
         results.push(decode_type(reader, 0)?);
     }
@@ -591,7 +798,7 @@ fn decode_signature(reader: &mut Reader<'_>) -> Result<Signature, KernelIrDecode
 }
 
 fn encode_function_body(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     body: &FunctionBody,
 ) -> Result<(), KernelIrEncodeError> {
     encode_values(
@@ -607,17 +814,17 @@ fn encode_function_body(
     Ok(())
 }
 
-fn decode_function_body(reader: &mut Reader<'_>) -> Result<FunctionBody, KernelIrDecodeError> {
+fn decode_function_body(reader: &mut Reader<'_, '_>) -> Result<FunctionBody, KernelIrDecodeError> {
     let parameters = decode_values(reader, "function parameters", MAX_FUNCTION_PARAMETERS_V1)?;
     let block_count = reader.count("function blocks", MAX_BLOCKS_V1)?;
-    let mut blocks = Vec::with_capacity(block_count);
+    let mut blocks = reader.vector(block_count)?;
     for _ in 0..block_count {
         blocks.push(decode_block(reader)?);
     }
     Ok(FunctionBody { parameters, blocks })
 }
 
-fn encode_kernel(writer: &mut Writer, kernel: &Kernel) -> Result<(), KernelIrEncodeError> {
+fn encode_kernel(writer: &mut Writer<'_>, kernel: &Kernel) -> Result<(), KernelIrEncodeError> {
     writer.text("kernel ID", kernel.id.as_str())?;
     writer.text("kernel entry", kernel.entry.as_str())?;
     encode_launch_domain(writer, &kernel.domain)?;
@@ -633,7 +840,7 @@ fn encode_kernel(writer: &mut Writer, kernel: &Kernel) -> Result<(), KernelIrEnc
     encode_capabilities(writer, &kernel.required_capabilities)
 }
 
-fn decode_kernel(reader: &mut Reader<'_>) -> Result<Kernel, KernelIrDecodeError> {
+fn decode_kernel(reader: &mut Reader<'_, '_>) -> Result<Kernel, KernelIrDecodeError> {
     let id = KernelId::new(reader.text("kernel ID")?);
     let entry = FunctionId::new(reader.text("kernel entry")?);
     let domain = decode_launch_domain(reader)?;
@@ -656,7 +863,7 @@ fn decode_kernel(reader: &mut Reader<'_>) -> Result<Kernel, KernelIrDecodeError>
     })
 }
 
-fn encode_block(writer: &mut Writer, block: &BasicBlock) -> Result<(), KernelIrEncodeError> {
+fn encode_block(writer: &mut Writer<'_>, block: &BasicBlock) -> Result<(), KernelIrEncodeError> {
     writer.u32(block.id.0)?;
     writer.count(
         "block parameters",
@@ -684,15 +891,15 @@ fn encode_block(writer: &mut Writer, block: &BasicBlock) -> Result<(), KernelIrE
     Ok(())
 }
 
-fn decode_block(reader: &mut Reader<'_>) -> Result<BasicBlock, KernelIrDecodeError> {
+fn decode_block(reader: &mut Reader<'_, '_>) -> Result<BasicBlock, KernelIrDecodeError> {
     let id = BlockId(reader.u32()?);
     let parameter_count = reader.count("block parameters", MAX_BLOCK_PARAMETERS_V1)?;
-    let mut parameters = Vec::with_capacity(parameter_count);
+    let mut parameters = reader.vector(parameter_count)?;
     for _ in 0..parameter_count {
         parameters.push(decode_value_def(reader)?);
     }
     let operation_count = reader.count("block operations", MAX_OPERATIONS_V1)?;
-    let mut operations = Vec::with_capacity(operation_count);
+    let mut operations = reader.vector(operation_count)?;
     for _ in 0..operation_count {
         operations.push(decode_operation(reader)?);
     }
@@ -709,7 +916,10 @@ fn decode_block(reader: &mut Reader<'_>) -> Result<BasicBlock, KernelIrDecodeErr
     })
 }
 
-fn encode_operation(writer: &mut Writer, operation: &Operation) -> Result<(), KernelIrEncodeError> {
+fn encode_operation(
+    writer: &mut Writer<'_>,
+    operation: &Operation,
+) -> Result<(), KernelIrEncodeError> {
     writer.count(
         "operation results",
         operation.results.len(),
@@ -721,9 +931,9 @@ fn encode_operation(writer: &mut Writer, operation: &Operation) -> Result<(), Ke
     encode_operation_kind(writer, &operation.kind)
 }
 
-fn decode_operation(reader: &mut Reader<'_>) -> Result<Operation, KernelIrDecodeError> {
+fn decode_operation(reader: &mut Reader<'_, '_>) -> Result<Operation, KernelIrDecodeError> {
     let result_count = reader.count("operation results", MAX_OPERATION_RESULTS_V1)?;
-    let mut results = Vec::with_capacity(result_count);
+    let mut results = reader.vector(result_count)?;
     for _ in 0..result_count {
         results.push(decode_value_def(reader)?);
     }
@@ -731,7 +941,7 @@ fn decode_operation(reader: &mut Reader<'_>) -> Result<Operation, KernelIrDecode
 }
 
 fn encode_operation_kind(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     operation: &OperationKind,
 ) -> Result<(), KernelIrEncodeError> {
     match operation {
@@ -948,7 +1158,9 @@ fn encode_operation_kind(
     Ok(())
 }
 
-fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, KernelIrDecodeError> {
+fn decode_operation_kind(
+    reader: &mut Reader<'_, '_>,
+) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
         30 if reader.version >= KERNEL_IR_VERSION_V12 => {
             let family = reader.u8()?;
@@ -1116,31 +1328,60 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
 }
 
 fn encode_memory_intrinsic(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     intrinsic: &MemoryIntrinsicOperation,
 ) -> Result<(), KernelIrEncodeError> {
-    let instance = encode_semantic_operation_instance_id(intrinsic.contract().instance_id());
+    // The producer derives the exact Copy payload identity without allocating
+    // the full semantic contract. Precharge its payload and final-instance Vec
+    // copies before either buffer is constructed.
+    let instance_id = intrinsic.semantic_instance_id_v1();
+    writer.charge_work(semantic_operation_instance_encoding_work_v1(instance_id))?;
+    let instance =
+        if !writer.counts_only() {
+            Some(encode_semantic_operation_instance_id(instance_id))
+        } else {
+            // The retained producer work charge covers this fixed observation in
+            // place of copying its two buffers. Distinct instances never coexist.
+            writer.peak_auxiliary_bytes = writer.peak_auxiliary_bytes.max(
+                semantic_operation_instance_encoding_scratch_bytes_v1(instance_id),
+            );
+            None
+        };
+    let instance_length = instance.as_ref().map_or_else(
+        || semantic_operation_instance_encoded_len_v1(instance_id),
+        Vec::len,
+    );
     writer.count(
         "semantic operation instance",
-        instance.len(),
+        instance_length,
         crate::SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1
             + MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1,
     )?;
-    writer.bytes(&instance)?;
-    for operand in intrinsic.operands() {
-        writer.u32(operand.0)?;
+    if let Some(instance) = instance {
+        writer.bytes(&instance)?;
+    } else {
+        writer.count_bytes(instance_length)?;
     }
+    intrinsic.try_visit_operands_v1(|operand| writer.u32(operand.0))?;
     Ok(())
 }
 
 fn decode_memory_intrinsic(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<MemoryIntrinsicOperation, KernelIrDecodeError> {
     let instance_len = reader.count(
         "semantic operation instance",
         crate::SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1
             + MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1,
     )?;
+    if reader.tracks_allocations() {
+        let validation_work = instance_len
+            .checked_mul(4)
+            .ok_or(KernelIrDecodeError::Resource(
+                crate::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+            ))?;
+        reader.charge_work(validation_work)?;
+    }
     let instance = decode_semantic_operation_instance_id(reader.take(instance_len)?)
         .map_err(|_| KernelIrDecodeError::InvalidSemanticOperationInstance)?;
     Ok(match instance.payload() {
@@ -1210,7 +1451,7 @@ fn decode_memory_intrinsic(
 }
 
 fn encode_inline_assembly(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     assembly: &InlineAssembly,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(inline_assembly_target_tag(assembly.target))?;
@@ -1245,7 +1486,7 @@ fn encode_inline_assembly(
             }
             AssemblyOperandKind::ImmediateI32(value) => {
                 writer.u8(4)?;
-                writer.bytes(&value.to_le_bytes())?;
+                writer.u32(value as u32)?;
             }
         }
     }
@@ -1264,7 +1505,9 @@ fn encode_inline_assembly(
     Ok(())
 }
 
-fn decode_inline_assembly(reader: &mut Reader<'_>) -> Result<InlineAssembly, KernelIrDecodeError> {
+fn decode_inline_assembly(
+    reader: &mut Reader<'_, '_>,
+) -> Result<InlineAssembly, KernelIrDecodeError> {
     let target = decode_inline_assembly_target(reader.u8()?)?;
     let source = AssemblySourceIdentity::new(
         reader.fixed()?,
@@ -1274,7 +1517,7 @@ fn decode_inline_assembly(reader: &mut Reader<'_>) -> Result<InlineAssembly, Ker
     );
     let mnemonic = reader.text("inline assembly mnemonic")?;
     let operand_count = reader.count("inline assembly operands", MAX_ASSEMBLY_OPERANDS_V3)?;
-    let mut operands = Vec::with_capacity(operand_count);
+    let mut operands = reader.vector(operand_count)?;
     for _ in 0..operand_count {
         let constraint = decode_assembly_constraint(reader.u8()?)?;
         let kind = match reader.u8()? {
@@ -1297,6 +1540,7 @@ fn decode_inline_assembly(reader: &mut Reader<'_>) -> Result<InlineAssembly, Ker
         operands.push(AssemblyOperand { kind, constraint });
     }
     let option_count = reader.count("inline assembly options", 5)?;
+    reader.tree::<AssemblyOption>(option_count)?;
     let mut options = BTreeSet::new();
     let mut previous_option = None;
     for _ in 0..option_count {
@@ -1308,6 +1552,7 @@ fn decode_inline_assembly(reader: &mut Reader<'_>) -> Result<InlineAssembly, Ker
         options.insert(option);
     }
     let effect_count = reader.count("inline assembly declared effects", 7)?;
+    reader.tree::<AssemblyEffect>(effect_count)?;
     let mut declared_effects = BTreeSet::new();
     let mut previous_effect = None;
     for _ in 0..effect_count {
@@ -1328,12 +1573,12 @@ fn decode_inline_assembly(reader: &mut Reader<'_>) -> Result<InlineAssembly, Ker
     })
 }
 
-fn encode_value_def(writer: &mut Writer, value: &ValueDef) -> Result<(), KernelIrEncodeError> {
+fn encode_value_def(writer: &mut Writer<'_>, value: &ValueDef) -> Result<(), KernelIrEncodeError> {
     writer.u32(value.id.0)?;
     encode_type(writer, &value.ty, 0)
 }
 
-fn decode_value_def(reader: &mut Reader<'_>) -> Result<ValueDef, KernelIrDecodeError> {
+fn decode_value_def(reader: &mut Reader<'_, '_>) -> Result<ValueDef, KernelIrDecodeError> {
     Ok(ValueDef::new(
         ValueId(reader.u32()?),
         decode_type(reader, 0)?,
@@ -1341,7 +1586,7 @@ fn decode_value_def(reader: &mut Reader<'_>) -> Result<ValueDef, KernelIrDecodeE
 }
 
 fn encode_values(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     field: &'static str,
     values: &[ValueId],
     max: usize,
@@ -1354,12 +1599,12 @@ fn encode_values(
 }
 
 fn decode_values(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
     field: &'static str,
     max: usize,
 ) -> Result<Vec<ValueId>, KernelIrDecodeError> {
     let count = reader.count(field, max)?;
-    let mut values = Vec::with_capacity(count);
+    let mut values = reader.vector(count)?;
     for _ in 0..count {
         values.push(ValueId(reader.u32()?));
     }
@@ -1367,7 +1612,7 @@ fn decode_values(
 }
 
 fn encode_optional_value(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     value: Option<ValueId>,
 ) -> Result<(), KernelIrEncodeError> {
     match value {
@@ -1380,7 +1625,7 @@ fn encode_optional_value(
 }
 
 fn decode_optional_value(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
     field: &'static str,
 ) -> Result<Option<ValueId>, KernelIrDecodeError> {
     Ok(if reader.option(field)? {
@@ -1390,7 +1635,11 @@ fn decode_optional_value(
     })
 }
 
-fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), KernelIrEncodeError> {
+fn encode_type(
+    writer: &mut Writer<'_>,
+    ty: &Type,
+    depth: usize,
+) -> Result<(), KernelIrEncodeError> {
     if depth > MAX_TYPE_DEPTH_V1 {
         return Err(KernelIrEncodeError::TypeNestingTooDeep {
             max: MAX_TYPE_DEPTH_V1,
@@ -1431,7 +1680,7 @@ fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), Kerne
     Ok(())
 }
 
-fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDecodeError> {
+fn decode_type(reader: &mut Reader<'_, '_>, depth: usize) -> Result<Type, KernelIrDecodeError> {
     if depth > MAX_TYPE_DEPTH_V1 {
         return Err(KernelIrDecodeError::TypeNestingTooDeep {
             max: MAX_TYPE_DEPTH_V1,
@@ -1454,6 +1703,7 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
             let access_tag = reader.u8()?;
             let access = decode_access_mode_for_version(reader, access_tag)?;
             let pointee = decode_type(reader, depth + 1)?;
+            reader.reserve_payload(std::mem::size_of::<Type>())?;
             Type::Pointer(PointerType::new(pointee, address_space, access))
         }
         4 => {
@@ -1461,6 +1711,7 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
             let access_tag = reader.u8()?;
             let access = decode_access_mode_for_version(reader, access_tag)?;
             let element = decode_type(reader, depth + 1)?;
+            reader.reserve_payload(std::mem::size_of::<Type>())?;
             Type::Slice(SliceType::new(element, address_space, access))
         }
         5 if reader.version >= KERNEL_IR_VERSION_V12 => {
@@ -1471,7 +1722,7 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
 }
 
 fn encode_fixed_vector_type_v12(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     vector: FixedVectorTypeV12,
 ) -> Result<(), KernelIrEncodeError> {
     if vector.lanes > MAX_FIXED_VECTOR_LANES_V12 {
@@ -1487,7 +1738,7 @@ fn encode_fixed_vector_type_v12(
 }
 
 fn decode_fixed_vector_type_v12(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<FixedVectorTypeV12, KernelIrDecodeError> {
     let element = decode_scalar_type(reader.u8()?)?;
     let lanes = reader.u16()?;
@@ -1506,7 +1757,7 @@ fn decode_fixed_vector_type_v12(
 }
 
 fn encode_vector_layout_v12(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     layout: VectorLayoutV12,
 ) -> Result<(), KernelIrEncodeError> {
     match layout {
@@ -1519,7 +1770,7 @@ fn encode_vector_layout_v12(
 }
 
 fn decode_vector_layout_v12(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<VectorLayoutV12, KernelIrDecodeError> {
     match reader.u8()? {
         1 => Ok(VectorLayoutV12::Contiguous),
@@ -1534,7 +1785,7 @@ fn decode_vector_layout_v12(
 }
 
 fn encode_vector_provenance_v12(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     provenance: VectorAccessProvenanceV12,
 ) -> Result<(), KernelIrEncodeError> {
     match provenance {
@@ -1546,7 +1797,7 @@ fn encode_vector_provenance_v12(
 }
 
 fn decode_vector_provenance_v12(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<VectorAccessProvenanceV12, KernelIrDecodeError> {
     match reader.u8()? {
         1 => Ok(VectorAccessProvenanceV12::Pointer(ValueId(reader.u32()?))),
@@ -1558,7 +1809,7 @@ fn decode_vector_provenance_v12(
 }
 
 fn encode_vector_memory_access_v12(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     access: VectorMemoryAccessV12,
 ) -> Result<(), KernelIrEncodeError> {
     encode_fixed_vector_type_v12(writer, access.vector)?;
@@ -1566,7 +1817,7 @@ fn encode_vector_memory_access_v12(
 }
 
 fn decode_vector_memory_access_v12(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<VectorMemoryAccessV12, KernelIrDecodeError> {
     Ok(VectorMemoryAccessV12::new(
         decode_fixed_vector_type_v12(reader)?,
@@ -1575,7 +1826,7 @@ fn decode_vector_memory_access_v12(
 }
 
 fn encode_intrinsic(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     intrinsic: &IntrinsicOperation,
 ) -> Result<(), KernelIrEncodeError> {
     match intrinsic.kind {
@@ -1592,7 +1843,9 @@ fn encode_intrinsic(
     encode_type(writer, &intrinsic.result_type, 0)
 }
 
-fn decode_intrinsic(reader: &mut Reader<'_>) -> Result<IntrinsicOperation, KernelIrDecodeError> {
+fn decode_intrinsic(
+    reader: &mut Reader<'_, '_>,
+) -> Result<IntrinsicOperation, KernelIrDecodeError> {
     let kind = match reader.u8()? {
         1 => IntrinsicKind::InvocationIndex {
             kind: decode_index_kind(reader.u8()?)?,
@@ -1611,7 +1864,7 @@ fn decode_intrinsic(reader: &mut Reader<'_>) -> Result<IntrinsicOperation, Kerne
     Ok(IntrinsicOperation::new(kind, decode_type(reader, 0)?))
 }
 
-fn encode_constant(writer: &mut Writer, value: &Constant) -> Result<(), KernelIrEncodeError> {
+fn encode_constant(writer: &mut Writer<'_>, value: &Constant) -> Result<(), KernelIrEncodeError> {
     match value {
         Constant::Bool(value) => {
             writer.u8(1)?;
@@ -1623,15 +1876,15 @@ fn encode_constant(writer: &mut Writer, value: &Constant) -> Result<(), KernelIr
         }
         Constant::I16(value) => {
             writer.u8(3)?;
-            writer.bytes(&value.to_le_bytes())?;
+            writer.u16(*value as u16)?;
         }
         Constant::I32(value) => {
             writer.u8(4)?;
-            writer.bytes(&value.to_le_bytes())?;
+            writer.u32(*value as u32)?;
         }
         Constant::I64(value) => {
             writer.u8(5)?;
-            writer.bytes(&value.to_le_bytes())?;
+            writer.u64(*value as u64)?;
         }
         Constant::U8(value) => {
             writer.u8(6)?;
@@ -1673,7 +1926,7 @@ fn encode_constant(writer: &mut Writer, value: &Constant) -> Result<(), KernelIr
     Ok(())
 }
 
-fn decode_constant(reader: &mut Reader<'_>) -> Result<Constant, KernelIrDecodeError> {
+fn decode_constant(reader: &mut Reader<'_, '_>) -> Result<Constant, KernelIrDecodeError> {
     Ok(match reader.u8()? {
         1 => Constant::Bool(reader.boolean("boolean constant")?),
         2 => Constant::I8(reader.u8()? as i8),
@@ -1699,7 +1952,7 @@ fn decode_constant(reader: &mut Reader<'_>) -> Result<Constant, KernelIrDecodeEr
 }
 
 fn encode_memory_access(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     access: MemoryAccess,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(address_space_tag(access.address_space))?;
@@ -1707,7 +1960,7 @@ fn encode_memory_access(
     writer.u8(u8::from(access.volatile))
 }
 
-fn decode_memory_access(reader: &mut Reader<'_>) -> Result<MemoryAccess, KernelIrDecodeError> {
+fn decode_memory_access(reader: &mut Reader<'_, '_>) -> Result<MemoryAccess, KernelIrDecodeError> {
     Ok(MemoryAccess {
         address_space: decode_address_space(reader.u8()?)?,
         alignment: reader.u32()?,
@@ -1715,14 +1968,14 @@ fn decode_memory_access(reader: &mut Reader<'_>) -> Result<MemoryAccess, KernelI
     })
 }
 
-fn encode_barrier(writer: &mut Writer, barrier: &Barrier) -> Result<(), KernelIrEncodeError> {
+fn encode_barrier(writer: &mut Writer<'_>, barrier: &Barrier) -> Result<(), KernelIrEncodeError> {
     writer.u8(scope_tag(barrier.execution_scope))?;
     writer.u8(scope_tag(barrier.memory_scope))?;
     writer.u8(ordering_tag(barrier.semantics.ordering))?;
     encode_address_spaces(writer, &barrier.semantics.address_spaces)
 }
 
-fn decode_barrier(reader: &mut Reader<'_>) -> Result<Barrier, KernelIrDecodeError> {
+fn decode_barrier(reader: &mut Reader<'_, '_>) -> Result<Barrier, KernelIrDecodeError> {
     Ok(Barrier {
         execution_scope: decode_scope(reader.u8()?)?,
         memory_scope: decode_scope(reader.u8()?)?,
@@ -1733,12 +1986,12 @@ fn decode_barrier(reader: &mut Reader<'_>) -> Result<Barrier, KernelIrDecodeErro
     })
 }
 
-fn encode_fence(writer: &mut Writer, fence: &Fence) -> Result<(), KernelIrEncodeError> {
+fn encode_fence(writer: &mut Writer<'_>, fence: &Fence) -> Result<(), KernelIrEncodeError> {
     writer.u8(scope_tag(fence.memory_scope))?;
     encode_barrier_semantics(writer, &fence.semantics)
 }
 
-fn decode_fence(reader: &mut Reader<'_>) -> Result<Fence, KernelIrDecodeError> {
+fn decode_fence(reader: &mut Reader<'_, '_>) -> Result<Fence, KernelIrDecodeError> {
     Ok(Fence {
         memory_scope: decode_scope(reader.u8()?)?,
         semantics: decode_barrier_semantics(reader)?,
@@ -1746,7 +1999,7 @@ fn decode_fence(reader: &mut Reader<'_>) -> Result<Fence, KernelIrDecodeError> {
 }
 
 fn encode_workgroup_barrier(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     barrier: &WorkgroupBarrier,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(scope_tag(barrier.memory_scope))?;
@@ -1755,7 +2008,7 @@ fn encode_workgroup_barrier(
 }
 
 fn decode_workgroup_barrier(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<WorkgroupBarrier, KernelIrDecodeError> {
     Ok(WorkgroupBarrier {
         memory_scope: decode_scope(reader.u8()?)?,
@@ -1765,7 +2018,7 @@ fn decode_workgroup_barrier(
 }
 
 fn encode_convergence(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     convergence: Convergence,
 ) -> Result<(), KernelIrEncodeError> {
     match convergence {
@@ -1776,7 +2029,7 @@ fn encode_convergence(
     }
 }
 
-fn decode_convergence(reader: &mut Reader<'_>) -> Result<Convergence, KernelIrDecodeError> {
+fn decode_convergence(reader: &mut Reader<'_, '_>) -> Result<Convergence, KernelIrDecodeError> {
     match reader.u8()? {
         1 => Ok(Convergence::uniform(decode_scope(reader.u8()?)?)),
         tag => Err(KernelIrDecodeError::UnknownTag {
@@ -1787,7 +2040,7 @@ fn decode_convergence(reader: &mut Reader<'_>) -> Result<Convergence, KernelIrDe
 }
 
 fn encode_workgroup_memory(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     memory: &WorkgroupMemory,
 ) -> Result<(), KernelIrEncodeError> {
     encode_type(writer, &memory.element, 0)?;
@@ -1808,7 +2061,7 @@ fn encode_workgroup_memory(
 }
 
 fn decode_workgroup_memory(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<WorkgroupMemory, KernelIrDecodeError> {
     let element = decode_type(reader, 0)?;
     let extent = match reader.u8()? {
@@ -1829,7 +2082,7 @@ fn decode_workgroup_memory(
 }
 
 fn encode_wave_operation(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     wave: &WaveOperation,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(wave_width_tag(wave.width))?;
@@ -1887,7 +2140,9 @@ fn encode_wave_operation(
     }
 }
 
-fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, KernelIrDecodeError> {
+fn decode_wave_operation(
+    reader: &mut Reader<'_, '_>,
+) -> Result<WaveOperation, KernelIrDecodeError> {
     let width = decode_wave_width(reader.u8()?)?;
     let active_lanes = reader.u32()?;
     let convergence = decode_convergence(reader)?;
@@ -1942,13 +2197,13 @@ fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, Kerne
 }
 
 fn encode_gfx950_lds_transpose_operation(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     transpose: &Gfx950LdsTransposeOperationV1,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(wave_width_tag(transpose.width))?;
     writer.u32(transpose.active_lanes)?;
     encode_convergence(writer, transpose.convergence)?;
-    let encode_format = |writer: &mut Writer, format| {
+    let encode_format = |writer: &mut Writer<'_>, format| {
         writer.u8(match format {
             Gfx950LdsTransposeFormatV1::Fp4E2M1 => 1,
             Gfx950LdsTransposeFormatV1::Fp8E4M3 => 2,
@@ -2000,12 +2255,12 @@ fn encode_gfx950_lds_transpose_operation(
 }
 
 fn decode_gfx950_lds_transpose_operation(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<Gfx950LdsTransposeOperationV1, KernelIrDecodeError> {
     let width = decode_wave_width(reader.u8()?)?;
     let active_lanes = reader.u32()?;
     let convergence = decode_convergence(reader)?;
-    let decode_format = |reader: &mut Reader<'_>| match reader.u8()? {
+    let decode_format = |reader: &mut Reader<'_, '_>| match reader.u8()? {
         1 => Ok(Gfx950LdsTransposeFormatV1::Fp4E2M1),
         2 => Ok(Gfx950LdsTransposeFormatV1::Fp8E4M3),
         tag => Err(KernelIrDecodeError::UnknownTag {
@@ -2052,7 +2307,7 @@ fn decode_gfx950_lds_transpose_operation(
 }
 
 fn encode_matrix_operation(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     matrix: &MatrixOperation,
 ) -> Result<(), KernelIrEncodeError> {
     if matrix.frontend_binding.is_some() {
@@ -2124,7 +2379,7 @@ fn encode_matrix_operation(
 }
 
 fn decode_matrix_operation(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<MatrixOperation, KernelIrDecodeError> {
     let active_lanes = reader.u32()?;
     let convergence = decode_convergence(reader)?;
@@ -2183,7 +2438,7 @@ fn decode_matrix_operation(
 }
 
 fn encode_tensor_layout_contract_v1(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     contract: TensorLayoutContractV1,
 ) -> Result<(), KernelIrEncodeError> {
     match contract.profile {
@@ -2224,7 +2479,7 @@ fn encode_tensor_layout_contract_v1(
 }
 
 fn decode_tensor_layout_contract_v1(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<TensorLayoutContractV1, KernelIrDecodeError> {
     let profile = match reader.u8()? {
         1 => TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64,
@@ -2274,7 +2529,7 @@ fn decode_tensor_layout_contract_v1(
 }
 
 fn encode_tensor_fragment_layout_v1(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     fragment: TensorFragmentLayoutV1,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(match fragment.role {
@@ -2347,7 +2602,7 @@ fn encode_tensor_fragment_layout_v1(
 }
 
 fn decode_tensor_fragment_layout_v1(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<TensorFragmentLayoutV1, KernelIrDecodeError> {
     let role = match reader.u8()? {
         1 => TensorOperandRoleV1::A,
@@ -2453,7 +2708,7 @@ fn decode_tensor_fragment_layout_v1(
 }
 
 fn encode_matrix_values(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     values: &[ValueId; 4],
 ) -> Result<(), KernelIrEncodeError> {
     for value in values {
@@ -2462,7 +2717,7 @@ fn encode_matrix_values(
     Ok(())
 }
 
-fn decode_matrix_values(reader: &mut Reader<'_>) -> Result<[ValueId; 4], KernelIrDecodeError> {
+fn decode_matrix_values(reader: &mut Reader<'_, '_>) -> Result<[ValueId; 4], KernelIrDecodeError> {
     let mut values = [ValueId(0); 4];
     for value in &mut values {
         *value = ValueId(reader.u32()?);
@@ -2471,7 +2726,7 @@ fn decode_matrix_values(reader: &mut Reader<'_>) -> Result<[ValueId; 4], KernelI
 }
 
 fn encode_matrix_values8(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     values: &[ValueId; 8],
 ) -> Result<(), KernelIrEncodeError> {
     for value in values {
@@ -2480,7 +2735,7 @@ fn encode_matrix_values8(
     Ok(())
 }
 
-fn decode_matrix_values8(reader: &mut Reader<'_>) -> Result<[ValueId; 8], KernelIrDecodeError> {
+fn decode_matrix_values8(reader: &mut Reader<'_, '_>) -> Result<[ValueId; 8], KernelIrDecodeError> {
     let mut values = [ValueId(0); 8];
     for value in &mut values {
         *value = ValueId(reader.u32()?);
@@ -2489,7 +2744,7 @@ fn decode_matrix_values8(reader: &mut Reader<'_>) -> Result<[ValueId; 8], Kernel
 }
 
 fn encode_matrix_multiply_profile(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     profile: MatrixMultiplyProfile,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u16(profile.m)?;
@@ -2501,7 +2756,7 @@ fn encode_matrix_multiply_profile(
 }
 
 fn decode_matrix_multiply_profile(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<MatrixMultiplyProfile, KernelIrDecodeError> {
     let m = reader.u16()?;
     let n = reader.u16()?;
@@ -2521,7 +2776,7 @@ fn decode_matrix_multiply_profile(
 }
 
 fn encode_matrix_lds_profile(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     profile: MatrixLdsProfile,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u16(profile.rows)?;
@@ -2533,7 +2788,7 @@ fn encode_matrix_lds_profile(
 }
 
 fn decode_matrix_lds_profile(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<MatrixLdsProfile, KernelIrDecodeError> {
     let rows = reader.u16()?;
     let columns = reader.u16()?;
@@ -2550,7 +2805,7 @@ fn decode_matrix_lds_profile(
 }
 
 fn encode_barrier_semantics(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     semantics: &BarrierSemantics,
 ) -> Result<(), KernelIrEncodeError> {
     writer.u8(ordering_tag(semantics.ordering))?;
@@ -2558,7 +2813,7 @@ fn encode_barrier_semantics(
 }
 
 fn decode_barrier_semantics(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<BarrierSemantics, KernelIrDecodeError> {
     Ok(BarrierSemantics {
         ordering: decode_ordering(reader.u8()?)?,
@@ -2566,7 +2821,7 @@ fn decode_barrier_semantics(
     })
 }
 
-fn encode_atomic(writer: &mut Writer, atomic: &Atomic) -> Result<(), KernelIrEncodeError> {
+fn encode_atomic(writer: &mut Writer<'_>, atomic: &Atomic) -> Result<(), KernelIrEncodeError> {
     writer.u8(atomic_kind_tag(atomic.kind))?;
     writer.u32(atomic.pointer.0)?;
     encode_optional_value(writer, atomic.value)?;
@@ -2583,7 +2838,7 @@ fn encode_atomic(writer: &mut Writer, atomic: &Atomic) -> Result<(), KernelIrEnc
     }
 }
 
-fn decode_atomic(reader: &mut Reader<'_>) -> Result<Atomic, KernelIrDecodeError> {
+fn decode_atomic(reader: &mut Reader<'_, '_>) -> Result<Atomic, KernelIrDecodeError> {
     Ok(Atomic {
         kind: decode_atomic_kind(reader.u8()?)?,
         pointer: ValueId(reader.u32()?),
@@ -2601,7 +2856,7 @@ fn decode_atomic(reader: &mut Reader<'_>) -> Result<Atomic, KernelIrDecodeError>
 }
 
 fn encode_terminator(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     terminator: &Terminator,
 ) -> Result<(), KernelIrEncodeError> {
     match terminator {
@@ -2718,7 +2973,7 @@ fn encode_terminator(
     Ok(())
 }
 
-fn decode_terminator(reader: &mut Reader<'_>) -> Result<Terminator, KernelIrDecodeError> {
+fn decode_terminator(reader: &mut Reader<'_, '_>) -> Result<Terminator, KernelIrDecodeError> {
     Ok(match reader.u8()? {
         1 => Terminator::Branch {
             target: BlockId(reader.u32()?),
@@ -2742,7 +2997,7 @@ fn decode_terminator(reader: &mut Reader<'_>) -> Result<Terminator, KernelIrDeco
         3 => {
             let selector = ValueId(reader.u32()?);
             let case_count = reader.count("switch cases", MAX_SWITCH_CASES_V1)?;
-            let mut cases = Vec::with_capacity(case_count);
+            let mut cases = reader.vector(case_count)?;
             for _ in 0..case_count {
                 cases.push(SwitchCase {
                     value: reader.u64()?,
@@ -2772,7 +3027,7 @@ fn decode_terminator(reader: &mut Reader<'_>) -> Result<Terminator, KernelIrDeco
         6 if reader.version >= KERNEL_IR_VERSION_V2 => {
             let selector = ValueId(reader.u32()?);
             let case_count = reader.count("integer switch cases", MAX_INTEGER_SWITCH_CASES_V2)?;
-            let mut cases: Vec<IntegerSwitchCase> = Vec::with_capacity(case_count);
+            let mut cases: Vec<IntegerSwitchCase> = reader.vector(case_count)?;
             for _ in 0..case_count {
                 let value = decode_constant(reader)?;
                 if cases.last().is_some_and(|previous| previous.value >= value) {
@@ -2809,7 +3064,7 @@ fn decode_terminator(reader: &mut Reader<'_>) -> Result<Terminator, KernelIrDeco
 }
 
 fn encode_launch_domain(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     domain: &LaunchDomain,
 ) -> Result<(), KernelIrEncodeError> {
     match domain {
@@ -2832,7 +3087,7 @@ fn encode_launch_domain(
     Ok(())
 }
 
-fn decode_launch_domain(reader: &mut Reader<'_>) -> Result<LaunchDomain, KernelIrDecodeError> {
+fn decode_launch_domain(reader: &mut Reader<'_, '_>) -> Result<LaunchDomain, KernelIrDecodeError> {
     Ok(match reader.u8()? {
         1 => LaunchDomain::D1 {
             x: decode_launch_extent(reader)?,
@@ -2856,7 +3111,7 @@ fn decode_launch_domain(reader: &mut Reader<'_>) -> Result<LaunchDomain, KernelI
 }
 
 fn encode_launch_extent(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     extent: LaunchExtent,
 ) -> Result<(), KernelIrEncodeError> {
     match extent {
@@ -2868,7 +3123,7 @@ fn encode_launch_extent(
     }
 }
 
-fn decode_launch_extent(reader: &mut Reader<'_>) -> Result<LaunchExtent, KernelIrDecodeError> {
+fn decode_launch_extent(reader: &mut Reader<'_, '_>) -> Result<LaunchExtent, KernelIrDecodeError> {
     match reader.u8()? {
         1 => Ok(LaunchExtent::Dynamic),
         2 => Ok(LaunchExtent::Static(reader.u32()?)),
@@ -2880,7 +3135,7 @@ fn decode_launch_extent(reader: &mut Reader<'_>) -> Result<LaunchExtent, KernelI
 }
 
 fn encode_capabilities(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     capabilities: &BTreeSet<TargetCapability>,
 ) -> Result<(), KernelIrEncodeError> {
     writer.count("capabilities", capabilities.len(), MAX_CAPABILITIES_V1)?;
@@ -2924,11 +3179,14 @@ fn encode_capabilities(
 }
 
 fn decode_capabilities(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<BTreeSet<TargetCapability>, KernelIrDecodeError> {
     let count = reader.count("capabilities", MAX_CAPABILITIES_V1)?;
+    reader.tree::<TargetCapability>(count)?;
     let mut capabilities = BTreeSet::new();
     let mut previous: Option<TargetCapability> = None;
+    let mut previous_heap = 0usize;
+    let mut maximum_comparison_width = 1_usize;
     for _ in 0..count {
         let capability = match reader.u8()? {
             1 => TargetCapability::Float16,
@@ -2959,17 +3217,64 @@ fn decode_capabilities(
                 });
             }
         };
+        let comparison_width =
+            target_capability_comparison_width_v1(&capability).ok_or_else(|| {
+                KernelIrDecodeError::WorkLimit(CanonicalKernelIrWorkLimitV1::new(
+                    usize::MAX,
+                    reader.work_limit(),
+                ))
+            })?;
+        maximum_comparison_width = maximum_comparison_width.max(comparison_width);
+        if previous.is_some() {
+            reader.charge_work(maximum_comparison_width)?;
+        }
         if previous.as_ref().is_some_and(|item| item >= &capability) {
             return Err(KernelIrDecodeError::NonCanonical);
         }
+        reader.charge_work(comparison_width)?;
+        let clone_heap = match &capability {
+            TargetCapability::Extension { namespace, name } => namespace
+                .capacity()
+                .checked_add(name.capacity())
+                .ok_or(KernelIrDecodeError::Resource(
+                    crate::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                ))?,
+            _ => 0,
+        };
+        reader.reserve_payload(clone_heap)?;
         previous = Some(capability.clone());
+        reader.release_payload(previous_heap)?;
+        previous_heap = clone_heap;
+        let insertion_work = capabilities
+            .len()
+            .checked_add(1)
+            .and_then(|queries| queries.checked_mul(maximum_comparison_width))
+            .ok_or_else(|| {
+                KernelIrDecodeError::WorkLimit(CanonicalKernelIrWorkLimitV1::new(
+                    usize::MAX,
+                    reader.work_limit(),
+                ))
+            })?;
+        reader.charge_work(insertion_work)?;
         capabilities.insert(capability);
     }
+    drop(previous);
+    reader.release_payload(previous_heap)?;
     Ok(capabilities)
 }
 
+fn target_capability_comparison_width_v1(capability: &TargetCapability) -> Option<usize> {
+    match capability {
+        TargetCapability::Extension { namespace, name } => namespace
+            .len()
+            .checked_add(name.len())
+            .and_then(|width| width.checked_add(2)),
+        _ => Some(1),
+    }
+}
+
 fn encode_address_spaces(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     address_spaces: &BTreeSet<AddressSpace>,
 ) -> Result<(), KernelIrEncodeError> {
     writer.count(
@@ -2984,9 +3289,10 @@ fn encode_address_spaces(
 }
 
 fn decode_address_spaces(
-    reader: &mut Reader<'_>,
+    reader: &mut Reader<'_, '_>,
 ) -> Result<BTreeSet<AddressSpace>, KernelIrDecodeError> {
     let count = reader.count("barrier address spaces", MAX_ADDRESS_SPACES)?;
+    reader.tree::<AddressSpace>(count)?;
     let mut address_spaces = BTreeSet::new();
     let mut previous = None;
     for _ in 0..count {
@@ -3028,7 +3334,10 @@ enum_codec!(access_mode_tag, decode_access_mode, AccessMode, "access mode", {
     AccessMode::WriteOnly => 3,
 });
 
-fn encode_access_mode(writer: &mut Writer, access: AccessMode) -> Result<(), KernelIrEncodeError> {
+fn encode_access_mode(
+    writer: &mut Writer<'_>,
+    access: AccessMode,
+) -> Result<(), KernelIrEncodeError> {
     if access == AccessMode::WriteOnly {
         require_v9(writer, "write-only pointer and slice types")?;
     }
@@ -3036,7 +3345,7 @@ fn encode_access_mode(writer: &mut Writer, access: AccessMode) -> Result<(), Ker
 }
 
 fn decode_access_mode_for_version(
-    reader: &Reader<'_>,
+    reader: &Reader<'_, '_>,
     tag: u8,
 ) -> Result<AccessMode, KernelIrDecodeError> {
     if tag == access_mode_tag(AccessMode::WriteOnly) && reader.version < KERNEL_IR_VERSION_V9 {
@@ -3099,7 +3408,10 @@ enum_codec!(unary_op_tag, decode_unary_op, UnaryOp, "unary operation", {
     UnaryOp::Negate => 1,
     UnaryOp::Not => 2,
 });
-fn encode_binary_op(writer: &mut Writer, operation: BinaryOp) -> Result<(), KernelIrEncodeError> {
+fn encode_binary_op(
+    writer: &mut Writer<'_>,
+    operation: BinaryOp,
+) -> Result<(), KernelIrEncodeError> {
     let tag = match operation {
         BinaryOp::Add => 1,
         BinaryOp::Subtract => 2,
@@ -3123,7 +3435,7 @@ fn encode_binary_op(writer: &mut Writer, operation: BinaryOp) -> Result<(), Kern
     writer.u8(tag)
 }
 
-fn decode_binary_op(reader: &Reader<'_>, tag: u8) -> Result<BinaryOp, KernelIrDecodeError> {
+fn decode_binary_op(reader: &Reader<'_, '_>, tag: u8) -> Result<BinaryOp, KernelIrDecodeError> {
     match tag {
         1 => Ok(BinaryOp::Add),
         2 => Ok(BinaryOp::Subtract),
@@ -3217,7 +3529,7 @@ enum_codec!(matrix_layout_tag, decode_matrix_layout, MatrixLayout, "matrix layou
 });
 
 fn encode_matrix_element(
-    writer: &mut Writer,
+    writer: &mut Writer<'_>,
     element: MatrixElement,
 ) -> Result<(), KernelIrEncodeError> {
     if matches!(element, MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3) {
@@ -3227,7 +3539,7 @@ fn encode_matrix_element(
 }
 
 fn decode_matrix_element_for_version(
-    reader: &Reader<'_>,
+    reader: &Reader<'_, '_>,
     tag: u8,
 ) -> Result<MatrixElement, KernelIrDecodeError> {
     if matches!(
@@ -3244,7 +3556,7 @@ fn decode_matrix_element_for_version(
     decode_matrix_element(tag)
 }
 
-fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v2(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V2 {
         Ok(())
     } else {
@@ -3255,7 +3567,7 @@ fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v3(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v3(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V3 {
         Ok(())
     } else {
@@ -3266,7 +3578,7 @@ fn require_v3(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v5(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v5(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V5 {
         Ok(())
     } else {
@@ -3277,7 +3589,7 @@ fn require_v5(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v6(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v6(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V6 {
         Ok(())
     } else {
@@ -3288,7 +3600,7 @@ fn require_v6(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v7(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v7(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V7 {
         Ok(())
     } else {
@@ -3299,7 +3611,7 @@ fn require_v7(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v8(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v8(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V8 {
         Ok(())
     } else {
@@ -3310,7 +3622,7 @@ fn require_v8(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v9(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v9(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V9 {
         Ok(())
     } else {
@@ -3321,7 +3633,7 @@ fn require_v9(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
     }
 }
 
-fn require_v10(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v10(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V10 {
         Ok(())
     } else {
@@ -3332,7 +3644,7 @@ fn require_v10(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnc
     }
 }
 
-fn require_v12(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v12(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V12 {
         Ok(())
     } else {
@@ -3343,7 +3655,7 @@ fn require_v12(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnc
     }
 }
 
-fn require_v11(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+fn require_v11(writer: &Writer<'_>, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V11 {
         Ok(())
     } else {
@@ -3354,173 +3666,21 @@ fn require_v11(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnc
     }
 }
 
-struct Writer {
-    bytes: Vec<u8>,
-    version: u16,
-}
+include!("wire_decode_allocation_v12.rs");
+include!("wire_resource_metering_v1.rs");
 
-impl Writer {
-    fn new(version: u16) -> Self {
-        Self {
-            bytes: Vec::new(),
-            version,
-        }
-    }
+#[cfg(test)]
+#[path = "wire_extent_v12_tests.rs"]
+mod wire_extent_v12_tests;
 
-    fn finish(self) -> Vec<u8> {
-        self.bytes
-    }
+#[cfg(test)]
+#[path = "wire_comparison_v12_tests.rs"]
+mod wire_comparison_v12_tests;
 
-    fn bytes(&mut self, value: &[u8]) -> Result<(), KernelIrEncodeError> {
-        let next =
-            self.bytes
-                .len()
-                .checked_add(value.len())
-                .ok_or(KernelIrEncodeError::Overflow {
-                    field: "module length",
-                })?;
-        if next > MAX_MODULE_BYTES_V1 {
-            return Err(KernelIrEncodeError::TooLarge {
-                max: MAX_MODULE_BYTES_V1,
-            });
-        }
-        self.bytes.extend_from_slice(value);
-        Ok(())
-    }
+#[cfg(test)]
+#[path = "wire_count_tokens_v12_tests.rs"]
+mod wire_count_tokens_v12_tests;
 
-    fn u8(&mut self, value: u8) -> Result<(), KernelIrEncodeError> {
-        self.bytes(&[value])
-    }
-
-    fn u16(&mut self, value: u16) -> Result<(), KernelIrEncodeError> {
-        self.bytes(&value.to_le_bytes())
-    }
-
-    fn u32(&mut self, value: u32) -> Result<(), KernelIrEncodeError> {
-        self.bytes(&value.to_le_bytes())
-    }
-
-    fn u64(&mut self, value: u64) -> Result<(), KernelIrEncodeError> {
-        self.bytes(&value.to_le_bytes())
-    }
-
-    fn count(
-        &mut self,
-        field: &'static str,
-        value: usize,
-        max: usize,
-    ) -> Result<(), KernelIrEncodeError> {
-        check_limit(field, value, max)?;
-        self.u32(u32::try_from(value).map_err(|_| KernelIrEncodeError::Overflow { field })?)
-    }
-
-    fn text(&mut self, field: &'static str, value: &str) -> Result<(), KernelIrEncodeError> {
-        check_limit(field, value.len(), MAX_TEXT_BYTES_V1)?;
-        self.u32(u32::try_from(value.len()).map_err(|_| KernelIrEncodeError::Overflow { field })?)?;
-        self.bytes(value.as_bytes())
-    }
-}
-
-fn check_limit(field: &'static str, actual: usize, max: usize) -> Result<(), KernelIrEncodeError> {
-    if actual > max {
-        Err(KernelIrEncodeError::LimitExceeded { field, actual, max })
-    } else {
-        Ok(())
-    }
-}
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-    version: u16,
-}
-
-impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self {
-            bytes,
-            offset: 0,
-            version: 0,
-        }
-    }
-
-    fn take(&mut self, length: usize) -> Result<&'a [u8], KernelIrDecodeError> {
-        let end = self
-            .offset
-            .checked_add(length)
-            .ok_or(KernelIrDecodeError::Truncated)?;
-        let value = self
-            .bytes
-            .get(self.offset..end)
-            .ok_or(KernelIrDecodeError::Truncated)?;
-        self.offset = end;
-        Ok(value)
-    }
-
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], KernelIrDecodeError> {
-        self.take(N)?
-            .try_into()
-            .map_err(|_| KernelIrDecodeError::Truncated)
-    }
-
-    fn u8(&mut self) -> Result<u8, KernelIrDecodeError> {
-        Ok(self.fixed::<1>()?[0])
-    }
-
-    fn u16(&mut self) -> Result<u16, KernelIrDecodeError> {
-        Ok(u16::from_le_bytes(self.fixed()?))
-    }
-
-    fn u32(&mut self) -> Result<u32, KernelIrDecodeError> {
-        Ok(u32::from_le_bytes(self.fixed()?))
-    }
-
-    fn u64(&mut self) -> Result<u64, KernelIrDecodeError> {
-        Ok(u64::from_le_bytes(self.fixed()?))
-    }
-
-    fn reserved_u32(&mut self, field: &'static str) -> Result<(), KernelIrDecodeError> {
-        if self.u32()? != 0 {
-            Err(KernelIrDecodeError::ReservedNonZero { field })
-        } else {
-            Ok(())
-        }
-    }
-
-    fn count(&mut self, field: &'static str, max: usize) -> Result<usize, KernelIrDecodeError> {
-        let count = self.u32()? as usize;
-        if count > max {
-            Err(KernelIrDecodeError::LimitExceeded {
-                field,
-                actual: count,
-                max,
-            })
-        } else {
-            Ok(count)
-        }
-    }
-
-    fn text(&mut self, field: &'static str) -> Result<String, KernelIrDecodeError> {
-        let length = self.count(field, MAX_TEXT_BYTES_V1)?;
-        let bytes = self.take(length)?;
-        str::from_utf8(bytes)
-            .map(str::to_owned)
-            .map_err(|_| KernelIrDecodeError::InvalidUtf8 { field })
-    }
-
-    fn option(&mut self, field: &'static str) -> Result<bool, KernelIrDecodeError> {
-        match self.u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            tag => Err(KernelIrDecodeError::UnknownTag { kind: field, tag }),
-        }
-    }
-
-    fn boolean(&mut self, field: &'static str) -> Result<bool, KernelIrDecodeError> {
-        self.option(field)
-    }
-
-    fn is_finished(&self) -> bool {
-        self.offset == self.bytes.len()
-    }
-}
+#[cfg(test)]
+#[path = "wire_marker_v12_tests.rs"]
+mod wire_marker_v12_tests;

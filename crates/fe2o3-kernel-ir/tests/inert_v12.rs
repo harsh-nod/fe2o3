@@ -16,8 +16,6 @@ const OLD_ENCODERS: [Encoder; 11] = [
     encode_module_v10,
     encode_module_v11,
 ];
-const REJECTION: &str =
-    "Kernel IR V12 vector and verification-contract carriers are not admitted by this verifier";
 const VECTOR_GOLDEN: &str = "4645324f334b49000c000000b9000000000000000a000000766563746f722d76313201000000000000000000000009000000726f756e647472697001000000030302020d00000000010100000000000000010000000000000000000000030000000100000001000000050d0400011b01000000000d0400010310000000000100000002000000050d04000202001d01000000020200000000001c0100000000020000000d040002020003100000000001040000000000000000";
 
 fn vector() -> FixedVectorTypeV12 {
@@ -103,20 +101,21 @@ fn assert_rejected_at(
     ]
     .map(Result::unwrap_err);
     assert_eq!(errors[0], errors[1]);
-    assert_eq!(errors[1], errors[2]);
-    assert_eq!(
-        errors[0].diagnostics(),
-        &[Diagnostic {
-            location: DiagnosticLocation {
-                module: module.id.clone(),
-                function: Some(module.functions[function].id.clone()),
-                kernel: None,
-                block,
-                operation,
-            },
-            code: DiagnosticCode::InvalidSemanticOperation,
-            message: REJECTION.to_owned(),
-        }]
+    for diagnostic in errors[0].diagnostics() {
+        assert!(errors[2].diagnostics().contains(diagnostic));
+    }
+    assert!(
+        errors[0].diagnostics().iter().any(|diagnostic| {
+            diagnostic.location
+                == DiagnosticLocation {
+                    module: module.id.clone(),
+                    function: Some(module.functions[function].id.clone()),
+                    kernel: None,
+                    block,
+                    operation,
+                }
+        }),
+        "{errors:?}"
     );
 }
 
@@ -182,7 +181,7 @@ fn operations_have_independent_version_guards_without_vector_results() {
 }
 
 #[test]
-fn declarations_definitions_and_nested_signature_types_are_rejected() {
+fn valid_vector_signatures_are_admitted_but_keep_frozen_wire_guards() {
     let direct = Type::vector(vector());
     let pointer = Type::pointer(direct.clone(), AddressSpace::Global, AccessMode::ReadOnly);
     let slice = Type::slice(direct.clone(), AddressSpace::Global, AccessMode::ReadOnly);
@@ -204,7 +203,18 @@ fn declarations_definitions_and_nested_signature_types_are_rejected() {
                 } else {
                     module.functions[0].signature.parameters.push(ty.clone());
                 }
-                assert_rejected(&module, None, None);
+                if !declaration {
+                    if result {
+                        module.functions[0].signature.parameters.push(ty.clone());
+                        body(&mut module).blocks[0].terminator = Some(Terminator::Return {
+                            values: vec![ValueId(0)],
+                        });
+                    }
+                    body(&mut module).parameters = vec![ValueId(0)];
+                }
+                verify_module(&module).unwrap();
+                verify_module_ref(&module).unwrap();
+                verify_module_with_capabilities(&module, &BTreeSet::new()).unwrap();
                 let mut bytes = assert_roundtrip(&module);
                 for (index, encode) in OLD_ENCODERS.into_iter().enumerate() {
                     assert_eq!(
@@ -245,7 +255,7 @@ fn dead_blocks_and_unused_results_do_not_hide_carriers() {
         .push(ValueDef::new(ValueId(4), Type::vector(vector())));
     dead.terminator = Some(Terminator::Return { values: vec![] });
     body(&mut module).blocks.push(dead);
-    assert_rejected(&module, Some(BlockId(9)), None);
+    verify_module(&module).unwrap();
     body(&mut module).blocks[1].parameters.clear();
     body(&mut module).blocks[1].operations.push(Operation::new(
         vec![ValueDef::new(ValueId(4), Type::vector(vector()))],
@@ -323,10 +333,21 @@ fn descriptor_legality_is_separate_from_raw_wire_well_formedness() {
             (2..=1024).contains(&lanes).then_some(u32::from(lanes) * 4)
         );
         let mut module = module(vec![]);
+        module.functions[0].body = None;
+        module.functions[0].role = FunctionRole::ExternalImport;
         module.functions[0].signature.results.push(Type::vector(ty));
         if lanes <= 1024 {
             assert_roundtrip(&module);
-            assert_rejected(&module, None, None);
+            if ty.validate().is_ok() {
+                verify_module(&module).unwrap();
+            } else {
+                assert_rejected(&module, None, None);
+                assert!(
+                    verify_module(&module)
+                        .unwrap_err()
+                        .contains(DiagnosticCode::InvalidVectorOperation)
+                );
+            }
         } else {
             assert_eq!(
                 encode_module_v12(&module),
@@ -349,9 +370,20 @@ fn descriptor_legality_is_separate_from_raw_wire_well_formedness() {
         let ty = vector().with_layout(VectorLayoutV12::Interleaved { factor });
         assert_eq!(ty.validate().is_ok(), factor == 2);
         let mut module = module(vec![]);
+        module.functions[0].body = None;
+        module.functions[0].role = FunctionRole::ExternalImport;
         module.functions[0].signature.results.push(Type::vector(ty));
         assert_roundtrip(&module);
-        assert_rejected(&module, None, None);
+        if ty.validate().is_ok() {
+            verify_module(&module).unwrap();
+        } else {
+            assert_rejected(&module, None, None);
+            assert!(
+                verify_module(&module)
+                    .unwrap_err()
+                    .contains(DiagnosticCode::InvalidVectorOperation)
+            );
+        }
     }
 }
 
@@ -458,7 +490,7 @@ fn vector_golden_bytes_preserve_types_layouts_and_memory_metadata() {
             ),
         ]
     );
-    assert_rejected(&module, Some(BlockId(0)), Some(0));
+    verify_module(&module).unwrap();
 }
 
 fn unique_offset(bytes: &[u8], marker: &[u8]) -> usize {

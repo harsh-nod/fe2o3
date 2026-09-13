@@ -34,6 +34,10 @@ use fe2o3_kernel_ir::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "lowering_v12_preflight.rs"]
+mod v12_preflight;
+use v12_preflight::reject_unsupported_v12_module;
+
 use crate::{
     AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim, MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
     MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
@@ -605,6 +609,7 @@ fn lower_kernel_to_llvm_ir_for_target(
     max_text_bytes: usize,
 ) -> Result<String, LoweringErrors> {
     verify_module(module).map_err(LoweringErrors::verification)?;
+    reject_unsupported_v12_module(module)?;
 
     let matches = module
         .kernels
@@ -1063,6 +1068,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         ));
     }
     verify_module(module).map_err(LoweringErrors::verification)?;
+    reject_unsupported_v12_module(module)?;
 
     if let Some(exact_target) = target.exact_target_binding() {
         for kernel in &module.kernels {

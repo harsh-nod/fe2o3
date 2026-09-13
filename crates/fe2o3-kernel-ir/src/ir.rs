@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, Gfx950LdsTransposeOperationV1, LaunchDomain,
+    AddressSpace, Axis, BarrierSemantics, Gfx950LdsTransposeOperationV1, LaunchDomain,
     MatrixOperation, MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation,
     SynchronizationScope, TargetCapability, Type, VectorLayoutConversionV12,
     VectorLoadOperationV12, VectorStoreOperationV12, VerificationContractOperationV12,
@@ -398,6 +398,11 @@ impl Operation {
         self.kind.operands()
     }
 
+    /// Visits every SSA operand in stable semantic order without allocating.
+    pub fn visit_operands(&self, visitor: impl FnMut(ValueId)) {
+        self.kind.visit_operands(visitor);
+    }
+
     /// Returns every SSA result in stable definition order.
     pub fn result_ids(&self) -> impl ExactSizeIterator<Item = ValueId> + '_ {
         self.results.iter().map(|result| result.id)
@@ -479,89 +484,14 @@ impl Operation {
     }
 
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
-        if let Some(semantic) = self.kind.semantic_operation() {
-            return semantic.contract().required_capabilities;
+        let mut capabilities = BTreeSet::new();
+        if let Err(infallible) = self.try_visit_required_capabilities_v1(|capability| {
+            capabilities.insert(capability.into_owned());
+            Ok::<_, std::convert::Infallible>(())
+        }) {
+            match infallible {}
         }
-        match &self.kind {
-            OperationKind::Intrinsic(_) => {
-                unreachable!("semantic operations return before legacy operation dispatch")
-            }
-            OperationKind::Alloca {
-                count,
-                address_space: AddressSpace::Workgroup,
-                ..
-            } => {
-                let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupMemory]);
-                if count.is_some() {
-                    capabilities.insert(TargetCapability::DynamicWorkgroupMemory);
-                }
-                capabilities
-            }
-            OperationKind::Barrier(barrier) => {
-                let mut capabilities = match barrier.execution_scope {
-                    SynchronizationScope::Subgroup => BTreeSet::from([TargetCapability::Subgroups]),
-                    SynchronizationScope::Workgroup => {
-                        BTreeSet::from([TargetCapability::WorkgroupBarrier])
-                    }
-                    _ => BTreeSet::new(),
-                };
-                add_synchronized_memory_capabilities(
-                    &mut capabilities,
-                    &barrier.semantics.address_spaces,
-                );
-                capabilities
-            }
-            OperationKind::Fence(fence) => {
-                let mut capabilities = BTreeSet::new();
-                if fence.memory_scope == SynchronizationScope::Subgroup {
-                    capabilities.insert(TargetCapability::Subgroups);
-                }
-                add_synchronized_memory_capabilities(
-                    &mut capabilities,
-                    &fence.semantics.address_spaces,
-                );
-                capabilities
-            }
-            OperationKind::WorkgroupBarrier(barrier) => {
-                let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupBarrier]);
-                add_synchronized_memory_capabilities(
-                    &mut capabilities,
-                    &barrier.semantics.address_spaces,
-                );
-                capabilities
-            }
-            OperationKind::WorkgroupMemory(memory) => {
-                let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupMemory]);
-                if memory.extent.is_dynamic() {
-                    capabilities.insert(TargetCapability::DynamicWorkgroupMemory);
-                }
-                capabilities
-            }
-            OperationKind::Matrix(matrix) => matrix.required_capabilities(),
-            OperationKind::Gfx950LdsTranspose(transpose) => transpose.required_capabilities(),
-            OperationKind::Wave(wave) => wave.required_capabilities(),
-            OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
-            OperationKind::Call { callee, arguments } => {
-                if let Some(diagnostic) =
-                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
-                {
-                    diagnostic.required_capabilities()
-                } else {
-                    FloatOperation::from_intrinsic_call(callee, arguments)
-                        .map_or_else(BTreeSet::new, |float| float.required_capabilities())
-                }
-            }
-            _ => BTreeSet::new(),
-        }
-    }
-}
-
-fn add_synchronized_memory_capabilities(
-    capabilities: &mut BTreeSet<TargetCapability>,
-    address_spaces: &BTreeSet<AddressSpace>,
-) {
-    if address_spaces.contains(&AddressSpace::Workgroup) {
-        capabilities.insert(TargetCapability::WorkgroupMemory);
+        capabilities
     }
 }
 
@@ -900,7 +830,111 @@ pub enum AmdGpuDiagnosticOperation {
     },
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum AmdGpuDiagnosticIntrinsicDescriptorV1 {
+    Clock32,
+    Trap,
+    DebugTrap,
+    ProfilingMarker,
+    Print { arguments: usize },
+    AssertFail,
+}
+
+const AMDGPU_DIAGNOSTIC_INTRINSICS_V1: [(&str, AmdGpuDiagnosticIntrinsicDescriptorV1); 8] = [
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_clock32",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Clock32,
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Trap,
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_debugtrap",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::DebugTrap,
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_profiling_marker",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::ProfilingMarker,
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_0",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Print { arguments: 0 },
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_1",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Print { arguments: 1 },
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_2",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Print { arguments: 2 },
+    ),
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_assert_fail",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::AssertFail,
+    ),
+];
+
+impl AmdGpuDiagnosticIntrinsicDescriptorV1 {
+    pub(crate) const fn arity(self) -> usize {
+        match self {
+            Self::Clock32 | Self::Trap | Self::DebugTrap => 0,
+            Self::ProfilingMarker => 1,
+            Self::Print { arguments } => arguments + 1,
+            Self::AssertFail => 2,
+        }
+    }
+
+    pub(crate) const fn has_result(self) -> bool {
+        matches!(self, Self::Clock32)
+    }
+
+    fn operation(self) -> AmdGpuDiagnosticOperation {
+        let values = [ValueId(0), ValueId(1), ValueId(2)];
+        match self {
+            Self::Clock32 => AmdGpuDiagnosticOperation::Clock32,
+            Self::Trap => AmdGpuDiagnosticOperation::Trap,
+            Self::DebugTrap => AmdGpuDiagnosticOperation::DebugTrap,
+            Self::ProfilingMarker => {
+                AmdGpuDiagnosticOperation::ProfilingMarker { marker: values[0] }
+            }
+            Self::Print { arguments } => AmdGpuDiagnosticOperation::Print {
+                format_id: values[0],
+                arguments: values[1..1 + arguments].to_vec(),
+            },
+            Self::AssertFail => AmdGpuDiagnosticOperation::AssertFail {
+                site_id: values[0],
+                line: values[1],
+            },
+        }
+    }
+}
+
 impl AmdGpuDiagnosticOperation {
+    pub(crate) const INTRINSIC_DESCRIPTOR_COUNT_V1: usize = AMDGPU_DIAGNOSTIC_INTRINSICS_V1.len();
+
+    pub(crate) fn intrinsic_descriptor_v1(
+        callee: &FunctionId,
+    ) -> Option<AmdGpuDiagnosticIntrinsicDescriptorV1> {
+        AMDGPU_DIAGNOSTIC_INTRINSICS_V1
+            .iter()
+            .find_map(|(name, descriptor)| (callee.as_str() == *name).then_some(*descriptor))
+    }
+
+    pub(crate) fn intrinsic_descriptor_lookup_work_v1(callee: &FunctionId) -> Option<usize> {
+        callee
+            .as_str()
+            .len()
+            // One descriptor-row visit plus a terminal-inclusive comparison.
+            .checked_add(2)?
+            .checked_mul(Self::INTRINSIC_DESCRIPTOR_COUNT_V1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn intrinsic_descriptor_roster_v1()
+    -> impl Iterator<Item = (&'static str, AmdGpuDiagnosticIntrinsicDescriptorV1)> {
+        AMDGPU_DIAGNOSTIC_INTRINSICS_V1.into_iter()
+    }
     /// Reports whether this operation ends the current invocation without
     /// returning to its Kernel IR continuation.
     pub const fn is_terminating(&self) -> bool {
@@ -928,16 +962,6 @@ impl AmdGpuDiagnosticOperation {
         BTreeSet::from([TargetCapability::Extension {
             namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
             name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
-        }])
-    }
-
-    /// Returns the frozen capability carried by canonical gfx942 V1 diagnostic
-    /// declarations before the target-neutral AMDGPU diagnostics capability
-    /// was introduced.
-    pub(crate) fn legacy_gfx942_required_capabilities(&self) -> BTreeSet<TargetCapability> {
-        BTreeSet::from([TargetCapability::Extension {
-            namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
-            name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
         }])
     }
 
@@ -987,14 +1011,6 @@ impl AmdGpuDiagnosticOperation {
         function
     }
 
-    /// Reconstructs the exact frozen gfx942 V1 declaration for verifier-only
-    /// compatibility with already serialized modules.
-    pub(crate) fn legacy_gfx942_declaration(&self) -> Function {
-        let mut function = self.declaration();
-        function.required_capabilities = self.legacy_gfx942_required_capabilities();
-        function
-    }
-
     pub fn operation(&self, result: Option<ValueId>) -> Operation {
         let results = match (self.result_type(), result) {
             (Some(ty), Some(id)) => vec![ValueDef::new(id, ty)],
@@ -1011,10 +1027,11 @@ impl AmdGpuDiagnosticOperation {
     }
 
     pub fn from_intrinsic_call(callee: &FunctionId, arguments: &[ValueId]) -> Option<Self> {
-        let mut diagnostic = Self::from_intrinsic_id(callee)?;
-        if diagnostic.operands().len() != arguments.len() {
+        let descriptor = Self::intrinsic_descriptor_v1(callee)?;
+        if descriptor.arity() != arguments.len() {
             return None;
         }
+        let mut diagnostic = descriptor.operation();
         match &mut diagnostic {
             Self::Clock32 | Self::Trap | Self::DebugTrap => {}
             Self::ProfilingMarker { marker } => *marker = arguments[0],
@@ -1034,409 +1051,11 @@ impl AmdGpuDiagnosticOperation {
     }
 
     pub fn from_intrinsic_id(callee: &FunctionId) -> Option<Self> {
-        let values = [ValueId(0), ValueId(1), ValueId(2)];
-        Some(match callee.as_str() {
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_clock32" => Self::Clock32,
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap" => Self::Trap,
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_debugtrap" => Self::DebugTrap,
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_profiling_marker" => {
-                Self::ProfilingMarker { marker: values[0] }
-            }
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_0" => Self::Print {
-                format_id: values[0],
-                arguments: Vec::new(),
-            },
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_1" => Self::Print {
-                format_id: values[0],
-                arguments: vec![values[1]],
-            },
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_2" => Self::Print {
-                format_id: values[0],
-                arguments: vec![values[1], values[2]],
-            },
-            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_assert_fail" => Self::AssertFail {
-                site_id: values[0],
-                line: values[1],
-            },
-            _ => return None,
-        })
-    }
-}
-/// One exact conversion between the integer-backed narrow-float values and `f32`.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum FloatConversionKind {
-    F16ToF32,
-    F32ToF16RoundTiesEven,
-    Bf16ToF32,
-    F32ToBf16RoundTiesEven,
-}
-
-/// The integer-backed narrow format used by widened arithmetic.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum NarrowFloatFormat {
-    F16,
-    Bf16,
-}
-
-impl NarrowFloatFormat {
-    pub const fn ty(self) -> Type {
-        match self {
-            Self::F16 => Type::Scalar(ScalarType::F16),
-            Self::Bf16 => Type::Scalar(ScalarType::Bf16),
-        }
-    }
-
-    pub const fn capability(self) -> TargetCapability {
-        match self {
-            Self::F16 => TargetCapability::Float16,
-            Self::Bf16 => TargetCapability::BFloat16,
-        }
+        Self::intrinsic_descriptor_v1(callee).map(AmdGpuDiagnosticIntrinsicDescriptorV1::operation)
     }
 }
 
-/// Binary arithmetic performed after exact widening to `f32`.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum WidenedFloatBinaryOp {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-}
-
-/// Scalar functions exposed by `fe2o3-device::DeviceMath`.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum F32MathFunction {
-    Sqrt,
-    FusedMultiplyAdd,
-    Floor,
-    Ceil,
-    Truncate,
-    RoundTiesEven,
-    Sin,
-    Cos,
-    Exp,
-    Exp2,
-    Ln,
-    Log2,
-    Log10,
-    /// IEEE-754 absolute value with no arithmetic rounding.
-    Abs,
-}
-
-impl F32MathFunction {
-    pub const fn arity(self) -> usize {
-        match self {
-            Self::FusedMultiplyAdd => 3,
-            _ => 1,
-        }
-    }
-
-    pub const fn required_implementation(self) -> F32MathImplementation {
-        match self {
-            Self::Sqrt => F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
-            Self::FusedMultiplyAdd
-            | Self::Floor
-            | Self::Ceil
-            | Self::Truncate
-            | Self::RoundTiesEven => F32MathImplementation::ConstrainedLlvm,
-            Self::Sin
-            | Self::Cos
-            | Self::Exp
-            | Self::Exp2
-            | Self::Ln
-            | Self::Log2
-            | Self::Log10 => F32MathImplementation::OcmlAbiV1,
-            Self::Abs => F32MathImplementation::IeeeFabsV1,
-        }
-    }
-}
-
-/// The implementation contract that gives an `f32` math operation meaning.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum F32MathImplementation {
-    /// LLVM constrained intrinsics, round-to-nearest-even, ignored exceptions.
-    ConstrainedLlvm,
-    /// The strict `__ocml_*_f32` ABI, with fast/finite/unsafe modes disabled.
-    OcmlAbiV1,
-    /// IEEE `f32` square root, round-to-nearest-even, with exceptions ignored.
-    ///
-    /// A target may realize this with constrained sqrt or with native
-    /// `llvm.sqrt.f32` when its strict default floating-point environment has
-    /// exactly these semantics.
-    IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
-    /// LLVM `fabs` semantics for one `f32` value.
-    IeeeFabsV1,
-}
-
-/// A pure floating-point operation with no implicit contraction or target fallback.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FloatOperation {
-    Convert {
-        kind: FloatConversionKind,
-        value: ValueId,
-    },
-    /// Widen both operands exactly, perform one constrained `f32` operation,
-    /// then narrow once using round-to-nearest, ties-to-even.
-    WidenedBinary {
-        format: NarrowFloatFormat,
-        op: WidenedFloatBinaryOp,
-        lhs: ValueId,
-        rhs: ValueId,
-    },
-    F32Math {
-        function: F32MathFunction,
-        implementation: F32MathImplementation,
-        arguments: Vec<ValueId>,
-    },
-    /// Two independent constrained `f32` FMAs followed by exact BF16 RNE packing.
-    /// Each packed operand and the result use lane zero in bits 0..16.
-    Bf16x2FusedMultiplyAdd {
-        value: ValueId,
-        multiplier: ValueId,
-        addend: ValueId,
-    },
-}
-
-impl FloatOperation {
-    pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            Self::Convert { value, .. } => vec![*value],
-            Self::WidenedBinary { lhs, rhs, .. } => vec![*lhs, *rhs],
-            Self::F32Math { arguments, .. } => arguments.clone(),
-            Self::Bf16x2FusedMultiplyAdd {
-                value,
-                multiplier,
-                addend,
-            } => vec![*value, *multiplier, *addend],
-        }
-    }
-
-    pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
-        match self {
-            Self::Convert { kind, .. } => BTreeSet::from([match kind {
-                FloatConversionKind::F16ToF32 | FloatConversionKind::F32ToF16RoundTiesEven => {
-                    TargetCapability::Float16
-                }
-                FloatConversionKind::Bf16ToF32 | FloatConversionKind::F32ToBf16RoundTiesEven => {
-                    TargetCapability::BFloat16
-                }
-            }]),
-            Self::WidenedBinary { format, .. } => BTreeSet::from([format.capability()]),
-            Self::F32Math { .. } => BTreeSet::new(),
-            Self::Bf16x2FusedMultiplyAdd { .. } => BTreeSet::from([TargetCapability::BFloat16]),
-        }
-    }
-
-    /// Closed semantic identity used to carry this operation through the existing call node.
-    pub fn intrinsic_function_id(&self) -> FunctionId {
-        FunctionId::new(match self {
-            Self::Convert { kind, .. } => match kind {
-                FloatConversionKind::F16ToF32 => "__fe2o3_ir_float_v1_f16_to_f32",
-                FloatConversionKind::F32ToF16RoundTiesEven => "__fe2o3_ir_float_v1_f32_to_f16_rne",
-                FloatConversionKind::Bf16ToF32 => "__fe2o3_ir_float_v1_bf16_to_f32",
-                FloatConversionKind::F32ToBf16RoundTiesEven => {
-                    "__fe2o3_ir_float_v1_f32_to_bf16_rne"
-                }
-            },
-            Self::WidenedBinary { format, op, .. } => match (format, op) {
-                (NarrowFloatFormat::F16, WidenedFloatBinaryOp::Add) => {
-                    "__fe2o3_ir_float_v1_f16_add_widened_rne"
-                }
-                (NarrowFloatFormat::F16, WidenedFloatBinaryOp::Subtract) => {
-                    "__fe2o3_ir_float_v1_f16_sub_widened_rne"
-                }
-                (NarrowFloatFormat::F16, WidenedFloatBinaryOp::Multiply) => {
-                    "__fe2o3_ir_float_v1_f16_mul_widened_rne"
-                }
-                (NarrowFloatFormat::F16, WidenedFloatBinaryOp::Divide) => {
-                    "__fe2o3_ir_float_v1_f16_div_widened_rne"
-                }
-                (NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Add) => {
-                    "__fe2o3_ir_float_v1_bf16_add_widened_rne"
-                }
-                (NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Subtract) => {
-                    "__fe2o3_ir_float_v1_bf16_sub_widened_rne"
-                }
-                (NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Multiply) => {
-                    "__fe2o3_ir_float_v1_bf16_mul_widened_rne"
-                }
-                (NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Divide) => {
-                    "__fe2o3_ir_float_v1_bf16_div_widened_rne"
-                }
-            },
-            Self::F32Math {
-                function,
-                implementation,
-                ..
-            } if function.required_implementation() != *implementation => {
-                "__fe2o3_ir_float_v1_invalid_contract"
-            }
-            Self::F32Math { function, .. } => match function {
-                F32MathFunction::Sqrt => "__fe2o3_ir_float_v1_sqrt_f32",
-                F32MathFunction::FusedMultiplyAdd => "__fe2o3_ir_float_v1_fma_f32",
-                F32MathFunction::Floor => "__fe2o3_ir_float_v1_floor_f32",
-                F32MathFunction::Ceil => "__fe2o3_ir_float_v1_ceil_f32",
-                F32MathFunction::Truncate => "__fe2o3_ir_float_v1_trunc_f32",
-                F32MathFunction::RoundTiesEven => "__fe2o3_ir_float_v1_roundeven_f32",
-                F32MathFunction::Sin => "__fe2o3_ir_float_v1_sin_f32",
-                F32MathFunction::Cos => "__fe2o3_ir_float_v1_cos_f32",
-                F32MathFunction::Exp => "__fe2o3_ir_float_v1_exp_f32",
-                F32MathFunction::Exp2 => "__fe2o3_ir_float_v1_exp2_f32",
-                F32MathFunction::Ln => "__fe2o3_ir_float_v1_log_f32",
-                F32MathFunction::Log2 => "__fe2o3_ir_float_v1_log2_f32",
-                F32MathFunction::Log10 => "__fe2o3_ir_float_v1_log10_f32",
-                F32MathFunction::Abs => "__fe2o3_ir_float_v1_fabs_f32",
-            },
-            Self::Bf16x2FusedMultiplyAdd { .. } => "__fe2o3_ir_float_v1_fma_bf16x2",
-        })
-    }
-
-    pub fn result_type(&self) -> Type {
-        match self {
-            Self::Convert { kind, .. } => match kind {
-                FloatConversionKind::F16ToF32 | FloatConversionKind::Bf16ToF32 => Type::F32,
-                FloatConversionKind::F32ToF16RoundTiesEven => Type::Scalar(ScalarType::F16),
-                FloatConversionKind::F32ToBf16RoundTiesEven => Type::Scalar(ScalarType::Bf16),
-            },
-            Self::WidenedBinary { format, .. } => format.ty(),
-            Self::F32Math { .. } => Type::F32,
-            Self::Bf16x2FusedMultiplyAdd { .. } => Type::Scalar(ScalarType::U32),
-        }
-    }
-
-    pub fn parameter_types(&self) -> Vec<Type> {
-        match self {
-            Self::Convert { kind, .. } => vec![match kind {
-                FloatConversionKind::F16ToF32 => Type::Scalar(ScalarType::F16),
-                FloatConversionKind::F32ToF16RoundTiesEven => Type::F32,
-                FloatConversionKind::Bf16ToF32 => Type::Scalar(ScalarType::Bf16),
-                FloatConversionKind::F32ToBf16RoundTiesEven => Type::F32,
-            }],
-            Self::WidenedBinary { format, .. } => vec![format.ty(), format.ty()],
-            Self::F32Math { function, .. } => vec![Type::F32; function.arity()],
-            Self::Bf16x2FusedMultiplyAdd { .. } => vec![Type::Scalar(ScalarType::U32); 3],
-        }
-    }
-
-    pub fn declaration(&self) -> Function {
-        let mut function = Function::external_import(
-            self.intrinsic_function_id(),
-            Signature::new(self.parameter_types(), vec![self.result_type()]),
-        );
-        function.required_capabilities = self.required_capabilities();
-        function
-    }
-
-    pub fn operation(&self, result: ValueId) -> Operation {
-        Operation::effect_free(
-            ValueDef::new(result, self.result_type()),
-            OperationKind::Call {
-                callee: self.intrinsic_function_id(),
-                arguments: self.operands(),
-            },
-        )
-    }
-
-    pub fn from_intrinsic_call(callee: &FunctionId, arguments: &[ValueId]) -> Option<Self> {
-        let mut float = Self::from_intrinsic_id(callee)?;
-        if float.operands().len() != arguments.len() {
-            return None;
-        }
-        match &mut float {
-            Self::Convert { value, .. } => *value = arguments[0],
-            Self::WidenedBinary { lhs, rhs, .. } => {
-                *lhs = arguments[0];
-                *rhs = arguments[1];
-            }
-            Self::F32Math {
-                arguments: values, ..
-            } => values.clone_from_slice(arguments),
-            Self::Bf16x2FusedMultiplyAdd {
-                value,
-                multiplier,
-                addend,
-            } => {
-                *value = arguments[0];
-                *multiplier = arguments[1];
-                *addend = arguments[2];
-            }
-        }
-        Some(float)
-    }
-
-    pub fn from_intrinsic_id(callee: &FunctionId) -> Option<Self> {
-        let values = [ValueId(0), ValueId(1), ValueId(2)];
-        let convert = |kind| Self::Convert {
-            kind,
-            value: values[0],
-        };
-        let binary = |format, op| Self::WidenedBinary {
-            format,
-            op,
-            lhs: values[0],
-            rhs: values[1],
-        };
-        let math = |function| Self::F32Math {
-            function,
-            implementation: function.required_implementation(),
-            arguments: values[..function.arity()].to_vec(),
-        };
-        Some(match callee.as_str() {
-            "__fe2o3_ir_float_v1_f16_to_f32" => convert(FloatConversionKind::F16ToF32),
-            "__fe2o3_ir_float_v1_f32_to_f16_rne" => {
-                convert(FloatConversionKind::F32ToF16RoundTiesEven)
-            }
-            "__fe2o3_ir_float_v1_bf16_to_f32" => convert(FloatConversionKind::Bf16ToF32),
-            "__fe2o3_ir_float_v1_f32_to_bf16_rne" => {
-                convert(FloatConversionKind::F32ToBf16RoundTiesEven)
-            }
-            "__fe2o3_ir_float_v1_f16_add_widened_rne" => {
-                binary(NarrowFloatFormat::F16, WidenedFloatBinaryOp::Add)
-            }
-            "__fe2o3_ir_float_v1_f16_sub_widened_rne" => {
-                binary(NarrowFloatFormat::F16, WidenedFloatBinaryOp::Subtract)
-            }
-            "__fe2o3_ir_float_v1_f16_mul_widened_rne" => {
-                binary(NarrowFloatFormat::F16, WidenedFloatBinaryOp::Multiply)
-            }
-            "__fe2o3_ir_float_v1_f16_div_widened_rne" => {
-                binary(NarrowFloatFormat::F16, WidenedFloatBinaryOp::Divide)
-            }
-            "__fe2o3_ir_float_v1_bf16_add_widened_rne" => {
-                binary(NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Add)
-            }
-            "__fe2o3_ir_float_v1_bf16_sub_widened_rne" => {
-                binary(NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Subtract)
-            }
-            "__fe2o3_ir_float_v1_bf16_mul_widened_rne" => {
-                binary(NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Multiply)
-            }
-            "__fe2o3_ir_float_v1_bf16_div_widened_rne" => {
-                binary(NarrowFloatFormat::Bf16, WidenedFloatBinaryOp::Divide)
-            }
-            "__fe2o3_ir_float_v1_sqrt_f32" => math(F32MathFunction::Sqrt),
-            "__fe2o3_ir_float_v1_fma_f32" => math(F32MathFunction::FusedMultiplyAdd),
-            "__fe2o3_ir_float_v1_floor_f32" => math(F32MathFunction::Floor),
-            "__fe2o3_ir_float_v1_ceil_f32" => math(F32MathFunction::Ceil),
-            "__fe2o3_ir_float_v1_trunc_f32" => math(F32MathFunction::Truncate),
-            "__fe2o3_ir_float_v1_roundeven_f32" => math(F32MathFunction::RoundTiesEven),
-            "__fe2o3_ir_float_v1_sin_f32" => math(F32MathFunction::Sin),
-            "__fe2o3_ir_float_v1_cos_f32" => math(F32MathFunction::Cos),
-            "__fe2o3_ir_float_v1_exp_f32" => math(F32MathFunction::Exp),
-            "__fe2o3_ir_float_v1_exp2_f32" => math(F32MathFunction::Exp2),
-            "__fe2o3_ir_float_v1_log_f32" => math(F32MathFunction::Ln),
-            "__fe2o3_ir_float_v1_log2_f32" => math(F32MathFunction::Log2),
-            "__fe2o3_ir_float_v1_log10_f32" => math(F32MathFunction::Log10),
-            "__fe2o3_ir_float_v1_fabs_f32" => math(F32MathFunction::Abs),
-            "__fe2o3_ir_float_v1_fma_bf16x2" => Self::Bf16x2FusedMultiplyAdd {
-                value: values[0],
-                multiplier: values[1],
-                addend: values[2],
-            },
-            _ => return None,
-        })
-    }
-}
+include!("ir_float_operations_v1.rs");
 
 /// A target-neutral GPU intrinsic recognized by the core kernel IR.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -2055,8 +1674,4 @@ impl MemoryEffectSummary {
     pub fn effects(&self) -> &BTreeSet<MemoryEffect> {
         &self.effects
     }
-}
-
-pub(crate) fn pointer_for(pointee: Type, address_space: AddressSpace, access: AccessMode) -> Type {
-    Type::pointer(pointee, address_space, access)
 }

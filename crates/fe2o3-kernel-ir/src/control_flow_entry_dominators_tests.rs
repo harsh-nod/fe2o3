@@ -205,7 +205,14 @@ fn entry_fan_in_has_exact_legacy_idom_work_and_one_under_limit() {
                 &reachable,
                 &reverse_postorder,
                 &mut meter,
-            );
+                &mut ControlFlowResourcesV1 { budget: None },
+            )
+            .map_err(|error| match error {
+                MeteredControlFlowErrorV1::ControlFlow(error) => error,
+                MeteredControlFlowErrorV1::Resource(error) => {
+                    panic!("unexpected resource error: {error:?}")
+                }
+            });
             assert_eq!(meter.work.dominator_climbs, 0);
             if limit < exact_work {
                 assert_eq!(result, Err(work_error(limit, limit + 1)));
@@ -235,8 +242,19 @@ fn entry_reached_after_intersection_stops_before_later_predecessors() {
     // then climbs from both join arms to entry: 2 * (6 + 2) = 16 units.
     for limit in [16, 15] {
         let mut meter = WorkMeter::new(limit);
-        let result =
-            compute_immediate_dominators(&predecessors, &reachable, &reverse_postorder, &mut meter);
+        let result = compute_immediate_dominators(
+            &predecessors,
+            &reachable,
+            &reverse_postorder,
+            &mut meter,
+            &mut ControlFlowResourcesV1 { budget: None },
+        )
+        .map_err(|error| match error {
+            MeteredControlFlowErrorV1::ControlFlow(error) => error,
+            MeteredControlFlowErrorV1::Resource(error) => {
+                panic!("unexpected resource error: {error:?}")
+            }
+        });
         assert_eq!(meter.work.dominator_predecessor_visits, 12);
         assert_eq!(meter.work.dominator_climbs, 4);
         assert_eq!(meter.work.total, 16);

@@ -167,6 +167,10 @@ pub enum EffectExtractionIssue {
     InlineAssemblyEffectsUnavailable {
         location: FunctionOperationLocation,
     },
+    /// The byte-region report cannot represent this operation's compiler order.
+    CompilerOrderingEffectsUnavailable {
+        location: FunctionOperationLocation,
+    },
 }
 
 /// Describes the non-authoritative facts on which this report is based.
@@ -316,6 +320,10 @@ pub fn extract_function_region_effects(
                     .push(EffectExtractionIssue::InlineAssemblyEffectsUnavailable { location });
             }
 
+            if !operation.compiler_ordering_effects_v12().is_empty() {
+                extraction_issues
+                    .push(EffectExtractionIssue::CompilerOrderingEffectsUnavailable { location });
+            }
             let Some(memory_operation) = MemoryOperation::from_ir(operation, &value_types) else {
                 continue;
             };
@@ -428,6 +436,18 @@ impl MemoryOperation {
                 pointer: *pointer,
                 access: *access,
                 access_width: value_types.get(*value).and_then(byte_width),
+                kind: RegionEffectKind::Write,
+            }),
+            OperationKind::VectorLoad(load) => Some(Self {
+                pointer: load.provenance.pointer(),
+                access: load.access.memory,
+                access_width: load.access.vector.byte_width().map(u64::from),
+                kind: RegionEffectKind::Read,
+            }),
+            OperationKind::VectorStore(store) => Some(Self {
+                pointer: store.provenance.pointer(),
+                access: store.access.memory,
+                access_width: store.access.vector.byte_width().map(u64::from),
                 kind: RegionEffectKind::Write,
             }),
             OperationKind::Atomic(atomic) => {

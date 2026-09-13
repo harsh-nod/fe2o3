@@ -1,5 +1,20 @@
+use super::definition_borrow_tests::with_verifier;
 use super::*;
-use crate::{Signature, ValueDef, WaveWidth};
+use crate::{
+    AccessMode, BasicBlock, Operation, OperationKind, Signature, Terminator, ValueDef, ValueId,
+    WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent,
+};
+
+fn empty_function() -> Function {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    Function::definition(
+        "borrowed_target_function",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    )
+}
 
 #[test]
 fn caller_roster_is_borrowed_while_validating_requirements() {
@@ -12,18 +27,14 @@ fn caller_roster_is_borrowed_while_validating_requirements() {
     ]);
     let mut module = Module::new("borrowed_target");
     module.required_capabilities = supported.clone();
-    let mut verifier = ModuleVerifier {
-        module: &module,
-        diagnostics: Vec::new(),
-        functions: BTreeMap::new(),
-        supported_capabilities: Some(&supported),
-    };
-    verifier.verify();
-    assert!(verifier.diagnostics.is_empty());
-    assert!(std::ptr::eq(
-        verifier.supported_capabilities.unwrap(),
-        &supported
-    ));
+    module.functions.push(empty_function());
+    let diagnostics = with_verifier(&module, Some(&supported), 0, |verifier| {
+        assert!(std::ptr::eq(
+            verifier.supported_capabilities.unwrap(),
+            &supported
+        ));
+    });
+    assert!(diagnostics.is_empty());
     verify_module_with_capabilities(&module, &supported).unwrap();
 }
 
@@ -77,18 +88,17 @@ fn malformed_target_diagnostics_precede_unsupported_requirements() {
         code,
         message: message.to_owned(),
     });
-    let mut verifier = ModuleVerifier {
-        module: &module,
-        diagnostics: Vec::new(),
-        functions: BTreeMap::new(),
-        supported_capabilities: Some(&supported),
-    };
-    verifier.verify();
-    assert_eq!(verifier.diagnostics.as_slice(), &expected);
-    assert!(std::ptr::eq(
-        verifier.supported_capabilities.unwrap(),
-        &supported
-    ));
+    // The shared engine stores no ModuleVerifier capability clone. Its
+    // function pass borrows the same roster; the complete module report
+    // below retains every exact diagnostic and canonical ordering check.
+    module.functions.push(empty_function());
+    let diagnostics = with_verifier(&module, Some(&supported), 0, |verifier| {
+        assert!(std::ptr::eq(
+            verifier.supported_capabilities.unwrap(),
+            &supported
+        ));
+    });
+    assert!(diagnostics.is_empty());
 
     // Public diagnostics sort by code and message within the same location.
     let sorted = [1, 0, 4, 3, 2, 5, 6].map(|index| expected[index].clone());
@@ -106,7 +116,7 @@ fn absent_and_empty_targets_keep_all_requirement_checks() {
     block.operations.push(Operation::effect_free(
         ValueDef::new(
             ValueId(7),
-            pointer_for(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite),
+            Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite),
         ),
         OperationKind::WorkgroupMemory(WorkgroupMemory {
             element: Type::F32,

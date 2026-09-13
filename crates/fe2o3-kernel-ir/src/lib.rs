@@ -20,9 +20,10 @@
 //! [`encode_module_v9`] adds gfx950 collectives and LDS transpose operations;
 //! [`encode_module_v10`] adds exact typed memory intrinsics without changing V1-V9;
 //! [`encode_module_v11`] adds one-way pointer access restriction casts without changing V1-V10.
-//! [`encode_module_v12`] adds inert vector and ordered verification-contract
-//! carriers. These carriers round-trip but are not yet admitted by semantic
-//! verification, optimization, simulation, or production lowering.
+//! [`encode_module_v12`] adds fixed vectors and ordered verification-contract
+//! events. Semantic verification checks their local types and operands; it does
+//! not authenticate contract keys or grant execution or proof authority.
+//! Target lowering, optimization and simulation require their own support.
 //! Decoding establishes wire well-formedness only.
 //! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V12
 //! reconstruct kernel-entry and import roles from their legacy records; they
@@ -55,11 +56,13 @@
 
 mod canonical_kir_v10;
 mod canonical_kir_v11;
+mod canonical_kir_v12;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
 mod canonical_kir_v8;
 mod canonical_kir_v9;
+mod canonical_work_budget_v1;
 mod control_flow;
 mod debug_source_map_v1;
 mod debug_source_map_v2;
@@ -72,6 +75,7 @@ mod ir;
 #[path = "launch_kernel_v2.rs"]
 mod launch_kernel_contract_v2;
 mod matrix;
+mod operation_capability_visitation_v1;
 mod production_semantic_debug_fragment_v1;
 mod region_effects;
 pub mod scalar_ops_v2;
@@ -88,7 +92,24 @@ mod standard_atomics;
 mod terminator_operands_v1;
 mod types;
 mod vector_v12;
+mod verification_borrowed_v1;
 mod verification_contract_v12;
+mod verification_diagnostics_v1;
+mod verification_engine_v1;
+mod verification_function_pass_v1;
+mod verification_function_state_v1;
+mod verification_index_v1;
+mod verification_inline_assembly_v1;
+mod verification_legacy_operation_v1;
+mod verification_memory_operation_v1;
+mod verification_module_state_v1;
+mod verification_public_preflight_v1;
+mod verification_registered_operation_v1;
+mod verification_reserved_call_v1;
+mod verification_resource_v1;
+mod verification_terminator_v1;
+mod verification_type_comparison_v1;
+mod verification_wave_operation_v1;
 mod verify;
 mod wave_operations;
 mod wire;
@@ -100,6 +121,8 @@ pub use canonical_kir_v8::*;
 pub use canonical_kir_v9::*;
 pub use canonical_kir_v10::*;
 pub use canonical_kir_v11::*;
+pub use canonical_kir_v12::*;
+pub use canonical_work_budget_v1::*;
 pub use control_flow::*;
 pub use debug_source_map_v1::*;
 pub use debug_source_map_v2::*;
@@ -127,6 +150,7 @@ pub use launch_kernel_contract_v2::{
     canonical_occupancy_subject_identity_v2, canonical_variant_tuple_identity_v2,
 };
 pub use matrix::*;
+pub(crate) use operation_capability_visitation_v1::*;
 pub use production_semantic_debug_fragment_v1::*;
 pub use region_effects::*;
 pub use semantic_debug_map_v1::*;
@@ -141,7 +165,19 @@ pub use simulation_bundle_v6::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use vector_v12::*;
+pub use verification_borrowed_v1::*;
 pub use verification_contract_v12::*;
+pub(crate) use verification_diagnostics_v1::*;
+pub(crate) use verification_engine_v1::*;
+pub(crate) use verification_function_pass_v1::*;
+pub(crate) use verification_function_state_v1::*;
+pub(crate) use verification_index_v1::*;
+pub(crate) use verification_module_state_v1::*;
+pub(crate) use verification_public_preflight_v1::*;
+pub(crate) use verification_registered_operation_v1::*;
+pub(crate) use verification_reserved_call_v1::*;
+pub use verification_resource_v1::*;
+pub(crate) use verification_type_comparison_v1::*;
 pub use verify::*;
 pub use wave_operations::*;
 pub use wire::*;

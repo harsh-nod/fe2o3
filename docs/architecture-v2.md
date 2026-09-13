@@ -708,6 +708,14 @@ Rust language operations lower from `mir.*` to ordinary target-neutral ops.
 Device APIs lower to `gpu.*` ops. Target backends then legalize only the
 capabilities supported by the selected device.
 
+Kernel IR's public and canonical V12 admission share one semantic verifier.
+V12 vectors and ordered verification events can be structurally valid without
+being admitted by the production graph, optimizer, simulator, or target
+backend. The [V12 verification contract](kernel-ir-v12-verification.md) records
+the exact consumer boundaries, resource-budget exclusions, and String-backed
+borrowed-location/owned-diagnostic architecture. This is not formal compiler
+verification or completed production V12 migration.
+
 ### IR framework
 
 The target architecture uses Pliron because the pinned cuda-oxide

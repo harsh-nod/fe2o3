@@ -12,7 +12,24 @@ use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Axis, IndexKind, IntrinsicKind, IntrinsicOperation, MemoryEffect,
-    ScalarType, TargetCapability, Type, ValueDef, ValueId,
+    OperationKind, ScalarType, TargetCapability, Type, ValueDef, ValueId,
+};
+
+#[path = "semantic_operations/verification_sink_01.rs"]
+mod verification_sink_01;
+use verification_sink_01::{
+    LegacySemanticOperationIssueSinkV1, SEMANTIC_FIXED_MESSAGE_WORK_UPPER_V1,
+    SemanticOperandTypeViewV1, emit_semantic_fixed_v1, semantic_type_message_work_upper_v1,
+    semantic_types_equal_v1, try_verify_intrinsic_additional_with_sink_v1,
+    try_verify_intrinsic_legacy_with_sink_v1, try_verify_memory_intrinsic_legacy_with_sink_v1,
+};
+pub(crate) use verification_sink_01::{
+    SemanticOperationBorrowedVerificationContextV1, SemanticOperationIssueSinkV1,
+    try_verify_semantic_operation_with_sink_v1,
+};
+#[cfg(test)]
+use verification_sink_01::{
+    try_verify_intrinsic_with_sink_v1, try_verify_memory_intrinsic_with_sink_v1,
 };
 
 pub const SEMANTIC_OPERATION_SCHEMA_MAGIC_V1: [u8; 8] = *b"FE2O3SO\0";
@@ -849,6 +866,35 @@ pub fn encode_semantic_operation_instance_id(id: SemanticOperationInstanceId) ->
     bytes.extend_from_slice(&0_u32.to_le_bytes());
     bytes.extend_from_slice(&payload);
     bytes
+}
+
+pub(crate) const fn semantic_operation_instance_encoded_len_v1(
+    id: SemanticOperationInstanceId,
+) -> usize {
+    let payload = match id.payload {
+        SemanticOperationInstancePayloadV1::PointerDistance { .. } => 9 + 12,
+        SemanticOperationInstancePayloadV1::VolatileLoad { .. }
+        | SemanticOperationInstancePayloadV1::VolatileStore { .. } => 7 + 12,
+        SemanticOperationInstancePayloadV1::CopyNonOverlapping { .. } => 10 + 12,
+        SemanticOperationInstancePayloadV1::LaunchInvocationIndex { .. } => 2,
+        SemanticOperationInstancePayloadV1::LaunchExtent { .. } => 1,
+    };
+    SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1 + payload
+}
+
+pub(crate) const fn semantic_operation_instance_encoding_work_v1(
+    id: SemanticOperationInstanceId,
+) -> usize {
+    semantic_operation_instance_encoding_scratch_bytes_v1(id)
+}
+
+pub(crate) const fn semantic_operation_instance_encoding_scratch_bytes_v1(
+    id: SemanticOperationInstanceId,
+) -> usize {
+    // The payload and its framed encoding coexist until the encoder returns.
+    let encoded = semantic_operation_instance_encoded_len_v1(id);
+    let payload = encoded - SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1;
+    payload + encoded
 }
 
 fn encode_memory_payload(tags: &[u8], layout: MemoryLayout) -> Vec<u8> {
@@ -1825,25 +1871,7 @@ pub enum MemoryIntrinsicOperation {
 }
 
 impl MemoryIntrinsicOperation {
-    pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            Self::PointerDistance {
-                pointer, origin, ..
-            } => vec![*pointer, *origin],
-            Self::VolatileLoad { pointer, .. } => vec![*pointer],
-            Self::VolatileStore { pointer, value, .. } => vec![*pointer, *value],
-            Self::CopyNonOverlapping {
-                source,
-                destination,
-                count,
-                ..
-            } => vec![*source, *destination, *count],
-        }
-    }
-}
-
-impl SemanticOperation for MemoryIntrinsicOperation {
-    fn contract(&self) -> SemanticOperationContract {
+    pub(crate) const fn semantic_instance_id_v1(&self) -> SemanticOperationInstanceId {
         match *self {
             Self::PointerDistance {
                 kind,
@@ -1853,15 +1881,100 @@ impl SemanticOperation for MemoryIntrinsicOperation {
                 layout,
                 contract,
                 ..
-            } => SemanticOperationContract::new(
-                SemanticOperationInstanceId::pointer_distance(
-                    kind,
-                    unit,
-                    element,
-                    address_space,
-                    layout,
-                    contract,
-                ),
+            } => SemanticOperationInstanceId::pointer_distance(
+                kind,
+                unit,
+                element,
+                address_space,
+                layout,
+                contract,
+            ),
+            Self::VolatileLoad {
+                element,
+                address_space,
+                layout,
+                contract,
+                ..
+            } => {
+                SemanticOperationInstanceId::volatile_load(element, address_space, layout, contract)
+            }
+            Self::VolatileStore {
+                element,
+                address_space,
+                layout,
+                contract,
+                ..
+            } => SemanticOperationInstanceId::volatile_store(
+                element,
+                address_space,
+                layout,
+                contract,
+            ),
+            Self::CopyNonOverlapping {
+                element,
+                source_address_space,
+                destination_address_space,
+                layout,
+                contract,
+                ..
+            } => SemanticOperationInstanceId::copy_nonoverlapping(
+                element,
+                source_address_space,
+                destination_address_space,
+                layout,
+                contract,
+            ),
+        }
+    }
+
+    pub(crate) fn try_visit_operands_v1<E>(
+        &self,
+        mut visitor: impl FnMut(ValueId) -> Result<(), E>,
+    ) -> Result<(), E> {
+        match *self {
+            Self::PointerDistance {
+                pointer, origin, ..
+            } => {
+                visitor(pointer)?;
+                visitor(origin)?;
+            }
+            Self::VolatileLoad { pointer, .. } => visitor(pointer)?,
+            Self::VolatileStore { pointer, value, .. } => {
+                visitor(pointer)?;
+                visitor(value)?;
+            }
+            Self::CopyNonOverlapping {
+                source,
+                destination,
+                count,
+                ..
+            } => {
+                visitor(source)?;
+                visitor(destination)?;
+                visitor(count)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn operands(&self) -> Vec<ValueId> {
+        let mut operands = Vec::new();
+        if let Err(infallible) = self.try_visit_operands_v1(|operand| {
+            operands.push(operand);
+            Ok::<_, std::convert::Infallible>(())
+        }) {
+            match infallible {}
+        }
+        operands
+    }
+}
+
+impl SemanticOperation for MemoryIntrinsicOperation {
+    fn contract(&self) -> SemanticOperationContract {
+        let instance_id = self.semantic_instance_id_v1();
+        match *self {
+            Self::PointerDistance { kind, .. } => SemanticOperationContract::new(
+                instance_id,
                 2,
                 vec![match kind {
                     PointerDistanceKind::Signed => Type::Scalar(ScalarType::I64),
@@ -1873,16 +1986,9 @@ impl SemanticOperation for MemoryIntrinsicOperation {
             Self::VolatileLoad {
                 element,
                 address_space,
-                layout,
-                contract,
                 ..
             } => SemanticOperationContract::new(
-                SemanticOperationInstanceId::volatile_load(
-                    element,
-                    address_space,
-                    layout,
-                    contract,
-                ),
+                instance_id,
                 1,
                 if element == MemoryElementType::Unit {
                     Vec::new()
@@ -1899,16 +2005,9 @@ impl SemanticOperation for MemoryIntrinsicOperation {
             Self::VolatileStore {
                 element,
                 address_space,
-                layout,
-                contract,
                 ..
             } => SemanticOperationContract::new(
-                SemanticOperationInstanceId::volatile_store(
-                    element,
-                    address_space,
-                    layout,
-                    contract,
-                ),
+                instance_id,
                 2,
                 Vec::new(),
                 if element == MemoryElementType::Unit {
@@ -1919,20 +2018,11 @@ impl SemanticOperation for MemoryIntrinsicOperation {
                 BTreeSet::new(),
             ),
             Self::CopyNonOverlapping {
-                element,
                 source_address_space,
                 destination_address_space,
-                layout,
-                contract,
                 ..
             } => SemanticOperationContract::new(
-                SemanticOperationInstanceId::copy_nonoverlapping(
-                    element,
-                    source_address_space,
-                    destination_address_space,
-                    layout,
-                    contract,
-                ),
+                instance_id,
                 3,
                 Vec::new(),
                 vec![
@@ -1949,157 +2039,211 @@ impl SemanticOperation for MemoryIntrinsicOperation {
         context: SemanticOperationVerificationContext<'_>,
         issues: &mut Vec<SemanticOperationIssue>,
     ) {
-        match *self {
-            Self::PointerDistance {
-                kind,
-                unit,
-                element,
-                address_space,
-                layout,
-                contract,
-                ..
-            } => {
-                verify_layout(element, layout, issues);
-                if unit == PointerDistanceUnit::Elements && layout.size_bytes == 0 {
-                    invalid_structure(
-                        issues,
-                        "element pointer distance rejects zero-sized pointees",
-                    );
-                }
-                if contract != PointerDistanceContract::supported_rust(kind) {
-                    invalid_structure(
-                        issues,
-                        "pointer distance requires equal-address or same-allocation provenance, differing-address in-bounds-or-one-past range, exact unit divisibility, isize fit, and kind-specific ordering obligations",
-                    );
-                }
-                verify_pointer_operand(
-                    context.operand_types.first(),
-                    element,
-                    address_space,
-                    false,
-                    issues,
-                );
-                verify_pointer_operand(
-                    context.operand_types.get(1),
-                    element,
-                    address_space,
-                    false,
-                    issues,
-                );
-            }
-            Self::VolatileLoad {
-                element,
-                address_space,
-                layout,
-                contract,
-                ..
-            } => {
-                verify_layout(element, layout, issues);
-                if !contract.matches_supported_load(element, address_space) {
-                    invalid_structure(
-                        issues,
-                        "volatile load requires either an aligned ZST no-access contract or a positive-sized Rust-allocation/external-MMIO readable initialized-element, aligned, nontrapping contract with external side-effect isolation",
-                    );
-                }
-                verify_pointer_operand(
-                    context.operand_types.first(),
-                    element,
-                    address_space,
-                    false,
-                    issues,
-                );
-            }
-            Self::VolatileStore {
-                element,
-                address_space,
-                layout,
-                contract,
-                ..
-            } => {
-                verify_layout(element, layout, issues);
-                if !contract.matches_supported_store(element, address_space) {
-                    invalid_structure(
-                        issues,
-                        "volatile store requires either an aligned ZST no-access contract or a positive-sized Rust-allocation/external-MMIO writable-element, aligned, nontrapping contract with external side-effect isolation",
-                    );
-                }
-                verify_pointer_operand(
-                    context.operand_types.first(),
-                    element,
-                    address_space,
-                    true,
-                    issues,
-                );
-                verify_value_operand(context.operand_types.get(1), element.ir_type(), issues);
-            }
-            Self::CopyNonOverlapping {
-                element,
-                source_address_space,
-                destination_address_space,
-                layout,
-                contract,
-                ..
-            } => {
-                verify_layout(element, layout, issues);
-                if contract != CopyNonOverlappingContract::supported_rust() {
-                    invalid_structure(
-                        issues,
-                        "copy_nonoverlapping requires alignment even at zero bytes, positive-byte range and non-overlap obligations, checked usize scaling, and signed in-allocation address bounds",
-                    );
-                }
-                verify_pointer_operand(
-                    context.operand_types.first(),
-                    element,
-                    source_address_space,
-                    false,
-                    issues,
-                );
-                verify_pointer_operand(
-                    context.operand_types.get(1),
-                    element,
-                    destination_address_space,
-                    true,
-                    issues,
-                );
-                verify_value_operand(context.operand_types.get(2), Type::INDEX, issues);
-            }
+        let mut sink = LegacySemanticOperationIssueSinkV1 { issues };
+        if let Err(infallible) = try_verify_memory_intrinsic_additional_with_sink_v1(
+            self,
+            context.operand_types,
+            &mut sink,
+        ) {
+            match infallible {}
         }
+    }
+
+    fn verify(
+        &self,
+        context: SemanticOperationVerificationContext<'_>,
+    ) -> Vec<SemanticOperationIssue> {
+        let mut issues = Vec::new();
+        let mut sink = LegacySemanticOperationIssueSinkV1 {
+            issues: &mut issues,
+        };
+        if let Err(infallible) =
+            try_verify_memory_intrinsic_legacy_with_sink_v1(self, context, &mut sink)
+        {
+            match infallible {}
+        }
+        issues
     }
 }
 
-fn verify_layout(
+fn try_verify_memory_intrinsic_additional_with_sink_v1<
+    T: SemanticOperandTypeViewV1 + ?Sized,
+    S: SemanticOperationIssueSinkV1,
+>(
+    operation: &MemoryIntrinsicOperation,
+    operand_types: &T,
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
+    match *operation {
+        MemoryIntrinsicOperation::PointerDistance {
+            kind,
+            unit,
+            element,
+            address_space,
+            layout,
+            contract,
+            ..
+        } => {
+            verify_layout_with_sink_v1(element, layout, sink)?;
+            sink.charge_work(1)?;
+            if unit == PointerDistanceUnit::Elements && layout.size_bytes == 0 {
+                emit_semantic_fixed_v1(
+                    sink,
+                    SemanticOperationIssueKind::InvalidStructure,
+                    "element pointer distance rejects zero-sized pointees",
+                )?;
+            }
+            sink.charge_work(1)?;
+            if contract != PointerDistanceContract::supported_rust(kind) {
+                emit_semantic_fixed_v1(
+                    sink,
+                    SemanticOperationIssueKind::InvalidStructure,
+                    "pointer distance requires equal-address or same-allocation provenance, differing-address in-bounds-or-one-past range, exact unit divisibility, isize fit, and kind-specific ordering obligations",
+                )?;
+            }
+            verify_pointer_operand_with_sink_v1(
+                operand_types.get_type(0),
+                element,
+                address_space,
+                false,
+                sink,
+            )?;
+            verify_pointer_operand_with_sink_v1(
+                operand_types.get_type(1),
+                element,
+                address_space,
+                false,
+                sink,
+            )?;
+        }
+        MemoryIntrinsicOperation::VolatileLoad {
+            element,
+            address_space,
+            layout,
+            contract,
+            ..
+        } => {
+            verify_layout_with_sink_v1(element, layout, sink)?;
+            sink.charge_work(1)?;
+            if !contract.matches_supported_load(element, address_space) {
+                emit_semantic_fixed_v1(
+                    sink,
+                    SemanticOperationIssueKind::InvalidStructure,
+                    "volatile load requires either an aligned ZST no-access contract or a positive-sized Rust-allocation/external-MMIO readable initialized-element, aligned, nontrapping contract with external side-effect isolation",
+                )?;
+            }
+            verify_pointer_operand_with_sink_v1(
+                operand_types.get_type(0),
+                element,
+                address_space,
+                false,
+                sink,
+            )?;
+        }
+        MemoryIntrinsicOperation::VolatileStore {
+            element,
+            address_space,
+            layout,
+            contract,
+            ..
+        } => {
+            verify_layout_with_sink_v1(element, layout, sink)?;
+            sink.charge_work(1)?;
+            if !contract.matches_supported_store(element, address_space) {
+                emit_semantic_fixed_v1(
+                    sink,
+                    SemanticOperationIssueKind::InvalidStructure,
+                    "volatile store requires either an aligned ZST no-access contract or a positive-sized Rust-allocation/external-MMIO writable-element, aligned, nontrapping contract with external side-effect isolation",
+                )?;
+            }
+            verify_pointer_operand_with_sink_v1(
+                operand_types.get_type(0),
+                element,
+                address_space,
+                true,
+                sink,
+            )?;
+            verify_value_operand_with_sink_v1(operand_types.get_type(1), &element.ir_type(), sink)?;
+        }
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            element,
+            source_address_space,
+            destination_address_space,
+            layout,
+            contract,
+            ..
+        } => {
+            verify_layout_with_sink_v1(element, layout, sink)?;
+            sink.charge_work(1)?;
+            if contract != CopyNonOverlappingContract::supported_rust() {
+                emit_semantic_fixed_v1(
+                    sink,
+                    SemanticOperationIssueKind::InvalidStructure,
+                    "copy_nonoverlapping requires alignment even at zero bytes, positive-byte range and non-overlap obligations, checked usize scaling, and signed in-allocation address bounds",
+                )?;
+            }
+            verify_pointer_operand_with_sink_v1(
+                operand_types.get_type(0),
+                element,
+                source_address_space,
+                false,
+                sink,
+            )?;
+            verify_pointer_operand_with_sink_v1(
+                operand_types.get_type(1),
+                element,
+                destination_address_space,
+                true,
+                sink,
+            )?;
+            verify_value_operand_with_sink_v1(operand_types.get_type(2), &Type::INDEX, sink)?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_layout_with_sink_v1<S: SemanticOperationIssueSinkV1>(
     element: MemoryElementType,
     layout: MemoryLayout,
-    issues: &mut Vec<SemanticOperationIssue>,
-) {
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     if layout != element.expected_layout() {
-        invalid_structure(
-            issues,
-            format!(
+        sink.emit(
+            SemanticOperationIssueKind::InvalidStructure,
+            SEMANTIC_FIXED_MESSAGE_WORK_UPPER_V1,
+            format_args!(
                 "memory layout {layout:?} does not match the closed {element:?} layout {:?}",
                 element.expected_layout()
             ),
-        );
+        )?;
     }
+    Ok(())
 }
 
-fn verify_pointer_operand(
-    actual: Option<&Option<Type>>,
+fn verify_pointer_operand_with_sink_v1<S: SemanticOperationIssueSinkV1>(
+    actual: Option<Option<&Type>>,
     element: MemoryElementType,
     address_space: AddressSpace,
     writable: bool,
-    issues: &mut Vec<SemanticOperationIssue>,
-) {
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     let Some(Some(Type::Pointer(pointer))) = actual else {
         if !matches!(actual, Some(None)) {
-            issues.push(SemanticOperationIssue::new(
+            emit_semantic_fixed_v1(
+                sink,
                 SemanticOperationIssueKind::InvalidOperandType,
                 "memory intrinsic requires a pointer operand",
-            ));
+            )?;
         }
-        return;
+        return Ok(());
     };
-    if pointer.pointee.as_ref() != &element.ir_type()
+    let expected = element.ir_type();
+    let pointee_matches = semantic_types_equal_v1(pointer.pointee.as_ref(), &expected, sink)?;
+    sink.charge_work(3)?;
+    if !pointee_matches
         || pointer.address_space != address_space
         || (writable
             && !matches!(
@@ -2108,35 +2252,38 @@ fn verify_pointer_operand(
             ))
         || (!writable && !matches!(pointer.access, AccessMode::ReadOnly | AccessMode::ReadWrite))
     {
-        issues.push(SemanticOperationIssue::new(
+        let pointer_upper = semantic_type_message_work_upper_v1(pointer.pointee.as_ref(), sink)?;
+        sink.emit(
             SemanticOperationIssueKind::InvalidOperandType,
-            format!(
+            SEMANTIC_FIXED_MESSAGE_WORK_UPPER_V1.saturating_add(pointer_upper),
+            format_args!(
                 "pointer operand {pointer:?} does not match element {element:?}, address space {address_space:?}, writable {writable}"
             ),
-        ));
+        )?;
     }
+    Ok(())
 }
 
-fn verify_value_operand(
-    actual: Option<&Option<Type>>,
-    expected: Type,
-    issues: &mut Vec<SemanticOperationIssue>,
-) {
+fn verify_value_operand_with_sink_v1<S: SemanticOperationIssueSinkV1>(
+    actual: Option<Option<&Type>>,
+    expected: &Type,
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     if let Some(Some(actual)) = actual
-        && actual != &expected
+        && !semantic_types_equal_v1(actual, expected, sink)?
     {
-        issues.push(SemanticOperationIssue::new(
+        let actual_upper = semantic_type_message_work_upper_v1(actual, sink)?;
+        let expected_upper = semantic_type_message_work_upper_v1(expected, sink)?;
+        sink.emit(
             SemanticOperationIssueKind::InvalidOperandType,
-            format!("memory intrinsic operand has type {actual:?}, expected {expected:?}"),
-        ));
+            SEMANTIC_FIXED_MESSAGE_WORK_UPPER_V1
+                .saturating_add(actual_upper)
+                .saturating_add(expected_upper),
+            format_args!("memory intrinsic operand has type {actual:?}, expected {expected:?}"),
+        )?;
     }
-}
-
-fn invalid_structure(issues: &mut Vec<SemanticOperationIssue>, message: impl Into<String>) {
-    issues.push(SemanticOperationIssue::new(
-        SemanticOperationIssueKind::InvalidStructure,
-        message,
-    ));
+    Ok(())
 }
 
 impl SemanticOperation for IntrinsicOperation {
@@ -2164,15 +2311,28 @@ impl SemanticOperation for IntrinsicOperation {
         _context: SemanticOperationVerificationContext<'_>,
         issues: &mut Vec<SemanticOperationIssue>,
     ) {
-        let expected = self.metadata().result_type;
-        if self.result_type != expected {
-            issues.push(SemanticOperationIssue::new(
-                SemanticOperationIssueKind::TypeMismatch,
-                format!(
-                    "intrinsic declares result type {:?}, expected {:?}",
-                    self.result_type, expected
-                ),
-            ));
+        let mut sink = LegacySemanticOperationIssueSinkV1 { issues };
+        if let Err(infallible) = try_verify_intrinsic_additional_with_sink_v1(self, &mut sink) {
+            match infallible {}
         }
     }
+
+    fn verify(
+        &self,
+        context: SemanticOperationVerificationContext<'_>,
+    ) -> Vec<SemanticOperationIssue> {
+        let mut issues = Vec::new();
+        let mut sink = LegacySemanticOperationIssueSinkV1 {
+            issues: &mut issues,
+        };
+        if let Err(infallible) = try_verify_intrinsic_legacy_with_sink_v1(self, context, &mut sink)
+        {
+            match infallible {}
+        }
+        issues
+    }
 }
+
+#[cfg(test)]
+#[path = "semantic_operations/verification_sink_01_tests.rs"]
+mod verification_sink_01_tests;

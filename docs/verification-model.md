@@ -38,6 +38,14 @@ The levels are not optimization grades. A kernel cannot become `Verified`
 because tests or a sanitizer passed, and cannot remain `Verified` after a proof
 identity mismatch.
 
+Structural IR verification is a different boundary from these assurance levels.
+The shared Kernel IR verifier and its exact V12 canonical owner check modeled
+IR contracts, including vectors and ordered verification events; their typed
+owners and resource receipts do not grant proof, optimization, load, or launch
+authority. See [Kernel IR V12 verification](kernel-ir-v12-verification.md) for
+the shared engine, resource exclusions, diagnostic ownership, and unsupported
+downstream consumers.
+
 ## Current Production Evidence Boundary
 
 The production compiler retains one exact aggregate Verus execution for the

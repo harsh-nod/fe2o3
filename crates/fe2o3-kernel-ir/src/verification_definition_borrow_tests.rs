@@ -1,24 +1,77 @@
 use super::*;
-use crate::{Signature, ValueDef};
+use crate::{
+    AccessMode, BasicBlock, CanonicalKernelIrVerificationResourceBudgetV1,
+    CanonicalKernelIrWorkBudgetV1, Constant, ControlFlowLimits, Operation, OperationKind,
+    Signature, Terminator, ValueDef, ValueId, VerificationDefinitionSiteV1,
+    VerificationDiagnosticCollectorV1, VerificationFunctionPassV1, VerificationFunctionStateV1,
+    VerificationModuleStateV1, analyze_control_flow_with_verification_budget_v1,
+    run_verification_function_pass_v1,
+};
 
-fn with_verifier(module: &Module, check: impl FnOnce(&mut FunctionVerifier<'_, '_>)) {
+pub(super) fn with_verifier(
+    module: &Module,
+    supported: Option<&BTreeSet<TargetCapability>>,
+    extra_diagnostics: usize,
+    check: impl FnOnce(&mut VerificationFunctionPassV1<'_, '_, '_>),
+) -> Vec<Diagnostic> {
     let function = &module.functions[0];
-    let functions = module
-        .functions
-        .iter()
-        .map(|function| (&function.id, function))
-        .collect();
-    let mut diagnostics = Vec::new();
-    let mut verifier = FunctionVerifier::new(
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, usize::MAX);
+    let module_state = VerificationModuleStateV1::build(module, &mut budget).unwrap();
+    let mut count = VerificationDiagnosticCollectorV1::count();
+    run_verification_function_pass_v1(
         module,
         function,
-        &functions,
-        None,
+        &module_state,
+        supported,
+        &mut count,
+        &mut budget,
+    )
+    .unwrap();
+    let expected = count.counted().unwrap() + extra_diagnostics;
+    count.abandon(&mut budget).unwrap();
+    let mut diagnostics =
+        VerificationDiagnosticCollectorV1::materialize(expected, &mut budget).unwrap();
+    run_verification_function_pass_v1(
+        module,
+        function,
+        &module_state,
+        supported,
         &mut diagnostics,
-        analyze_control_flow(function).ok(),
-    );
-    verifier.verify();
-    check(&mut verifier);
+        &mut budget,
+    )
+    .unwrap();
+
+    let function_state = VerificationFunctionStateV1::build(function, &mut budget)
+        .unwrap()
+        .unwrap();
+    let control_flow = analyze_control_flow_with_verification_budget_v1(
+        function,
+        ControlFlowLimits::DEFAULT,
+        &mut budget,
+    )
+    .unwrap();
+    {
+        let mut verifier = VerificationFunctionPassV1 {
+            module,
+            function,
+            module_state: &module_state,
+            function_state: &function_state,
+            supported_capabilities: supported,
+            diagnostics: &mut diagnostics,
+            budget: &mut budget,
+            control_flow: Some(&control_flow),
+            dynamic_workgroup_memory_declarations: 0,
+            gfx950_lds_transpose_current_formats: 0,
+        };
+        check(&mut verifier);
+    }
+    function_state.release(&mut budget).unwrap();
+    control_flow.release(&mut budget).unwrap();
+    module_state.release(&mut budget).unwrap();
+    let diagnostics = diagnostics.finish_materialized(&mut budget).unwrap();
+    assert_eq!(budget.storage(), 0);
+    diagnostics
 }
 
 #[test]
@@ -51,8 +104,7 @@ fn definition_types_borrow_all_three_immutable_owners() {
     ));
     verify_module(&module).unwrap();
 
-    with_verifier(&module, |verifier| {
-        assert!(verifier.diagnostics.is_empty());
+    let diagnostics = with_verifier(&module, None, 0, |verifier| {
         let function = &module.functions[0];
         let block = &function.body.as_ref().unwrap().blocks[1];
         for (value, owner) in [
@@ -60,11 +112,15 @@ fn definition_types_borrow_all_three_immutable_owners() {
             (ValueId(4000), &block.parameters[0].ty),
             (ValueId(8), &block.operations[0].results[0].ty),
         ] {
-            assert!(std::ptr::eq(verifier.ty(value).unwrap(), owner));
+            assert!(std::ptr::eq(
+                verifier.definition_type_v1(value).unwrap().unwrap(),
+                owner,
+            ));
         }
-        assert!(verifier.ty(ValueId(0)).is_none());
-        assert_eq!(verifier.definitions.len(), 3);
+        assert!(verifier.definition_type_v1(ValueId(0)).unwrap().is_none());
+        assert_eq!(verifier.function_state.definition_rows().len(), 3);
     });
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -96,24 +152,37 @@ fn duplicate_definition_keeps_last_type_site_and_diagnostic_order() {
     });
     assert_eq!(verify_module(&module).unwrap_err().diagnostics(), &expected);
 
-    with_verifier(&module, |verifier| {
-        assert_eq!(verifier.diagnostics.as_slice(), &expected);
-        assert_eq!(verifier.definitions.len(), 1);
+    let diagnostics = with_verifier(&module, None, 1, |verifier| {
+        // The shared index retains all duplicate rows, but resolves the same
+        // last definition as main's former one-entry map.
+        let rows = verifier.function_state.definition_rows();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row.key == 7));
+        let definition = verifier
+            .function_state
+            .definition(ValueId(7), verifier.budget)
+            .unwrap()
+            .unwrap();
         assert!(matches!(
-            verifier.definitions[&ValueId(7)].site,
-            DefSite::Operation(BlockId(9), 0)
+            definition.site,
+            VerificationDefinitionSiteV1::Operation(BlockId(9), 0)
         ));
         assert!(std::ptr::eq(
-            verifier.ty(ValueId(7)).unwrap(),
+            definition.ty,
             &module.functions[0].body.as_ref().unwrap().blocks[0].operations[0].results[0].ty
         ));
-        verifier.verify_use(ValueId(7), BlockId(9), Some(0), base.clone());
-        assert_eq!(verifier.diagnostics.len(), 3);
-        assert_eq!(
-            verifier.diagnostics[2].code,
-            DiagnosticCode::NonDominatingUse
-        );
+        verifier
+            .verify_use(ValueId(7), BlockId(9), Some(0), &base.borrowed_v1())
+            .unwrap();
     });
+    let mut expected_use = expected.to_vec();
+    expected_use.push(Diagnostic {
+        location: base,
+        code: DiagnosticCode::NonDominatingUse,
+        message: "definition of %7 does not dominate this use".to_owned(),
+    });
+    expected_use.sort();
+    assert_eq!(diagnostics, expected_use);
 }
 
 #[test]
@@ -135,22 +204,30 @@ fn malformed_parameter_rosters_only_define_the_matched_prefix() {
             errors.diagnostics()[0].code,
             DiagnosticCode::SignatureMismatch
         );
-        with_verifier(&module, |verifier| {
-            assert!(verifier.diagnostics.is_empty());
-            assert_eq!(verifier.definitions.len(), 1);
+        let diagnostics = with_verifier(&module, None, 1, |verifier| {
+            assert_eq!(verifier.function_state.definition_rows().len(), 1);
             assert!(std::ptr::eq(
-                verifier.ty(ValueId(1000)).unwrap(),
+                verifier.definition_type_v1(ValueId(1000)).unwrap().unwrap(),
                 &module.functions[0].signature.parameters[0]
             ));
-            assert!(verifier.ty(ValueId(u32::MAX)).is_none());
-            verifier.verify_use(
-                ValueId(u32::MAX),
-                BlockId(4),
-                None,
-                DiagnosticLocation::function(&module, &module.functions[0]).at_block(BlockId(4)),
+            assert!(
+                verifier
+                    .definition_type_v1(ValueId(u32::MAX))
+                    .unwrap()
+                    .is_none()
             );
-            assert_eq!(verifier.diagnostics.len(), 1);
-            assert_eq!(verifier.diagnostics[0].code, DiagnosticCode::UndefinedValue);
+            verifier
+                .verify_use(
+                    ValueId(u32::MAX),
+                    BlockId(4),
+                    None,
+                    &DiagnosticLocation::function(&module, &module.functions[0])
+                        .at_block(BlockId(4))
+                        .borrowed_v1(),
+                )
+                .unwrap();
         });
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, DiagnosticCode::UndefinedValue);
     }
 }

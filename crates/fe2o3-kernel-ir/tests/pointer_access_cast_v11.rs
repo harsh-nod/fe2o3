@@ -58,6 +58,50 @@ fn pointer_access_cast_requires_v11_and_round_trips_canonically() {
 }
 
 #[test]
+fn mixed_pointer_restriction_shapes_preserve_invalid_cast_diagnostics() {
+    let pointer = Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly);
+    for (from, to) in [(Type::INDEX, pointer.clone()), (pointer, Type::INDEX)] {
+        let mut module = restriction_module();
+        let function = &mut module.functions[0];
+        function.signature.parameters = vec![from.clone()];
+        let operation = &mut function.body.as_mut().unwrap().blocks[0].operations[0];
+        operation.results[0].ty = to.clone();
+        operation.kind = OperationKind::Cast {
+            kind: CastKind::RestrictPointerAccess,
+            value: ValueId(0),
+            to: to.clone(),
+        };
+        let expected = [Diagnostic {
+            location: DiagnosticLocation {
+                module: module.id.clone(),
+                function: Some(module.functions[0].id.clone()),
+                kernel: None,
+                block: Some(BlockId(0)),
+                operation: Some(0),
+            },
+            code: DiagnosticCode::InvalidCast,
+            message: format!("invalid RestrictPointerAccess cast from {from:?} to {to:?}"),
+        }];
+        for result in [
+            verify_module(&module),
+            verify_module_ref(&module).map(|_| ()),
+            verify_module_with_capabilities(&module, &Default::default()),
+        ] {
+            assert_eq!(result.unwrap_err().diagnostics(), &expected);
+        }
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, usize::MAX);
+        let Err(BorrowedKernelIrVerificationErrorV1::Verification(errors)) =
+            verify_module_ref_with_budget_v1(&module, None, &mut budget)
+        else {
+            panic!("expected the same invalid-cast diagnostic");
+        };
+        assert_eq!(errors.diagnostics(), &expected);
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
 fn frozen_v10_reader_rejects_a_forged_pointer_access_cast_tag() {
     let mut encoded = encode_module_v11(&restriction_module()).unwrap();
     encoded[8..10].copy_from_slice(&KERNEL_IR_VERSION_V10.to_le_bytes());

@@ -1,8 +1,21 @@
 use std::collections::BTreeSet;
+use std::fmt;
 
 use crate::{
     AccessMode, AddressSpace, Convergence, MemoryEffect, ScalarType, SynchronizationScope,
-    TargetCapability, Type, ValueDef, ValueId, WaveWidth,
+    TargetCapability, TargetCapabilityRefV1, Type, ValueDef, ValueId, WaveWidth,
+};
+
+#[path = "matrix/tensor_layout_coordinate_verification_01.rs"]
+mod tensor_layout_coordinate_verification_01;
+#[path = "matrix/verification_sink_01.rs"]
+mod verification_sink_01;
+use tensor_layout_coordinate_verification_01::try_verify_tensor_coordinates_with_sink_v1;
+pub(crate) use verification_sink_01::MatrixOperationIssueSinkV1;
+use verification_sink_01::{
+    LegacyMatrixOperationIssueSinkV1, MATRIX_FIXED_MESSAGE_WORK_UPPER_V1, MatrixOperandTypeViewV1,
+    emit_matrix_fixed_v1, matrix_type_message_work_upper_v1, matrix_types_equal_v1,
+    try_visit_matrix_required_capabilities_v1,
 };
 
 pub const MATRIX_CAPABILITY_NAMESPACE: &str = "fe2o3.matrix";
@@ -206,7 +219,7 @@ impl MatrixProjectedKernargPolicyV1 {
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self != &Self::canonical() {
+        if !self.matches_canonical_without_allocation_v1() {
             return Err("matrix projected kernarg policy differs from canonical V1");
         }
         Ok(())
@@ -813,51 +826,154 @@ impl std::fmt::Display for TensorLayoutFindingV1 {
     }
 }
 
+trait TensorLayoutFindingSinkV1 {
+    type Error;
+
+    fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error>;
+    fn allocate_coordinates(&mut self, count: usize) -> Result<Vec<[u64; 2]>, Self::Error>;
+    fn release_coordinates(
+        &mut self,
+        coordinates: Vec<[u64; 2]>,
+        count: usize,
+    ) -> Result<(), Self::Error>;
+    fn emit(&mut self, finding: TensorLayoutFindingV1) -> Result<(), Self::Error>;
+}
+
+struct LegacyTensorLayoutFindingSinkV1<'a> {
+    findings: &'a mut Vec<TensorLayoutFindingV1>,
+}
+
+impl TensorLayoutFindingSinkV1 for LegacyTensorLayoutFindingSinkV1<'_> {
+    type Error = std::convert::Infallible;
+
+    fn charge_work(&mut self, _amount: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn allocate_coordinates(&mut self, count: usize) -> Result<Vec<[u64; 2]>, Self::Error> {
+        Ok(Vec::with_capacity(count))
+    }
+
+    fn release_coordinates(
+        &mut self,
+        coordinates: Vec<[u64; 2]>,
+        _count: usize,
+    ) -> Result<(), Self::Error> {
+        drop(coordinates);
+        Ok(())
+    }
+
+    fn emit(&mut self, finding: TensorLayoutFindingV1) -> Result<(), Self::Error> {
+        self.findings.push(finding);
+        Ok(())
+    }
+}
+
+struct MatrixTensorLayoutFindingSinkV1<'a, S> {
+    sink: &'a mut S,
+}
+
+impl<S: MatrixOperationIssueSinkV1> TensorLayoutFindingSinkV1
+    for MatrixTensorLayoutFindingSinkV1<'_, S>
+{
+    type Error = S::Error;
+
+    fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error> {
+        self.sink.charge_work(amount)
+    }
+
+    fn allocate_coordinates(&mut self, count: usize) -> Result<Vec<[u64; 2]>, Self::Error> {
+        self.sink.allocate_coordinates(count)
+    }
+
+    fn release_coordinates(
+        &mut self,
+        coordinates: Vec<[u64; 2]>,
+        count: usize,
+    ) -> Result<(), Self::Error> {
+        self.sink.release_coordinates(coordinates, count)
+    }
+
+    fn emit(&mut self, finding: TensorLayoutFindingV1) -> Result<(), Self::Error> {
+        self.sink.emit(
+            MatrixVerificationIssueKind::InvalidStructure,
+            MATRIX_FIXED_MESSAGE_WORK_UPPER_V1,
+            format_args!("{finding}"),
+        )
+    }
+}
+
+fn try_verify_tensor_layout_for_matrix_with_sink_v1<S: MatrixOperationIssueSinkV1>(
+    contract: &TensorLayoutContractV1,
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    let mut adapter = MatrixTensorLayoutFindingSinkV1 { sink };
+    try_verify_tensor_layout_contract_with_sink_v1(contract, &mut adapter)
+}
+
 /// Bounded verification shared by canonical Kernel IR and ranked PLIRON.
 pub fn verify_tensor_layout_contract_v1(
     contract: &TensorLayoutContractV1,
 ) -> Vec<TensorLayoutFindingV1> {
     let mut findings = Vec::new();
+    let mut sink = LegacyTensorLayoutFindingSinkV1 {
+        findings: &mut findings,
+    };
+    if let Err(infallible) = try_verify_tensor_layout_contract_with_sink_v1(contract, &mut sink) {
+        match infallible {}
+    }
+    findings
+}
+
+fn try_verify_tensor_layout_contract_with_sink_v1<S: TensorLayoutFindingSinkV1>(
+    contract: &TensorLayoutContractV1,
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     match contract.profile {
         TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64
         | TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
         | TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64
         | TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {}
         TensorInstructionProfileV1::IncompatibleWave32 => {
-            findings.push(TensorLayoutFindingV1::ProfileMismatch {
+            sink.emit(TensorLayoutFindingV1::ProfileMismatch {
                 field: "wave32 target profile",
-            });
-            return findings;
+            })?;
+            return Ok(());
         }
         TensorInstructionProfileV1::Opaque(_) => {
-            findings.push(TensorLayoutFindingV1::UnsupportedProfile);
-            return findings;
+            sink.emit(TensorLayoutFindingV1::UnsupportedProfile)?;
+            return Ok(());
         }
     }
+    sink.charge_work(1)?;
     if contract.subgroup_width != 64 {
-        findings.push(TensorLayoutFindingV1::ProfileMismatch {
+        sink.emit(TensorLayoutFindingV1::ProfileMismatch {
             field: "subgroup width",
-        });
+        })?;
     }
+    sink.charge_work(3)?;
     for (position, fragment) in [
         (TensorOperandRoleV1::A, &contract.a),
         (TensorOperandRoleV1::B, &contract.b),
         (TensorOperandRoleV1::Accumulator, &contract.accumulator),
     ] {
-        verify_tensor_fragment_v1(
+        try_verify_tensor_fragment_with_sink_v1(
             contract.profile,
             position,
             fragment,
             contract.subgroup_width,
-            &mut findings,
-        );
+            sink,
+        )?;
     }
+    sink.charge_work(1)?;
     if !matches!(
         contract.tail_mask,
         TensorTailMaskV1::ExactPhysicalTile | TensorTailMaskV1::ZeroFilledPredicateInputs
     ) {
-        findings.push(TensorLayoutFindingV1::TailMaskMismatch);
+        sink.emit(TensorLayoutFindingV1::TailMaskMismatch)?;
     }
+    sink.charge_work(2)?;
     for (role, storage_transform) in [
         (TensorOperandRoleV1::A, contract.a.lds_swizzle),
         (TensorOperandRoleV1::B, contract.b.lds_swizzle),
@@ -866,30 +982,33 @@ pub fn verify_tensor_layout_contract_v1(
             storage_transform,
             TensorLdsSwizzleV1::None | TensorLdsSwizzleV1::Xor4
         ) {
-            findings.push(TensorLayoutFindingV1::SwizzleMismatch { role });
+            sink.emit(TensorLayoutFindingV1::SwizzleMismatch { role })?;
         }
     }
+    sink.charge_work(1)?;
     if contract.accumulator.lds_swizzle != TensorLdsSwizzleV1::None {
-        findings.push(TensorLayoutFindingV1::SwizzleMismatch {
+        sink.emit(TensorLayoutFindingV1::SwizzleMismatch {
             role: TensorOperandRoleV1::Accumulator,
-        });
+        })?;
     }
-    findings
+    Ok(())
 }
 
-fn verify_tensor_fragment_v1(
+fn try_verify_tensor_fragment_with_sink_v1<S: TensorLayoutFindingSinkV1>(
     profile: TensorInstructionProfileV1,
     position: TensorOperandRoleV1,
     fragment: &TensorFragmentLayoutV1,
     subgroup_width: u16,
-    findings: &mut Vec<TensorLayoutFindingV1>,
-) {
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     if fragment.role != position {
-        findings.push(TensorLayoutFindingV1::RoleMismatch {
+        sink.emit(TensorLayoutFindingV1::RoleMismatch {
             position,
             actual: fragment.role,
-        });
+        })?;
     }
+    sink.charge_work(1)?;
     let expected = match profile {
         TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => {
             canonical_fragment(position)
@@ -908,80 +1027,48 @@ fn verify_tensor_fragment_v1(
             }
         }
         TensorInstructionProfileV1::IncompatibleWave32 | TensorInstructionProfileV1::Opaque(_) => {
-            return;
+            return Ok(());
         }
     };
+    sink.charge_work(1)?;
     if fragment.shape != expected.shape || fragment.element != expected.element {
-        findings.push(TensorLayoutFindingV1::ShapeOrElementMismatch { role: position });
+        sink.emit(TensorLayoutFindingV1::ShapeOrElementMismatch { role: position })?;
     }
+    sink.charge_work(1)?;
     if fragment.fragment_elements != expected.fragment_elements {
-        findings.push(TensorLayoutFindingV1::FragmentWidthMismatch {
+        sink.emit(TensorLayoutFindingV1::FragmentWidthMismatch {
             role: position,
             actual: fragment.fragment_elements,
-        });
-        return;
+        })?;
+        return Ok(());
     }
+    sink.charge_work(1)?;
     if fragment.packing != expected.packing {
-        findings.push(TensorLayoutFindingV1::PackingMismatch { role: position });
+        sink.emit(TensorLayoutFindingV1::PackingMismatch { role: position })?;
     }
+    sink.charge_work(1)?;
     match fragment.mapping {
         TensorSymbolicMapV1::LaneComponentAffine {
             lane_modulus,
             lane_divisor,
             ..
         } if lane_modulus == 0 || lane_divisor == 0 => {
-            findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
-            return;
+            sink.emit(TensorLayoutFindingV1::MalformedSymbolicMap { role: position })?;
+            return Ok(());
         }
         TensorSymbolicMapV1::Opaque(_) => {
-            findings.push(TensorLayoutFindingV1::UnsupportedSymbolicMap { role: position });
-            return;
+            sink.emit(TensorLayoutFindingV1::UnsupportedSymbolicMap { role: position })?;
+            return Ok(());
         }
         TensorSymbolicMapV1::LaneComponentAffine { .. }
         | TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => {}
     }
+    sink.charge_work(1)?;
     if fragment.mapping != expected.mapping {
-        findings.push(TensorLayoutFindingV1::SymbolicMapMismatch { role: position });
+        sink.emit(TensorLayoutFindingV1::SymbolicMapMismatch { role: position })?;
     }
 
-    let mut coordinates = std::collections::BTreeMap::<[u64; 2], u16>::new();
-    for lane in 0..u64::from(subgroup_width.min(64)) {
-        for component in 0..u64::from(fragment.fragment_elements) {
-            let Some(coordinate) = fragment.logical_coordinate(lane as u16, component as u8) else {
-                findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
-                return;
-            };
-            if coordinate[0] >= u64::from(fragment.shape[0])
-                || coordinate[1] >= u64::from(fragment.shape[1])
-            {
-                findings.push(TensorLayoutFindingV1::CoordinateOutOfBounds { role: position });
-                return;
-            }
-            let count = coordinates.entry(coordinate).or_default();
-            *count = count.saturating_add(1);
-        }
-    }
-    let expected_coordinates = usize::from(fragment.shape[0]) * usize::from(fragment.shape[1]);
-    match fragment.multiplicity {
-        TensorMultiplicityV1::Unique => {
-            if coordinates.values().any(|count| *count != 1) {
-                findings.push(TensorLayoutFindingV1::DuplicateCoordinate { role: position });
-            }
-            if coordinates.len() != expected_coordinates {
-                findings.push(TensorLayoutFindingV1::IncompleteCoverage { role: position });
-            }
-        }
-        TensorMultiplicityV1::Broadcast { factor } => {
-            if factor == 0
-                || coordinates.len() != expected_coordinates
-                || coordinates
-                    .values()
-                    .any(|count| *count != u16::from(factor))
-            {
-                findings.push(TensorLayoutFindingV1::BroadcastContractMismatch { role: position });
-            }
-        }
-    }
+    try_verify_tensor_coordinates_with_sink_v1(fragment, &expected, position, subgroup_width, sink)
 }
 
 fn evaluate_tensor_coordinate_v1(
@@ -1322,50 +1409,110 @@ impl MatrixOperation {
         capabilities
     }
 
+    pub(crate) fn try_visit_required_capabilities_v1<E>(
+        &self,
+        visitor: impl FnMut(TargetCapabilityRefV1<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        try_visit_matrix_required_capabilities_v1(self, visitor)
+    }
+
     pub fn verify(
         &self,
         operand_types: &[Option<Type>],
         results: &[ValueDef],
     ) -> Vec<MatrixVerificationIssue> {
         let mut issues = Vec::new();
-        if self.active_lanes != 64 {
-            issues.push(MatrixVerificationIssue::structure(format!(
-                "matrix V1 requires all 64 lanes active, found {}",
-                self.active_lanes
-            )));
-        }
-        if self.convergence.scope() != SynchronizationScope::Subgroup {
-            issues.push(MatrixVerificationIssue::structure(
-                "matrix V1 requires uniform subgroup convergence",
-            ));
-        }
-        if let Some(binding) = &self.frontend_binding
-            && let Err(reason) = binding.validate()
+        let mut sink = LegacyMatrixOperationIssueSinkV1 {
+            issues: &mut issues,
+        };
+        if let Err(infallible) =
+            self.try_verify_with_type_view_v1(operand_types, results, &mut sink)
         {
-            issues.push(MatrixVerificationIssue::structure(reason));
+            match infallible {}
         }
+        issues
+    }
+
+    pub(crate) fn try_verify_with_sink_v1<S: MatrixOperationIssueSinkV1>(
+        &self,
+        operand_types: &[Option<&Type>],
+        results: &[ValueDef],
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        self.try_verify_with_type_view_v1(operand_types, results, sink)
+    }
+
+    fn try_verify_with_type_view_v1<
+        T: MatrixOperandTypeViewV1 + ?Sized,
+        S: MatrixOperationIssueSinkV1,
+    >(
+        &self,
+        operand_types: &T,
+        results: &[ValueDef],
+        sink: &mut S,
+    ) -> Result<(), S::Error> {
+        sink.charge_work(1)?;
+        if self.active_lanes != 64 {
+            sink.emit(
+                MatrixVerificationIssueKind::InvalidStructure,
+                MATRIX_FIXED_MESSAGE_WORK_UPPER_V1,
+                format_args!(
+                    "matrix V1 requires all 64 lanes active, found {}",
+                    self.active_lanes
+                ),
+            )?;
+        }
+        sink.charge_work(1)?;
+        if self.convergence.scope() != SynchronizationScope::Subgroup {
+            emit_matrix_fixed_v1(
+                sink,
+                MatrixVerificationIssueKind::InvalidStructure,
+                "matrix V1 requires uniform subgroup convergence",
+            )?;
+        }
+        sink.charge_work(1)?;
+        if let Some(binding) = &self.frontend_binding
+            && let Err(reason) = try_validate_matrix_frontend_binding_with_sink_v1(binding, sink)?
+        {
+            emit_matrix_fixed_v1(sink, MatrixVerificationIssueKind::InvalidStructure, reason)?;
+        }
+        sink.charge_work(1)?;
         match self.kind {
             MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
+                sink.charge_work(1)?;
                 if profile != MatrixMultiplyProfile::bf16_f32_m16n16k16_wave64() {
-                    issues.push(MatrixVerificationIssue::structure(format!(
-                        "unsupported matrix multiply profile {profile:?}"
-                    )));
+                    sink.emit(
+                        MatrixVerificationIssueKind::InvalidStructure,
+                        MATRIX_FIXED_MESSAGE_WORK_UPPER_V1,
+                        format_args!("unsupported matrix multiply profile {profile:?}"),
+                    )?;
                 }
-                for actual in operand_types.iter().take(8) {
-                    expect_type(actual, Type::Scalar(ScalarType::Bf16), &mut issues);
+                sink.charge_work(operand_types.len().min(8))?;
+                for index in 0..operand_types.len().min(8) {
+                    expect_matrix_type_with_sink_v1(
+                        operand_types.get_type(index).flatten(),
+                        &Type::Scalar(ScalarType::Bf16),
+                        sink,
+                    )?;
                 }
-                for actual in operand_types.iter().skip(8) {
-                    expect_type(actual, Type::F32, &mut issues);
+                sink.charge_work(operand_types.len().saturating_sub(8))?;
+                for index in 8..operand_types.len() {
+                    expect_matrix_type_with_sink_v1(
+                        operand_types.get_type(index).flatten(),
+                        &Type::F32,
+                        sink,
+                    )?;
                 }
+                sink.charge_work(1)?;
                 match &self.tensor_layout {
                     Some(contract) => {
-                        for finding in verify_tensor_layout_contract_v1(contract) {
-                            issues.push(MatrixVerificationIssue::structure(finding.to_string()));
-                        }
+                        try_verify_tensor_layout_for_matrix_with_sink_v1(contract, sink)?;
                     }
-                    None => issues.push(MatrixVerificationIssue::structure(
+                    None => emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "matrix multiply requires an explicit tensor layout contract",
-                    )),
+                    )?,
                 }
             }
             MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
@@ -1381,107 +1528,232 @@ impl MatrixOperation {
                 } else {
                     &[][..]
                 };
+                sink.charge_work(1)?;
                 if expected_layout_profiles.is_empty() {
-                    issues.push(MatrixVerificationIssue::structure(format!(
-                        "unsupported scaled matrix multiply profile {profile:?}"
-                    )));
+                    sink.emit(
+                        MatrixVerificationIssueKind::InvalidStructure,
+                        MATRIX_FIXED_MESSAGE_WORK_UPPER_V1,
+                        format_args!("unsupported scaled matrix multiply profile {profile:?}"),
+                    )?;
                 }
-                for actual in operand_types.iter().take(16) {
-                    expect_type(actual, Type::Scalar(ScalarType::U32), &mut issues);
+                sink.charge_work(operand_types.len().min(16))?;
+                for index in 0..operand_types.len().min(16) {
+                    expect_matrix_type_with_sink_v1(
+                        operand_types.get_type(index).flatten(),
+                        &Type::Scalar(ScalarType::U32),
+                        sink,
+                    )?;
                 }
-                for actual in operand_types.iter().skip(16) {
-                    expect_type(actual, Type::F32, &mut issues);
+                sink.charge_work(operand_types.len().saturating_sub(16))?;
+                for index in 16..operand_types.len() {
+                    expect_matrix_type_with_sink_v1(
+                        operand_types.get_type(index).flatten(),
+                        &Type::F32,
+                        sink,
+                    )?;
                 }
+                sink.charge_work(expected_layout_profiles.len().saturating_add(1))?;
                 match &self.tensor_layout {
                     Some(contract) if expected_layout_profiles.contains(&contract.profile) => {
-                        for finding in verify_tensor_layout_contract_v1(contract) {
-                            issues.push(MatrixVerificationIssue::structure(finding.to_string()));
-                        }
+                        try_verify_tensor_layout_for_matrix_with_sink_v1(contract, sink)?;
                     }
-                    Some(_) => issues.push(MatrixVerificationIssue::structure(
+                    Some(_) => emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "scaled matrix multiply profile and gfx950 tensor layout disagree",
-                    )),
-                    None => issues.push(MatrixVerificationIssue::structure(
+                    )?,
+                    None => emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "scaled matrix multiply requires an explicit tensor layout contract",
-                    )),
+                    )?,
                 }
             }
             MatrixOperationKind::LdsLoad { profile, .. } => {
+                sink.charge_work(1)?;
                 if self.tensor_layout.is_some() {
-                    issues.push(MatrixVerificationIssue::structure(
+                    emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "matrix LDS operations cannot carry an instruction layout contract",
-                    ));
+                    )?;
                 }
+                sink.charge_work(1)?;
                 if self.frontend_binding.is_some() {
-                    issues.push(MatrixVerificationIssue::structure(
+                    emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "matrix frontend ABI binding is valid only on multiply-accumulate",
-                    ));
+                    )?;
                 }
-                verify_lds_profile(profile, false, operand_types.first(), &mut issues);
+                verify_lds_profile_with_sink_v1(profile, false, operand_types.get_type(0), sink)?;
             }
             MatrixOperationKind::LdsStore { profile, .. } => {
+                sink.charge_work(1)?;
                 if self.tensor_layout.is_some() {
-                    issues.push(MatrixVerificationIssue::structure(
+                    emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "matrix LDS operations cannot carry an instruction layout contract",
-                    ));
+                    )?;
                 }
+                sink.charge_work(1)?;
                 if self.frontend_binding.is_some() {
-                    issues.push(MatrixVerificationIssue::structure(
+                    emit_matrix_fixed_v1(
+                        sink,
+                        MatrixVerificationIssueKind::InvalidStructure,
                         "matrix frontend ABI binding is valid only on multiply-accumulate",
-                    ));
+                    )?;
                 }
-                verify_lds_profile(profile, true, operand_types.first(), &mut issues);
-                for actual in operand_types.iter().skip(1) {
-                    expect_type(actual, profile.element.ty(), &mut issues);
+                verify_lds_profile_with_sink_v1(profile, true, operand_types.get_type(0), sink)?;
+                sink.charge_work(operand_types.len().saturating_sub(1))?;
+                for index in 1..operand_types.len() {
+                    expect_matrix_type_with_sink_v1(
+                        operand_types.get_type(index).flatten(),
+                        &profile.element.ty(),
+                        sink,
+                    )?;
                 }
             }
         }
-        if operand_types.len() != self.operands().len() {
-            issues.push(MatrixVerificationIssue::structure(
+        let operand_count = match self.kind {
+            MatrixOperationKind::MultiplyAccumulate { .. } => 12,
+            MatrixOperationKind::ScaledMultiplyAccumulate { .. } => 20,
+            MatrixOperationKind::LdsLoad { .. } => 1,
+            MatrixOperationKind::LdsStore { .. } => 5,
+        };
+        sink.charge_work(1)?;
+        if operand_types.len() != operand_count {
+            emit_matrix_fixed_v1(
+                sink,
+                MatrixVerificationIssueKind::InvalidStructure,
                 "matrix operand/type arity mismatch",
-            ));
+            )?;
         }
-        let expected = self.result_types();
-        if results.len() != expected.len() {
-            issues.push(MatrixVerificationIssue::result(format!(
-                "matrix operation defines {} results, expected {}",
-                results.len(),
-                expected.len()
-            )));
+        let (result_count, expected_result) = match self.kind {
+            MatrixOperationKind::MultiplyAccumulate { profile, .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
+                (4, Some(profile.accumulator.ty()))
+            }
+            MatrixOperationKind::LdsLoad { profile, .. } => (4, Some(profile.element.ty())),
+            MatrixOperationKind::LdsStore { .. } => (0, None),
+        };
+        sink.charge_work(1)?;
+        if results.len() != result_count {
+            sink.emit(
+                MatrixVerificationIssueKind::InvalidResult,
+                MATRIX_FIXED_MESSAGE_WORK_UPPER_V1,
+                format_args!(
+                    "matrix operation defines {} results, expected {result_count}",
+                    results.len()
+                ),
+            )?;
         }
-        for (result, expected) in results.iter().zip(expected) {
-            if result.ty != expected {
-                issues.push(MatrixVerificationIssue::result(format!(
-                    "matrix result {} has type {:?}, expected {expected:?}",
-                    result.id, result.ty
-                )));
+        let compared_results = results.len().min(result_count);
+        sink.charge_work(compared_results)?;
+        if let Some(expected) = expected_result.as_ref() {
+            for result in results.iter().take(result_count) {
+                if !matrix_types_equal_v1(&result.ty, expected, sink)? {
+                    let actual_upper = matrix_type_message_work_upper_v1(&result.ty, sink)?;
+                    let expected_upper = matrix_type_message_work_upper_v1(expected, sink)?;
+                    sink.emit(
+                        MatrixVerificationIssueKind::InvalidResult,
+                        MATRIX_FIXED_MESSAGE_WORK_UPPER_V1
+                            .saturating_add(actual_upper)
+                            .saturating_add(expected_upper),
+                        format_args!(
+                            "matrix result {} has type {:?}, expected {expected:?}",
+                            result.id, result.ty
+                        ),
+                    )?;
+                }
             }
         }
-        issues
+        Ok(())
     }
 }
 
-fn verify_lds_profile(
+fn try_validate_matrix_frontend_binding_with_sink_v1<S: MatrixOperationIssueSinkV1>(
+    binding: &MatrixFrontendBindingV2,
+    sink: &mut S,
+) -> Result<Result<(), &'static str>, S::Error> {
+    let record_bytes = binding.observed_source.canonical_record.len();
+    let record_hash_work = record_bytes.saturating_add(
+        record_bytes
+            .saturating_add(9)
+            .div_ceil(64)
+            .saturating_mul(64),
+    );
+    let source_work = binding
+        .observed_source
+        .canonical_record
+        .len()
+        .saturating_add(record_hash_work)
+        .saturating_add(
+            binding
+                .observed_source
+                .provider
+                .definition_identities
+                .len()
+                .saturating_mul(3),
+        )
+        .saturating_add(16);
+    sink.charge_work(source_work)?;
+    if let Err(reason) = binding.observed_source.validate() {
+        return Ok(Err(reason));
+    }
+    let projected_bytes = b"FE2O3/MATRIX-PROJECTED-KERNARG-POLICY/V1\0"
+        .len()
+        .saturating_add(12 * 7)
+        .saturating_add(7);
+    let projected_hash_work = projected_bytes.saturating_add(
+        projected_bytes
+            .saturating_add(9)
+            .div_ceil(64)
+            .saturating_mul(64),
+    );
+    sink.charge_work(12_usize.saturating_add(projected_hash_work))?;
+    if !binding
+        .projected_kernarg
+        .matches_canonical_without_allocation_v1()
+    {
+        return Ok(Err(
+            "matrix projected kernarg policy differs from canonical V1",
+        ));
+    }
+    Ok(Ok(()))
+}
+
+fn verify_lds_profile_with_sink_v1<S: MatrixOperationIssueSinkV1>(
     profile: MatrixLdsProfile,
     writable: bool,
-    base: Option<&Option<Type>>,
-    issues: &mut Vec<MatrixVerificationIssue>,
-) {
+    base: Option<Option<&Type>>,
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     if !profile.is_supported_v1() {
-        issues.push(MatrixVerificationIssue::structure(format!(
-            "unsupported matrix LDS profile {profile:?}"
-        )));
+        sink.emit(
+            MatrixVerificationIssueKind::InvalidStructure,
+            MATRIX_FIXED_MESSAGE_WORK_UPPER_V1,
+            format_args!("unsupported matrix LDS profile {profile:?}"),
+        )?;
     }
+    sink.charge_work(1)?;
     let Some(Some(Type::Pointer(pointer))) = base else {
         if !matches!(base, Some(None)) {
-            issues.push(MatrixVerificationIssue::operand(
+            emit_matrix_fixed_v1(
+                sink,
+                MatrixVerificationIssueKind::InvalidOperandType,
                 "matrix LDS base must be a workgroup pointer",
-            ));
+            )?;
         }
-        return;
+        return Ok(());
     };
+    let expected = profile.element.ty();
+    let pointee_matches = matrix_types_equal_v1(pointer.pointee.as_ref(), &expected, sink)?;
+    sink.charge_work(3)?;
     if pointer.address_space != AddressSpace::Workgroup
-        || pointer.pointee.as_ref() != &profile.element.ty()
+        || !pointee_matches
         || (writable
             && !matches!(
                 pointer.access,
@@ -1489,21 +1761,39 @@ fn verify_lds_profile(
             ))
         || (!writable && !matches!(pointer.access, AccessMode::ReadOnly | AccessMode::ReadWrite))
     {
-        issues.push(MatrixVerificationIssue::operand(format!(
-            "matrix LDS base {pointer:?} does not match element {:?}, workgroup address space, writable {writable}",
-            profile.element
-        )));
+        let pointer_upper = matrix_type_message_work_upper_v1(pointer.pointee.as_ref(), sink)?;
+        sink.emit(
+            MatrixVerificationIssueKind::InvalidOperandType,
+            MATRIX_FIXED_MESSAGE_WORK_UPPER_V1.saturating_add(pointer_upper),
+            format_args!(
+                "matrix LDS base {pointer:?} does not match element {:?}, workgroup address space, writable {writable}",
+                profile.element
+            ),
+        )?;
     }
+    Ok(())
 }
 
-fn expect_type(actual: &Option<Type>, expected: Type, issues: &mut Vec<MatrixVerificationIssue>) {
+fn expect_matrix_type_with_sink_v1<S: MatrixOperationIssueSinkV1>(
+    actual: Option<&Type>,
+    expected: &Type,
+    sink: &mut S,
+) -> Result<(), S::Error> {
+    sink.charge_work(1)?;
     if let Some(actual) = actual
-        && actual != &expected
+        && !matrix_types_equal_v1(actual, expected, sink)?
     {
-        issues.push(MatrixVerificationIssue::operand(format!(
-            "matrix operand has type {actual:?}, expected {expected:?}"
-        )));
+        let actual_upper = matrix_type_message_work_upper_v1(actual, sink)?;
+        let expected_upper = matrix_type_message_work_upper_v1(expected, sink)?;
+        sink.emit(
+            MatrixVerificationIssueKind::InvalidOperandType,
+            MATRIX_FIXED_MESSAGE_WORK_UPPER_V1
+                .saturating_add(actual_upper)
+                .saturating_add(expected_upper),
+            format_args!("matrix operand has type {actual:?}, expected {expected:?}"),
+        )?;
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1517,27 +1807,4 @@ pub enum MatrixVerificationIssueKind {
 pub struct MatrixVerificationIssue {
     pub kind: MatrixVerificationIssueKind,
     pub message: String,
-}
-
-impl MatrixVerificationIssue {
-    fn structure(message: impl Into<String>) -> Self {
-        Self {
-            kind: MatrixVerificationIssueKind::InvalidStructure,
-            message: message.into(),
-        }
-    }
-
-    fn operand(message: impl Into<String>) -> Self {
-        Self {
-            kind: MatrixVerificationIssueKind::InvalidOperandType,
-            message: message.into(),
-        }
-    }
-
-    fn result(message: impl Into<String>) -> Self {
-        Self {
-            kind: MatrixVerificationIssueKind::InvalidResult,
-            message: message.into(),
-        }
-    }
 }

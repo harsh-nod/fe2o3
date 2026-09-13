@@ -1,10 +1,11 @@
-//! Bounded interprocedural memory-effect summaries for verified Kernel IR.
+//! Bounded interprocedural physical-memory and compiler-order summaries for verified Kernel IR.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    FunctionId, FunctionOperationLocation, MemoryEffect, MemoryEffectSummary, Module,
-    OperationKind, VerificationErrors, VerifiedKernelIrModuleV1, verify_module_ref,
+    CompilerOrderingEffectSummaryV12, FunctionId, FunctionOperationLocation, MemoryEffect,
+    MemoryEffectSummary, Module, OperationEffectSummaryV12, OperationKind, VerificationErrors,
+    VerifiedKernelIrModuleV1, verify_module_ref,
 };
 
 pub const MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1: usize = 4_096;
@@ -31,9 +32,9 @@ pub enum InterproceduralEffectIncompleteReasonV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InterproceduralEffectDecisionV1 {
-    Complete(MemoryEffectSummary),
+    Complete(OperationEffectSummaryV12),
     Incomplete {
-        partial: MemoryEffectSummary,
+        partial: OperationEffectSummaryV12,
         reasons: Vec<InterproceduralEffectIncompleteReasonV1>,
     },
 }
@@ -43,7 +44,7 @@ impl InterproceduralEffectDecisionV1 {
         matches!(self, Self::Complete(_))
     }
 
-    pub fn summary(&self) -> &MemoryEffectSummary {
+    pub fn summary(&self) -> &OperationEffectSummaryV12 {
         match self {
             Self::Complete(summary)
             | Self::Incomplete {
@@ -105,7 +106,7 @@ pub fn analyze_interprocedural_effects_from_verified_v1(
             analysis.decisions.insert(
                 function.id.clone(),
                 InterproceduralEffectDecisionV1::Incomplete {
-                    partial: MemoryEffectSummary::pure(),
+                    partial: OperationEffectSummaryV12::pure(),
                     reasons: vec![reason.clone()],
                 },
             );
@@ -137,6 +138,7 @@ impl EffectSummaryBuilderV1<'_> {
         if !self.visiting.insert(function_id.clone()) {
             return incomplete(
                 BTreeSet::new(),
+                CompilerOrderingEffectSummaryV12::empty(),
                 [
                     InterproceduralEffectIncompleteReasonV1::RecursiveCallCycle {
                         function: function_id.clone(),
@@ -151,6 +153,7 @@ impl EffectSummaryBuilderV1<'_> {
         let Some(body) = &function.body else {
             let decision = incomplete(
                 BTreeSet::new(),
+                CompilerOrderingEffectSummaryV12::empty(),
                 [
                     InterproceduralEffectIncompleteReasonV1::FunctionDeclaration {
                         function: function_id.clone(),
@@ -163,9 +166,12 @@ impl EffectSummaryBuilderV1<'_> {
         };
 
         let mut effects = BTreeSet::<MemoryEffect>::new();
+        let mut compiler_ordering = CompilerOrderingEffectSummaryV12::empty();
         let mut reasons = BTreeSet::new();
         for block in &body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
+                compiler_ordering =
+                    compiler_ordering.union(operation.compiler_ordering_effects_v12());
                 match &operation.kind {
                     OperationKind::Call { .. } if operation.has_complete_effect_summary() => {
                         effects.extend(operation.memory_effects());
@@ -187,6 +193,8 @@ impl EffectSummaryBuilderV1<'_> {
                         }
                         let callee = self.summarize(callee);
                         effects.extend(callee.summary().effects().iter().cloned());
+                        compiler_ordering =
+                            compiler_ordering.union(callee.summary().compiler_ordering());
                         reasons.extend(callee.incomplete_reasons().iter().cloned());
                     }
                     OperationKind::InlineAssembly(_) => {
@@ -202,9 +210,12 @@ impl EffectSummaryBuilderV1<'_> {
         }
         self.visiting.remove(function_id);
         let decision = if reasons.is_empty() {
-            InterproceduralEffectDecisionV1::Complete(MemoryEffectSummary::new(effects))
+            InterproceduralEffectDecisionV1::Complete(OperationEffectSummaryV12::new(
+                MemoryEffectSummary::new(effects),
+                compiler_ordering,
+            ))
         } else {
-            incomplete(effects, reasons)
+            incomplete(effects, compiler_ordering, reasons)
         };
         self.decisions.insert(function_id.clone(), decision.clone());
         decision
@@ -213,10 +224,14 @@ impl EffectSummaryBuilderV1<'_> {
 
 fn incomplete(
     effects: impl IntoIterator<Item = MemoryEffect>,
+    compiler_ordering: CompilerOrderingEffectSummaryV12,
     reasons: impl IntoIterator<Item = InterproceduralEffectIncompleteReasonV1>,
 ) -> InterproceduralEffectDecisionV1 {
     InterproceduralEffectDecisionV1::Incomplete {
-        partial: MemoryEffectSummary::new(effects),
+        partial: OperationEffectSummaryV12::new(
+            MemoryEffectSummary::new(effects),
+            compiler_ordering,
+        ),
         reasons: reasons
             .into_iter()
             .collect::<BTreeSet<_>>()
