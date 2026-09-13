@@ -74,6 +74,7 @@ enum RankedOperationKind {
     FiniteRecurrenceContract,
     PermutationGatherContract,
     TypedSemantic,
+    TypedRead,
     RequireEquivalent,
     ProofObligation,
     ProofEvidence,
@@ -179,6 +180,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::SemanticExpressionCommitment)
+    } else if operation.downcast_ref::<SemanticTypedReadOp>().is_some() {
+        Some(RankedOperationKind::TypedRead)
     } else if operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
         || operation
             .downcast_ref::<TensorResultComponentOp>()

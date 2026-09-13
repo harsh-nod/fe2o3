@@ -25,6 +25,9 @@ use pliron::{
     value::Value,
 };
 
+#[path = "pliron_ranked_bounds_semantic_reads_tests.rs"]
+mod semantic_reads;
+
 fn setup() -> Context {
     let mut context = Context::new();
     let dialect = DialectName::try_new(DIALECT_NAME).unwrap();

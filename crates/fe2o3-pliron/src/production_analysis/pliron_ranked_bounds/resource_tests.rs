@@ -119,7 +119,7 @@ mod resource_upper_bound_tests {
         let internal_storage = 9 + 1 + fact_words + findings;
         let exact_temporary =
             internal_storage + structural_items + MAX_RANKED_MEMORY_RANK * 6 + 2 * 1_024 + 128;
-        let charged_work = 1 + operation_items + 5 + 4 + 1 + 3;
+        let charged_work = 1 + operation_items + 5 + 4 + 1 + 3 + 1 + 3;
         let exact_work = structural_items * 3
             + charged_work
             + 3 * (fe2o3_kernel_analysis::MAX_PRESBURGER_WORK_UNITS_V1 + 1)

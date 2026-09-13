@@ -291,17 +291,22 @@ fn owner_snapshot_rejects_changed_read_volatility_before_analysis() {
 }
 
 #[test]
-fn typed_read_representation_alone_does_not_admit_the_memory_pipeline() {
+fn paired_source_reads_pass_bounds_but_not_unproved_value_semantics() {
     for mode in [Mode::UnorderedNonVolatile, Mode::UnorderedVolatile] {
         let (mut session, stage, root) = construct(kernel(mode)).unwrap();
-        let Err(ProductionSessionErrorV1::RankedBounds(error)) =
+        let bounds = crate::production_analysis::run_pliron_ranked_bounds_check_v1(
+            &session.inner.context,
+            &function(&session, &stage),
+        );
+        assert!(bounds.is_clean(), "{bounds:?}");
+        let Err(ProductionSessionErrorV1::RankedSemantic(error)) =
             session.verify_production_ranked_kernel_pipeline(stage, root)
         else {
-            panic!("typed read must remain unsupported by memory admission");
+            panic!("memory pairing must not supply a value-semantics proof");
         };
-        assert!(error.report().findings().iter().any(|finding| matches!(finding,
-            crate::RankedBoundsFindingV1::UnsupportedOperation { block: 0, operation: 4, kind }
-                if kind == "kernel.semantic_typed_read"
+        assert!(error.report().findings().iter().any(|finding| matches!(
+            finding,
+            crate::PlironSemanticRefinementFindingV1::TypedExpressionRejected { .. }
         )));
     }
 }

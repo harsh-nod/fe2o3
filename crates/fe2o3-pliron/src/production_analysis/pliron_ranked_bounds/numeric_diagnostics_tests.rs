@@ -224,19 +224,19 @@ fn assert_literal_boundary(
 
 #[test]
 fn numeric_report_literal_exact_and_one_under() {
-    // S=22, internal=15, charged graph work=17; four numeric findings.
-    // Work: 3S+17+3*1048577 +4*768+4*17+1024 = 3149978.
+    // S=22, internal=15, graph+companion scan work=21; four numeric findings.
+    // Work: 3S+21+3*1048577 +4*768+4*17+1024 = 3149982.
     // Retained=max(4*256, 2*17+320)=1024.
     // Temporary=15+22+48+34+128=247; peak=1271.
-    assert_literal_boundary(literal_census(17), 3_149_978, 1_024, 1_271);
+    assert_literal_boundary(literal_census(17), 3_149_982, 1_024, 1_271);
 }
 
 #[test]
 fn singleton_report_literal_exact_and_one_under() {
-    // S=1029, internal=15, graph=17.
-    // Work: 3S+17+3*1048577+4*768+4096+1024 = 3157027.
+    // S=1029, internal=15, graph+companion scan=21.
+    // Work: 3S+21+3*1048577+4*768+4096+1024 = 3157031.
     // Retained=max(1024,2048+320)=2368; temporary=3268.
-    assert_literal_boundary(literal_census(1_024), 3_157_027, 2_368, 5_636);
+    assert_literal_boundary(literal_census(1_024), 3_157_031, 2_368, 5_636);
 }
 
 #[test]

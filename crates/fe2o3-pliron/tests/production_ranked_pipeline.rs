@@ -168,12 +168,15 @@ fn typed_load_leaf_is_reconciled_to_the_exact_live_ranked_read() {
     );
     assert!(
         matches!(
-            lowering,
+            &lowering,
             Err(ProductionRankedCompileErrorV1::Session(
-                ProductionSessionErrorV1::RankedBounds(_)
+                ProductionSessionErrorV1::RankedSemantic(error)
+            )) if error.report().findings().iter().any(|finding| matches!(
+                finding,
+                fe2o3_pliron::PlironSemanticRefinementFindingV1::TypedExpressionRejected { .. }
             ))
         ),
-        "read representation needs independent companion-access admission: {lowering:?}"
+        "a bounds-checked read still needs live value semantics: {lowering:?}"
     );
 }
 

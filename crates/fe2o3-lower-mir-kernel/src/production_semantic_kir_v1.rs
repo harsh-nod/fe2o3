@@ -30380,7 +30380,7 @@ mod resource_tests {
     }
 
     #[test]
-    fn value_translation_comparison_does_not_replace_owned_memory_admission() {
+    fn value_translation_comparison_does_not_replace_owned_semantic_admission() {
         let fixture = value_translation_fixture(ProductionSemanticBinaryOpV2::Add, 0x3f80_0000);
         assert!(fixture.compare().is_ok());
         let result = compile_ranked_kernel_for_lowering_v1(
@@ -30389,14 +30389,14 @@ mod resource_tests {
             ProductionSessionLimitsV1::default(),
         );
         let Err(fe2o3_pliron::ProductionRankedCompileErrorV1::Session(
-            fe2o3_pliron::ProductionSessionErrorV1::RankedBounds(error),
+            fe2o3_pliron::ProductionSessionErrorV1::RankedSemantic(error),
         )) = result
         else {
-            panic!("comparison must not admit a typed-read recipe");
+            panic!("comparison and memory pairing must not supply value semantics");
         };
-        assert!(error.report().findings().iter().any(|finding| matches!(finding,
-            fe2o3_pliron::RankedBoundsFindingV1::UnsupportedOperation { block: 0, operation: 4, kind }
-                if kind == "kernel.semantic_typed_read"
+        assert!(error.report().findings().iter().any(|finding| matches!(
+            finding,
+            fe2o3_pliron::PlironSemanticRefinementFindingV1::TypedExpressionRejected { .. }
         )));
     }
 

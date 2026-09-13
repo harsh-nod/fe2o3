@@ -24,8 +24,8 @@ use dialect_kernel::{
     RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
     SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
     SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
-    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp,
-    TensorResultComponentOp, TrapOp, ranked_view_type,
+    SemanticTypedReadOp, SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp,
+    TensorLayoutOp, TensorResultComponentOp, TrapOp, ranked_view_type,
 };
 use dialect_proof::{
     EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
@@ -34,7 +34,7 @@ use dialect_proof::{
 use pliron::{
     builtin::ops::FuncOp,
     common_traits::Named,
-    context::Context,
+    context::{Context, Ptr},
     op::Op,
     operation::{Operation, verify_operation},
     r#type::{Typed, TypedHandle},
@@ -163,6 +163,10 @@ pub(crate) fn preflight_ranked_bounds_resource_upper_bound_v1(
                 "memory-bounds charged work upper bound",
             )?,
             intersection_work,
+            census.operations,
+            census.operands,
+            // Companion validation scans every operation and compares each
+            // typed read's operands once, without building another read roster.
             census.operations,
             census.operands,
         ],
@@ -355,6 +359,10 @@ pub enum RankedBoundsFindingV1 {
         operation: usize,
         kind: String,
     },
+    UnpairedSemanticRead {
+        block: usize,
+        operation: usize,
+    },
     SparseIndexAnalysisFailed {
         detail: String,
     },
@@ -415,6 +423,7 @@ impl RankedBoundsFindingV1 {
             | Self::UnreachableBlock { .. }
             | Self::UnsupportedTerminator { .. }
             | Self::UnsupportedOperation { .. }
+            | Self::UnpairedSemanticRead { .. }
             | Self::SparseIndexAnalysisFailed { .. }
             | Self::MachineIntegerOverflow {
                 path_complete: false,
@@ -458,6 +467,10 @@ impl fmt::Display for RankedBoundsFindingV1 {
             Self::SparseIndexAnalysisFailed { detail } => write!(
                 formatter,
                 "error[FE2O3-BOUNDS-003]: sparse index analysis failed before bounds verification: {detail}",
+            ),
+            Self::UnpairedSemanticRead { block, operation } => write!(
+                formatter,
+                "error[FE2O3-BOUNDS-007]: block {block} op {operation} has no adjacent ordinary read with identical view and ordered indices; guarded, checked, and atomic read companions are unsupported",
             ),
             Self::StaticOutOfBounds {
                 block,
@@ -602,6 +615,7 @@ include!("pliron_ranked_bounds/checked_domain_solver_v1.rs");
 include!("pliron_ranked_bounds/checked_domain_access_v1.rs");
 include!("pliron_ranked_bounds/execution_v1.rs");
 include!("pliron_ranked_bounds/access_proofs_v1.rs");
+include!("pliron_ranked_bounds/semantic_reads_v1.rs");
 include!("pliron_ranked_bounds/resource_tests.rs");
 #[cfg(test)]
 #[path = "pliron_ranked_bounds/edge_transport_v1_tests.rs"]

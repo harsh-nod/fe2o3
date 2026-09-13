@@ -199,11 +199,16 @@ uses share that SSA result; distinct source reads remain distinct. The producer
 retains exact view, indices, allocation, scalar type and source volatility.
 Native verification still checks dominance, and unavailable producers reject.
 
-This is representation, not memory or value equivalence. Exact structural
-capture includes the read metadata, but mandatory bounds admission still rejects
-typed reads until independent companion-access validation is integrated. Atomic
-loads and volatile call-result binding remain unsupported here. Read labels and
-expression commitments alone never establish CPU/GPU equality or an error bound.
+Mandatory bounds admission now checks that each producer has an adjacent ordinary
+read with exactly the same SSA view and ordered indices. Both volatility modes
+retain the original access as the single memory event. Detached, guarded,
+checked, atomic, or mismatched companions reject at the mandatory bounds gate.
+
+This is memory-access correspondence, not memory stability or value equivalence.
+Original access bounds and the remaining safety and semantic checks still apply;
+live read-value semantics and volatile call-result binding remain unsupported
+here. Read labels and expression commitments alone never establish CPU/GPU
+equality or an error bound.
 
 ## Remaining trusted surfaces
 

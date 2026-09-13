@@ -105,6 +105,31 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         return structural_failure();
     }
 
+    // The result-producing companion is not a second memory event. Validate
+    // the pair even in unreachable blocks, before preparing derived analyses.
+    for block_index in 0..blocks.len() {
+        let mut previous = None;
+        for site in inventory.block_operations(block_index) {
+            if let Err(finding) = budget.work(1) {
+                return finding_failure(finding);
+            }
+            let pointer = site.pointer();
+            let operation = Operation::get_op_dyn(pointer, context);
+            if let Some(read) = operation.downcast_ref::<SemanticTypedReadOp>() {
+                if let Err(finding) = budget.work(pointer.deref(context).get_num_operands()) {
+                    return finding_failure(finding);
+                }
+                if paired_read_access_v1(context, read, previous).is_none() {
+                    return finding_failure(RankedBoundsFindingV1::UnpairedSemanticRead {
+                        block: block_index,
+                        operation: site.operation(),
+                    });
+                }
+            }
+            previous = Some(pointer);
+        }
+    }
+
     analyses.prepare_sparse_indices(context, function);
     analyses.prepare_presburger(context, function);
     let sparse_indices = match analyses.sparse_indices() {
