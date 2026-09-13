@@ -5,43 +5,6 @@ use dialect_gpu::{
 };
 use pliron::builtin::types::Signedness;
 
-// Structural closure alone is independent of the production operation
-// allowlist. This census is not a positive identity or analysis admission.
-fn native_census(context: &Context, function: &FuncOp) -> PrescanV1 {
-    let blocks: Vec<_> = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .collect();
-    let operations: Vec<Vec<_>> = blocks
-        .iter()
-        .map(|block| block.deref(context).iter(context).collect())
-        .collect();
-    let mut scan = PrescanV1 {
-        blocks,
-        operations,
-        values: 0,
-        operands: 0,
-        successors: 0,
-        block_arguments: 0,
-        attributes: 0,
-        type_nodes: 0,
-        max_operation_arity: 0,
-        max_successor_arity: 0,
-    };
-    for block in &scan.blocks {
-        scan.block_arguments += block.deref(context).get_num_arguments();
-    }
-    scan.values = scan.block_arguments;
-    for operation in scan.operations.iter().flatten() {
-        let raw = operation.deref(context);
-        scan.values += raw.get_num_results();
-        scan.operands += raw.get_num_operands();
-        scan.successors += raw.get_num_successors();
-    }
-    scan
-}
-
 #[test]
 fn checked_second_result_pays_both_defining_roster_scans() {
     let context = &mut setup();

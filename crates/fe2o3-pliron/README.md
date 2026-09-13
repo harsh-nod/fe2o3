@@ -160,13 +160,18 @@ before admitting the second run. Ordinary optimizer passes begin and commit
 checked graph mutations; changed graphs advance the epoch and invalidate
 cached analyses, while verified no-op passes preserve them.
 
+A fresh scoped dominance tree avoids repeated tree construction during one
+production structural capture. Same-block dominance uses the operation-order
+index retained from def-use closure, after checking the exact physical block and
+operation order. Query work and the index's storage overlap with counting and
+verification are prepaid. The index belongs to the exact context and root and is
+consumed before final diagnostics and canonical maps are constructed.
+
 The resource receipts cover the implemented phase policies, not a complete
-worst-case proof for every upstream operation. In particular, generic verifier
-allocation, retained hash-table behavior, and same-block ordering scans still
-need resource closure. A fresh scoped dominance tree avoids repeated tree
-construction during one production structural capture, but does not establish
-formal compiler verification. Native Switch and vector memory operations are
-not admitted by this migration.
+worst-case proof for every upstream operation. Generic verifier and dominance-tree
+allocation, along with other retained hash-table costs, still need resource
+closure. These checks do not establish formal compiler verification. Native
+Switch and vector memory operations are not admitted by this migration.
 
 The relocated textual suites are under `src/production_analysis/tests/lit/`
 and `src/production_analysis/tests/protocol-lit/`. Run them with:

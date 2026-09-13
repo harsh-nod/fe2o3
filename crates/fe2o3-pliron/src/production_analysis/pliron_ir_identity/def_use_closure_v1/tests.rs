@@ -6,7 +6,17 @@ use dialect_kernel::{
 use pliron::dialect::DialectName;
 
 mod native;
+mod order;
 mod ownership;
+
+fn check(
+    context: &Context,
+    function: &FuncOp,
+    scan: &PrescanV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+) -> Checked<ProductionAnalysisResourceUpperBoundV1> {
+    super::check(context, function, scan, limits).map(|order| order.resource_upper_bound())
+}
 
 fn setup() -> Context {
     let mut context = Context::new();
@@ -66,6 +76,9 @@ fn pinned_pointer_table_and_use_vector_capacities() {
     assert_eq!(size_of::<Use<Value>>(), 24);
     assert_eq!(size_of::<Use<Ptr<BasicBlock>>>(), 24);
     assert_eq!(size_of::<HashSet<Ptr<Operation>>>(), 48);
+    assert_eq!(size_of::<HashMap<Ptr<Operation>, usize>>(), 48);
+    assert_eq!(size_of::<(Ptr<Operation>, usize)>(), 24);
+    assert_eq!(cells::<CheckedOrder<'_>>(), 13);
     for (entries, buckets, usable, heap_cells) in [
         (0, 0, 0, 0),
         (1, 4, 3, 11),
@@ -81,6 +94,13 @@ fn pinned_pointer_table_and_use_vector_capacities() {
         assert_eq!(profile.usable(), usable);
         assert_eq!(profile.storage, 6 + heap_cells);
         let mut actual = HashSet::<Ptr<Operation>>::new();
+        actual.try_reserve(entries).unwrap();
+        assert_eq!(actual.capacity(), usable);
+        let order = Table::entries::<Ptr<Operation>, (Ptr<Operation>, usize)>(entries, 6).unwrap();
+        assert_eq!(order.buckets, buckets);
+        assert_eq!(order.storage, 6 + heap_cells + buckets);
+        assert_eq!(order.lookup, profile.lookup);
+        let mut actual = HashMap::<Ptr<Operation>, usize>::new();
         actual.try_reserve(entries).unwrap();
         assert_eq!(actual.capacity(), usable);
     }
@@ -107,12 +127,14 @@ fn fanout_literal_work_peak_and_exact_boundaries() {
     // B=2/O=3 reserve four buckets each. Every pointer lookup is 408
     // logical visits. The two independent definition/use scans contribute
     // 2*triangular(n), not a linear estimate for a wide successor signature.
+    // Physical-order admission adds 39 visits; owner transfer adds 8. Each
+    // operand adds 4 classification visits and prepays one 408+4 order query.
     for (count, work, peak) in [
-        (0, 3032, 163),
-        (1, 3868, 163),
-        (3, 5544, 163),
-        (4, 6385, 163),
-        (5, 7228, 166),
+        (0, 3079, 167),
+        (1, 4331, 167),
+        (3, 6839, 167),
+        (4, 8096, 167),
+        (5, 9355, 170),
     ] {
         let context = &mut setup();
         let function = fanout(context, count);
@@ -121,7 +143,10 @@ fn fanout_literal_work_peak_and_exact_boundaries() {
         let bound = check(context, &function, &scan, hard()).unwrap();
         assert_eq!(bound.work_upper_bound(), work, "fanout {count}");
         assert_eq!(bound.peak_storage_upper_bound(), peak, "fanout {count}");
-        assert_eq!(bound.retained_storage_upper_bound(), 0);
+        assert_eq!(bound.retained_storage_upper_bound(), 28);
+        assert_eq!(observed().order_indexes, 1);
+        assert_eq!(observed().live_order_indexes, 0);
+        assert_eq!(observed().retired_order_indexes, 1);
         assert_eq!(observed().definition_rosters, count);
         assert_eq!(observed().user_rosters, count + 1);
         assert_eq!(observed().value_use_vectors, usize::from(count != 0));
@@ -169,7 +194,7 @@ fn owner_reservations_and_use_vectors_follow_admission() {
             context,
             &function,
             &scan,
-            ProductionAnalysisResourceLimitsV1::new(usize::MAX, 147),
+            ProductionAnalysisResourceLimitsV1::new(usize::MAX, 151),
         ),
         "peak storage upper bound",
     );
@@ -180,7 +205,7 @@ fn owner_reservations_and_use_vectors_follow_admission() {
             context,
             &function,
             &scan,
-            ProductionAnalysisResourceLimitsV1::new(usize::MAX, 165),
+            ProductionAnalysisResourceLimitsV1::new(usize::MAX, 169),
         ),
         "peak storage upper bound",
     );

@@ -265,6 +265,75 @@ mod resource_tests {
     }
 
     #[test]
+    fn carried_order_index_overlaps_counting_and_verification_but_is_not_output() {
+        let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+        for (text_peak, closure_peak, expected_peak) in [(10, 8, 17), (20, 8, 24), (10, 40, 40)] {
+            let text =
+                ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 2, 0, text_peak)
+                    .unwrap();
+            let closure = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+                phase,
+                3,
+                4,
+                closure_peak - 4,
+            )
+            .unwrap();
+            let capture =
+                ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 7, 6, 7).unwrap();
+            let prefix = closure.retained_storage_upper_bound();
+            let before_counting = dominate_identity_preflight_bound_v1(
+                closure,
+                identity_bound_with_live_prefix_v1(text, prefix).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(before_counting.work_upper_bound(), 5);
+            assert_eq!(before_counting.retained_storage_upper_bound(), 4);
+            assert_eq!(
+                before_counting.peak_storage_upper_bound(),
+                closure_peak.max(text_peak + 4)
+            );
+            let final_bound = dominate_identity_preflight_bound_v1(
+                identity_bound_with_live_prefix_v1(capture, prefix).unwrap(),
+                before_counting,
+            )
+            .unwrap();
+            assert_eq!(final_bound.work_upper_bound(), 12);
+            assert_eq!(final_bound.retained_storage_upper_bound(), 6);
+            assert_eq!(final_bound.peak_storage_upper_bound(), expected_peak);
+            assert!(
+                ProductionAnalysisResourceLimitsV1::new(12, expected_peak)
+                    .require(phase, final_bound)
+                    .is_ok()
+            );
+            for (work, peak, resource) in [
+                (11, expected_peak, "work upper bound"),
+                (12, expected_peak - 1, "peak storage upper bound"),
+            ] {
+                assert_eq!(
+                    ProductionAnalysisResourceLimitsV1::new(work, peak).require(phase, final_bound),
+                    Err(ProductionAnalysisResourceLimitV1 { phase, resource })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn carried_storage_zero_is_identity_and_overflow_is_typed() {
+        let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+        let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 2, 3, 4).unwrap();
+        assert_eq!(identity_bound_with_live_prefix_v1(bound, 0).unwrap(), bound);
+        let largest =
+            ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 0, 0, usize::MAX).unwrap();
+        assert_eq!(
+            identity_bound_with_live_prefix_v1(largest, 1),
+            Err(ProductionAnalysisResourceLimitV1 {
+                phase,
+                resource: "identity carried storage upper bound"
+            })
+        );
+    }
+
+    #[test]
     fn preflight_and_capture_composition_rejects_work_overflow() {
         let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
         let capture =

@@ -162,6 +162,30 @@ fn identity_textual_preflight_resource_upper_bound_v1(
     )
 }
 
+fn identity_bound_with_live_prefix_v1(
+    bound: ProductionAnalysisResourceUpperBoundV1,
+    prefix: usize,
+) -> Result<
+    ProductionAnalysisResourceUpperBoundV1,
+    crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1,
+> {
+    use crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1;
+    let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
+    let peak = bound.peak_storage_upper_bound().checked_add(prefix).ok_or(
+        ProductionAnalysisResourceLimitV1 {
+            phase,
+            resource: "identity carried storage upper bound",
+        },
+    )?;
+    // External overlap is temporary here, not retained identity output.
+    ProductionAnalysisResourceUpperBoundV1::checked_phase(
+        phase,
+        bound.work_upper_bound(),
+        bound.retained_storage_upper_bound(),
+        peak - bound.retained_storage_upper_bound(),
+    )
+}
+
 fn dominate_identity_preflight_bound_v1(
     capture: ProductionAnalysisResourceUpperBoundV1,
     preflight: ProductionAnalysisResourceUpperBoundV1,

@@ -5,7 +5,10 @@
 
 use super::*;
 use crate::production_analysis::pliron_resource_envelope::ProductionAnalysisResourceLimitV1;
-use pliron::value::{DefiningEntity, Use};
+use pliron::{
+    linked_list::LinkedList,
+    value::{DefiningEntity, Use},
+};
 use std::{
     collections::HashSet,
     mem::{align_of, size_of},
@@ -109,6 +112,7 @@ impl Budget {
     }
 }
 
+#[derive(Debug)]
 struct Table {
     buckets: usize,
     storage: usize,
@@ -117,8 +121,12 @@ struct Table {
 
 impl Table {
     fn pointers<T>(entries: usize) -> Checked<Self> {
+        Self::entries::<T, T>(entries, cells::<HashSet<T>>())
+    }
+
+    fn entries<K, E>(entries: usize, header: usize) -> Checked<Self> {
         // Pinned hashbrown 0.16.1 policy for pointer keys, not tiny scalar keys.
-        if size_of::<T>() < 4 {
+        if size_of::<K>() < 4 {
             return Err(overflow());
         }
         let buckets = if entries == 0 {
@@ -130,8 +138,8 @@ impl Table {
                 .ok_or_else(overflow)?
                 .max(4)
         };
-        let alignment = align_of::<T>().max(16);
-        let payload = mul(buckets, size_of::<T>())?;
+        let alignment = align_of::<E>().max(16);
+        let payload = mul(buckets, size_of::<E>())?;
         let heap = if buckets == 0 {
             0
         } else {
@@ -143,12 +151,12 @@ impl Table {
         // Prepay a complete probe cycle, including the final control group.
         // No collision-free or worst-case constant-time hash assumption.
         let lookup = add(
-            add(16, mul(2, size_of::<T>())?)?,
-            mul(add(buckets, 16)?, add(2, size_of::<T>())?)?,
+            add(16, mul(2, size_of::<K>())?)?,
+            mul(add(buckets, 16)?, add(2, size_of::<K>())?)?,
         )?;
         Ok(Self {
             buckets,
-            storage: add(cells::<HashSet<T>>(), heap.div_ceil(size_of::<usize>()))?,
+            storage: add(header, heap.div_ceil(size_of::<usize>()))?,
             lookup,
         })
     }
@@ -167,11 +175,15 @@ fn use_storage<T>(count: usize) -> Checked<usize> {
     add(cells::<Vec<T>>(), mul(capacity, cells::<T>())?)
 }
 
+#[derive(Debug)]
 struct Owners {
     blocks: HashSet<Ptr<BasicBlock>>,
-    operations: HashSet<Ptr<Operation>>,
+    operations: HashMap<Ptr<Operation>, usize>,
     block_table: Table,
     operation_table: Table,
+    same_block_queries: usize,
+    #[cfg(test)]
+    index_lifetime: OrderIndexLifetime,
 }
 
 impl Owners {
@@ -208,7 +220,10 @@ impl Owners {
             ));
         }
         let block_table = Table::pointers::<Ptr<BasicBlock>>(prescan.blocks.len())?;
-        let operation_table = Table::pointers::<Ptr<Operation>>(count)?;
+        let operation_table = Table::entries::<Ptr<Operation>, (Ptr<Operation>, usize)>(
+            count,
+            cells::<HashMap<Ptr<Operation>, usize>>(),
+        )?;
         budget.base = add(
             FRAME_CELLS,
             add(floor, add(block_table.storage, operation_table.storage)?)?,
@@ -216,7 +231,7 @@ impl Owners {
         budget.scratch(0)?;
         budget.charge(add(add(block_table.buckets, operation_table.buckets)?, 32)?)?;
         let mut blocks = HashSet::new();
-        let mut operations = HashSet::new();
+        let mut operations = HashMap::new();
         #[cfg(test)]
         trace(|trace| trace.owner_reservations += 1);
         blocks
@@ -225,6 +240,8 @@ impl Owners {
         operations
             .try_reserve(count)
             .map_err(|_| resource("def-use operation index allocation"))?;
+        #[cfg(test)]
+        let index_lifetime = OrderIndexLifetime::new();
         if blocks.capacity() > block_table.usable()
             || operations.capacity() > operation_table.usable()
         {
@@ -233,29 +250,63 @@ impl Owners {
             ));
         }
         let region = function.get_region(context);
+        budget.charge(4)?;
+        let mut next_block = region.deref(context).get_head();
         for (ordinal, block) in prescan.blocks.iter().copied().enumerate() {
-            budget.charge(add(block_table.lookup, 4)?)?;
+            budget.charge(add(block_table.lookup, 8)?)?;
             if !blocks.insert(block) || block.deref(context).get_parent_region() != Some(region) {
                 return Err(Failure::Invalid(
                     "identity block roster is duplicate or detached",
                 ));
             }
-            for operation in prescan.operations[ordinal].iter().copied() {
-                budget.charge(add(operation_table.lookup, 4)?)?;
-                if !operations.insert(operation)
+            if next_block != Some(block) {
+                return Err(Failure::Invalid(
+                    "identity block roster differs from physical order",
+                ));
+            }
+            next_block = block.deref(context).get_next();
+            let mut next_operation = block.deref(context).get_head();
+            for (position, operation) in prescan.operations[ordinal].iter().copied().enumerate() {
+                budget.charge(add(operation_table.lookup, 9)?)?;
+                if operations.insert(operation, position).is_some()
                     || operation.deref(context).get_parent_block() != Some(block)
                 {
                     return Err(Failure::Invalid(
                         "identity operation roster is duplicate or detached",
                     ));
                 }
+                if next_operation != Some(operation) {
+                    return Err(Failure::Invalid(
+                        "identity operation roster differs from physical order",
+                    ));
+                }
+                next_operation = operation.deref(context).get_next();
             }
+            budget.charge(4)?;
+            if next_operation.is_some()
+                || block.deref(context).get_tail() != prescan.operations[ordinal].last().copied()
+            {
+                return Err(Failure::Invalid(
+                    "identity operation roster differs from physical order",
+                ));
+            }
+        }
+        budget.charge(4)?;
+        if next_block.is_some()
+            || region.deref(context).get_tail() != prescan.blocks.last().copied()
+        {
+            return Err(Failure::Invalid(
+                "identity block roster differs from physical order",
+            ));
         }
         Ok(Self {
             blocks,
             operations,
             block_table,
             operation_table,
+            same_block_queries: 0,
+            #[cfg(test)]
+            index_lifetime,
         })
     }
 
@@ -263,7 +314,7 @@ impl Owners {
         match value.defining_entity() {
             DefiningEntity::Op(operation) => {
                 budget.charge(self.operation_table.lookup)?;
-                if !self.operations.contains(&operation) {
+                if !self.operations.contains_key(&operation) {
                     return Ok(false);
                 }
                 let raw = operation.deref(context);
@@ -327,7 +378,7 @@ impl Owners {
         for usage in uses {
             budget.charge(self.operation_table.lookup)?;
             let user = usage.user_op();
-            if !self.operations.contains(&user) {
+            if !self.operations.contains_key(&user) {
                 return Err(Failure::Invalid("SSA use leaves this function"));
             }
             #[cfg(test)]
@@ -381,7 +432,7 @@ impl Owners {
         for usage in uses {
             budget.charge(self.operation_table.lookup)?;
             let user = usage.user_op();
-            if !self.operations.contains(&user) {
+            if !self.operations.contains_key(&user) {
                 return Err(Failure::Invalid("successor use leaves this function"));
             }
             #[cfg(test)]
@@ -406,18 +457,91 @@ impl Owners {
     }
 }
 
-pub(super) fn check(
-    context: &Context,
+/// Fresh, single-use order index for this synchronous immutable capture only.
+/// It is not mutation-surviving analysis or durable graph identity.
+pub(super) struct CheckedOrder<'a> {
+    context: &'a Context,
+    root: Ptr<Operation>,
+    operations: HashMap<Ptr<Operation>, usize>,
+    bound: ProductionAnalysisResourceUpperBoundV1,
+    remaining_queries: usize,
+    #[cfg(test)]
+    _index_lifetime: OrderIndexLifetime,
+}
+
+impl fmt::Debug for CheckedOrder<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CheckedOrder")
+            .field("bound", &self.bound)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CheckedOrder<'_> {
+    pub(super) fn resource_upper_bound(&self) -> ProductionAnalysisResourceUpperBoundV1 {
+        self.bound
+    }
+
+    pub(super) fn belongs_to(&self, context: &Context, function: &FuncOp) -> bool {
+        std::ptr::eq(self.context, context) && self.root == function.get_operation()
+    }
+
+    pub(super) fn strictly_precedes(&mut self, definition: Ptr<Operation>, user: usize) -> bool {
+        let Some(remaining) = self.remaining_queries.checked_sub(1) else {
+            return false;
+        };
+        self.remaining_queries = remaining;
+        self.operations
+            .get(&definition)
+            .is_some_and(|position| *position < user)
+    }
+}
+
+pub(super) fn check<'a>(
+    context: &'a Context,
     function: &FuncOp,
     prescan: &PrescanV1,
     limits: ProductionAnalysisResourceLimitsV1,
-) -> Checked<ProductionAnalysisResourceUpperBoundV1> {
+) -> Checked<CheckedOrder<'a>> {
     let mut budget = Budget::new(limits)?;
-    if let Err(failure) = check_inner(context, function, prescan, &mut budget) {
-        budget.admit_failure(&failure)?;
-        return Err(failure);
-    }
-    budget.bound()
+    let owners = match check_inner(context, function, prescan, &mut budget) {
+        Ok(owners) => owners,
+        Err(failure) => {
+            budget.admit_failure(&failure)?;
+            return Err(failure);
+        }
+    };
+    budget.charge(add(
+        8,
+        mul(
+            owners.same_block_queries,
+            add(owners.operation_table.lookup, 4)?,
+        )?,
+    )?)?;
+    let heap = owners
+        .operation_table
+        .storage
+        .checked_sub(cells::<HashMap<Ptr<Operation>, usize>>())
+        .ok_or_else(overflow)?;
+    let retained = add(cells::<CheckedOrder<'_>>(), heap)?;
+    budget.scratch(cells::<CheckedOrder<'_>>())?;
+    let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+        PHASE,
+        budget.work,
+        retained,
+        budget.peak.checked_sub(retained).ok_or_else(overflow)?,
+    )
+    .map_err(Failure::Resource)?;
+    Ok(CheckedOrder {
+        context,
+        root: function.get_operation(),
+        operations: owners.operations,
+        bound,
+        remaining_queries: owners.same_block_queries,
+        #[cfg(test)]
+        _index_lifetime: owners.index_lifetime,
+    })
 }
 
 fn check_inner(
@@ -425,8 +549,8 @@ fn check_inner(
     function: &FuncOp,
     prescan: &PrescanV1,
     budget: &mut Budget,
-) -> Checked<()> {
-    let owners = Owners::new(context, function, prescan, budget)?;
+) -> Checked<Owners> {
+    let mut owners = Owners::new(context, function, prescan, budget)?;
     // Check direction-sensitive ownership before reverse lists can follow an
     // external user. Lookup errors remain compact; no upstream error rendering.
     for (block, operations) in prescan.operations.iter().enumerate() {
@@ -441,6 +565,12 @@ fn check_inner(
                         operation,
                         operand,
                     });
+                }
+                budget.charge(4)?;
+                if let DefiningEntity::Op(definition) = value.defining_entity()
+                    && definition.deref(context).get_parent_block() == Some(prescan.blocks[block])
+                {
+                    owners.same_block_queries = add(owners.same_block_queries, 1)?;
                 }
             }
             for (successor, target) in raw.successors().enumerate() {
@@ -477,7 +607,7 @@ fn check_inner(
     }
     // Unique use identities plus exact-slot checks and equal cardinality prove
     // closure without retaining a second, A/S-sized use table.
-    Ok(())
+    Ok(owners)
 }
 
 pub(super) fn identity_failure(
@@ -485,6 +615,8 @@ pub(super) fn identity_failure(
     prescan: &PrescanV1,
     failure: Failure,
 ) -> BuildIdentityFailureV1 {
+    #[cfg(test)]
+    require_order_index_retired_for_tests();
     let (block, operation) = match failure {
         Failure::Resource(error) => return BuildIdentityFailureV1::ResourceLimit(error),
         Failure::Invalid(detail) => {
@@ -537,11 +669,17 @@ struct Trace {
     value_use_vectors: usize,
     successor_use_vectors: usize,
     full_verifications: usize,
+    order_indexes: usize,
+    live_order_indexes: usize,
+    retired_order_indexes: usize,
+    retirement_checks: usize,
 }
 #[cfg(test)]
 std::thread_local! { static TRACE: std::cell::Cell<Trace> = const { std::cell::Cell::new(Trace {
     owner_reservations: 0, definition_rosters: 0, user_rosters: 0,
     value_use_vectors: 0, successor_use_vectors: 0, full_verifications: 0,
+    order_indexes: 0, live_order_indexes: 0, retired_order_indexes: 0,
+    retirement_checks: 0,
 }) }; }
 #[cfg(test)]
 fn trace(update: impl FnOnce(&mut Trace)) {
@@ -554,6 +692,86 @@ fn trace(update: impl FnOnce(&mut Trace)) {
 #[cfg(test)]
 pub(super) fn full_verification() {
     trace(|trace| trace.full_verifications += 1);
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct OrderIndexLifetime;
+
+#[cfg(test)]
+impl OrderIndexLifetime {
+    fn new() -> Self {
+        trace(|trace| {
+            trace.live_order_indexes += 1;
+            trace.order_indexes += 1;
+        });
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for OrderIndexLifetime {
+    fn drop(&mut self) {
+        trace(|trace| {
+            trace.live_order_indexes -= 1;
+            trace.retired_order_indexes += 1;
+        });
+    }
+}
+
+#[cfg(test)]
+pub(super) fn require_order_index_retired_for_tests() {
+    assert_eq!(TRACE.get().live_order_indexes, 0);
+    trace(|trace| trace.retirement_checks += 1);
+}
+
+#[cfg(test)]
+pub(super) fn order_index_counts_for_tests() -> (usize, usize, usize, usize) {
+    let trace = TRACE.get();
+    (
+        trace.order_indexes,
+        trace.live_order_indexes,
+        trace.retired_order_indexes,
+        trace.retirement_checks,
+    )
+}
+
+// Structural closure alone is independent of the production operation allowlist.
+// This test census grants no identity or production analysis admission.
+#[cfg(test)]
+pub(super) fn native_census(context: &Context, function: &FuncOp) -> PrescanV1 {
+    let blocks: Vec<_> = function
+        .get_region(context)
+        .deref(context)
+        .iter(context)
+        .collect();
+    let operations: Vec<Vec<_>> = blocks
+        .iter()
+        .map(|block| block.deref(context).iter(context).collect())
+        .collect();
+    let mut scan = PrescanV1 {
+        blocks,
+        operations,
+        values: 0,
+        operands: 0,
+        successors: 0,
+        block_arguments: 0,
+        attributes: 0,
+        type_nodes: 0,
+        max_operation_arity: 0,
+        max_successor_arity: 0,
+    };
+    for block in &scan.blocks {
+        scan.block_arguments += block.deref(context).get_num_arguments();
+    }
+    scan.values = scan.block_arguments;
+    for operation in scan.operations.iter().flatten() {
+        let raw = operation.deref(context);
+        scan.values += raw.get_num_results();
+        scan.operands += raw.get_num_operands();
+        scan.successors += raw.get_num_successors();
+    }
+    scan
 }
 
 #[cfg(test)]

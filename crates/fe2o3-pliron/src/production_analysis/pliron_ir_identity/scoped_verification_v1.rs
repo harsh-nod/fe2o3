@@ -6,14 +6,11 @@
 //! separate complete generic-verifier resource bound.
 
 use super::*;
-use pliron::{
-    common_traits::Verify,
-    graph::{dominance::DomInfo, strictly_precedes_in_block},
-    value::DefiningEntity,
-};
+use pliron::{common_traits::Verify, graph::dominance::DomInfo, value::DefiningEntity};
 
 #[derive(Debug)]
 pub(super) enum Failure {
+    OwnerMismatch,
     Structural(pliron::result::Error),
     NotSsa,
     Dominance {
@@ -26,6 +23,7 @@ pub(super) enum Failure {
 impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::OwnerMismatch => formatter.write_str("SSA order index belongs to another owner"),
             Self::Structural(error) => fmt::Display::fmt(error, formatter),
             Self::NotSsa => formatter.write_str("identity verification requires an SSA region"),
             Self::Dominance {
@@ -42,7 +40,16 @@ impl fmt::Display for Failure {
 
 /// Caller must have admitted this exact immutable owner's prescan and def-use
 /// closure. In particular, there are no nested regions or foreign users/defs.
-pub(super) fn verify(context: &Context, function: &FuncOp) -> Result<(), Failure> {
+pub(super) fn verify(
+    context: &Context,
+    function: &FuncOp,
+    mut order: def_use_closure_v1::CheckedOrder<'_>,
+) -> Result<(), Failure> {
+    if !order.belongs_to(context, function) {
+        return Err(Failure::OwnerMismatch);
+    }
+    #[cfg(test)]
+    assert!(!PANIC_NEXT.replace(false), "injected scoped verifier panic");
     #[cfg(test)]
     trace(|trace| trace.structural_verifications += 1);
     function
@@ -72,8 +79,11 @@ pub(super) fn verify(context: &Context, function: &FuncOp) -> Result<(), Failure
                     DefiningEntity::Block(definition) => (Some(definition), true),
                     DefiningEntity::Op(definition) => {
                         let parent = definition.deref(context).get_parent_block();
-                        let ordered = parent == Some(block)
-                            && strictly_precedes_in_block(context, definition, operation);
+                        let ordered = parent == Some(block) && {
+                            #[cfg(test)]
+                            trace(|trace| trace.order_queries += 1);
+                            order.strictly_precedes(definition, operation_index)
+                        };
                         (parent, ordered)
                     }
                 };
@@ -109,6 +119,7 @@ struct Trace {
     tree_requests: usize,
     operand_visits: usize,
     cross_block_queries: usize,
+    order_queries: usize,
 }
 
 #[cfg(test)]
@@ -118,7 +129,9 @@ thread_local! {
         tree_requests: 0,
         operand_visits: 0,
         cross_block_queries: 0,
+        order_queries: 0,
     }) };
+    static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]

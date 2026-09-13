@@ -6,6 +6,7 @@ use dialect_kernel::{
 use pliron::{builtin::ops::ModuleOp, dialect::DialectName};
 
 mod native;
+mod order;
 
 fn setup() -> Context {
     let mut context = Context::new();
@@ -61,7 +62,15 @@ fn conditional(
 
 fn observe(context: &Context, function: &FuncOp) -> Result<(), Failure> {
     TRACE.set(Trace::default());
-    verify(context, function)
+    let scan = def_use_closure_v1::native_census(context, function);
+    let order = def_use_closure_v1::check(
+        context,
+        function,
+        &scan,
+        ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+    )
+    .unwrap();
+    verify(context, function, order)
 }
 
 fn captures(context: &Context, function: &FuncOp) -> bool {
@@ -120,6 +129,7 @@ fn actual_provider_uses_one_tree_and_visits_every_operand() {
             tree_requests: 1,
             operand_visits: 1086,
             cross_block_queries: 0,
+            order_queries: 0,
         }
     );
 }

@@ -20,11 +20,22 @@ fn build_identity(
             textual_preflight_bound,
         )
         .map_err(BuildIdentityFailureV1::ResourceLimit)?;
-    let closure_bound = def_use_closure_v1::check(context, function, &prescan, closure_limits)
+    let order = def_use_closure_v1::check(context, function, &prescan, closure_limits)
         .map_err(|failure| def_use_closure_v1::identity_failure(context, &prescan, failure))?;
+    let closure_bound = order.resource_upper_bound();
+    let order_storage = closure_bound.retained_storage_upper_bound();
+    let textual_preflight_bound =
+        identity_bound_with_live_prefix_v1(textual_preflight_bound, order_storage)
+            .map_err(BuildIdentityFailureV1::ResourceLimit)?;
     let textual_preflight_bound =
         dominate_identity_preflight_bound_v1(closure_bound, textual_preflight_bound)
             .map_err(BuildIdentityFailureV1::ResourceLimit)?;
+    limits
+        .require(
+            ProductionAnalysisResourcePhaseV1::StructuralIdentity,
+            textual_preflight_bound,
+        )
+        .map_err(BuildIdentityFailureV1::ResourceLimit)?;
     let encode = |encoder: &mut IdentityEncoderV1,
                   block_ids: Option<&HashMap<Ptr<BasicBlock>, u64>>,
                   value_ids: Option<&HashMap<Value, u64>>| {
@@ -346,6 +357,11 @@ fn build_identity(
         counter.record_location_name_bytes,
     )
     .map_err(BuildIdentityFailureV1::ResourceLimit)?;
+    // The order index stays live through counting and verification. Conservatively
+    // cover its overlap with the bundled capture envelope, including later encoding.
+    let resource_upper_bound =
+        identity_bound_with_live_prefix_v1(resource_upper_bound, order_storage)
+            .map_err(BuildIdentityFailureV1::ResourceLimit)?;
     // Admit the cumulative preflight/capture work before native verification
     // or retained identity allocation, not after both phases have executed.
     let resource_upper_bound =
@@ -359,9 +375,11 @@ fn build_identity(
         .map_err(BuildIdentityFailureV1::ResourceLimit)?;
     #[cfg(test)]
     def_use_closure_v1::full_verification();
-    let verification = catch_unwind(AssertUnwindSafe(|| {
-        scoped_verification_v1::verify(context, function)
+    let verification = catch_unwind(AssertUnwindSafe(move || {
+        scoped_verification_v1::verify(context, function, order)
     }));
+    #[cfg(test)]
+    def_use_closure_v1::require_order_index_retired_for_tests();
     match verification {
         Err(_) => {
             return Err(PlironIrIdentityErrorV1::StructuralVerificationFailed {
