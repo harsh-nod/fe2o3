@@ -1,0 +1,9 @@
+PASS real-clean
+PASS real-success
+PASS real-failure
+PASS real-inner-timeout
+PASS real-spawn
+PASS cleanup-eperm-retains-success
+PASS outer-timeout-retains-signal
+PASS cleanup-esrch-is-benign
+PASS: 8 runner contract tests

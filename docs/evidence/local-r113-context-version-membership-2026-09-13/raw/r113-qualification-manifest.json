@@ -1,0 +1,1665 @@
+{
+  "source_head": "a2feef229758381b66f962ad8be2b87843eb33a3",
+  "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05",
+  "helpers": [
+    {
+      "name": "r113-run-v3.js",
+      "sha256": "c50fcee48fa8e4de1d6979514cd73d2d5fa04b6d67562d9a1197450b775509b1"
+    },
+    {
+      "name": "r113-qualification-plan.js",
+      "sha256": "b53b6dc1aaf016237147c12cea448f44a44b9aec081474040c01ef4a26b82230"
+    },
+    {
+      "name": "r113-qualification-evidence.js",
+      "sha256": "e697de56e7e64419b3024434b85136d5770b5a76d0add4e9723653b5d1468e64"
+    },
+    {
+      "name": "r113-qualification-tests.js",
+      "sha256": "4cd355d9210afcbafccaaa936d1ebeaaabb20dff65f93ce32239c23b31bab4be"
+    },
+    {
+      "name": "r113-qualification-prepare.js",
+      "sha256": "41c8e908710a81cc4f798afed0daf8e3c53fdc1c9ff4588d2994983e7aad5652"
+    },
+    {
+      "name": "r113-qualification-run.js",
+      "sha256": "55397809c2bec317df65b782fe36dfca29c850919c2e34c0d9ee381fdd53738c"
+    },
+    {
+      "name": "r113-qualification-collect.js",
+      "sha256": "d84d77362c24ca53be4bff0da60d8b303b25169c4d95a0c21429be8fbcad33a5"
+    }
+  ],
+  "original_source": {
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "text": "//! Bounded writer issuance and allocation membership over Context projections.\n//!\n//! Model values are not runtime authority. The caller models one journal per\n//! fresh Context, configured before any local ID is minted. This module neither\n//! authenticates that premise nor allocates Context IDs. Settlement, production\n//! tickets and cross-run reuse remain separate transitions.\n\nuse alloc::vec::Vec;\n#[cfg(test)]\nuse core::cell::Cell;\n\npub const CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1: usize = 1_048_576;\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContextWriterKindV1 {\n    Synchronous,\n    Submission,\n}\n\n/// Inert projection of an existing identity, not an identity-issuance API.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextWriterKeyV1 {\n    pub context_generation: u64,\n    pub local: u64,\n    pub kind: ContextWriterKindV1,\n}\n\n/// A descriptive slot reference; discarding it does not abort its reservation.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n#[must_use = \"discarding a reference does not release its retained writer slot\"]\npub struct ContextWriterReferenceV1 {\n    pub slot: usize,\n    pub key: ContextWriterKeyV1,\n}\n\n/// An inert projection of the complete existing allocation identity.\n#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]\npub struct ContextAllocationKeyV1 {\n    pub context_generation: u64,\n    pub local: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextJournalDeviceKeyV1 {\n    pub context_generation: u64,\n    pub local: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextAllocationReferenceV1 {\n    pub slot: usize,\n    pub key: ContextAllocationKeyV1,\n}\n\n/// One canonical whole-allocation destination, not an aliased input view.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextAllocationWriteV1 {\n    pub allocation: ContextAllocationReferenceV1,\n    pub device: ContextJournalDeviceKeyV1,\n    pub byte_extent: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContextWriterStateV1 {\n    Reserved,\n    Pending { member_count: usize },\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextAllocationStateV1 {\n    pub device: ContextJournalDeviceKeyV1,\n    pub byte_extent: u64,\n    pub attempt_epoch: u64,\n    pub content_lineage: u64,\n    pub pending_writer: Option<ContextWriterReferenceV1>,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum WriterEntryV1 {\n    Reserved(ContextWriterKeyV1),\n    Pending {\n        key: ContextWriterKeyV1,\n        head: Option<usize>,\n        count: usize,\n    },\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct AllocationEntryV1 {\n    key: ContextAllocationKeyV1,\n    device: ContextJournalDeviceKeyV1,\n    byte_extent: u64,\n    attempt_epoch: u64,\n    content_lineage: u64,\n    pending_member: Option<usize>,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct MemberEntryV1 {\n    writer: ContextWriterReferenceV1,\n    allocation: ContextAllocationReferenceV1,\n    prior_lineage: u64,\n    attempt_epoch: u64,\n    next: Option<usize>,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct BeginMemberPlanV1 {\n    member_slot: usize,\n    allocation: ContextAllocationReferenceV1,\n    prior_lineage: u64,\n    attempt_epoch: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContextVersionJournalErrorV1 {\n    InvalidContextGeneration,\n    InvalidCapacity,\n    StorageAllocationFailed,\n    ForeignContext,\n    InvalidWriterId,\n    WriterReplay,\n    WriterCapacity,\n    InvalidReference,\n    InvalidState,\n    InvalidAllocationId,\n    InvalidDeviceId,\n    InvalidExtent,\n    AllocationReplay,\n    AllocationCapacity,\n    InvalidAllocationReference,\n    AllocationDeviceMismatch,\n    AllocationExtentMismatch,\n    AllocationBusy,\n    RosterCapacity,\n    NonCanonicalRoster,\n    MemberCapacity,\n    EpochExhausted,\n}\n\n/// Construction is O(A + W), enrollment O(A), and canonical Begin O(k).\n/// Writer issuance, exact lookup and pre-effect abort remain O(1).\n#[derive(Debug)]\npub struct ContextVersionJournalV1 {\n    context_generation: u64,\n    allocation_capacity: usize,\n    writer_capacity: usize,\n    registration_watermark: u64,\n    reserved_count: usize,\n    writers: Vec<Option<WriterEntryV1>>,\n    free: Vec<usize>,\n    allocations: Vec<Option<AllocationEntryV1>>,\n    allocation_free: Vec<usize>,\n    members: Vec<Option<MemberEntryV1>>,\n    member_free: Vec<usize>,\n    scratch: Vec<Option<BeginMemberPlanV1>>,\n    #[cfg(test)]\n    indexed_accesses: Cell<usize>,\n}\n\nfn issuable_context_id(value: u64) -> bool {\n    value != 0 && value != u64::MAX\n}\n\nfn vacant_slots<T>(capacity: usize) -> Result<Vec<Option<T>>, ContextVersionJournalErrorV1> {\n    let mut slots = Vec::new();\n    slots\n        .try_reserve_exact(capacity)\n        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;\n    slots.resize_with(capacity, || None);\n    Ok(slots)\n}\n\nfn free_slots(capacity: usize) -> Result<Vec<usize>, ContextVersionJournalErrorV1> {\n    let mut free = Vec::new();\n    free.try_reserve_exact(capacity)\n        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;\n    free.extend((0..capacity).rev());\n    Ok(free)\n}\n\nimpl ContextVersionJournalV1 {\n    /// Models construction-only opt-in, with a fixed zero initial watermark.\n    pub fn new(\n        context_generation: u64,\n        allocation_capacity: usize,\n        writer_capacity: usize,\n    ) -> Result<Self, ContextVersionJournalErrorV1> {\n        if !issuable_context_id(context_generation) {\n            return Err(ContextVersionJournalErrorV1::InvalidContextGeneration);\n        }\n        if !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&allocation_capacity)\n            || !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&writer_capacity)\n        {\n            return Err(ContextVersionJournalErrorV1::InvalidCapacity);\n        }\n        Ok(Self {\n            context_generation,\n            allocation_capacity,\n            writer_capacity,\n            registration_watermark: 0,\n            reserved_count: 0,\n            writers: vacant_slots(writer_capacity)?,\n            free: free_slots(writer_capacity)?,\n            allocations: vacant_slots(allocation_capacity)?,\n            allocation_free: free_slots(allocation_capacity)?,\n            members: vacant_slots(allocation_capacity)?,\n            member_free: free_slots(allocation_capacity)?,\n            scratch: vacant_slots(allocation_capacity)?,\n            #[cfg(test)]\n            indexed_accesses: Cell::new(0),\n        })\n    }\n\n    pub const fn context_generation(&self) -> u64 {\n        self.context_generation\n    }\n\n    pub const fn allocation_capacity(&self) -> usize {\n        self.allocation_capacity\n    }\n\n    pub const fn writer_capacity(&self) -> usize {\n        self.writer_capacity\n    }\n\n    pub const fn registration_watermark(&self) -> u64 {\n        self.registration_watermark\n    }\n\n    /// The future exclusive Context owner checks this before minting an ID.\n    pub fn remaining_writer_slots(&self) -> usize {\n        self.free.len()\n    }\n\n    pub fn reserved_writer_count(&self) -> usize {\n        self.reserved_count\n    }\n\n    /// Registers an already-issued key. Gaps are legal; rejected keys do not\n    /// advance this watermark or undo the caller's existing ID consumption.\n    pub fn register_writer(\n        &mut self,\n        key: ContextWriterKeyV1,\n    ) -> Result<ContextWriterReferenceV1, ContextVersionJournalErrorV1> {\n        if key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::ForeignContext);\n        }\n        if !issuable_context_id(key.local) {\n            return Err(ContextVersionJournalErrorV1::InvalidWriterId);\n        }\n        if key.local <= self.registration_watermark {\n            return Err(ContextVersionJournalErrorV1::WriterReplay);\n        }\n        let slot = self\n            .next_free()\n            .ok_or(ContextVersionJournalErrorV1::WriterCapacity)?;\n        if self.read_slot(slot) != Some(&None) {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        let reserved_count = self\n            .reserved_count\n            .checked_add(1)\n            .filter(|count| *count <= self.writer_capacity)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        // Exclusive preflight fixes the free slot; commit has no fallible work.\n        self.pop_free();\n        self.store_slot(slot, Some(WriterEntryV1::Reserved(key)));\n        self.reserved_count = reserved_count;\n        self.registration_watermark = key.local;\n        Ok(ContextWriterReferenceV1 { slot, key })\n    }\n\n    /// Validates exact Reserved identity, not the latest registration order.\n    pub fn lookup_reserved(\n        &self,\n        reference: ContextWriterReferenceV1,\n    ) -> Result<ContextWriterKeyV1, ContextVersionJournalErrorV1> {\n        match self.read_slot(reference.slot).copied().flatten() {\n            Some(WriterEntryV1::Reserved(key))\n                if key == reference.key && key.context_generation == self.context_generation =>\n            {\n                Ok(key)\n            }\n            _ => Err(ContextVersionJournalErrorV1::InvalidReference),\n        }\n    }\n\n    /// Explicitly releases a Reserved slot before effects; never rolls back IDs.\n    pub fn abort_reserved(\n        &mut self,\n        reference: ContextWriterReferenceV1,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        self.lookup_reserved(reference)?;\n        if self.free.len() >= self.writer_capacity || self.free.len() >= self.free.capacity() {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        let reserved_count = self\n            .reserved_count\n            .checked_sub(1)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        self.store_slot(reference.slot, None);\n        self.push_free(reference.slot);\n        self.reserved_count = reserved_count;\n        Ok(())\n    }\n\n    /// Enrolls an existing allocation. No retirement or re-enrollment is implied.\n    pub fn enroll_allocation(\n        &mut self,\n        key: ContextAllocationKeyV1,\n        device: ContextJournalDeviceKeyV1,\n        byte_extent: u64,\n    ) -> Result<ContextAllocationReferenceV1, ContextVersionJournalErrorV1> {\n        if key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::ForeignContext);\n        }\n        if !issuable_context_id(key.local) {\n            return Err(ContextVersionJournalErrorV1::InvalidAllocationId);\n        }\n        if device.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::ForeignContext);\n        }\n        if !issuable_context_id(device.local) {\n            return Err(ContextVersionJournalErrorV1::InvalidDeviceId);\n        }\n        if byte_extent == 0 {\n            return Err(ContextVersionJournalErrorV1::InvalidExtent);\n        }\n        for index in 0..self.allocations.len() {\n            if self\n                .read_allocation(index)\n                .is_some_and(|entry| entry.key == key)\n            {\n                return Err(ContextVersionJournalErrorV1::AllocationReplay);\n            }\n        }\n        self.count_indexed_access();\n        let slot = self\n            .allocation_free\n            .last()\n            .copied()\n            .ok_or(ContextVersionJournalErrorV1::AllocationCapacity)?;\n        self.count_indexed_access();\n        if self.allocations.get(slot) != Some(&None) {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        self.count_indexed_access();\n        let _ = self.allocation_free.pop();\n        self.count_indexed_access();\n        self.allocations[slot] = Some(AllocationEntryV1 {\n            key,\n            device,\n            byte_extent,\n            attempt_epoch: 0,\n            content_lineage: 0,\n            pending_member: None,\n        });\n        Ok(ContextAllocationReferenceV1 { slot, key })\n    }\n\n    pub fn lookup_allocation(\n        &self,\n        reference: ContextAllocationReferenceV1,\n    ) -> Result<ContextAllocationStateV1, ContextVersionJournalErrorV1> {\n        let entry = self.exact_allocation(reference)?;\n        let pending_writer = match entry.pending_member {\n            None => None,\n            Some(slot) => {\n                self.count_indexed_access();\n                let member = self\n                    .members\n                    .get(slot)\n                    .and_then(Option::as_ref)\n                    .filter(|member| member.allocation == reference)\n                    .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n                Some(member.writer)\n            }\n        };\n        Ok(ContextAllocationStateV1 {\n            device: entry.device,\n            byte_extent: entry.byte_extent,\n            attempt_epoch: entry.attempt_epoch,\n            content_lineage: entry.content_lineage,\n            pending_writer,\n        })\n    }\n\n    pub fn lookup_writer(\n        &self,\n        reference: ContextWriterReferenceV1,\n    ) -> Result<ContextWriterStateV1, ContextVersionJournalErrorV1> {\n        let (key, state) = match self.read_slot(reference.slot).copied().flatten() {\n            Some(WriterEntryV1::Reserved(key)) => (key, ContextWriterStateV1::Reserved),\n            Some(WriterEntryV1::Pending { key, count, .. }) => (\n                key,\n                ContextWriterStateV1::Pending {\n                    member_count: count,\n                },\n            ),\n            None => return Err(ContextVersionJournalErrorV1::InvalidReference),\n        };\n        if key != reference.key || key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::InvalidReference);\n        }\n        Ok(state)\n    }\n\n    /// The caller supplies an already canonical whole-allocation roster.\n    /// Full preflight precedes even scratch mutation; commit keeps the same borrow.\n    pub fn begin_write(\n        &mut self,\n        writer: ContextWriterReferenceV1,\n        canonical: &[ContextAllocationWriteV1],\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        self.lookup_reserved(writer)?;\n        let reserved_count = self\n            .reserved_count\n            .checked_sub(1)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        let count = canonical.len();\n        if count > self.allocation_capacity {\n            return Err(ContextVersionJournalErrorV1::RosterCapacity);\n        }\n        for pair in canonical.windows(2) {\n            if pair[0].allocation.key >= pair[1].allocation.key {\n                return Err(ContextVersionJournalErrorV1::NonCanonicalRoster);\n            }\n        }\n        for destination in canonical {\n            let entry = self.exact_allocation(destination.allocation)?;\n            if entry.device != destination.device {\n                return Err(ContextVersionJournalErrorV1::AllocationDeviceMismatch);\n            }\n            if entry.byte_extent != destination.byte_extent {\n                return Err(ContextVersionJournalErrorV1::AllocationExtentMismatch);\n            }\n            if entry.pending_member.is_some() {\n                return Err(ContextVersionJournalErrorV1::AllocationBusy);\n            }\n            entry\n                .attempt_epoch\n                .checked_add(1)\n                .ok_or(ContextVersionJournalErrorV1::EpochExhausted)?;\n        }\n        if count > self.member_free.len() {\n            return Err(ContextVersionJournalErrorV1::MemberCapacity);\n        }\n        if count > self.scratch.len() {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        // Free-slot uniqueness is a preserved global invariant, not an arena scan.\n        for index in 0..count {\n            let member = self.free_member_slot(index);\n            self.count_indexed_access();\n            if self.members.get(member) != Some(&None) {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n            self.count_indexed_access();\n            if self.scratch[index].is_some() {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n        }\n        for (index, destination) in canonical.iter().enumerate() {\n            let entry = self\n                .read_allocation(destination.allocation.slot)\n                .expect(\"whole-roster preflight retains exact allocations\");\n            let plan = BeginMemberPlanV1 {\n                member_slot: self.free_member_slot(index),\n                allocation: destination.allocation,\n                prior_lineage: entry.content_lineage,\n                attempt_epoch: entry.attempt_epoch + 1,\n            };\n            self.store_plan(index, plan);\n        }\n        let head = if count == 0 {\n            None\n        } else {\n            self.count_indexed_access();\n            Some(self.scratch[0].expect(\"complete member plan\").member_slot)\n        };\n        for index in 0..count {\n            self.count_indexed_access();\n            let plan = self.scratch[index].take().expect(\"complete member plan\");\n            let next = if index + 1 == count {\n                None\n            } else {\n                self.count_indexed_access();\n                Some(\n                    self.scratch[index + 1]\n                        .expect(\"complete next member plan\")\n                        .member_slot,\n                )\n            };\n            self.count_indexed_access();\n            let _ = self.member_free.pop();\n            self.count_indexed_access();\n            self.members[plan.member_slot] = Some(MemberEntryV1 {\n                writer,\n                allocation: plan.allocation,\n                prior_lineage: plan.prior_lineage,\n                attempt_epoch: plan.attempt_epoch,\n                next,\n            });\n            self.count_indexed_access();\n            let entry = self.allocations[plan.allocation.slot]\n                .as_mut()\n                .expect(\"retained exact allocation\");\n            entry.attempt_epoch = plan.attempt_epoch;\n            entry.pending_member = Some(plan.member_slot);\n        }\n        self.store_slot(\n            writer.slot,\n            Some(WriterEntryV1::Pending {\n                key: writer.key,\n                head,\n                count,\n            }),\n        );\n        self.reserved_count = reserved_count;\n        Ok(())\n    }\n\n    fn read_allocation(&self, slot: usize) -> Option<&AllocationEntryV1> {\n        self.count_indexed_access();\n        self.allocations.get(slot).and_then(Option::as_ref)\n    }\n\n    fn exact_allocation(\n        &self,\n        reference: ContextAllocationReferenceV1,\n    ) -> Result<&AllocationEntryV1, ContextVersionJournalErrorV1> {\n        self.read_allocation(reference.slot)\n            .filter(|entry| {\n                entry.key == reference.key\n                    && entry.key.context_generation == self.context_generation\n            })\n            .ok_or(ContextVersionJournalErrorV1::InvalidAllocationReference)\n    }\n\n    fn free_member_slot(&self, offset: usize) -> usize {\n        self.count_indexed_access();\n        self.member_free[self.member_free.len() - 1 - offset]\n    }\n\n    fn store_plan(&mut self, index: usize, plan: BeginMemberPlanV1) {\n        self.count_indexed_access();\n        self.scratch[index] = Some(plan);\n    }\n\n    fn count_indexed_access(&self) {\n        #[cfg(test)]\n        self.indexed_accesses.set(self.indexed_accesses.get() + 1);\n    }\n\n    fn read_slot(&self, slot: usize) -> Option<&Option<WriterEntryV1>> {\n        self.count_indexed_access();\n        self.writers.get(slot)\n    }\n\n    fn store_slot(&mut self, slot: usize, value: Option<WriterEntryV1>) {\n        self.count_indexed_access();\n        self.writers[slot] = value;\n    }\n\n    fn next_free(&self) -> Option<usize> {\n        self.count_indexed_access();\n        self.free.last().copied()\n    }\n\n    fn pop_free(&mut self) {\n        self.count_indexed_access();\n        let _ = self.free.pop();\n    }\n\n    fn push_free(&mut self, slot: usize) {\n        self.count_indexed_access();\n        self.free.push(slot);\n    }\n}\n\n#[cfg(test)]\nmod tests;\n"
+  },
+  "historical_artifacts": [
+    {
+      "name": "r113-auxiliary-campaign-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-auxiliary-campaign-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-auxiliary-campaign.json",
+      "sha256": "d209aa96081ea72b4f3d1cb61daa4a982d8c3cb7bb23b246e6db1acbca4c228b"
+    },
+    {
+      "name": "r113-auxiliary-campaign.log",
+      "sha256": "f43c51e9e196904eeee2cce9fcd75b711eaf77c4d89da0037f24df874d4db0df"
+    },
+    {
+      "name": "r113-auxiliary-complete.json",
+      "sha256": "e9fa3f7bb3a81b88053af45c414aea1d6a95ce9b0041ea8ce586d3c9726d2055"
+    },
+    {
+      "name": "r113-auxiliary-gates.py",
+      "sha256": "fe7f78410f0e6e158f1fe3eb5cec08aec26a2e28c1583a0804258bbc16a84240"
+    },
+    {
+      "name": "r113-auxiliary-results.json",
+      "sha256": "0f42e77d5640a122a63188f9ad8d3435c0bdcfb6e1a572b0d2b41192fdd081cd"
+    },
+    {
+      "name": "r113-auxiliary-source-after.json",
+      "sha256": "2afa0882f0c4d9f3046941a87ec23ca765cf53652f9d70315f183e27c477822c"
+    },
+    {
+      "name": "r113-auxiliary-source-inputs.json",
+      "sha256": "2afa0882f0c4d9f3046941a87ec23ca765cf53652f9d70315f183e27c477822c"
+    },
+    {
+      "name": "r113-bind.log",
+      "sha256": "820067a24e0938e2d689f51751e70bc63d6bae8f2dc8dc79c6182e9f3098d25d"
+    },
+    {
+      "name": "r113-environment.json",
+      "sha256": "ead116b6923daaa3279a2a8eb94ac06033e8b49b98591da640fb85ef9abbc570"
+    },
+    {
+      "name": "r113-final-ci-test-gate.log",
+      "sha256": "7614173c0974c8aa8202f60f5fc9a9ed8691211147a0004dab9299a3555f5b9b"
+    },
+    {
+      "name": "r113-final-clippy-all.log",
+      "sha256": "9ff43f117ced247787ef7af701f2e66827e223880402505a9b501b250bf2fd90"
+    },
+    {
+      "name": "r113-final-clippy-production.log",
+      "sha256": "8401a0310aca881ad908406cf437375e8f7b6ced882220fdb8cbc838491ee1a8"
+    },
+    {
+      "name": "r113-final-cohort-helper-tests-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-cohort-helper-tests-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-cohort-helper-tests.json",
+      "sha256": "cb4feb8b5fd5ca8ddb75d8cd5c35ccbb1a47a3ae63ab9600bf8b7cf6cfc1ff32"
+    },
+    {
+      "name": "r113-final-cohort-helper-tests.log",
+      "sha256": "14822c1ac7481b76eb6a6be7b24ee14c00dd6f8385d9c573be4199aa6c327346"
+    },
+    {
+      "name": "r113-final-complete.json",
+      "sha256": "06f34652f1ed554ca91e68e2b817e5f556e1ee5f8f368c7d357123f436213c3d"
+    },
+    {
+      "name": "r113-final-dependency-policy.log",
+      "sha256": "e4909791d89201a88e23213fca74159a2d5b8e869b5227635acbe74c893d6e25"
+    },
+    {
+      "name": "r113-final-dependency-tests.log",
+      "sha256": "c6352adff70a6982c739a1cd77bbb43d2425eefd2dc2112b92b0ceebf2a6ca31"
+    },
+    {
+      "name": "r113-final-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-final-format-check-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-format-check-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-format-check.json",
+      "sha256": "9942182f980b2068aac03de0a12f781462ea26cb8b46fe311d6774faca2a471f"
+    },
+    {
+      "name": "r113-final-format-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-final-gnu-docs.log",
+      "sha256": "25b0574b475a8567a4f8c074ab0ffb555e672069d0f595bb229f56e17c0031cc"
+    },
+    {
+      "name": "r113-final-gnu-host.log",
+      "sha256": "b59a842247a0bf5d534b61b173e491673c62afcbb5fc2ea40789cff7fc5029c5"
+    },
+    {
+      "name": "r113-final-gnu-tests.log",
+      "sha256": "9aa2b1860bcd62b7c1f35b777ff71a8150a1d4dcc29784ac9e7892dca27fda76"
+    },
+    {
+      "name": "r113-final-journal-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-journal-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-journal.json",
+      "sha256": "a842e2902328433d9880bc5ab61040c71aae75c28b460bf81a098faa2571870c"
+    },
+    {
+      "name": "r113-final-journal.log",
+      "sha256": "d06cc72c3c3d6e73de3c5d4c91fb25bc1ea00debe49848abe8ac2c7bb72aeed3"
+    },
+    {
+      "name": "r113-final-macro-fixtures.log",
+      "sha256": "7ca1ecd127cbe2389c744b69ce8dd706106946517cb3043e35b9f6bf0b85c99a"
+    },
+    {
+      "name": "r113-final-model-clippy-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-model-clippy-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-model-clippy.json",
+      "sha256": "3310eda62b4ee8edbd33d7ba1693a8fef5ec0c8bb2cccd10d50353b05de487d3"
+    },
+    {
+      "name": "r113-final-model-clippy.log",
+      "sha256": "9a2ce3bc1ed67f19369607afc8e03de3e5da39be7f3eaa95bf59641dd759fdd1"
+    },
+    {
+      "name": "r113-final-musl-docs.log",
+      "sha256": "c92e5433dfa280e75fd4808ac73aa542c8aa460e952bb0674737dc08f3db06a7"
+    },
+    {
+      "name": "r113-final-musl-host-docs.log",
+      "sha256": "0d7fb438f2c15ab1cf79c5416c8eb39ceb2cd0051048d34357e21acef8557564"
+    },
+    {
+      "name": "r113-final-musl-host.log",
+      "sha256": "61da1dc4b0a437268354e36e4cc1ab13693f2fd5686e705a6c203d4b8f774de5"
+    },
+    {
+      "name": "r113-final-musl-tests.log",
+      "sha256": "7da0e0648cc505aa3a3985bf0574dc9ba20ce835819a4abc13a69e049c061389"
+    },
+    {
+      "name": "r113-final-production-clippy-corrected-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-production-clippy-corrected-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-production-clippy-corrected.json",
+      "sha256": "22749989342670fa2903c989d3fd7d2e4921f26bf668d7490f992db25b9a342d"
+    },
+    {
+      "name": "r113-final-production-clippy-corrected.log",
+      "sha256": "2b34696728dc82b03cbf6311d7e3a6a41658bbde097834c3010a78bc82842c1a"
+    },
+    {
+      "name": "r113-final-production-clippy-gate-failure.json",
+      "sha256": "d98855ea0fe57cbe89069737528c25779ef59d6f83ae9a81ae68925b93f3a386"
+    },
+    {
+      "name": "r113-final-python.log",
+      "sha256": "ffb987a404c51785876cfb5a7bcb1286204cfc9d6ebc24b80ae85a479cd707e1"
+    },
+    {
+      "name": "r113-final-source-after.json",
+      "sha256": "2afa0882f0c4d9f3046941a87ec23ca765cf53652f9d70315f183e27c477822c"
+    },
+    {
+      "name": "r113-final-source-gate.json",
+      "sha256": "e7aaed6151b74c3c6a9322e3cc64ebb438c1c7d40033a7befdeef9c87482191b"
+    },
+    {
+      "name": "r113-final-source-inputs.json",
+      "sha256": "2afa0882f0c4d9f3046941a87ec23ca765cf53652f9d70315f183e27c477822c"
+    },
+    {
+      "name": "r113-final-standalone-lockfiles.log",
+      "sha256": "192a90ed1f437f0cc1b070e66c2061a491c34346df88f5da05cf21234c4bf430"
+    },
+    {
+      "name": "r113-final-whitespace-check-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-whitespace-check-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-final-whitespace-check.json",
+      "sha256": "c8d0e0c012ecd0d0b1efd6c21a992c4b106907a2c1b595331dece79a06cacc6d"
+    },
+    {
+      "name": "r113-final-whitespace-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-final-whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-freeze-contract-tests-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-freeze-contract-tests-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-freeze-contract-tests-v2-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-freeze-contract-tests-v2-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-freeze-contract-tests-v2.json",
+      "sha256": "cee9a6e62c8eb55648a30deb5f0e68dc42fe69ff2e8381133f78e4d2c59f8380"
+    },
+    {
+      "name": "r113-freeze-contract-tests-v2.log",
+      "sha256": "4688d3c97d49b49b62901ddb88c8f80664ef7010223c0274d2d57bb52fe9a9c2"
+    },
+    {
+      "name": "r113-freeze-contract-tests.json",
+      "sha256": "b0193766a48355e7061d11ce90780efa0d18b517cede7940307dc5945bb6fb9d"
+    },
+    {
+      "name": "r113-freeze-contract-tests.log",
+      "sha256": "4688d3c97d49b49b62901ddb88c8f80664ef7010223c0274d2d57bb52fe9a9c2"
+    },
+    {
+      "name": "r113-freeze-tests-v2.js",
+      "sha256": "e299977c47831eb52b13439cb8841059ca97541889fa331897b4f7836ad50efe"
+    },
+    {
+      "name": "r113-freeze-tests.js",
+      "sha256": "b6f776ddb42a7ed641fe15f06bf238214a20ca366ea3a4827295ab8045d2e3cf"
+    },
+    {
+      "name": "r113-freeze-v2.js",
+      "sha256": "1819404ce9cd73acb89dec34513b327e4cba1f48b4bf4386e349e7e9cf5c5063"
+    },
+    {
+      "name": "r113-freeze-v3.js",
+      "sha256": "30f3e5b2bd8daa14941673862f2f8705591e156b65ea06dd2203549fc60699f9"
+    },
+    {
+      "name": "r113-freeze.js",
+      "sha256": "57c9585c5e44f9f8c50c0cd641d27a25b56916277312bf0c1a13c63659d1a13f"
+    },
+    {
+      "name": "r113-frozen-journal-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-frozen-journal-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-frozen-journal.json",
+      "sha256": "a6482a7f19b450a517bd67799b67843a9f8dfe0cb72b05432aed08c43c2e0c5d"
+    },
+    {
+      "name": "r113-frozen-journal.log",
+      "sha256": "fb5aecf48c2017c2e77ab5be9fd47763440d11714b42194084c9dc0ad08b1539"
+    },
+    {
+      "name": "r113-frozen-membership-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-frozen-membership-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-frozen-membership.json",
+      "sha256": "6e7b468a23cd379062924cf26702447005ae562a6267c666af267d8106b7d497"
+    },
+    {
+      "name": "r113-frozen-membership.log",
+      "sha256": "c7f400a170d7da1215556508f40748a50368a645bf2e92237e50a184151886a8"
+    },
+    {
+      "name": "r113-frozen-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-history-probe-native-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-history-probe-native-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-history-probe-native.json",
+      "sha256": "03159af441a2efc309dd6aa8842420b0bf201409a649677fa7ef5d5921f0b5f3"
+    },
+    {
+      "name": "r113-history-probe-native.log",
+      "sha256": "bc8dacaa4690f72641cda02e13740c78da517966e6f646a49a4e60b553625902"
+    },
+    {
+      "name": "r113-initialization.log",
+      "sha256": "2539c3f47f9b58d8b35eb39fe3cd12bb6eec89601632c522d7f117cb462de37a"
+    },
+    {
+      "name": "r113-integrated-format-source-after.json",
+      "sha256": "0a906c937d1ee5e4b91406cc4c7abd800d6eb605cd5eaf6df65aaf45527d596d"
+    },
+    {
+      "name": "r113-integrated-format-source.json",
+      "sha256": "0a906c937d1ee5e4b91406cc4c7abd800d6eb605cd5eaf6df65aaf45527d596d"
+    },
+    {
+      "name": "r113-integrated-format.json",
+      "sha256": "e7c2b4ff7e3ee81056587899f15a4de22a5e356bbbb6911679dcef1b68152d55"
+    },
+    {
+      "name": "r113-integrated-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-integrated-journal-source-after.json",
+      "sha256": "0a906c937d1ee5e4b91406cc4c7abd800d6eb605cd5eaf6df65aaf45527d596d"
+    },
+    {
+      "name": "r113-integrated-journal-source.json",
+      "sha256": "0a906c937d1ee5e4b91406cc4c7abd800d6eb605cd5eaf6df65aaf45527d596d"
+    },
+    {
+      "name": "r113-integrated-journal.json",
+      "sha256": "aafadc081096d869e49ab69ba0b1adf59855f4f316c191652ec1e3caf31e3fab"
+    },
+    {
+      "name": "r113-integrated-journal.log",
+      "sha256": "007fbc9bea956798aa01b88b24fa2ec5e223b1763e47b7fbf375c7ffd1675060"
+    },
+    {
+      "name": "r113-issue-status.json",
+      "sha256": "7779deaf04ff18d2f9d7d6a67127c03f281221b787ad0ee5b8a344c1ac641487"
+    },
+    {
+      "name": "r113-linux-helpers.log",
+      "sha256": "7128fb0d94396b95af8f00256ee5b81ca1e6c109e5c44a57abe1a365838a28b8"
+    },
+    {
+      "name": "r113-ordinary.log",
+      "sha256": "6421565b2de45af572a9e2430266e3c87b464ab2c62336f7e89eb9063170d232"
+    },
+    {
+      "name": "r113-overlap-format-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-overlap-format-source.json",
+      "sha256": "f1c76273a2ba664d47855cb7848f6f12e41fcefb09152343778ce2b5409f48be"
+    },
+    {
+      "name": "r113-overlap-format.json",
+      "sha256": "08726776ff51ba440cf2e9d3c1c59724e2dc85530d25a060e86557cae4c4d776"
+    },
+    {
+      "name": "r113-overlap-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-preliminary-cohort-helper-snapshot.json",
+      "sha256": "dfecd760e63c73af85cd7615cf47b90bfacbe281bf0c05ae2db871696e635a41"
+    },
+    {
+      "name": "r113-preliminary-cohort-tests-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-preliminary-cohort-tests-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-preliminary-cohort-tests.json",
+      "sha256": "8b04d3a8d35dea0e91ecd5364d388750928070fdcaa9616204c896f2b50c52f7"
+    },
+    {
+      "name": "r113-preliminary-cohort-tests.log",
+      "sha256": "ff7ca9024246699249b13c2090b09e5a0c3a0bab6fc93843ccf936d88fa7d6b8"
+    },
+    {
+      "name": "r113-preparation-rejected-helper-snapshot.json",
+      "sha256": "c51c80723f618d92b53b55c19184feac3b0ab0eed7ef624f6488ee9bb6dc3683"
+    },
+    {
+      "name": "r113-preparation.log",
+      "sha256": "efdb8dd253549833ad306cd86c72f375c3a8b15f5891b250fce66c6d852d5863"
+    },
+    {
+      "name": "r113-production-audit.log",
+      "sha256": "400860e866d558eb288fcb5fa535c2f1df7461ba462f0c21f77e3b96009a228c"
+    },
+    {
+      "name": "r113-production-metadata.log",
+      "sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+    },
+    {
+      "name": "r113-production-metadata.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-proof-inventory.log",
+      "sha256": "71666f9ef118d670089a13bab3ca328ec739b8b3870abc98706f4b572884f2e5"
+    },
+    {
+      "name": "r113-qualification-collect.js",
+      "sha256": "d84d77362c24ca53be4bff0da60d8b303b25169c4d95a0c21429be8fbcad33a5"
+    },
+    {
+      "name": "r113-qualification-contract-tests-corrected-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-qualification-contract-tests-corrected-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-qualification-contract-tests-corrected.json",
+      "sha256": "3bf0edf658eb7ea814ef53b2f0ffe0c0f2bb1ae8d84e7198617e6c79f30acba2"
+    },
+    {
+      "name": "r113-qualification-contract-tests-corrected.log",
+      "sha256": "7c06ccefd7965a490944c41d7a250d5f50d04ee29db01217763f4a061fa54c90"
+    },
+    {
+      "name": "r113-qualification-contract-tests-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-qualification-contract-tests-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-qualification-contract-tests.json",
+      "sha256": "32bf921357ddff70f79bf4d55069225a8944ab67bd3cf168137483e15baea09c"
+    },
+    {
+      "name": "r113-qualification-contract-tests.log",
+      "sha256": "14822c1ac7481b76eb6a6be7b24ee14c00dd6f8385d9c573be4199aa6c327346"
+    },
+    {
+      "name": "r113-qualification-evidence.js",
+      "sha256": "e697de56e7e64419b3024434b85136d5770b5a76d0add4e9723653b5d1468e64"
+    },
+    {
+      "name": "r113-qualification-plan.js",
+      "sha256": "b53b6dc1aaf016237147c12cea448f44a44b9aec081474040c01ef4a26b82230"
+    },
+    {
+      "name": "r113-qualification-prepare-initial-failure.json",
+      "sha256": "00bcbff5ac8f0cd1410eded4ba221521590732cda73578f33ce909cdf63bad7e"
+    },
+    {
+      "name": "r113-qualification-prepare-rejected-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-qualification-prepare-rejected-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-qualification-prepare-rejected.json",
+      "sha256": "a8539358e9dd538d0a99980ea1208275a73a8d360bc37c10b1531a925353a500"
+    },
+    {
+      "name": "r113-qualification-prepare-rejected.log",
+      "sha256": "d03ab0c2a197956947389c22fc4044ae5eacafeec5057f885b7634fbf485d0ef"
+    },
+    {
+      "name": "r113-qualification-prepare.js",
+      "sha256": "41c8e908710a81cc4f798afed0daf8e3c53fdc1c9ff4588d2994983e7aad5652"
+    },
+    {
+      "name": "r113-qualification-run.js",
+      "sha256": "55397809c2bec317df65b782fe36dfca29c850919c2e34c0d9ee381fdd53738c"
+    },
+    {
+      "name": "r113-qualification-tests.js",
+      "sha256": "4cd355d9210afcbafccaaa936d1ebeaaabb20dff65f93ce32239c23b31bab4be"
+    },
+    {
+      "name": "r113-registration.log",
+      "sha256": "8e72548a65b4243a4fae5ce3a6d498890444e2dc0634968d0cd778e4a9bb0e92"
+    },
+    {
+      "name": "r113-reviewed-cohort-helper-snapshot.json",
+      "sha256": "879de8524a3d2dcb262d70aee40c30d6bac18875c7e2778cbbd4d9436ba91833"
+    },
+    {
+      "name": "r113-reviewed-cohort-tests-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-reviewed-cohort-tests-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-reviewed-cohort-tests.json",
+      "sha256": "9d084142ddd586329921498d625938eaa18073dd65f5a1520760423cbe0900ff"
+    },
+    {
+      "name": "r113-reviewed-cohort-tests.log",
+      "sha256": "dfe1b5b9b0cef68ad98162b77b21e9fc89648d86118883f976a7d979737d883a"
+    },
+    {
+      "name": "r113-reviewed-format-source-after.json",
+      "sha256": "d54032b988f53bad4b8dc10939dd111a7371cc688679b11b292d2081a6a1cc74"
+    },
+    {
+      "name": "r113-reviewed-format-source.json",
+      "sha256": "d54032b988f53bad4b8dc10939dd111a7371cc688679b11b292d2081a6a1cc74"
+    },
+    {
+      "name": "r113-reviewed-format.json",
+      "sha256": "30742cc2d488974a7f19896439141f4825c74b87beebfd9bae48b79537fda018"
+    },
+    {
+      "name": "r113-reviewed-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-reviewed-journal-source-after.json",
+      "sha256": "d54032b988f53bad4b8dc10939dd111a7371cc688679b11b292d2081a6a1cc74"
+    },
+    {
+      "name": "r113-reviewed-journal-source.json",
+      "sha256": "d54032b988f53bad4b8dc10939dd111a7371cc688679b11b292d2081a6a1cc74"
+    },
+    {
+      "name": "r113-reviewed-journal.json",
+      "sha256": "8fc163821fb6475471082cd983f69f45fcb7355ba5377713aa22e8f0db30a9e7"
+    },
+    {
+      "name": "r113-reviewed-journal.log",
+      "sha256": "b07df72994afa0a27c757c6df2378d1708259e1fcf624f1a5054925e655dc5e7"
+    },
+    {
+      "name": "r113-reviewed-model-source-after.json",
+      "sha256": "d54032b988f53bad4b8dc10939dd111a7371cc688679b11b292d2081a6a1cc74"
+    },
+    {
+      "name": "r113-reviewed-model-source.json",
+      "sha256": "d54032b988f53bad4b8dc10939dd111a7371cc688679b11b292d2081a6a1cc74"
+    },
+    {
+      "name": "r113-reviewed-model.json",
+      "sha256": "645df7d1f9502550a04c33106cb6b0c9eb132fd1d9b894650c03ddc26e750af2"
+    },
+    {
+      "name": "r113-reviewed-model.log",
+      "sha256": "76fb3fdab374ec3b47d7fa123d5fb59cd16e23215c6fccd10e16cea12ab96836"
+    },
+    {
+      "name": "r113-run-v2.js",
+      "sha256": "af5301b916333bd6455a14c06a25015c34c9bde35221e11a185a592cdfd11d9e"
+    },
+    {
+      "name": "r113-run-v3.js",
+      "sha256": "c50fcee48fa8e4de1d6979514cd73d2d5fa04b6d67562d9a1197450b775509b1"
+    },
+    {
+      "name": "r113-run.js",
+      "sha256": "0c0aaf748b7d3820880a82938590269c3ea890964a8c4949d12bd966c4c31ecb"
+    },
+    {
+      "name": "r113-runner-contract-tests-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-contract-tests-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-contract-tests-v2-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-contract-tests-v2-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-contract-tests-v2.json",
+      "sha256": "5039a857ac2210aa934e47e1702a75972647e10a0785b2aa2723c4c39252ee20"
+    },
+    {
+      "name": "r113-runner-contract-tests-v2.log",
+      "sha256": "c118b9c11556a703e09ee89e8754ab912d3506cc626e6c5aeb0c029029905a5f"
+    },
+    {
+      "name": "r113-runner-contract-tests.json",
+      "sha256": "731229bf0ed1b34a0f0eb8d82071d9812a150ef5d1952d0813fdc6223f374a00"
+    },
+    {
+      "name": "r113-runner-contract-tests.log",
+      "sha256": "d7c7971647ca36b8dc700aa3b6804ba58d46ccf6a17f1cd218a8f2bbae486079"
+    },
+    {
+      "name": "r113-runner-fixture-clean-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-clean-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-clean.json",
+      "sha256": "5b304c7a9e8ef9881949f30c5a185fd1e0fb87c4d22b40528ec582e3852de779"
+    },
+    {
+      "name": "r113-runner-fixture-clean.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-runner-fixture-failure-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-failure-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-failure.json",
+      "sha256": "e953078cb8a1910e28fc8b1dd4f46ddc8444d4cac9397dbe6ef7532f14c2c3eb"
+    },
+    {
+      "name": "r113-runner-fixture-failure.log",
+      "sha256": "beea2cb7b87dda13abd3e28f7ce17c94591ee6ecbfad8dad3072602f6313f68a"
+    },
+    {
+      "name": "r113-runner-fixture-inner-timeout-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-inner-timeout-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-inner-timeout.json",
+      "sha256": "d45de662cfdf7f2c81bb21729c3e5fe42023c01abb04793da656326fcb26d0ba"
+    },
+    {
+      "name": "r113-runner-fixture-inner-timeout.log",
+      "sha256": "315d7592cd101527585f315c7a958afd1fc1cccf70a60ddf1635d0bf43e86bcc"
+    },
+    {
+      "name": "r113-runner-fixture-spawn-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-spawn-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-spawn.json",
+      "sha256": "77508c72695c41773e47e6d1b466405fa5f21c0525d97da72b19310f792ccf7e"
+    },
+    {
+      "name": "r113-runner-fixture-spawn.log",
+      "sha256": "49c34b99a771affefe59c4159edd213059d41ec4c36280401317798d267c55c6"
+    },
+    {
+      "name": "r113-runner-fixture-success-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-success-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-fixture-success.json",
+      "sha256": "cece57280b6a79365b9ba77a31a5b840001543f34e1c513108cfc189dddbb270"
+    },
+    {
+      "name": "r113-runner-fixture-success.log",
+      "sha256": "8ebc133a7a765bd1a0694f38ec126c5448422920092a761e23934040d25fd61f"
+    },
+    {
+      "name": "r113-runner-tests-v2.js",
+      "sha256": "1986826db148e0e3e2ca2b1c650c277f5da5462834bb9e2714fc0df3b7cdce33"
+    },
+    {
+      "name": "r113-runner-tests.js",
+      "sha256": "39b080090e025c130af7633473ac2fc64e10fe159f2c1ea84a045715a1896cae"
+    },
+    {
+      "name": "r113-runner-v2-fixture-clean-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-clean-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-clean.json",
+      "sha256": "6d42c9ad90b1e7e285ef57cebc60aff116ca2555f0580ade3fb729497657b1d5"
+    },
+    {
+      "name": "r113-runner-v2-fixture-clean.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r113-runner-v2-fixture-failure-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-failure-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-failure.json",
+      "sha256": "9a8ca1b91783546ba3ff9c93be3c05bacf235e8a80b83e9ac81f45ebbbd92bf0"
+    },
+    {
+      "name": "r113-runner-v2-fixture-failure.log",
+      "sha256": "a506344dc20f11c1c3de2e52a1d07e39f5d79e727e0d177313a34e6143cca6c7"
+    },
+    {
+      "name": "r113-runner-v2-fixture-inner-timeout-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-inner-timeout-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-inner-timeout.json",
+      "sha256": "1949648f0a283770c1a666bd59a19e001e590083600037dbde75a74e32a1834d"
+    },
+    {
+      "name": "r113-runner-v2-fixture-inner-timeout.log",
+      "sha256": "a95b263dfd5b487a2e4ec073f6e3a6244d065414a8e337f3edb9ba80bd8480e8"
+    },
+    {
+      "name": "r113-runner-v2-fixture-spawn-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-spawn-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-spawn.json",
+      "sha256": "b052d3cb89ed563ec37637585224c57ac1411613f37ef9319578d259456a9236"
+    },
+    {
+      "name": "r113-runner-v2-fixture-spawn.log",
+      "sha256": "49c34b99a771affefe59c4159edd213059d41ec4c36280401317798d267c55c6"
+    },
+    {
+      "name": "r113-runner-v2-fixture-success-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-success-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-runner-v2-fixture-success.json",
+      "sha256": "53d5388e05eb06de8391409d7360069a1149a41a71ddc1a950fd745b2fdb881f"
+    },
+    {
+      "name": "r113-runner-v2-fixture-success.log",
+      "sha256": "a6fbf289bd77d0943fa60cb2b374c7c388c498f21a9897e79f5d37745ed84cbc"
+    },
+    {
+      "name": "r113-source-campaign-source-after.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-source-campaign-source.json",
+      "sha256": "3fdd78b703c0bd312e27f4082782fe162d2f807caa48a42a245cf4f5381dac32"
+    },
+    {
+      "name": "r113-source-campaign.json",
+      "sha256": "f9271ea6c9083cb732711fd693cbfd074a8d36f0084ec57185728824d47b7218"
+    },
+    {
+      "name": "r113-source-campaign.log",
+      "sha256": "71184110d1ed9a10cfeea5e5b300985fac97b0c3189829404276ecf3fbe198e8"
+    },
+    {
+      "name": "r113-source-gate.py",
+      "sha256": "78c28ecbd8da1b1534817048b4b770c6d0874a6c532482e105d64a7c96885d10"
+    },
+    {
+      "name": "r113-transitions.log",
+      "sha256": "2fa6d3f2dc0aa34a6e3899e8eda10993b14b3111cab2438ab9d7e1a36319b6e5"
+    }
+  ],
+  "mutations": [
+    {
+      "name": "partial-preflight-epoch",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          ".ok_or(ContextVersionJournalErrorV1::EpochExhausted)?;\n        }\n        if count > self.member_free.len() {",
+          ".ok_or(ContextVersionJournalErrorV1::EpochExhausted)?;\n            self.allocations[destination.allocation.slot].as_mut().unwrap().attempt_epoch += 1;\n        }\n        if count > self.member_free.len() {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 54,
+      "expected": [
+        "assertion `left == right` failed",
+        "whole journal and scratch remain unchanged"
+      ]
+    },
+    {
+      "name": "omit-last-member",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "for index in 0..count {\n            self.count_indexed_access();\n            let plan = self.scratch[index].take()",
+          "for index in 0..count.saturating_sub(1) {\n            self.count_indexed_access();\n            let plan = self.scratch[index].take()"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::allocation_writer_and_member_limits_have_independent_effects",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 457,
+      "expected": [
+        "assertion failed: journal.member_free.is_empty()"
+      ]
+    },
+    {
+      "name": "omit-epoch-burn",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "            entry.attempt_epoch = plan.attempt_epoch;\n",
+          ""
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 280,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: (0, 0)",
+        "right: (1, 0)"
+      ]
+    },
+    {
+      "name": "premature-lineage",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "            entry.pending_member = Some(plan.member_slot);",
+          "            entry.content_lineage = plan.attempt_epoch;\n            entry.pending_member = Some(plan.member_slot);"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 280,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: (1, 1)",
+        "right: (1, 0)"
+      ]
+    },
+    {
+      "name": "omit-allocation-identity",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "entry.key == reference.key\n                    && entry.key.context_generation == self.context_generation",
+          "entry.key.context_generation == self.context_generation"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(InvalidAllocationReference)"
+      ]
+    },
+    {
+      "name": "device-local-only",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if entry.device != destination.device {",
+          "if entry.device.local != destination.device.local {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(AllocationDeviceMismatch)"
+      ]
+    },
+    {
+      "name": "omit-extent",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if entry.byte_extent != destination.byte_extent {",
+          "if false && entry.byte_extent != destination.byte_extent {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(AllocationExtentMismatch)"
+      ]
+    },
+    {
+      "name": "member-capacity-before-identity",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "        for destination in canonical {\n            let entry = self.exact_allocation(destination.allocation)?;",
+          "        if count > self.member_free.len() {\n            return Err(ContextVersionJournalErrorV1::MemberCapacity);\n        }\n        for destination in canonical {\n            let entry = self.exact_allocation(destination.allocation)?;"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Err(MemberCapacity)",
+        "right: Err(InvalidAllocationReference)"
+      ]
+    },
+    {
+      "name": "pending-abort",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "        self.lookup_reserved(reference)?;",
+          "        self.lookup_writer(reference)?;"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs",
+      "oracle_line": 206,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Err(InvalidState)",
+        "right: Err(InvalidReference)"
+      ]
+    },
+    {
+      "name": "pending-begin",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "        self.lookup_reserved(writer)?;",
+          "        self.lookup_writer(writer)?;"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Err(InvalidState)",
+        "right: Err(InvalidReference)"
+      ]
+    },
+    {
+      "name": "empty-frees-writer",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "        let head = if count == 0 {\n            None",
+          "        let head = if count == 0 {\n            self.push_free(writer.slot);\n            None"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 227,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: 1",
+        "right: 0"
+      ]
+    },
+    {
+      "name": "canonical-local-only",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if pair[0].allocation.key >= pair[1].allocation.key {",
+          "if pair[0].allocation.key.local >= pair[1].allocation.key.local {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Err(InvalidAllocationReference)",
+        "right: Err(NonCanonicalRoster)"
+      ]
+    },
+    {
+      "name": "pending-counted-reserved",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "    pub fn reserved_writer_count(&self) -> usize {\n        self.reserved_count\n    }",
+          "    pub fn reserved_writer_count(&self) -> usize {\n        self.writer_capacity - self.free.len()\n    }"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 226,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: 1",
+        "right: 0"
+      ]
+    },
+    {
+      "name": "allow-duplicate-allocation",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if pair[0].allocation.key >= pair[1].allocation.key {",
+          "if pair[0].allocation.key > pair[1].allocation.key {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(NonCanonicalRoster)"
+      ]
+    },
+    {
+      "name": "overwrite-enrollment-slot",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if self.allocations.get(slot) != Some(&None) {",
+          "if false && self.allocations.get(slot) != Some(&None) {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::selected_private_slot_corruption_rejects_before_any_planning_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 690,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Ok(ContextAllocationReferenceV1",
+        "right: Err(InvalidState)"
+      ]
+    },
+    {
+      "name": "reject-older-reserved",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if key == reference.key && key.context_generation == self.context_generation =>",
+          "if key == reference.key && key.context_generation == self.context_generation && key.local == self.registration_watermark =>"
+        ]
+      ],
+      "test": "context_version_journal::tests::existing_ids_preserve_gaps_and_older_reserved_lookup_and_abort",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs",
+      "oracle_line": 263,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Err(InvalidReference)",
+        "right: Ok(ContextWriterKeyV1"
+      ]
+    },
+    {
+      "name": "omit-busy",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "if entry.pending_member.is_some() {",
+          "if false && entry.pending_member.is_some() {"
+        ]
+      ],
+      "test": "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs",
+      "oracle_line": 53,
+      "expected": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(AllocationBusy)"
+      ]
+    }
+  ],
+  "entries": {
+    "r113-qualified-mut-partial-preflight-epoch.json": {
+      "kind": "run",
+      "predecessor": "r113-qualification-manifest.json",
+      "source_map_sha256": "7746b80e82a75cc7aed74a3785065b030f392e41279e738a71b72cd9e17c0d5d",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-partial-preflight-epoch.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-partial-preflight-epoch.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-omit-last-member.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-partial-preflight-epoch.json",
+      "source_map_sha256": "ce58da707670ac30bda7b74ba7fe2563c1a1af62feb88253594670bcf45bdd82",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::allocation_writer_and_member_limits_have_independent_effects",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-omit-last-member.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-omit-last-member.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-omit-epoch-burn.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-omit-last-member.json",
+      "source_map_sha256": "5bf1a94f1909973478fd9430e42b513ecd166dec260d67ba624fdfb664c3af87",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-omit-epoch-burn.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-omit-epoch-burn.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-premature-lineage.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-omit-epoch-burn.json",
+      "source_map_sha256": "63aedc19087ec54d0a959627f8e3f64e4fcfd9fd36377f1a2528a17f867882d3",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-premature-lineage.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-premature-lineage.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-omit-allocation-identity.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-premature-lineage.json",
+      "source_map_sha256": "a1a75f311c1837c8bfefc5246f902b4a1cd717d57d44379e1a29e074d3c6d55f",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-omit-allocation-identity.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-omit-allocation-identity.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-device-local-only.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-omit-allocation-identity.json",
+      "source_map_sha256": "2e326c647d95b8ab3730ff749c037522ba7dcfc29908ae3e8d5cee40674b66a5",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-device-local-only.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-device-local-only.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-omit-extent.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-device-local-only.json",
+      "source_map_sha256": "3cbe164d660a0203b18f1b8a9d1d533389413e8d019cada6e57faece20ec96d3",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-omit-extent.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-omit-extent.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-member-capacity-before-identity.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-omit-extent.json",
+      "source_map_sha256": "fb7864f60a48ea0314ea18a4910295223faf1363d4bbdb55e78b4c19647adbd5",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-member-capacity-before-identity.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-member-capacity-before-identity.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-pending-abort.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-member-capacity-before-identity.json",
+      "source_map_sha256": "6fda9a572ea222a68e5154759a66213c9d0bab00f70823403828ef1c89dadbad",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-pending-abort.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-pending-abort.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-pending-begin.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-pending-abort.json",
+      "source_map_sha256": "c5e3849c6e423d3c768bd61be62d482938f86d1c55a64e665d9de518c90090c1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-pending-begin.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-pending-begin.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-empty-frees-writer.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-pending-begin.json",
+      "source_map_sha256": "d690630b8420503b32e365afb510f6845ab505c2212219d4150bbaab68b76db0",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-empty-frees-writer.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-empty-frees-writer.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-canonical-local-only.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-empty-frees-writer.json",
+      "source_map_sha256": "6c53b602d639706b25f5489c2ed9050c4512dedb6c6a6e919dfff91ffceb6456",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-canonical-local-only.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-canonical-local-only.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-pending-counted-reserved.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-canonical-local-only.json",
+      "source_map_sha256": "a424b2db490f7cdbf5978d5dfc1f9dc0f2258defe5e4d9940b8e2c3da3f949ce",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-pending-counted-reserved.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-pending-counted-reserved.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-allow-duplicate-allocation.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-pending-counted-reserved.json",
+      "source_map_sha256": "3911d74ba34f465d825752b8844080126a16fae7d901a6725d75582ace76f8cb",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-allow-duplicate-allocation.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-allow-duplicate-allocation.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-overwrite-enrollment-slot.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-allow-duplicate-allocation.json",
+      "source_map_sha256": "4704bcae23d4e2bd83d59af81d1c73647716b6cc8589529baed1366b9a317fef",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::selected_private_slot_corruption_rejects_before_any_planning_write",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-overwrite-enrollment-slot.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-overwrite-enrollment-slot.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-reject-older-reserved.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-overwrite-enrollment-slot.json",
+      "source_map_sha256": "e2784623e72dc744924627139467c8c74afc89b6ac7097f2e140db2f9ab36531",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::existing_ids_preserve_gaps_and_older_reserved_lookup_and_abort",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-reject-older-reserved.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-reject-older-reserved.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-mut-omit-busy.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-reject-older-reserved.json",
+      "source_map_sha256": "d0c60faac3abde830af850d94e11fcacdc48ab4fbdb5ff19922f3b119b28bb9f",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged",
+        "--",
+        "--exact"
+      ],
+      "returncode": 101
+    },
+    "r113-qualified-restoration-omit-busy.json": {
+      "kind": "restoration",
+      "predecessor": "r113-qualified-mut-omit-busy.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05"
+    },
+    "r113-qualified-restored-journal.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restoration-omit-busy.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::"
+      ],
+      "returncode": 0
+    },
+    "r113-qualified-restored-membership.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restored-journal.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::"
+      ],
+      "returncode": 0
+    },
+    "r113-qualified-collector-validation.json": {
+      "kind": "run",
+      "predecessor": "r113-qualified-restored-membership.json",
+      "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r113-qualification-collect.js",
+        "--check"
+      ],
+      "returncode": 0
+    }
+  },
+  "clock": {
+    "contract": "r113-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "manifest",
+    "predecessor": {
+      "name": "r113-qualification-contract-tests-corrected.json",
+      "sha256": "3bf0edf658eb7ea814ef53b2f0ffe0c0f2bb1ae8d84e7198617e6c79f30acba2",
+      "observation": {
+        "utc_ms": 1789275120481,
+        "monotonic_ns": "73697969648586",
+        "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "source_verified": {
+      "utc_ms": 1789275236900,
+      "monotonic_ns": "73820235949841",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    }
+  },
+  "recorded_at": "2026-09-13T04:53:56.900Z"
+}

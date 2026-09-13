@@ -1,0 +1,36 @@
+{
+  "scope": "isolated V2 preliminary draft, not packet acceptance",
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "started_at": "2026-09-13T02:29:17.602Z",
+  "finished_at": "2026-09-13T02:29:18.243Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "clippy",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--no-default-features",
+    "--lib",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-v2-membership",
+  "source": "/home/harsh/.codex-tmp/v2-membership-production-clippy-source.json",
+  "log": "/home/harsh/.codex-tmp/v2-membership-production-clippy.log",
+  "source_unchanged": true,
+  "unmaterialized_sources": 381,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 0.651970939,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null,
+    "RUST_MIN_STACK": null
+  }
+}

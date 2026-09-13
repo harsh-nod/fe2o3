@@ -1,0 +1,62 @@
+{
+  "source_head": "a2feef229758381b66f962ad8be2b87843eb33a3",
+  "source_map_sha256": "55a13c68c9bf8cd5a81eeb51e957e117b0bd5fc880d3548243c56e81c65fa5e5",
+  "started_at": "2026-09-13T03:34:19.516Z",
+  "finished_at": "2026-09-13T03:34:20.906Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "fmt",
+    "-p",
+    "fe2o3-runtime-model"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r113-overlap-format.log",
+  "source": "/home/harsh/.codex-tmp/r113-overlap-format-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r113-overlap-format-source-after.json",
+  "source_unchanged": false,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "elapsed_seconds": 1.390069881,
+  "verification_elapsed_seconds": 0.316600255,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r113-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r113-reviewed-model.json",
+      "sha256": "645df7d1f9502550a04c33106cb6b0c9eb132fd1d9b894650c03ddc26e750af2",
+      "observation": {
+        "utc_ms": 1789270411230,
+        "monotonic_ns": "68763110166277",
+        "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789270459516,
+      "monotonic_ns": "68814513434560",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789270460906,
+      "monotonic_ns": "68815903504441",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789270461223,
+      "monotonic_ns": "68816220104696",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

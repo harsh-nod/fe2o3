@@ -1,9 +1,10 @@
 # Context Version Membership: V2 Contract
 
-This freezes the next executable-model patch after R108 writer issuance.
-It is an implementation contract, not packet, formal or production acceptance.
-The candidate was developed separately from R112's frozen source and remains
-isolated after R112 acceptance. The main runtime has no V2 consumer yet.
+This is the frozen executable-model contract after R108 writer issuance.
+R113 locally accepts its membership/Begin implementation above R112, with
+[retained evidence](evidence/local-r113-context-version-membership-2026-09-13/README.md).
+This is model acceptance, not formal or production acceptance; the production
+runtime has no V2 consumer yet.
 
 ## Scope And Identity
 
@@ -97,12 +98,34 @@ No tests here authenticate the supplied existing IDs, establish that a roster
 contains every kernel write, or prove production commit correspondence.
 Authenticated proofs and actual Context integration remain separate gates.
 
-## Preliminary Candidate Checks
+## R113 Local Acceptance
+
+Seventeen source gates and ten auxiliary checks pass. GNU/musl each pass 2,695
+tests with five ignored across 48 libtest harnesses; the existing harnessless
+benchmark is accounted separately. Seventeen compiled behavioral negatives
+reject at exact named oracles, followed by restored journal/membership suites
+with 23/12 passing. All 5,680 source identities are restored. The closed collector
+and independent review verify the exact 344-artifact archive.
+
+Nine runner and nine freeze tests pass. The corrected collector passes 52
+contract tests, including exact benchmark target/schema accounting; original
+preparation rejections and earlier helper identities are retained. This does
+not qualify settlement, authenticated proofs, native execution, aggregate
+memory, performance or production Context integration.
+
+## Historical Preliminary Checks
 
 The isolated candidate adds twelve membership tests while retaining all eleven
 issuance tests. The 23-test journal suite and full GNU model suite (744 passing,
 two ignored) pass, as do all-feature/all-target and production-only strict
 Clippy. These are preliminary checks, not immutable packet qualification.
+
+The integrated candidate additionally tests full-key ordering across Context
+generations and direct Busy rejection with spare membership capacity. Its final
+journal suite passes 23 tests and both strict lint configurations pass. The
+preliminary 744-pass model run predates the final Busy-only test enhancement;
+the accepted frozen full-workspace campaign validates the final source. The
+isolated source and its preliminary artifacts remain separate historical evidence.
 
 The membership differential model enumerates 29,282 four-action traces with
 independent maps/sets and exact chain comparisons. Direct tests cover identity

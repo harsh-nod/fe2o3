@@ -1,0 +1,35 @@
+{
+  "source_head": "a2feef229758381b66f962ad8be2b87843eb33a3",
+  "manifest_sha256": "c1534550d6c0746e14a91b373bb617b2c650e16d672ea84d1ef183d617462b7a",
+  "source_map_sha256": "7758a87941492589a32dc1a59159246c91d54fcbee573c48c3fb494d76eacf05",
+  "mutated_source_sha256": "37994089778c825c399aa1457b8005ca1cd7e1a39789d684eec9f468df642dc8",
+  "source_unchanged": true,
+  "source_identities": 5680,
+  "clock": {
+    "contract": "r113-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "restoration",
+    "start": {
+      "utc_ms": 1789275593923,
+      "monotonic_ns": "74194819778877",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789275594217,
+      "monotonic_ns": "74195113819906",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r113-qualified-mut-omit-busy.json",
+      "sha256": "045689b90d561c225872784d57f3110c2c025593778fcdd2336d7b8634531908",
+      "observation": {
+        "utc_ms": 1789275593869,
+        "monotonic_ns": "74194766407420",
+        "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 12 tests
+test context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations ... ok
+test context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs ... ok
+test context_version_journal::tests::membership::allocation_writer_and_member_limits_have_independent_effects ... ok
+test context_version_journal::tests::membership::enrollment_uses_complete_coordinates_without_an_allocation_watermark ... ok
+test context_version_journal::tests::membership::final_epoch_is_admitted_but_exhaustion_is_whole_roster_atomic ... ok
+test context_version_journal::tests::membership::begin_routes_full_preflight_before_bounded_planning_and_commit ... ok
+test context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged ... ok
+test context_version_journal::tests::membership::stale_copied_and_foreign_references_never_alias_reused_slots ... ok
+test context_version_journal::tests::membership::selected_private_slot_corruption_rejects_before_any_planning_write ... ok
+test context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation ... ok
+test context_version_journal::tests::membership::fixed_roster_work_and_storage_are_independent_of_unrelated_capacities ... ok
+test context_version_journal::tests::membership::short_traces_match_independent_writer_and_allocation_maps ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 734 filtered out; finished in 1.04s
+

@@ -1,0 +1,91 @@
+{
+  "source_head": "a2feef229758381b66f962ad8be2b87843eb33a3",
+  "source_map_sha256": "e2784623e72dc744924627139467c8c74afc89b6ac7097f2e140db2f9ab36531",
+  "started_at": "2026-09-13T04:59:17.203Z",
+  "finished_at": "2026-09-13T04:59:35.538Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-features",
+    "--lib",
+    "context_version_journal::tests::existing_ids_preserve_gaps_and_older_reserved_lookup_and_abort",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r113-qualified-mut-reject-older-reserved.log",
+  "source": "/home/harsh/.codex-tmp/r113-qualified-mut-reject-older-reserved-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r113-qualified-mut-reject-older-reserved-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r113-run-v3.js",
+    "sha256": "c50fcee48fa8e4de1d6979514cd73d2d5fa04b6d67562d9a1197450b775509b1"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 3257012,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789275575543,
+        "monotonic_ns": "74174979431529",
+        "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 19.796659992,
+  "verification_elapsed_seconds": 0.241958301,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r113-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r113-qualified-restoration-overwrite-enrollment-slot.json",
+      "sha256": "14b395705c7a16aecfa1dfd51d83ca1726738f81a64787b1d55812d12379c92e",
+      "observation": {
+        "utc_ms": 1789275556268,
+        "monotonic_ns": "74154242041882",
+        "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789275557203,
+      "monotonic_ns": "74155177417062",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789275575538,
+      "monotonic_ns": "74174974077054",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789275575780,
+      "monotonic_ns": "74175216035355",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

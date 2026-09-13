@@ -1,0 +1,10 @@
+PASS unchanged
+PASS added-source
+PASS deleted-untracked-member-test
+PASS deleted-tracked-source
+PASS modified-lockfile
+PASS same-count-replacement
+PASS late-head-change
+PASS wrong-opening-head
+PASS docs-only-change
+PASS: 9 freeze contract tests

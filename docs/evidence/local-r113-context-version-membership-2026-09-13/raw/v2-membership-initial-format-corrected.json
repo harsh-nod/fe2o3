@@ -1,0 +1,29 @@
+{
+  "scope": "isolated V2 preliminary draft, not packet acceptance",
+  "source_head": "29505205cc54bab1885a67845aaceda8b22b3a9c",
+  "started_at": "2026-09-13T02:26:25.275Z",
+  "finished_at": "2026-09-13T02:26:27.197Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "fmt",
+    "-p",
+    "fe2o3-runtime-model"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-v2-membership",
+  "source": "/home/harsh/.codex-tmp/v2-membership-initial-format-corrected-source.json",
+  "log": "/home/harsh/.codex-tmp/v2-membership-initial-format-corrected.log",
+  "source_unchanged": false,
+  "unmaterialized_sources": 381,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 1.934992837,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null,
+    "RUST_MIN_STACK": null
+  }
+}

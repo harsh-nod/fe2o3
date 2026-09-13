@@ -1,0 +1,8 @@
+{
+  "scope": "Observed initial unwrapped preparation rejection; not a qualification execution record",
+  "tool_session_id": 40830,
+  "exit_code": 1,
+  "source_mutation_started": false,
+  "manifest_created": false,
+  "stderr": "node:internal/assert/utils:77\n    throw err;\n    ^\n\nAssertionError [ERR_ASSERTION]: nonempty test summaries\n    at Object.totals (/home/harsh/.codex-tmp/r113-qualification-evidence.js:87:3)\n    at /home/harsh/.codex-tmp/r113-qualification-collect.js:79:43\n    at Array.map (<anonymous>)\n    at harnesses (/home/harsh/.codex-tmp/r113-qualification-collect.js:76:18)\n    at checkBaseline (/home/harsh/.codex-tmp/r113-qualification-collect.js:125:34)\n    at Object.<anonymous> (/home/harsh/.codex-tmp/r113-qualification-prepare.js:7:34)\n    at Module._compile (node:internal/modules/cjs/loader:1705:14)\n    at Object..js (node:internal/modules/cjs/loader:1838:10)\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\n    at Function._load (node:internal/modules/cjs/loader:1263:12) {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n\nNode.js v22.22.1\n"
+}

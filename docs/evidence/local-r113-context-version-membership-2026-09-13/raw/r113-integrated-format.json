@@ -1,0 +1,55 @@
+{
+  "source_head": "a2feef229758381b66f962ad8be2b87843eb33a3",
+  "source_map_sha256": "c321cf6411f78a1fac1d4dfab705ef8cd866975efbdcec34cf2356ce9168cb47",
+  "started_at": "2026-09-13T03:29:20.668Z",
+  "finished_at": "2026-09-13T03:29:22.095Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "fmt",
+    "-p",
+    "fe2o3-runtime-model",
+    "--",
+    "--check"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r113-integrated-format.log",
+  "source": "/home/harsh/.codex-tmp/r113-integrated-format-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r113-integrated-format-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "elapsed_seconds": 1.427293922,
+  "verification_elapsed_seconds": 0.284984564,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r113-raw-utc-boot-monotonic-v1",
+    "predecessor": null,
+    "start": {
+      "utc_ms": 1789270160668,
+      "monotonic_ns": "68500374138127",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789270162095,
+      "monotonic_ns": "68501801432049",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789270162380,
+      "monotonic_ns": "68502086416613",
+      "boot_id": "bc684b4a-2d08-43a8-ad02-b55a8fa1b726",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

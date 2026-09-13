@@ -1,0 +1,24 @@
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: nonempty test summaries
+    at Object.totals (/home/harsh/.codex-tmp/r113-qualification-evidence.js:87:3)
+    at /home/harsh/.codex-tmp/r113-qualification-collect.js:79:43
+    at Array.map (<anonymous>)
+    at harnesses (/home/harsh/.codex-tmp/r113-qualification-collect.js:76:18)
+    at checkBaseline (/home/harsh/.codex-tmp/r113-qualification-collect.js:125:34)
+    at Object.<anonymous> (/home/harsh/.codex-tmp/r113-qualification-prepare.js:7:34)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

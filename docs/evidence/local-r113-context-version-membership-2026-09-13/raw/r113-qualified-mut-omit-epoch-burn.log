@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.39s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations ... FAILED
+
+failures:
+
+---- context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations stdout ----
+
+thread 'context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations' (3247439) panicked at crates/fe2o3-runtime-model/src/context_version_journal/membership_tests.rs:280:9:
+assertion `left == right` failed
+  left: (0, 0)
+ right: (1, 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 745 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`

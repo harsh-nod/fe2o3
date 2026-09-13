@@ -21,19 +21,45 @@ struct Snapshot {
     context: u64,
     capacities: (usize, usize),
     watermark: u64,
-    reserved: Vec<Option<Key>>,
+    reserved_count: usize,
+    writers: Vec<Option<WriterEntryV1>>,
     free: Vec<usize>,
-    storage: ((usize, usize), (usize, usize)),
+    allocations: Vec<Option<AllocationEntryV1>>,
+    allocation_free: Vec<usize>,
+    members: Vec<Option<MemberEntryV1>>,
+    member_free: Vec<usize>,
+    scratch: Vec<Option<BeginMemberPlanV1>>,
+    storage: [(usize, usize); 7],
 }
 
-fn storage(journal: &Journal) -> ((usize, usize), (usize, usize)) {
-    (
+fn storage(journal: &Journal) -> [(usize, usize); 7] {
+    [
         (
-            journal.reserved.as_ptr() as usize,
-            journal.reserved.capacity(),
+            journal.writers.as_ptr() as usize,
+            journal.writers.capacity(),
         ),
         (journal.free.as_ptr() as usize, journal.free.capacity()),
-    )
+        (
+            journal.allocations.as_ptr() as usize,
+            journal.allocations.capacity(),
+        ),
+        (
+            journal.allocation_free.as_ptr() as usize,
+            journal.allocation_free.capacity(),
+        ),
+        (
+            journal.members.as_ptr() as usize,
+            journal.members.capacity(),
+        ),
+        (
+            journal.member_free.as_ptr() as usize,
+            journal.member_free.capacity(),
+        ),
+        (
+            journal.scratch.as_ptr() as usize,
+            journal.scratch.capacity(),
+        ),
+    ]
 }
 
 fn snapshot(journal: &Journal) -> Snapshot {
@@ -41,42 +67,126 @@ fn snapshot(journal: &Journal) -> Snapshot {
         context: journal.context_generation,
         capacities: (journal.allocation_capacity, journal.writer_capacity),
         watermark: journal.registration_watermark,
-        reserved: journal.reserved.clone(),
+        reserved_count: journal.reserved_count,
+        writers: journal.writers.clone(),
         free: journal.free.clone(),
+        allocations: journal.allocations.clone(),
+        allocation_free: journal.allocation_free.clone(),
+        members: journal.members.clone(),
+        member_free: journal.member_free.clone(),
+        scratch: journal.scratch.clone(),
         storage: storage(journal),
     }
 }
 
-// Full partition/identity audit is test-only, never part of the O(1) operations.
+fn partition<T>(slots: &[Option<T>], free: &[usize]) {
+    let mut vacant = vec![false; slots.len()];
+    for slot in free {
+        assert!(*slot < slots.len());
+        assert!(!vacant[*slot], "duplicate free slot");
+        vacant[*slot] = true;
+    }
+    for (slot, value) in slots.iter().enumerate() {
+        assert_eq!(
+            value.is_none(),
+            vacant[slot],
+            "exact free/occupied partition"
+        );
+    }
+}
+
+// Full arena scans are test-only, never part of issuance or touched Begin work.
 fn audit(journal: &Journal) {
     assert!(issuable_context_id(journal.context_generation));
     assert!((1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&journal.allocation_capacity));
     assert!((1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&journal.writer_capacity));
     assert!(journal.registration_watermark < u64::MAX);
-    assert_eq!(journal.reserved.len(), journal.writer_capacity);
-    assert!(journal.reserved.capacity() >= journal.writer_capacity);
-    assert!(journal.free.capacity() >= journal.writer_capacity);
-    let mut free = vec![false; journal.writer_capacity];
-    for slot in &journal.free {
-        assert!(*slot < journal.writer_capacity);
-        assert!(!free[*slot], "duplicate free slot");
-        free[*slot] = true;
+    assert_eq!(journal.writers.len(), journal.writer_capacity);
+    assert_eq!(journal.allocations.len(), journal.allocation_capacity);
+    assert_eq!(journal.members.len(), journal.allocation_capacity);
+    assert_eq!(journal.scratch.len(), journal.allocation_capacity);
+    for (index, (_, capacity)) in storage(journal).into_iter().enumerate() {
+        assert!(
+            capacity
+                >= if index < 2 {
+                    journal.writer_capacity
+                } else {
+                    journal.allocation_capacity
+                }
+        );
     }
+    partition(&journal.writers, &journal.free);
+    partition(&journal.allocations, &journal.allocation_free);
+    partition(&journal.members, &journal.member_free);
+    assert!(journal.scratch.iter().all(Option::is_none));
     let mut locals = BTreeSet::new();
-    for (slot, writer) in journal.reserved.iter().enumerate() {
-        match writer {
-            None => assert!(free[slot], "vacancy absent from free stack"),
-            Some(writer) => {
-                assert!(!free[slot], "occupied slot on free stack");
-                assert_eq!(writer.context_generation, journal.context_generation);
-                assert!(issuable_context_id(writer.local));
-                assert!(writer.local <= journal.registration_watermark);
-                assert!(locals.insert(writer.local), "reused local writer identity");
+    let mut reserved_count = 0;
+    let mut seen = vec![false; journal.allocation_capacity];
+    for (slot, writer) in journal.writers.iter().enumerate() {
+        let (key, mut head, count) = match writer {
+            None => continue,
+            Some(WriterEntryV1::Reserved(key)) => {
+                reserved_count += 1;
+                (*key, None, 0)
             }
+            Some(WriterEntryV1::Pending { key, head, count }) => (*key, *head, *count),
+        };
+        assert_eq!(key.context_generation, journal.context_generation);
+        assert!(issuable_context_id(key.local));
+        assert!(key.local <= journal.registration_watermark);
+        assert!(locals.insert(key.local), "reused local writer identity");
+        assert!(count <= journal.allocation_capacity);
+        let writer_reference = Reference { slot, key };
+        for _ in 0..count {
+            let index = head.expect("complete retained membership");
+            assert!(index < journal.members.len());
+            assert!(!seen[index], "cycle or shared member");
+            seen[index] = true;
+            let member = journal.members[index].expect("live chain member");
+            assert_eq!(member.writer, writer_reference);
+            let allocation = journal.allocations[member.allocation.slot].unwrap();
+            assert_eq!(allocation.key, member.allocation.key);
+            assert_eq!(allocation.pending_member, Some(index));
+            assert_eq!(allocation.attempt_epoch, member.attempt_epoch);
+            assert_eq!(allocation.content_lineage, member.prior_lineage);
+            head = member.next;
+        }
+        assert_eq!(head, None, "exact chain cardinality");
+    }
+    assert_eq!(reserved_count, journal.reserved_writer_count());
+    assert_eq!(locals.len() + journal.free.len(), journal.writer_capacity);
+    let mut allocation_keys = BTreeSet::new();
+    for (slot, allocation) in journal.allocations.iter().enumerate() {
+        let Some(allocation) = allocation else {
+            continue;
+        };
+        assert_eq!(
+            allocation.key.context_generation,
+            journal.context_generation
+        );
+        assert!(issuable_context_id(allocation.key.local));
+        assert!(allocation_keys.insert(allocation.key));
+        assert_eq!(
+            allocation.device.context_generation,
+            journal.context_generation
+        );
+        assert!(issuable_context_id(allocation.device.local));
+        assert!(allocation.byte_extent > 0);
+        assert!(allocation.content_lineage <= allocation.attempt_epoch);
+        if let Some(index) = allocation.pending_member {
+            assert!(seen[index], "orphaned allocation backlink");
+            assert_eq!(
+                journal.members[index].unwrap().allocation,
+                ContextAllocationReferenceV1 {
+                    slot,
+                    key: allocation.key
+                }
+            );
         }
     }
-    assert_eq!(locals.len(), journal.reserved_writer_count());
-    assert_eq!(locals.len() + journal.free.len(), journal.writer_capacity);
+    for (index, member) in journal.members.iter().enumerate() {
+        assert_eq!(member.is_some(), seen[index], "orphaned membership node");
+    }
 }
 
 fn rejected_registration(journal: &mut Journal, writer: Key, expected: Error) {
@@ -498,12 +608,12 @@ fn short_traces_match_independent_active_writer_map() {
                 assert_eq!(journal.registration_watermark(), watermark);
                 assert_eq!(journal.reserved_writer_count(), active.len());
                 assert_eq!(storage(&journal), before.storage);
-                for (slot, actual) in journal.reserved.iter().enumerate() {
+                for (slot, actual) in journal.writers.iter().enumerate() {
                     let expected = active
                         .values()
                         .find(|reference| reference.slot == slot)
                         .map(|reference| reference.key);
-                    assert_eq!(*actual, expected);
+                    assert_eq!(*actual, expected.map(WriterEntryV1::Reserved));
                 }
                 audit(&journal);
             }
@@ -524,7 +634,14 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
         .unwrap();
     assert!(allocator.find(".checked_add(1)").unwrap() < allocator.find("Ok(identity)").unwrap());
     let source = include_str!("../context_version_journal.rs");
-    let operations = source.split("pub fn register_writer(").nth(1).unwrap();
+    let operations = source
+        .split("pub fn register_writer(")
+        .nth(1)
+        .unwrap()
+        .split("pub fn enroll_allocation(")
+        .next()
+        .unwrap();
+    let helpers = source.split("fn count_indexed_access(").nth(1).unwrap();
     for forbidden in [
         "try_reserve",
         ".resize(",
@@ -539,13 +656,13 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
         "loop",
     ] {
         assert!(
-            !operations.contains(forbidden),
+            !operations.contains(forbidden) && !helpers.contains(forbidden),
             "operation contains {forbidden}"
         );
     }
-    let routed_operations = operations.split("fn count_indexed_access(").next().unwrap();
+    let routed_operations = operations;
     for direct_access in [
-        "self.reserved",
+        "self.writers",
         "self.free[",
         "self.free.get",
         "self.free.last",
@@ -558,3 +675,6 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
         );
     }
 }
+
+#[path = "membership_tests.rs"]
+mod membership;

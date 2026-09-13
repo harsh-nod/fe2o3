@@ -1,0 +1,4 @@
+{
+  "accepted": false,
+  "error": "Error: ENOENT: no such file or directory, lstat '/home/harsh/.codex-tmp/r113-final-model-clippy.json'"
+}

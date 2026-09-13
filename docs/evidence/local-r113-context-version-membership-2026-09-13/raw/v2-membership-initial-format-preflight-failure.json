@@ -1,0 +1,15 @@
+{
+  "record_kind": "retrospective tool observation, not a runner transcript",
+  "tool_chunk_id": "495685",
+  "command": ["node", "/home/harsh/.codex-tmp/v2-membership-run.js", "v2-membership-initial-format", "cargo", "+nightly-2026-04-03", "fmt", "-p", "fe2o3-runtime-model"],
+  "returncode": 1,
+  "phase": "source inventory before opening attempt artifacts or spawning formatter",
+  "failed_subprocess": ["git", "ls-files", "--stage", "-z"],
+  "error": "spawnSync git ENOBUFS",
+  "subprocess_signal": "SIGTERM",
+  "node_version": "v22.22.1",
+  "formatter_started": false,
+  "tests_started": false,
+  "retained_runner": "/home/harsh/.codex-tmp/v2-membership-run-preflight-v0.js",
+  "correction": "raise Git inventory maxBuffer to 64 MiB; no test deadline or runtime source change"
+}
