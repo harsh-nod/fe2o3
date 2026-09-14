@@ -207,12 +207,12 @@ const TRUSTED_REGISTRY_PROC_MACROS: [(&str, &str, &str); 9] = [
 const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "pliron-derive",
     "0.17.0",
-    "git+https://github.com/harsh-nod/pliron.git?rev=9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd#9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd",
+    "git+https://github.com/harsh-nod/pliron.git?rev=161c385576d45d4e634ba179fa93a545b91124e6#161c385576d45d4e634ba179fa93a545b91124e6",
     "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
 )];
 // The complete workspace tree includes nested fixture lockfiles.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "ddc114620067b4f6075923574e453312b8df01db50bf2d7c855fa3debf046a67";
+    "8e3b1b343f80964f87c87c7e387793c3448a3e94a6ad29ac0f554762065b789d";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =

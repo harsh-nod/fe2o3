@@ -651,10 +651,11 @@ fn preserved_switch_cfg_rewrite_module() -> Module {
     module.functions.push(Function::internal_helper(
         "preserved_switch_cfg_rewrite",
         Signature::new(
-            vec![Type::INDEX, u32_ty.clone(), u32_ty.clone()],
+            vec![Type::INDEX, u32_ty.clone(), u32_ty.clone(), u32_ty.clone()],
             vec![u32_ty],
         ),
-        vec![ValueId(0), ValueId(1), ValueId(2)],
+        // The unused fourth entry argument remains part of the function ABI.
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(6)],
         vec![
             entry,
             repeated_target,
@@ -724,7 +725,21 @@ fn preserved_switch_export_tracks_dead_arguments_repeated_edges_and_block_mergin
 
     let optimized = decode_module_v9(optimized.canonical_bytes()).unwrap();
     verify_module(&optimized).expect("rewritten switch CFG remains verified Kernel IR");
-    let body = optimized.functions[0].body.as_ref().unwrap();
+    let function = &optimized.functions[0];
+    let u32_ty = Type::Scalar(ScalarType::U32);
+    assert_eq!(
+        function.signature,
+        Signature::new(
+            vec![Type::INDEX, u32_ty.clone(), u32_ty.clone(), u32_ty.clone()],
+            vec![u32_ty.clone()],
+        ),
+        "DCE must not change the function ABI, including its unused entry slot"
+    );
+    let body = function.body.as_ref().unwrap();
+    assert_eq!(
+        body.parameters,
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(6)]
+    );
     assert_eq!(
         body.blocks.len(),
         3,
@@ -748,16 +763,16 @@ fn preserved_switch_export_tracks_dead_arguments_repeated_edges_and_block_mergin
         panic!("entry switch must remain a typed preserved terminator");
     };
     assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].value, 7);
+    assert_eq!(cases[1].value, 8);
     assert_eq!(cases[0].target, BlockId(10));
     assert_eq!(cases[1].target, BlockId(10));
-    assert_eq!(cases[0].arguments.len(), 2);
-    assert_eq!(cases[1].arguments, vec![ValueId(2), ValueId(1)]);
+    assert_eq!(cases[0].arguments.len(), 1);
+    assert_eq!(cases[1].arguments, vec![ValueId(2)]);
     assert_eq!(*default_target, BlockId(20));
-    assert_eq!(default_arguments.len(), 2);
+    assert_eq!(default_arguments, &[ValueId(1)]);
 
     let folded_value = cases[0].arguments[0];
-    assert_eq!(cases[0].arguments[1], ValueId(1));
-    assert_eq!(default_arguments, &[ValueId(1), ValueId(2)]);
     assert!(entry.operations.iter().any(|operation| {
         operation
             .results
@@ -771,15 +786,24 @@ fn preserved_switch_export_tracks_dead_arguments_repeated_edges_and_block_mergin
         .iter()
         .find(|block| block.id == BlockId(10))
         .unwrap();
-    // Builtin FuncOp retains non-entry arguments, so both repeated edges must
-    // keep the unused second slot aligned while other CFG nodes are rewritten.
-    assert_eq!(repeated_target.parameters.len(), 2);
+    // DCE removes the dead internal slot from every incoming edge occurrence.
+    assert_eq!(
+        repeated_target.parameters,
+        vec![ValueDef::new(ValueId(10), u32_ty.clone())]
+    );
+    assert!(matches!(
+        repeated_target.terminator,
+        Some(Terminator::Return { ref values }) if values == &[ValueId(10)]
+    ));
     let merge_predecessor = body
         .blocks
         .iter()
         .find(|block| block.id == BlockId(20))
         .unwrap();
-    assert_eq!(merge_predecessor.parameters.len(), 2);
+    assert_eq!(
+        merge_predecessor.parameters,
+        vec![ValueDef::new(ValueId(20), u32_ty)]
+    );
     let merged_live_parameter = merge_predecessor.parameters[0].id;
     assert!(
         matches!(
