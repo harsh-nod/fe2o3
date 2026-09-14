@@ -4,7 +4,7 @@ use fe2o3_semantic_trace::{
     AllocationEventV1, CaptureBoundariesV1, DiagnosticKindV1, DispatchEventV1, DispatchOutcomeV1,
     EvidenceKindV1, ExecutionLevelV1, FactProvenanceV1, InvocationEventV1, KirSiteClaimV1,
     KirSitePointV1, LaunchGeometryV1, MemoryOutcomeV1, OpaqueIdentityV1, ProducerKindV1,
-    TimestampV1, TraceCompletenessV1, TraceEventKindV1, TraceEventV1, TraceV1,
+    TimestampV1, TraceCompletenessV1, TraceEventKindV1, TraceEventV1,
 };
 use serde::Serialize;
 
@@ -359,7 +359,7 @@ struct FactInventoryV1 {
 }
 
 impl FactInventoryV1 {
-    fn inspect(trace: &TraceV1) -> Result<Self, QueryErrorV1> {
+    fn inspect(trace: &crate::TraceQueryInput) -> Result<Self, QueryErrorV1> {
         let source = trace_source(trace);
         let mut inventory = Self { bits: 0 };
         inventory.insert(CaptureFactV1::KernelIrClaim);
@@ -478,7 +478,9 @@ struct InvocationCoordinateV1 {
     logical_workitem: [u64; 3],
 }
 
-fn has_exact_observed_invocation_coverage(trace: &TraceV1) -> Result<bool, QueryErrorV1> {
+fn has_exact_observed_invocation_coverage(
+    trace: &crate::TraceQueryInput,
+) -> Result<bool, QueryErrorV1> {
     let mut begins = bounded_vec(trace.events().len())?;
     let mut ends = bounded_vec(trace.events().len())?;
     for event in trace.events() {
@@ -574,7 +576,7 @@ fn coordinate_for_logical_workitem(
 }
 
 pub(crate) fn plan_next_capture(
-    trace: &TraceV1,
+    trace: &crate::TraceQueryInput,
     trace_binding: OpaqueIdentityViewV1,
     goal: CaptureGoalV1,
 ) -> Result<NextCapturePlanV1, QueryErrorV1> {
@@ -840,7 +842,7 @@ pub(crate) fn plan_next_capture(
 }
 
 pub(crate) fn diagnosis_status(
-    trace: &TraceV1,
+    trace: &crate::TraceQueryInput,
     goal: CaptureGoalV1,
 ) -> Result<DiagnosisStatusV1, QueryErrorV1> {
     let inventory = FactInventoryV1::inspect(trace)?;
@@ -959,7 +961,7 @@ fn push_unsupported(
 }
 
 fn existing_evidence(
-    trace: &TraceV1,
+    trace: &crate::TraceQueryInput,
     trace_binding: OpaqueIdentityViewV1,
     goal: CaptureGoalV1,
 ) -> Result<Vec<ExistingEvidenceRefV1>, QueryErrorV1> {
@@ -977,7 +979,7 @@ fn existing_evidence(
         fact: CaptureFactV1::KernelIrClaim,
         event_sequence: None,
         provenance: "untrusted_claim",
-        identity: Some(identity_view(trace.header().kernel_ir_claim().digest())),
+        identity: Some(trace.header().kernel_ir_claim().digest),
     });
     if let Some(artifact) = trace.header().artifact() {
         refs.push(ExistingEvidenceRefV1 {
@@ -1057,8 +1059,9 @@ const fn fact_bit(fact: CaptureFactV1) -> u64 {
     1_u64 << fact as u8
 }
 
-fn trace_source(trace: &TraceV1) -> TraceSourceV1 {
-    let producer = trace.header().producer();
+fn trace_source(trace: &crate::TraceQueryInput) -> TraceSourceV1 {
+    let header = trace.header();
+    let producer = header.producer();
     match producer.kind() {
         ProducerKindV1::CpuKirSimulator => TraceSourceV1::Simulator,
         ProducerKindV1::RocprofImporter if producer.name().as_str() == "rocprofv3-json-import" => {
@@ -1133,7 +1136,10 @@ fn reproduction_target(site: Option<CaptureSiteV1>) -> CaptureTargetV1 {
     }
 }
 
-fn observed_goal_site(trace: &TraceV1, goal: CaptureGoalV1) -> Option<CaptureSiteV1> {
+fn observed_goal_site(
+    trace: &crate::TraceQueryInput,
+    goal: CaptureGoalV1,
+) -> Option<CaptureSiteV1> {
     trace.events().iter().find_map(|event| {
         if event.provenance() != FactProvenanceV1::Observed {
             return None;

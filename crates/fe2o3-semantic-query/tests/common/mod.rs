@@ -178,6 +178,37 @@ pub fn encoded_trace(seed: u8) -> Vec<u8> {
     encode_trace_v1(&sample_trace(seed)).unwrap()
 }
 
+pub fn versioned_trace(trace: &TraceV1, version: KernelIrWireVersionV2) -> TraceEnvelopeV2 {
+    let header = trace.header();
+    TraceEnvelopeV2::new(
+        TraceHeaderV2::new(
+            header.producer().clone(),
+            header.execution_kind(),
+            KernelIrIdentityClaimV2::exact_canonical_claim(
+                version,
+                header.kernel_ir_claim().digest(),
+                header.kernel_ir_claim().canonical_len(),
+            )
+            .unwrap(),
+            header.semantic_mir(),
+            header.lineage(),
+            header.artifact(),
+            header.dispatch(),
+            header.launch(),
+            header.bounds(),
+            header.completeness(),
+            header.boundaries(),
+        )
+        .unwrap(),
+        trace.events().to_vec(),
+    )
+    .unwrap()
+}
+
+pub fn encoded_trace_v2(seed: u8, version: KernelIrWireVersionV2) -> Vec<u8> {
+    encode_trace_v2(&versioned_trace(&sample_trace(seed), version)).unwrap()
+}
+
 pub fn memory_fault_trace(seed: u8) -> TraceV1 {
     replace_memory_outcome(
         sample_trace(seed),

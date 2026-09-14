@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Bounded, deterministic, read-only queries over Semantic Trace V1.
+//! Bounded, deterministic, read-only queries over Semantic Trace V1 and V2.
 //!
 //! This crate is an observation surface. It grants no compiler, debugger,
 //! runtime, KFD, address, handle, or execution-control authority.
@@ -63,8 +63,11 @@ use serde::{Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 mod capture_plan;
+mod trace_view;
 
 pub use capture_plan::*;
+use trace_view::TraceQueryInput;
+pub use trace_view::{QUERY_SCHEMA_V2, TraceQuerySessionV1, TraceQuerySessionV2};
 
 pub const QUERY_SCHEMA_V1: &str = "fe2o3-semantic-query-v1";
 pub const MAX_QUERY_PAGE_ITEMS_V1: u16 = 4_096;
@@ -264,56 +267,14 @@ pub enum QueryResponseV1 {
 }
 
 #[derive(Debug)]
-pub struct TraceQuerySessionV1 {
-    trace: TraceV1,
+struct TraceQueryCore {
+    trace: TraceQueryInput,
     input_bytes: u64,
     trace_binding: OpaqueIdentityViewV1,
     limits: QueryLimitsV1,
 }
 
-impl TraceQuerySessionV1 {
-    /// Opens and fully validates one canonical Trace V1 byte stream.
-    pub fn open(bytes: &[u8], limits: QueryLimitsV1) -> Result<Self, QueryErrorV1> {
-        let input_bytes = u64::try_from(bytes.len()).map_err(|_| QueryErrorV1::SizeOverflow)?;
-        if input_bytes > limits.max_input_bytes {
-            return Err(QueryErrorV1::InputTooLarge {
-                actual: input_bytes,
-                max: limits.max_input_bytes,
-            });
-        }
-        let trace_binding = trace_binding(bytes);
-        let trace = decode_trace_v1(bytes).map_err(QueryErrorV1::TraceDecode)?;
-        Ok(Self {
-            trace,
-            input_bytes,
-            trace_binding,
-            limits,
-        })
-    }
-
-    /// Adopts an already constructed and validated Trace V1 value.
-    pub fn from_trace(trace: TraceV1, limits: QueryLimitsV1) -> Result<Self, QueryErrorV1> {
-        let encoded = encode_trace_v1(&trace).map_err(QueryErrorV1::TraceEncode)?;
-        let input_bytes = u64::try_from(encoded.len()).map_err(|_| QueryErrorV1::SizeOverflow)?;
-        if input_bytes > limits.max_input_bytes {
-            return Err(QueryErrorV1::InputTooLarge {
-                actual: input_bytes,
-                max: limits.max_input_bytes,
-            });
-        }
-        let trace_binding = trace_binding(&encoded);
-        Ok(Self {
-            trace,
-            input_bytes,
-            trace_binding,
-            limits,
-        })
-    }
-
-    pub const fn limits(&self) -> QueryLimitsV1 {
-        self.limits
-    }
-
+impl TraceQueryCore {
     pub fn query(&self, request: QueryRequestV1) -> Result<QueryResponseV1, QueryErrorV1> {
         match request {
             QueryRequestV1::Capabilities => self.capabilities(),
@@ -439,7 +400,7 @@ impl TraceQuerySessionV1 {
         let header = self.trace.header();
         let producer = header.producer();
         Ok(TraceContextViewV1 {
-            schema: QUERY_SCHEMA_V1,
+            schema: self.trace.schema(),
             trace_binding: self.trace_binding,
             input_bytes: self.input_bytes,
             event_count: u64::try_from(self.trace.events().len())
@@ -451,7 +412,7 @@ impl TraceQuerySessionV1 {
                 executable: producer.executable().map(identity_view),
             },
             execution_kind: execution_kind_label(header.execution_kind()),
-            kernel_ir: kernel_ir_view(header.kernel_ir_claim()),
+            kernel_ir: header.kernel_ir_claim(),
             semantic_mir: header.semantic_mir().map(content_identity_view),
             lineage: header.lineage().map(content_identity_view),
             artifact: header.artifact().map(content_identity_view),

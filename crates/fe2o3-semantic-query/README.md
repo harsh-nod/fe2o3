@@ -1,7 +1,7 @@
 # fe2o3 semantic query
 
 `fe2o3-semantic-query` is a bounded, deterministic, read-only debugger query
-surface over canonical Semantic Trace V1 files. It works with every conforming
+surface over canonical Semantic Trace V1 and V2 files. It works with every conforming
 trace producer; it does not compile, load, dispatch, stop, or mutate a kernel.
 
 The typed library and `fe2o3-trace-query` JSON CLI expose:
@@ -24,6 +24,20 @@ the trace-local `(ordinal, generation)` pair.
 
 ## CLI
 
+The CLI routes V1 and V2 envelopes to their exact decoders without conversion
+or fallback. The typed library keeps `TraceQuerySessionV1` strict to V1/KIR V7
+and adds `TraceQuerySessionV2` for V2/KIR V9 or V10. Both share the V1 event,
+request, response-field and capture-plan grammar; V2 response contexts use
+`fe2o3-semantic-query-v2` and retain the exact KIR version, digest, length and
+identity policy. Existing V1 response bytes and CLI error contracts are unchanged.
+
+V2 has the same absent-event capabilities as V1, so existing
+`not_represented_by_trace_v1` reason labels refer to the shared event grammar,
+not a failed version conversion. Neither envelope authenticates its producer
+claims. Cursors bind the entire exact trace, query kind and filters, including
+the envelope and KIR version; they cannot cross captures or versions.
+V11/V12 KIR claims are not admitted by these frozen trace envelopes.
+
 ```text
 fe2o3-trace-query capabilities < trace.fe2o3tr1
 fe2o3-trace-query summary < trace.fe2o3tr1
@@ -32,6 +46,8 @@ fe2o3-trace-query memory-accesses --allocation 2,0 --sequence-start 10 < trace.f
 fe2o3-trace-query faults --limit 64 < trace.fe2o3tr1
 fe2o3-trace-query plan-next-capture --goal memory_fault < trace.fe2o3tr1
 fe2o3-trace-query diagnosis-status --goal correctness_mismatch < trace.fe2o3tr1
+fe2o3-trace-query summary < trace.fe2o3tr2
+fe2o3-trace-query lanes --limit 32 --workgroup 0,0,0 --wave 1 < trace.fe2o3tr2
 ```
 
 Other page commands are `workgroups`, `waves`, `sites`, `occurrences`,
@@ -54,7 +70,7 @@ evidence is referenced by the trace binding, header claims, event sequence, and
 inert evidence identity. Header identities and producer names remain untrusted
 claims.
 
-The current supported paths are simulator Trace V1, rocprofv3 dispatch JSON,
+The current supported paths are simulator Trace V1/V2, rocprofv3 dispatch JSON,
 Counter Capture V2, PC Sample Capture V3, the rocprofv3 ATT manifest, and
 normalized ROCgdb imports. Counter values and PC samples remain unsupported
 Trace V1 facts even though their separate capture formats have read-only query

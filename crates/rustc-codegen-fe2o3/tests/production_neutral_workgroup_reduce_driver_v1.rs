@@ -784,6 +784,10 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
             "fe2o3-debug-cli",
             "--bin",
             "fe2o3-debug",
+            "-p",
+            "fe2o3-semantic-query",
+            "--bin",
+            "fe2o3-trace-query",
             "--target-dir",
         ])
         .arg(&debug_target)
@@ -998,6 +1002,68 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
                 .iter()
                 .all(|event| event.provenance() == FactProvenanceV1::Observed)
         );
+
+        let trace_bytes = fe2o3_semantic_trace::encode_trace_v2(&trace.trace).unwrap();
+        let query_trace = |arguments: &[&str]| {
+            let mut child = Command::new(debug_target.join("debug/fe2o3-trace-query"))
+                .args(arguments)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let written = child.stdin.take().unwrap().write_all(&trace_bytes);
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{} trace query failed: {}",
+                case.feature,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stderr.is_empty());
+            written.expect("write complete canonical trace to query stdin");
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()
+        };
+        let summary = query_trace(&["summary"]);
+        let context = &summary["context"];
+        assert_eq!(context["schema"], "fe2o3-semantic-query-v2");
+        assert_eq!(context["execution_kind"], "cpu_kir_simulation");
+        assert_eq!(context["event_count"], trace.trace.events().len() as u64);
+        assert_eq!(context["kernel_ir"]["wire_version"], 10);
+        assert_eq!(context["kernel_ir"]["identity_policy"], 1);
+        assert_eq!(
+            context["kernel_ir"]["digest"],
+            hex(bundle.canonical_kir_v10_digest())
+        );
+        assert_eq!(
+            context["kernel_ir"]["canonical_len"],
+            bundle.canonical_kir_v10_length()
+        );
+        assert_eq!(context["kernel_ir"]["authenticated"], false);
+        assert_eq!(context["capture"]["completeness"], "complete");
+        assert!(summary["summary"]["memory_accesses"].as_u64().unwrap() > 0);
+        assert!(summary["summary"]["barrier_events"].as_u64().unwrap() > 0);
+        if case.extent == 65 {
+            let lanes = query_trace(&[
+                "lanes",
+                "--workgroup",
+                "0,0,0",
+                "--wave",
+                "1",
+                "--lane",
+                "0",
+                "--limit",
+                "1",
+            ]);
+            assert_eq!(lanes["page"]["returned"], 1);
+            let scope = &lanes["page"]["items"][0]["event"]["scope"];
+            assert_eq!(scope["level"], "lane");
+            assert_eq!(scope["logical_workitem"], json!([64, 0, 0]));
+            assert_eq!(scope["wave"], 1);
+            assert_eq!(scope["lane"], 0);
+            assert_eq!(scope["active_mask"], 1);
+            assert_eq!(scope["wave_width"], 64);
+        }
 
         execute_scan_through_sim_runtime(&bundle, case, &runtime_layout, &input, &expected);
 

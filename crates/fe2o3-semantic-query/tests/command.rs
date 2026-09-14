@@ -5,6 +5,60 @@ use std::process::{Command, Stdio};
 
 use common::encoded_trace;
 
+#[test]
+fn v1_cli_matches_pristine_summary_and_cursor_bytes() {
+    for (arguments, expected) in [
+        (
+            vec!["summary"],
+            include_bytes!("golden/v1-summary.json").as_slice(),
+        ),
+        (
+            vec!["sites", "--limit", "1"],
+            include_bytes!("golden/v1-sites.json").as_slice(),
+        ),
+    ] {
+        let output = run(&arguments, &encoded_trace(8));
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(output.stdout, expected);
+    }
+}
+
+#[test]
+fn v2_cli_routes_exact_versions_and_rejects_bad_streams_without_partial_output() {
+    use fe2o3_semantic_query::{QueryLimitsV1, QueryRequestV1, TraceQuerySessionV2};
+    use fe2o3_semantic_trace::KernelIrWireVersionV2;
+    for version in [KernelIrWireVersionV2::V9, KernelIrWireVersionV2::V10] {
+        let bytes = common::encoded_trace_v2(8, version);
+        let session = TraceQuerySessionV2::open(&bytes, QueryLimitsV1::default()).unwrap();
+        let output = run(&["summary"], &bytes);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            output.stdout,
+            session.query_json(QueryRequestV1::DispatchSummary).unwrap()
+        );
+        let mut wrong_claim = bytes.clone();
+        wrong_claim[70..72].copy_from_slice(&11_u16.to_le_bytes());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        let mut wrong_schema = bytes.clone();
+        wrong_schema[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        for malformed in [
+            wrong_claim,
+            trailing,
+            wrong_schema,
+            bytes[..bytes.len() - 1].to_vec(),
+        ] {
+            let output = run(&["summary"], &malformed);
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(error["code"], "trace_open");
+        }
+    }
+}
+
 fn run(arguments: &[&str], input: &[u8]) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-trace-query"))
         .args(arguments)

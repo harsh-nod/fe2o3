@@ -30,16 +30,27 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
     let request = parse_arguments()?;
     let limits = QueryLimitsV1::default();
     let input = read_bounded_stdin(limits.max_input_bytes())?;
-    let session = TraceQuerySessionV1::open(&input, limits).map_err(|_| {
-        CliErrorV1::new(
-            "trace_open",
-            "stdin is not a valid bounded canonical Trace V1 stream",
-        )
-    })?;
-    drop(input);
-    session
-        .query_json(request)
-        .map_err(|_| CliErrorV1::new("query", "the bounded semantic query was rejected"))
+    // Route by the envelope only; each codec still validates the entire stream.
+    let response = if input.starts_with(b"FE2O3TR2") {
+        let session = TraceQuerySessionV2::open(&input, limits).map_err(|_| {
+            CliErrorV1::new(
+                "trace_open",
+                "stdin is not a valid bounded canonical Trace V2 stream",
+            )
+        })?;
+        drop(input);
+        session.query_json(request)
+    } else {
+        let session = TraceQuerySessionV1::open(&input, limits).map_err(|_| {
+            CliErrorV1::new(
+                "trace_open",
+                "stdin is not a valid bounded canonical Trace V1 stream",
+            )
+        })?;
+        drop(input);
+        session.query_json(request)
+    };
+    response.map_err(|_| CliErrorV1::new("query", "the bounded semantic query was rejected"))
 }
 
 fn read_bounded_stdin(max: u64) -> Result<Vec<u8>, CliErrorV1> {
