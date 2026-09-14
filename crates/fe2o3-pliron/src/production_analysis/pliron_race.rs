@@ -125,16 +125,87 @@ pub(crate) fn preflight_race_resource_upper_bound_v1(
     layout: Option<PlironExecutionLayoutV1>,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    let extents = layout
+        .as_ref()
+        .map(|layout| layout.global_extents.as_slice())
+        .unwrap_or_else(|| sparse.launch_extents());
     race_resource_upper_bound_for_shape_v1(
         census,
         static_invocation_shape_for_resource_v1(sparse, layout),
+        presburger_invocation_shape_for_resource_v1(extents),
         limits,
     )
+}
+
+fn presburger_invocation_shape_for_resource_v1(extents: &[u64]) -> Option<(usize, usize)> {
+    let invocations = extents.iter().try_fold(1_u128, |count, extent| {
+        count.checked_mul(u128::from(*extent))
+    })?;
+    if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
+        return None;
+    }
+    // With no relevant pair the relation loop allocates nothing. With at
+    // least one pair, this is the minimum admission charge in disjointness_v1.
+    let minimum_work = invocations
+        .checked_mul((extents.len() as u128).checked_add(1)?)?
+        .checked_mul(2)?;
+    if minimum_work > MAX_PRESBURGER_WORK_UNITS_V1 as u128 {
+        return None;
+    }
+    Some((usize::try_from(invocations).ok()?, extents.len()))
+}
+
+fn presburger_relation_resource_upper_bound_v1(
+    shape: Option<(usize, usize)>,
+    pairs: usize,
+) -> Result<(usize, usize), ProductionAnalysisResourceLimitV1> {
+    let Some((invocations, launch_rank)) = shape else {
+        return Ok((0, 0));
+    };
+    let minimum_pair_work = checked_race_mul_v1(
+        checked_race_mul_v1(invocations, checked_race_sum_v1(&[launch_rank, 1])?)?,
+        2,
+    )?;
+    if minimum_pair_work == 0 {
+        return Err(race_resource_overflow_v1());
+    }
+    let admitted_pairs = pairs.min(MAX_PRESBURGER_WORK_UNITS_V1 / minimum_pair_work);
+    if admitted_pairs == 0 {
+        return Ok((0, 0));
+    }
+    let rank = launch_rank.max(MAX_RANKED_MEMORY_RANK);
+    let rank_squared = checked_race_mul_v1(rank, rank)?;
+    // Two overflow walks and two relation walks per pair. Each walk evaluates
+    // rank outputs with rank coefficients; reserve cloning, hashing and drop
+    // work as well as the traversal itself.
+    let per_invocation_work = checked_race_sum_v1(&[
+        checked_race_mul_v1(rank_squared, 16)?,
+        checked_race_mul_v1(rank, 128)?,
+        256,
+    ])?;
+    let work = checked_race_mul_v1(
+        checked_race_mul_v1(invocations, admitted_pairs)?,
+        per_invocation_work,
+    )?;
+    // One pair is live at a time: owner keys plus first/alternate coordinates
+    // use the exact-address map's capacity allowance. Also retain two fact
+    // vectors, two maps, traversal state and a transient collision witness.
+    let temporary = checked_race_sum_v1(&[
+        checked_race_mul_v1(
+            invocations,
+            checked_race_sum_v1(&[checked_race_mul_v1(rank, 9)?, 64])?,
+        )?,
+        checked_race_mul_v1(rank_squared, 8)?,
+        checked_race_mul_v1(rank, 64)?,
+        128,
+    ])?;
+    Ok((work, temporary))
 }
 
 fn race_resource_upper_bound_for_shape_v1(
     census: ProductionAnalysisInputCensusV1,
     invocation_shape: Option<(usize, usize)>,
+    presburger_shape: Option<(usize, usize)>,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
     let effects = checked_race_sum_v1(&[census.ranked_accesses, census.allocation_effects])?;
@@ -145,7 +216,14 @@ fn race_resource_upper_bound_for_shape_v1(
         .ok_or_else(race_resource_overflow_v1)?;
     let pairs = effect_pairs.min(MAX_PRESBURGER_WORK_UNITS_V1);
     let (invocations, launch_rank) = invocation_shape.unwrap_or((0, 3));
-    let potential_effect_instances = checked_race_mul_v1(invocations, effects)?;
+    // Every early return before exact enumeration retains at most one finding.
+    // The symbolic proofs still run, including separately bounded relation maps.
+    let exact_fallback_reachable = invocations > 1;
+    let potential_effect_instances = if exact_fallback_reachable {
+        checked_race_mul_v1(invocations, effects)?
+    } else {
+        0
+    };
     let charged_effect_instances = potential_effect_instances.min(
         MAX_PLIRON_RACE_EFFECT_INSTANCES_V1
             .checked_add(1)
@@ -154,18 +232,21 @@ fn race_resource_upper_bound_for_shape_v1(
     let retained_effect_instances =
         potential_effect_instances.min(MAX_PLIRON_RACE_EFFECT_INSTANCES_V1);
     let rank = launch_rank.max(MAX_RANKED_MEMORY_RANK);
-    let raw_evaluation_queries = checked_race_mul_v1(
-        effects
-            .checked_add(charged_effect_instances)
-            .ok_or_else(race_resource_overflow_v1)?,
-        MAX_RANKED_MEMORY_RANK,
-    )?;
-    let (raw_evaluation_work, raw_evaluation_temporary) =
+    let (raw_evaluation_work, raw_evaluation_temporary) = if exact_fallback_reachable {
+        let raw_evaluation_queries = checked_race_mul_v1(
+            checked_race_sum_v1(&[effects, charged_effect_instances])?,
+            MAX_RANKED_MEMORY_RANK,
+        )?;
         raw_index_evaluation_resource_upper_bound_v1(
             census.operations,
             raw_evaluation_queries,
             rank,
-        )?;
+        )?
+    } else {
+        (0, 0)
+    };
+    let (presburger_work, presburger_temporary) =
+        presburger_relation_resource_upper_bound_v1(presburger_shape, pairs)?;
     let symbolic_work = if invocations == 0 {
         MAX_PRESBURGER_WORK_UNITS_V1
     } else {
@@ -186,6 +267,7 @@ fn race_resource_upper_bound_for_shape_v1(
                 .ok_or_else(race_resource_overflow_v1)?,
         )?,
         raw_evaluation_work,
+        presburger_work,
     ])?;
     let name_storage = census
         .identifier_bytes
@@ -212,23 +294,31 @@ fn race_resource_upper_bound_for_shape_v1(
     ])?;
     // Exact fallback deduplicates ordered static effect pairs, not invocation
     // coordinates. Reversing the witness order can produce a distinct class.
-    let conflict_classes = checked_race_mul_v1(effects, effects)?;
-    let retained_finding_count = conflict_classes.clamp(1, MAX_PLIRON_RACE_FINDINGS_V1);
+    let (retained_finding_count, conflict_class_storage) = if exact_fallback_reachable {
+        let conflict_classes = checked_race_mul_v1(effects, effects)?;
+        (
+            conflict_classes.clamp(1, MAX_PLIRON_RACE_FINDINGS_V1),
+            checked_race_mul_v1(
+                MAX_PLIRON_RACE_FINDINGS_V1
+                    .checked_add(1)
+                    .ok_or_else(race_resource_overflow_v1)?,
+                16,
+            )?,
+        )
+    } else {
+        (1, 0)
+    };
     let retained_findings = checked_race_mul_v1(retained_finding_count, per_finding_storage)?;
     let attempted_finding = per_finding_storage;
     let temporary = checked_race_sum_v1(&[
         effect_state,
         address_state,
         attempted_finding,
-        checked_race_mul_v1(
-            MAX_PLIRON_RACE_FINDINGS_V1
-                .checked_add(1)
-                .ok_or_else(race_resource_overflow_v1)?,
-            16,
-        )?,
+        conflict_class_storage,
         checked_race_mul_v1(census.blocks, MAX_RANKED_MEMORY_RANK + 3)?,
         checked_race_mul_v1(effects, 8)?,
         raw_evaluation_temporary,
+        presburger_temporary,
     ])?;
     let bound = ProductionAnalysisResourceUpperBoundV1::checked_phase(
         ProductionAnalysisResourcePhaseV1::RaceFreedom,
