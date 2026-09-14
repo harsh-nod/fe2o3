@@ -24,10 +24,17 @@ depends on the core and publicly re-exports its existing API for downstream
 compatibility.
 
 The dependency is pinned to reviewed Pliron v0.17.0 fork commit
-`9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd`. It is a strict descendant of
+`161c385576d45d4e634ba179fa93a545b91124e6`. It is a strict descendant of
 upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and adds
 private context provenance on upstream pointers and the mutation-attempt epoch
 used by the production analysis boundary.
+
+The fork also provides opt-in rewrite observers and occurrence notifications for
+CFG merging, unreachable-block removal, and dead block-argument removal. The
+existing pass entry points and scheduling listeners remain available. Builtin
+function DCE preserves entry arguments and removes each dead internal argument
+once, including when duplicate uses enqueue it repeatedly. These observations
+are not semantic proofs; consumers must check the resulting graph independently.
 The `pliron-derive` dependency used by `pliron` is sourced from that same Git
 workspace revision and retains the reviewed source-tree identity. This crate
 does not construct or lower LLVM operations. The workspace pins `pliron-llvm`

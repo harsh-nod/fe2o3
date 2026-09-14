@@ -165,8 +165,8 @@ signal-hook = { version = "=0.4.4", default-features = false }
 
 proc-macro2 = "1"
 proc-macro-crate = "3"
-pliron = { git = "https://github.com/harsh-nod/pliron.git", rev = "9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd" }
-pliron-llvm = { git = "https://github.com/harsh-nod/pliron.git", rev = "9de42fc6ca7b8f3500ccf2346d69ebbb36e889cd", default-features = false, features = ["std"] }
+pliron = { git = "https://github.com/harsh-nod/pliron.git", rev = "161c385576d45d4e634ba179fa93a545b91124e6" }
+pliron-llvm = { git = "https://github.com/harsh-nod/pliron.git", rev = "161c385576d45d4e634ba179fa93a545b91124e6", default-features = false, features = ["std"] }
 quote = "1"
 rustc_apfloat = "=0.2.3"
 sha2 = { version = "0.11.0", default-features = false }
