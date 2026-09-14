@@ -7,7 +7,8 @@ use dialect_proof::{
     MAX_TENSOR_REFINEMENT_COMPONENTS_V1, ObligationOp, ObligationRefType, ProofIdAttr,
     ProofOverlayOpInterface, PropertyAttr, RegistrationError, RegistrationOutcome,
     RelativeErrorF64BitsAttr, RequireEffectRefinementOp, RequireNumericalRefinementOp,
-    RequireTensorRefinementOp, evidence_ref_op_attr_names, register_dialect,
+    RequireTensorRefinementOp, evidence_ref_op_attr_names, obligation_op_attr_names,
+    register_dialect, require_numerical_refinement_op_attr_names,
 };
 use pliron::{
     attribute::{AttrObj, verify_attr},
@@ -179,10 +180,22 @@ fn verifier_rejects_identity_confusion_and_zero_references() {
 
     let zero = ObligationOp::new(
         &mut context,
-        ProofIdAttr::new([0; 4]),
+        id(205),
         id(210),
         id(220),
         PropertyAttr::Initialization,
+    );
+    verify_op(&zero, &context).expect("valid obligation must verify before corruption");
+    assert!(
+        zero.try_set_attr_proof_obligation_obligation_id(&context, ProofIdAttr::new([0; 4]))
+            .is_err()
+    );
+    assert_eq!(zero.obligation_id(&context), Some(id(205).words()));
+    verify_op(&zero, &context).expect("rejected typed update must preserve a valid obligation");
+    // Bypass typed preflight deliberately to test the independent verifier.
+    zero.get_operation().deref_mut(&context).attributes.set(
+        obligation_op_attr_names::ATTR_KEY_PROOF_OBLIGATION_OBLIGATION_ID.clone(),
+        ProofIdAttr::new([0; 4]),
     );
     assert!(verify_op(&zero, &context).is_err());
 }
@@ -279,7 +292,7 @@ fn effect_refinement_locally_requires_ranked_indices_and_six_semantic_expression
     )
     .unwrap();
     register_dialect(&mut context).unwrap();
-    let view_type = RankedViewType::new(&mut context, 32, true, vec![4]).unwrap();
+    let view_type = RankedViewType::new(&context, 32, true, vec![4]).unwrap();
     let view = RankedViewOp::new(&mut context, view_type, vec![]).unwrap();
     let index = IndexConstantOp::new(&mut context, 0);
     let scalar = SemanticSymbolOp::new(&mut context, 7);
@@ -374,12 +387,30 @@ fn numerical_refinement_requires_typed_roots_and_a_finite_nonzero_bound() {
     let nan = RequireNumericalRefinementOp::new(
         &mut context,
         id(520),
-        AbsoluteErrorF64BitsAttr(f64::NAN.to_bits()),
+        AbsoluteErrorF64BitsAttr(0.01_f64.to_bits()),
         RelativeErrorF64BitsAttr(0.0_f64.to_bits()),
         scalar,
         scalar,
         scalar,
         scalar,
+    );
+    verify_op(&nan, &context).expect("finite bound must verify before corruption");
+    assert!(
+        nan.try_set_attr_proof_require_numerical_refinement_absolute_error(
+            &context,
+            AbsoluteErrorF64BitsAttr(f64::NAN.to_bits()),
+        )
+        .is_err()
+    );
+    assert_eq!(
+        nan.absolute_error_f64_bits(&context),
+        Some(0.01_f64.to_bits())
+    );
+    verify_op(&nan, &context).expect("rejected typed update must preserve a finite bound");
+    // Raw corruption must still be rejected at the verifier boundary.
+    nan.get_operation().deref_mut(&context).attributes.set(
+        require_numerical_refinement_op_attr_names::ATTR_KEY_PROOF_REQUIRE_NUMERICAL_REFINEMENT_ABSOLUTE_ERROR.clone(),
+        AbsoluteErrorF64BitsAttr(f64::NAN.to_bits()),
     );
     assert!(verify_op(&nan, &context).is_err());
 
@@ -405,7 +436,7 @@ fn tensor_refinement_component_payload_is_locally_bounded() {
     )
     .unwrap();
     register_dialect(&mut context).unwrap();
-    let view_type = RankedViewType::new(&mut context, 32, true, vec![4]).unwrap();
+    let view_type = RankedViewType::new(&context, 32, true, vec![4]).unwrap();
     let view = RankedViewOp::new(&mut context, view_type, vec![]).unwrap();
     let view_value = view.result(&context);
     let scalar = SemanticSymbolOp::new(&mut context, 7).result(&context);
