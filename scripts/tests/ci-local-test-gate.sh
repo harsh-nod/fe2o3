@@ -199,10 +199,19 @@ if ((kill_status != 137)); then
   exit 1
 fi
 read -r kill_parent kill_child <"${KILL_MARKER}"
+# timeout can exit before its killed descendants are reaped.
+for ((reap_attempt = 0; reap_attempt < 200; reap_attempt++)); do
+  if ! kill -0 "${kill_parent}" 2>/dev/null &&
+    ! kill -0 "${kill_child}" 2>/dev/null; then
+    break
+  fi
+  sleep 0.01
+done
 for killed_pid in "${kill_parent}" "${kill_child}"; do
   if kill -0 "${killed_pid}" 2>/dev/null; then
     printf 'timed-out process %s survived TERM/KILL escalation\n' \
       "${killed_pid}" >&2
+    ps -o pid=,ppid=,stat= -p "${killed_pid}" >&2 || true
     exit 1
   fi
 done
