@@ -297,6 +297,9 @@ pub struct SemanticU32InductionNoOverflowReportV1 {
     checked_additions_examined: usize,
     certificates: Box<[SemanticU32InductionNoOverflowCertificateV1]>,
     work_units: usize,
+    reachable_scope: bool,
+    ssa_scope_work_units: usize,
+    reachable_blocks: Option<SemanticReachableScopeV2>,
 }
 
 impl SemanticU32InductionNoOverflowReportV1 {
@@ -322,6 +325,58 @@ impl SemanticU32InductionNoOverflowReportV1 {
 
     pub const fn work_units(&self) -> usize {
         self.work_units
+    }
+
+    /// Whether facts exclude source blocks unreachable from the actual entry.
+    pub const fn uses_reachable_scope_v2(&self) -> bool {
+        self.reachable_scope
+    }
+
+    /// Work checking a supplied SSA plan, separate from deterministic replay.
+    ///
+    /// This work shares the analysis limit but is not serialized as semantic
+    /// evidence: an independent replay has no producer's SSA owner to check.
+    pub const fn ssa_scope_work_units_v2(&self) -> usize {
+        self.ssa_scope_work_units
+    }
+
+    /// Complete work charged to this invocation's single analysis budget.
+    pub const fn total_work_units_v2(&self) -> usize {
+        self.work_units + self.ssa_scope_work_units
+    }
+
+    /// Returns exact source-entry membership, rejecting invalid coordinates.
+    pub fn block_is_reachable_v2(
+        &self,
+        block: SemanticBlockIdV1,
+    ) -> Result<bool, SemanticU32InductionAnalysisErrorV1> {
+        self.reachable_blocks
+            .as_ref()
+            .ok_or(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+                "a complete-scope report has no V2 reachability roster",
+            ))?
+            .blocks
+            .get(block.index() as usize)
+            .copied()
+            .ok_or(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+                "a reachability query is outside the source block table",
+            ))
+    }
+
+    /// Returns the exact in-scope block count for a V2 report.
+    pub const fn reachable_block_count_v2(&self) -> Option<usize> {
+        match &self.reachable_blocks {
+            Some(scope) => Some(scope.block_count),
+            None => None,
+        }
+    }
+
+    /// Returns the exact in-scope source statement count for a V2 report.
+    pub const fn reachable_statement_count_v2(&self) -> Option<usize> {
+        match &self.reachable_blocks {
+            Some(scope) => Some(scope.statement_count),
+            None => None,
+        }
     }
 
     pub const fn grants_authority(&self) -> bool {
@@ -371,6 +426,76 @@ fn analyze_function_with_limits_v1(
     function: SemanticFunctionIdV1,
     limits: SemanticU32InductionAnalysisLimitsV1,
 ) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    analyze_function_in_scope_v2(
+        types,
+        declaration,
+        semantic_mir_sha256,
+        function,
+        None,
+        false,
+        limits,
+    )
+}
+
+/// Replays facts over the actual entry-reachable semantic CFG only.
+///
+/// This V2 analysis derives reachability from admitted terminators, never a
+/// caller-authored mask. It does not authenticate a lowering or grant authority.
+pub fn analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2(
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    function: SemanticFunctionIdV1,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    analyze_semantic_scope_v2(semantic_mir, function, None, limits)
+}
+
+/// Derives V2 facts and cross-checks every source block against a real SSA plan.
+///
+/// The producer must obtain the plan from its retained semantic SSA owner. The
+/// analysis independently computes the exact source reachability, so a foreign
+/// plan cannot suppress reachable definitions, hazards, predecessors or uses.
+/// Analysis and cross-check work share one unchanged caller limit.
+pub fn analyze_semantic_u32_induction_no_overflow_with_ssa_plan_v2(
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    function: SemanticFunctionIdV1,
+    plan: &crate::ssa::SsaConstructionPlanV1,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    analyze_semantic_scope_v2(semantic_mir, function, Some(plan), limits)
+}
+
+fn analyze_semantic_scope_v2(
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    function: SemanticFunctionIdV1,
+    plan: Option<&crate::ssa::SsaConstructionPlanV1>,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    let declaration = semantic_mir
+        .functions()
+        .get(function.index() as usize)
+        .ok_or(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+            "the requested semantic function is outside the admitted function table",
+        ))?;
+    analyze_function_in_scope_v2(
+        semantic_mir.types(),
+        declaration,
+        semantic_mir.semantic_sha256(),
+        function,
+        plan,
+        true,
+        limits,
+    )
+}
+
+fn analyze_function_in_scope_v2(
+    types: &[SemanticTypeDeclV1],
+    declaration: &SemanticFunctionDeclV1,
+    semantic_mir_sha256: InertSemanticMirSha256V1,
+    function: SemanticFunctionIdV1,
+    plan: Option<&crate::ssa::SsaConstructionPlanV1>,
+    reachable_scope: bool,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
     if limits.work_units > MAX_SEMANTIC_U32_INDUCTION_WORK_V1
         || limits.certificates > MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1
     {
@@ -383,8 +508,15 @@ fn analyze_function_with_limits_v1(
     }
 
     let mut budget = WorkBudgetV1::new(limits.work_units);
-    let graph = SemanticCfgV1::analyze(declaration, &mut budget)?;
-    let inventory = SemanticInventoryV1::analyze(declaration, &mut budget)?;
+    let mut ssa_scope_work_units = 0;
+    let graph = SemanticCfgV1::analyze(
+        declaration,
+        reachable_scope,
+        plan,
+        &mut budget,
+        &mut ssa_scope_work_units,
+    )?;
+    let inventory = SemanticInventoryV1::analyze(declaration, &graph, &mut budget)?;
     let mut certificates = Vec::new();
     certificates
         .try_reserve(inventory.checked_additions.len().min(limits.certificates))
@@ -416,7 +548,10 @@ fn analyze_function_with_limits_v1(
         function_identity: declaration.identity(),
         checked_additions_examined: inventory.checked_additions.len(),
         certificates: certificates.into_boxed_slice(),
-        work_units: budget.used,
+        work_units: budget.used - ssa_scope_work_units,
+        reachable_scope,
+        ssa_scope_work_units,
+        reachable_blocks: graph.reachable_scope,
     })
 }
 
@@ -490,6 +625,7 @@ struct SemanticInventoryV1 {
 impl SemanticInventoryV1 {
     fn analyze(
         function: &SemanticFunctionDeclV1,
+        graph: &SemanticCfgV1,
         budget: &mut WorkBudgetV1,
     ) -> Result<Self, SemanticU32InductionAnalysisErrorV1> {
         let local_count = function.locals().len();
@@ -502,6 +638,9 @@ impl SemanticInventoryV1 {
 
         for (block_index, block) in function.blocks().iter().enumerate() {
             budget.charge(1)?;
+            if !graph.is_in_scope(block_index) {
+                continue;
+            }
             for (statement_index, statement) in block.statements().iter().enumerate() {
                 budget.charge(1)?;
                 let site = DefinitionSiteV1 {
@@ -1124,18 +1263,38 @@ fn match_guard_induction_snapshot_v1(
     Ok(Some((snapshot, Some(snapshot_definition))))
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SemanticReachableScopeV2 {
+    blocks: Vec<bool>,
+    block_count: usize,
+    statement_count: usize,
+}
+
 struct SemanticCfgV1 {
     entry: usize,
     successors: Vec<Vec<usize>>,
     predecessors: Vec<Vec<usize>>,
+    reachable_scope: Option<SemanticReachableScopeV2>,
 }
 
 impl SemanticCfgV1 {
     fn analyze(
         function: &SemanticFunctionDeclV1,
+        reachable_only: bool,
+        plan: Option<&crate::ssa::SsaConstructionPlanV1>,
         budget: &mut WorkBudgetV1,
+        scope_work: &mut usize,
     ) -> Result<Self, SemanticU32InductionAnalysisErrorV1> {
         let block_count = function.blocks().len();
+        if let Some(plan) = plan {
+            budget.charge(1)?;
+            *scope_work += 1;
+            if plan.resources().input_blocks() != block_count {
+                return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
+                    "the SSA plan has a different source block count",
+                ));
+            }
+        }
         let entry = function.entry().index() as usize;
         if block_count == 0 || entry >= block_count {
             return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
@@ -1165,18 +1324,62 @@ impl SemanticCfgV1 {
                 Ok(())
             })?;
         }
-        let graph = Self {
+        let mut graph = Self {
             entry,
             successors,
             predecessors,
+            reachable_scope: None,
         };
         let reachable = graph.reachable_avoiding(None, budget)?;
-        if reachable.iter().any(|reachable| !reachable) {
+        if reachable_only {
+            let mut reachable_block_count = 0_usize;
+            let mut reachable_statement_count = 0_usize;
+            for (block, is_reachable) in reachable.iter().copied().enumerate() {
+                if let Some(plan) = plan {
+                    budget.charge(1)?;
+                    *scope_work += 1;
+                    let block_id = u32::try_from(block).map_err(|_| {
+                        SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
+                            "a source block index does not fit the SSA identity",
+                        )
+                    })?;
+                    if plan.is_reachable(crate::ssa::SsaBlockIdV1::new(block_id)) != is_reachable {
+                        return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
+                            "the SSA plan differs from exact semantic reachability",
+                        ));
+                    }
+                }
+                budget.charge(1)?;
+                budget.charge(graph.predecessors[block].len())?;
+                graph.predecessors[block].retain(|source| reachable[*source]);
+                if !is_reachable {
+                    graph.successors[block].clear();
+                } else {
+                    reachable_block_count += 1;
+                    reachable_statement_count = reachable_statement_count
+                        .checked_add(function.blocks()[block].statements().len())
+                        .ok_or(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+                            "reachable source statement count overflows",
+                        ))?;
+                }
+            }
+            graph.reachable_scope = Some(SemanticReachableScopeV2 {
+                blocks: reachable,
+                block_count: reachable_block_count,
+                statement_count: reachable_statement_count,
+            });
+        } else if reachable.iter().any(|reachable| !reachable) {
             return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
                 "the semantic CFG contains an unreachable block",
             ));
         }
         Ok(graph)
+    }
+
+    fn is_in_scope(&self, block: usize) -> bool {
+        self.reachable_scope
+            .as_ref()
+            .is_none_or(|scope| scope.blocks[block])
     }
 
     fn predecessors(&self, block: usize) -> Result<&[usize], SemanticU32InductionAnalysisErrorV1> {
@@ -1201,6 +1404,9 @@ impl SemanticCfgV1 {
             return Err(SemanticU32InductionAnalysisErrorV1::InvalidControlFlow(
                 "a dominance query is outside the block table",
             ));
+        }
+        if !self.is_in_scope(dominator) || !self.is_in_scope(block) {
+            return Ok(false);
         }
         if dominator == block {
             return Ok(true);
@@ -1757,6 +1963,8 @@ mod tests {
         guard_snapshot_extra_use: bool,
         mutate_assert_operands: bool,
         identity_seed: u8,
+        dead_predecessor: bool,
+        dead_definitions: bool,
     }
 
     impl Default for Shape {
@@ -1771,6 +1979,8 @@ mod tests {
                 guard_snapshot_extra_use: false,
                 mutate_assert_operands: false,
                 identity_seed: 0,
+                dead_predecessor: false,
+                dead_definitions: false,
             }
         }
     }
@@ -2024,7 +2234,7 @@ mod tests {
         } else {
             constant(shape.step)
         };
-        let blocks = vec![
+        let mut blocks = vec![
             block(
                 seed,
                 30,
@@ -2079,6 +2289,46 @@ mod tests {
             ),
             block(seed, 34, vec![], SemanticTerminatorKindV1::Return),
         ];
+        if shape.dead_predecessor || shape.dead_definitions {
+            let statements = if shape.dead_definitions {
+                vec![
+                    assignment(
+                        place(INDUCTION, U32),
+                        U32,
+                        SemanticRvalueKindV1::Use(constant(99)),
+                    ),
+                    assignment(
+                        place(BOUND, U32),
+                        U32,
+                        SemanticRvalueKindV1::Use(copy(INDUCTION, U32)),
+                    ),
+                    assignment(
+                        place(CHECKED_RESULT, CHECKED_U32),
+                        CHECKED_U32,
+                        SemanticRvalueKindV1::CheckedBinary(
+                            crate::semantic_mir_v1::SemanticCheckedBinaryRvalueV1::new(
+                                SemanticCheckedBinaryOpV1::Add,
+                                copy(INDUCTION, U32),
+                                constant(2),
+                            ),
+                        ),
+                    ),
+                    assignment(
+                        field(CHECKED_RESULT, 0, U32),
+                        U32,
+                        SemanticRvalueKindV1::Use(constant(9)),
+                    ),
+                ]
+            } else {
+                vec![]
+            };
+            blocks.push(block(
+                seed,
+                35,
+                statements,
+                SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+            ));
+        }
         let abi = SemanticFunctionAbiV1::new(
             SemanticAbiIdentityV1::from_sha256(identity(seed, 40)),
             SemanticLayoutIdentityV1::from_sha256(identity(seed, 41)),
@@ -2123,6 +2373,8 @@ mod tests {
         analyze_semantic_u32_induction_no_overflow_v1(admitted, SemanticFunctionIdV1::from_index(0))
             .unwrap()
     }
+
+    include!("semantic_u32_induction/reachable_scope_tests.rs");
 
     #[test]
     fn exact_guarded_checked_u32_induction_produces_one_bound_certificate() {

@@ -13,6 +13,8 @@ use crate::{
 
 /// Canonical wire version for semantic induction report custody.
 pub const SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1: u16 = 1;
+/// Explicit entry-reachable semantic analysis; V1 retains all-block behavior.
+pub const SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V2: u16 = 2;
 /// Closed validation policy for semantic induction report custody.
 pub const SEMANTIC_U32_INDUCTION_EVIDENCE_POLICY_V1: u16 = 1;
 /// Maximum exact bytes admitted by one report evidence record.
@@ -20,6 +22,7 @@ pub const MAX_SEMANTIC_U32_INDUCTION_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024
 
 const MAGIC_V1: [u8; 8] = *b"F2U32I\0\0";
 const IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/SEMANTIC-U32-INDUCTION-EVIDENCE/V1\0";
+const IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/SEMANTIC-U32-INDUCTION-EVIDENCE/V2\0";
 const HEADER_BYTES_V1: usize = 104;
 const PLACE_BYTES_V1: usize = 72;
 const BLOCK_SITE_BYTES_V1: usize = 36;
@@ -177,6 +180,7 @@ impl SemanticU32InductionNoOverflowCertificateEvidenceV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InertCanonicalSemanticU32InductionEvidenceV1 {
     canonical_bytes: Box<[u8]>,
+    version: u16,
     identity: [u8; 32],
     semantic_mir_sha256: [u8; 32],
     function: u32,
@@ -215,6 +219,11 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
             )
         });
         let bytes = encode(
+            if report.uses_reachable_scope_v2() {
+                SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V2
+            } else {
+                SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1
+            },
             *report.semantic_mir_sha256().as_bytes(),
             report.function().index(),
             *report.function_identity().as_bytes(),
@@ -234,8 +243,11 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
         if reader.fixed::<8>()? != MAGIC_V1 {
             return Err(SemanticU32InductionEvidenceErrorV1::InvalidHeader);
         }
-        if reader.u16()? != SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1
-            || reader.u16()? != SEMANTIC_U32_INDUCTION_EVIDENCE_POLICY_V1
+        let version = reader.u16()?;
+        if !matches!(
+            version,
+            SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1 | SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V2
+        ) || reader.u16()? != SEMANTIC_U32_INDUCTION_EVIDENCE_POLICY_V1
             || reader.u32()? != 0
         {
             return Err(SemanticU32InductionEvidenceErrorV1::InvalidHeader);
@@ -277,6 +289,7 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
             &certificates,
         )?;
         let reencoded = encode(
+            version,
             semantic_mir_sha256,
             function,
             function_identity,
@@ -287,10 +300,11 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
         if reencoded != bytes {
             return Err(SemanticU32InductionEvidenceErrorV1::NonCanonical);
         }
-        let identity = evidence_identity(&reencoded);
+        let identity = evidence_identity(version, &reencoded);
         require_nonzero(&identity)?;
         Ok(Self {
             canonical_bytes: reencoded.into_boxed_slice(),
+            version,
             identity,
             semantic_mir_sha256,
             function,
@@ -299,6 +313,39 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
             work_units,
             certificates: certificates.into_boxed_slice(),
         })
+    }
+
+    /// Returns the closed analysis framing version.
+    pub const fn version(&self) -> u16 {
+        self.version
+    }
+
+    /// Independently rederives the report selected by the explicit wire version.
+    ///
+    /// The caller must compare canonical evidence from the returned report with
+    /// this record. No SSA plan, source reachability mask or authority is imported.
+    pub fn replay_report(
+        &self,
+        semantic: &crate::semantic_mir_v1::AdmittedInertSemanticMirV1,
+        limits: crate::SemanticU32InductionAnalysisLimitsV1,
+    ) -> Result<SemanticU32InductionNoOverflowReportV1, crate::SemanticU32InductionAnalysisErrorV1>
+    {
+        let function = crate::semantic_mir_v1::SemanticFunctionIdV1::from_index(self.function);
+        match self.version {
+            SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1 => {
+                crate::analyze_semantic_u32_induction_no_overflow_with_limits_v1(
+                    semantic, function, limits,
+                )
+            }
+            SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V2 => {
+                crate::analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2(
+                    semantic, function, limits,
+                )
+            }
+            _ => Err(crate::SemanticU32InductionAnalysisErrorV1::InvalidModel(
+                "an induction record has an unsupported analysis version",
+            )),
+        }
     }
 
     /// Re-decodes the exact retained bytes and identity.
@@ -532,6 +579,7 @@ fn validate_certificate(
 }
 
 fn encode(
+    version: u16,
     semantic_mir_sha256: [u8; 32],
     function: u32,
     function_identity: [u8; 32],
@@ -563,7 +611,7 @@ fn encode(
         .map_err(|_| SemanticU32InductionEvidenceErrorV1::Overflow)?;
     let mut bytes = Vec::with_capacity(exact_size);
     bytes.extend_from_slice(&MAGIC_V1);
-    bytes.extend_from_slice(&SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1.to_le_bytes());
+    bytes.extend_from_slice(&version.to_le_bytes());
     bytes.extend_from_slice(&SEMANTIC_U32_INDUCTION_EVIDENCE_POLICY_V1.to_le_bytes());
     bytes.extend_from_slice(&0_u32.to_le_bytes());
     bytes.extend_from_slice(&declared.to_le_bytes());
@@ -719,9 +767,13 @@ fn require_nonzero(identity: &[u8; 32]) -> Result<(), SemanticU32InductionEviden
     }
 }
 
-fn evidence_identity(bytes: &[u8]) -> [u8; 32] {
+fn evidence_identity(version: u16, bytes: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(IDENTITY_DOMAIN_V1);
+    digest.update(if version == SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1 {
+        IDENTITY_DOMAIN_V1
+    } else {
+        IDENTITY_DOMAIN_V2
+    });
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
     digest.finalize().into()
