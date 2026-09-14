@@ -12252,7 +12252,7 @@ enum AssertionRangeFrameV1 {
     ApplyStrictUpperBoundCandidate {
         state: AssertionStrictUpperBoundStateV1,
         switch_block: usize,
-        true_target: usize,
+        success_target: usize,
     },
 }
 
@@ -13522,30 +13522,33 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         let switch_block = state.next_switch_block;
                         state.next_switch_block += 1;
                         self.charge(1)?;
-                        let Some((condition_local, true_target, statement_count)) = (|| {
-                            let block = &self.function.blocks()[switch_block];
-                            let SemanticTerminatorKindV1::SwitchInt {
-                                discriminant,
-                                targets,
-                            } = block.terminator().kind()
-                            else {
-                                return None;
-                            };
-                            if targets.values().len() != 1 || targets.values()[0].value() != 0 {
-                                return None;
-                            }
-                            let false_target = targets.values()[0].edge().target().index() as usize;
-                            let true_target = targets.otherwise().target().index() as usize;
-                            if false_target == true_target {
-                                return None;
-                            }
-                            Some((
-                                simple_operand_local(discriminant)?.index() as usize,
-                                true_target,
-                                block.statements().len(),
-                            ))
-                        })(
-                        ) else {
+                        let Some((condition_local, false_target, true_target, statement_count)) =
+                            (|| {
+                                let block = &self.function.blocks()[switch_block];
+                                let SemanticTerminatorKindV1::SwitchInt {
+                                    discriminant,
+                                    targets,
+                                } = block.terminator().kind()
+                                else {
+                                    return None;
+                                };
+                                if targets.values().len() != 1 || targets.values()[0].value() != 0 {
+                                    return None;
+                                }
+                                let false_target =
+                                    targets.values()[0].edge().target().index() as usize;
+                                let true_target = targets.otherwise().target().index() as usize;
+                                if false_target == true_target {
+                                    return None;
+                                }
+                                Some((
+                                    simple_operand_local(discriminant)?.index() as usize,
+                                    false_target,
+                                    true_target,
+                                    block.statements().len(),
+                                ))
+                            })()
+                        else {
                             continue;
                         };
                         if self.definition_counts.get(condition_local).copied() != Some(1)
@@ -13566,7 +13569,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         {
                             continue;
                         }
-                        let Some((left_local, right)) = (|| {
+                        let Some((left_local, right, success_target)) = (|| {
                             let SemanticStatementKindV1::Assign(assignment) =
                                 self.function.blocks()[site.block].statements()[site.statement]
                                     .kind()
@@ -13574,18 +13577,25 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 return None;
                             };
                             let SemanticRvalueKindV1::Binary {
-                                operation: SemanticBinaryOpV1::LessThan,
+                                operation,
                                 left,
                                 right,
                             } = assignment.value().kind()
                             else {
                                 return None;
                             };
+                            let success_target = match operation {
+                                SemanticBinaryOpV1::LessThan => true_target,
+                                SemanticBinaryOpV1::GreaterOrEqual => false_target,
+                                _ => return None,
+                            };
                             Some((
                                 simple_operand_local(left)?.index() as usize,
                                 Self::assertion_range_operand_task_v1(right),
+                                success_target,
                             ))
-                        })() else {
+                        })(
+                        ) else {
                             continue;
                         };
                         let mut capture = site;
@@ -13612,16 +13622,16 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         ) {
                             continue;
                         }
-                        scheduled = Some((right, site, switch_block, true_target));
+                        scheduled = Some((right, site, switch_block, success_target));
                         break;
                     }
-                    if let Some((task, site, switch_block, true_target)) = scheduled {
+                    if let Some((task, site, switch_block, success_target)) = scheduled {
                         push_assertion_range_frame_v1(
                             &mut frames,
                             AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
                                 state,
                                 switch_block,
-                                true_target,
+                                success_target,
                             },
                         )?;
                         Self::schedule_assertion_range_operand_v1(&mut frames, task, site)?;
@@ -13651,7 +13661,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 AssertionRangeFrameV1::ApplyStrictUpperBoundCandidate {
                     mut state,
                     switch_block,
-                    true_target,
+                    success_target,
                 } => {
                     let bound = pop_assertion_range_value_v1(&mut values)?;
                     if let Some(candidate) = bound.and_then(|bound| bound.maximum.checked_sub(1)) {
@@ -13667,12 +13677,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 "assertion proof upper-bound edge storage cannot be reserved",
                             )
                         })?;
-                        edge.insert((switch_block, true_target));
+                        edge.insert((switch_block, success_target));
                         if self.edge_set_dominates(&edge, state.use_block)?
                             && self.local_is_stable_from_revalidating_edge_to_use(
                                 state.local,
                                 switch_block,
-                                true_target,
+                                success_target,
                                 state.use_block,
                                 &state.can_reach_use,
                                 &mut state.stability_visited,
@@ -36250,6 +36260,13 @@ mod tests {
     fn statement_ordered_upper_bound_function(
         case: StatementOrderedUpperBoundCaseV1,
     ) -> SemanticFunctionDeclV1 {
+        statement_ordered_upper_bound_function_for_polarity(case, false)
+    }
+
+    fn statement_ordered_upper_bound_function_for_polarity(
+        case: StatementOrderedUpperBoundCaseV1,
+        greater_equal_false: bool,
+    ) -> SemanticFunctionDeclV1 {
         use StatementOrderedUpperBoundCaseV1 as Case;
         let assign_value =
             |operand| typed_assignment(2, U64_TYPE, SemanticRvalueKindV1::Use(operand));
@@ -36323,7 +36340,11 @@ mod tests {
             5,
             BOOL_TYPE,
             SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::LessThan,
+                operation: if greater_equal_false {
+                    SemanticBinaryOpV1::GreaterOrEqual
+                } else {
+                    SemanticBinaryOpV1::LessThan
+                },
                 left: typed_operand(if uses_alias { 4 } else { 2 }, U64_TYPE),
                 right: typed_constant(U64_TYPE, 8_192, 8),
             },
@@ -36358,7 +36379,7 @@ mod tests {
                 block(
                     211,
                     guard,
-                    if matches!(case, Case::WrongEdge) {
+                    if matches!(case, Case::WrongEdge) != greater_equal_false {
                         zero_switch(5, BOOL_TYPE, 2, 4)
                     } else {
                         zero_switch(5, BOOL_TYPE, 4, 2)
@@ -36441,6 +36462,154 @@ mod tests {
                 "{case:?} must not discharge the checked addition",
             );
         }
+    }
+
+    fn greater_equal_false_upper_bound_function() -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(220, vec![], zero_switch(3, BOOL_TYPE, 1, 2)),
+                block(
+                    221,
+                    vec![typed_assignment(
+                        4,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    222,
+                    vec![typed_assignment(
+                        4,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(2, U64_TYPE)),
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    223,
+                    vec![
+                        typed_assignment(
+                            5,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_operand(4, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            6,
+                            BOOL_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::GreaterOrEqual,
+                                left: typed_operand(5, U64_TYPE),
+                                right: typed_constant(U64_TYPE, 8, 8),
+                            },
+                        ),
+                    ],
+                    zero_switch(6, BOOL_TYPE, 4, 6),
+                ),
+                block(
+                    224,
+                    vec![
+                        typed_assignment(
+                            7,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_operand(4, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            8,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    typed_constant(U64_TYPE, u128::from(u64::MAX) - 7, 8),
+                                    typed_operand(7, U64_TYPE),
+                                ),
+                            ),
+                        ),
+                    ],
+                    checked_overflow_terminator(
+                        8,
+                        SemanticBinaryOpV1::Add,
+                        typed_constant(U64_TYPE, u128::from(u64::MAX) - 7, 8),
+                        typed_operand(7, U64_TYPE),
+                        5,
+                    ),
+                ),
+                block(225, vec![], SemanticTerminatorKindV1::Return),
+                block(226, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(220, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(221, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(222, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(223, BOOL_TYPE, SemanticLocalRoleV1::Argument(2)),
+                local(224, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(225, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(226, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(227, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(228, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn strict_upper_bound_accepts_greater_equal_false_with_distinct_value_copies() {
+        let types = assertion_proof_types();
+        let function = greater_equal_false_upper_bound_function();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        assert_eq!(
+            proof
+                .range_at_operand(&typed_operand(4, U64_TYPE), 4, 0)
+                .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: 7
+            }),
+        );
+        assert!(SemanticAssertProofsV1::analyze(&types, &function).unwrap()[4]);
+    }
+
+    #[test]
+    fn strict_upper_bound_greater_equal_false_retains_capture_and_edge_requirements() {
+        use StatementOrderedUpperBoundCaseV1 as Case;
+        let types = assertion_proof_types();
+        for case in [Case::Direct, Case::CopyChain, Case::CheckedResult] {
+            let function = statement_ordered_upper_bound_function_for_polarity(case, true);
+            let assertions = SemanticAssertProofsV1::analyze(&types, &function).unwrap();
+            assert!(assertions[2], "{case:?}");
+            if matches!(case, Case::CheckedResult) {
+                assert!(!assertions[0], "the earlier overflow check stays mandatory");
+            }
+        }
+        for case in [
+            Case::WrittenAfterCopy,
+            Case::WrittenAfterComparison,
+            Case::WrittenAfterEdge,
+            Case::AliasRedefined,
+            Case::EscapedValue,
+            Case::EscapedAlias,
+            Case::WrongEdge,
+            Case::BypassedGuard,
+        ] {
+            let function = statement_ordered_upper_bound_function_for_polarity(case, true);
+            assert!(
+                !SemanticAssertProofsV1::analyze(&types, &function).unwrap()[2],
+                "{case:?} must not discharge the checked addition",
+            );
+        }
+    }
+
+    #[test]
+    fn strict_upper_bound_greater_equal_false_preserves_existing_work_limit() {
+        let types = assertion_proof_types();
+        let function = greater_equal_false_upper_bound_function();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        proof.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        assert!(matches!(
+            proof.range_at_operand(&typed_operand(4, U64_TYPE), 4, 0),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "uniform induction CFG analysis exceeds its work limit",
+            )),
+        ));
     }
 
     #[test]
