@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.08s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 1 test
+test context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack ... FAILED
+
+failures:
+
+---- context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack stdout ----
+
+thread 'context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack' (773368) panicked at crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs:836:13:
+assertion `left == right` failed: settlement changed allocation-free order: mode=0 count=0
+  left: [0, 1, 2, 3]
+ right: [3, 2, 1, 0]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 764 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime-model --lib`

@@ -1,0 +1,92 @@
+{
+  "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "source_map_sha256": "f03da4ffc155e2de8a4a534e7107f1d3b6f1fc405701f1d9c5f424b55f292b02",
+  "started_at": "2026-09-14T19:49:13.333Z",
+  "finished_at": "2026-09-14T19:49:31.955Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-features",
+    "--lib",
+    "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-admitted-epoch.log",
+  "source": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-admitted-epoch-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-admitted-epoch-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r116-run-v1.js",
+    "sha256": "f95a569263d885f58101682445f29a42a2cc2a41c4f93d446e858cd9cb3fa515"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 752198,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789415371961,
+        "monotonic_ns": "14738149472514",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 18.622271984,
+  "verification_elapsed_seconds": 0.256635387,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r116-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r116-qualified-restoration-skip-allocation-backlink.json",
+      "sha256": "f9190ead012cdbc923375ac4f9dbe90da67d166629a5a95e0cfba7865c9888c6",
+      "observation": {
+        "utc_ms": 1789415352347,
+        "monotonic_ns": "14718535813276",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789415353333,
+      "monotonic_ns": "14719521347007",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789415371955,
+      "monotonic_ns": "14738143618991",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789415372211,
+      "monotonic_ns": "14738400254378",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

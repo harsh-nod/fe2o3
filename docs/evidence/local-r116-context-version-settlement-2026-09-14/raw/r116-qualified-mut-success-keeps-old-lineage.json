@@ -1,0 +1,92 @@
+{
+  "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "source_map_sha256": "442706053c846621aac8967e1b3af252c6a20702ca5e4cf879f8681477f73af6",
+  "started_at": "2026-09-14T19:51:34.025Z",
+  "finished_at": "2026-09-14T19:51:51.889Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-features",
+    "--lib",
+    "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r116-qualified-mut-success-keeps-old-lineage.log",
+  "source": "/home/harsh/.codex-tmp/r116-qualified-mut-success-keeps-old-lineage-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r116-qualified-mut-success-keeps-old-lineage-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r116-run-v1.js",
+    "sha256": "f95a569263d885f58101682445f29a42a2cc2a41c4f93d446e858cd9cb3fa515"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 760113,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789415511895,
+        "monotonic_ns": "14878084060864",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 17.864146316,
+  "verification_elapsed_seconds": 0.237474778,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r116-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r116-qualified-restoration-no-effect-rolls-back-epoch.json",
+      "sha256": "49b1dff07f9773954c8af3736d31f52d627a3664dab76e5a9267bc6c13490bc7",
+      "observation": {
+        "utc_ms": 1789415493171,
+        "monotonic_ns": "14859359435171",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789415494025,
+      "monotonic_ns": "14860213386744",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789415511889,
+      "monotonic_ns": "14878077533060",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789415512126,
+      "monotonic_ns": "14878315007838",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "source_map_sha256": "df0c0dea130df3c2d9d2d28b7c4f6961aff3377b0c4f3e69fb556af45074aa46",
+  "started_at": "2026-09-14T19:48:53.174Z",
+  "finished_at": "2026-09-14T19:49:11.716Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-features",
+    "--lib",
+    "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-allocation-backlink.log",
+  "source": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-allocation-backlink-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-allocation-backlink-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r116-run-v1.js",
+    "sha256": "f95a569263d885f58101682445f29a42a2cc2a41c4f93d446e858cd9cb3fa515"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 750925,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789415351722,
+        "monotonic_ns": "14717911058597",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 18.542181209,
+  "verification_elapsed_seconds": 0.265459142,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r116-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r116-qualified-restoration-slot-only-allocation.json",
+      "sha256": "25807771efb4994704ff376949ae58f4b3c3641341a25f7ac22292425ae3278b",
+      "observation": {
+        "utc_ms": 1789415332343,
+        "monotonic_ns": "14698531391486",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789415333174,
+      "monotonic_ns": "14699363134893",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789415351716,
+      "monotonic_ns": "14717905316102",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789415351982,
+      "monotonic_ns": "14718170775244",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

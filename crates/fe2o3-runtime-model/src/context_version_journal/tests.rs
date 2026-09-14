@@ -129,7 +129,8 @@ fn audit(journal: &Journal) {
                 reserved_count += 1;
                 (*key, None, 0)
             }
-            Some(WriterEntryV1::Pending { key, head, count }) => (*key, *head, *count),
+            Some(WriterEntryV1::Pending { key, head, count })
+            | Some(WriterEntryV1::Unknown { key, head, count }) => (*key, *head, *count),
         };
         assert_eq!(key.context_generation, journal.context_generation);
         assert!(issuable_context_id(key.local));
@@ -137,6 +138,7 @@ fn audit(journal: &Journal) {
         assert!(locals.insert(key.local), "reused local writer identity");
         assert!(count <= journal.allocation_capacity);
         let writer_reference = Reference { slot, key };
+        let mut previous_key = None;
         for _ in 0..count {
             let index = head.expect("complete retained membership");
             assert!(index < journal.members.len());
@@ -149,6 +151,9 @@ fn audit(journal: &Journal) {
             assert_eq!(allocation.pending_member, Some(index));
             assert_eq!(allocation.attempt_epoch, member.attempt_epoch);
             assert_eq!(allocation.content_lineage, member.prior_lineage);
+            assert!(member.prior_lineage < member.attempt_epoch);
+            assert!(previous_key.is_none_or(|key| key < member.allocation.key));
+            previous_key = Some(member.allocation.key);
             head = member.next;
         }
         assert_eq!(head, None, "exact chain cardinality");
@@ -678,3 +683,6 @@ fn runtime_identity_and_operation_routing_contract_is_explicit() {
 
 #[path = "membership_tests.rs"]
 mod membership;
+
+#[path = "settlement_tests.rs"]
+mod settlement;

@@ -1,0 +1,92 @@
+{
+  "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "source_map_sha256": "94c08a8e34cc0027b5e6e58536833ad2867a1b5a58d1387423109529f4d5e406",
+  "started_at": "2026-09-14T19:55:00.593Z",
+  "finished_at": "2026-09-14T19:55:19.430Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime-model",
+    "--all-features",
+    "--lib",
+    "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-repeated-unknown-validation.log",
+  "source": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-repeated-unknown-validation-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r116-qualified-mut-skip-repeated-unknown-validation-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r116-run-v1.js",
+    "sha256": "f95a569263d885f58101682445f29a42a2cc2a41c4f93d446e858cd9cb3fa515"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 770165,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789415719438,
+        "monotonic_ns": "15085626966593",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 18.837398303,
+  "verification_elapsed_seconds": 0.270327062,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r116-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r116-qualified-restoration-settle-sticky-unknown.json",
+      "sha256": "215c71194871d47475e01920f4f364a12b62fe4f894ab35b567c9a9681d1de35",
+      "observation": {
+        "utc_ms": 1789415699692,
+        "monotonic_ns": "15065880856197",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789415700593,
+      "monotonic_ns": "15066781579586",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789415719430,
+      "monotonic_ns": "15085618977889",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789415719700,
+      "monotonic_ns": "15085889304951",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

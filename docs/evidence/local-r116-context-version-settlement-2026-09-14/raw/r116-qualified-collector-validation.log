@@ -1,0 +1,80 @@
+{
+  "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "accepted_parent": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+  "scope": "executable Context journal settlement and counted touched-work model; local CPU tests",
+  "source_identities": 5688,
+  "changed_source": [
+    "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+    "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+    "crates/fe2o3-runtime-model/src/context_version_journal/settlement_reference_tests.rs",
+    "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+    "crates/fe2o3-runtime-model/src/context_version_journal/tests.rs"
+  ],
+  "full": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2746,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2746,
+      "failed": 0,
+      "ignored": 5
+    }
+  },
+  "source_gates": 17,
+  "source_gate_prerequisites": [
+    "r116-reviewed-gnu-all",
+    "r116-reviewed-musl-all"
+  ],
+  "subsequent_source_gates": 15,
+  "auxiliary_gates": 10,
+  "initial_runs": [
+    "r116-reviewed-format",
+    "r116-reviewed-journal"
+  ],
+  "isolated_candidate_history": {
+    "runs": 10,
+    "artifacts": 42,
+    "source_head": "0265025b96f25a7cb79c97b576bb25cb38b15df5",
+    "source_map_sha256": "51c996704992ad6f6a46965eeeeffb389c451d1ba051fbf7917a9fe3e490ddd0",
+    "accepted_as_integrated_prerequisite": false
+  },
+  "original_integrated_history": {
+    "runs": 4,
+    "artifacts": 16,
+    "source_map_sha256": "66db1c7f75544d74dc0eba5753836518d192e7014776581432ce154d84b6a5a8",
+    "accepted_as_final_source_prerequisite": false
+  },
+  "reviewed_test_extension": {
+    "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+    "original_bytes": 29353,
+    "original_sha256": "5859062698593d1cdc88936b65d1a3ace12039a8ef6ffc7e39fc3534f4c2d237",
+    "reviewed_sha256": "f42370dc0849f8ff2495fe010caf700d665eb7109c2329e78bae5dfcccfdd278"
+  },
+  "focused": {
+    "settlement": 19,
+    "journal": 42,
+    "membership": 12,
+    "traces": 2
+  },
+  "compiled_negatives": 29,
+  "new_behavioral_tests": 18,
+  "new_source_guards": 1,
+  "qualification_contract_tests": 122,
+  "runner_contract_tests": 9,
+  "freeze_contract_tests": 31,
+  "doctest_relocations": [],
+  "harnessless_benchmark_targets_per_full_run": 1,
+  "formal_qualification": false,
+  "native_qualification": false,
+  "performance_qualification": false,
+  "executable_journal_settlement_qualification": true,
+  "production_context_journal_qualification": false,
+  "authenticated_receipt_qualification": false,
+  "recovery_qualification": false,
+  "cross_run_reuse_qualification": false
+}

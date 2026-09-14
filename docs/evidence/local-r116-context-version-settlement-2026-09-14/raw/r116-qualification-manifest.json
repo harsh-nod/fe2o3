@@ -1,0 +1,2151 @@
+{
+  "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+  "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+  "helpers": [
+    {
+      "name": "r116-run-v1.js",
+      "sha256": "f95a569263d885f58101682445f29a42a2cc2a41c4f93d446e858cd9cb3fa515"
+    },
+    {
+      "name": "r116-qualification-plan.js",
+      "sha256": "073c43c4b0ad332b9238f8a05e94b644f5e0cb63dc74b861536aa3a148e66149"
+    },
+    {
+      "name": "r116-qualification-evidence.js",
+      "sha256": "58515acd025415373b07682faf278355ffccaedd904cae5762d80d302f8e07d0"
+    },
+    {
+      "name": "r116-qualification-tests.js",
+      "sha256": "4a1334759079ca319ec7e4aae00a7a1957ecd0c5b5fe7bebc4cdb0aca06029f1"
+    },
+    {
+      "name": "r116-qualification-prepare.js",
+      "sha256": "ff4bc7e8fae2ed0e2c5cb82eb47af4553e8216097d6586fe7253d358004bb29d"
+    },
+    {
+      "name": "r116-qualification-run.js",
+      "sha256": "00e815bbf2bed36c9251d2f05d294918bc90496db6c5b0efe9dcb00e854de035"
+    },
+    {
+      "name": "r116-qualification-collect.js",
+      "sha256": "e880d86c778536a25fc2c9fc6ce900dc1365e5667e0b02ac9d1aebefae943bdb"
+    }
+  ],
+  "original_sources": [
+    {
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "text": "//! Bounded writer issuance and allocation membership over Context projections.\n//!\n//! Model values are not runtime authority. The caller models one journal per\n//! fresh Context, configured before any local ID is minted. This module neither\n//! authenticates that premise nor allocates Context IDs. Production\n//! tickets and cross-run reuse remain separate from these model transitions.\n\nuse alloc::vec::Vec;\n#[cfg(test)]\nuse core::cell::Cell;\n\nmod settlement;\n\npub const CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1: usize = 1_048_576;\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContextWriterKindV1 {\n    Synchronous,\n    Submission,\n}\n\n/// Inert projection of an existing identity, not an identity-issuance API.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextWriterKeyV1 {\n    pub context_generation: u64,\n    pub local: u64,\n    pub kind: ContextWriterKindV1,\n}\n\n/// A descriptive slot reference; discarding it does not abort its reservation.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n#[must_use = \"discarding a reference does not release its retained writer slot\"]\npub struct ContextWriterReferenceV1 {\n    pub slot: usize,\n    pub key: ContextWriterKeyV1,\n}\n\n/// An inert projection of the complete existing allocation identity.\n#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]\npub struct ContextAllocationKeyV1 {\n    pub context_generation: u64,\n    pub local: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextJournalDeviceKeyV1 {\n    pub context_generation: u64,\n    pub local: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextAllocationReferenceV1 {\n    pub slot: usize,\n    pub key: ContextAllocationKeyV1,\n}\n\n/// One canonical whole-allocation destination, not an aliased input view.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextAllocationWriteV1 {\n    pub allocation: ContextAllocationReferenceV1,\n    pub device: ContextJournalDeviceKeyV1,\n    pub byte_extent: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContextWriterStateV1 {\n    Reserved,\n    Pending { member_count: usize },\n    Unknown { member_count: usize },\n}\n\n/// Inert model premise, not authenticated runtime completion authority.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextWriterSuccessEvidenceV1 {\n    pub writer: ContextWriterReferenceV1,\n}\n\n/// Inert model premise; an ordinary backend error does not authenticate it.\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextWriterNoEffectEvidenceV1 {\n    pub writer: ContextWriterReferenceV1,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ContextAllocationStateV1 {\n    pub device: ContextJournalDeviceKeyV1,\n    pub byte_extent: u64,\n    pub attempt_epoch: u64,\n    pub content_lineage: u64,\n    pub pending_writer: Option<ContextWriterReferenceV1>,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum WriterEntryV1 {\n    Reserved(ContextWriterKeyV1),\n    Pending {\n        key: ContextWriterKeyV1,\n        head: Option<usize>,\n        count: usize,\n    },\n    Unknown {\n        key: ContextWriterKeyV1,\n        head: Option<usize>,\n        count: usize,\n    },\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct AllocationEntryV1 {\n    key: ContextAllocationKeyV1,\n    device: ContextJournalDeviceKeyV1,\n    byte_extent: u64,\n    attempt_epoch: u64,\n    content_lineage: u64,\n    pending_member: Option<usize>,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct MemberEntryV1 {\n    writer: ContextWriterReferenceV1,\n    allocation: ContextAllocationReferenceV1,\n    prior_lineage: u64,\n    attempt_epoch: u64,\n    next: Option<usize>,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct BeginMemberPlanV1 {\n    member_slot: usize,\n    allocation: ContextAllocationReferenceV1,\n    prior_lineage: u64,\n    attempt_epoch: u64,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContextVersionJournalErrorV1 {\n    InvalidContextGeneration,\n    InvalidCapacity,\n    StorageAllocationFailed,\n    ForeignContext,\n    InvalidWriterId,\n    WriterReplay,\n    WriterCapacity,\n    InvalidReference,\n    InvalidState,\n    InvalidAllocationId,\n    InvalidDeviceId,\n    InvalidExtent,\n    AllocationReplay,\n    AllocationCapacity,\n    InvalidAllocationReference,\n    AllocationDeviceMismatch,\n    AllocationExtentMismatch,\n    AllocationBusy,\n    RosterCapacity,\n    NonCanonicalRoster,\n    MemberCapacity,\n    EpochExhausted,\n    SettlementEvidenceMismatch,\n}\n\n/// Construction is O(A + W), enrollment O(A), and canonical Begin O(k).\n/// Writer issuance, exact lookup and pre-effect abort remain O(1).\n/// Settlement and Unknown validation examine only the retained k members.\n#[derive(Debug)]\npub struct ContextVersionJournalV1 {\n    context_generation: u64,\n    allocation_capacity: usize,\n    writer_capacity: usize,\n    registration_watermark: u64,\n    reserved_count: usize,\n    writers: Vec<Option<WriterEntryV1>>,\n    free: Vec<usize>,\n    allocations: Vec<Option<AllocationEntryV1>>,\n    allocation_free: Vec<usize>,\n    members: Vec<Option<MemberEntryV1>>,\n    member_free: Vec<usize>,\n    scratch: Vec<Option<BeginMemberPlanV1>>,\n    #[cfg(test)]\n    indexed_accesses: Cell<usize>,\n}\n\nfn issuable_context_id(value: u64) -> bool {\n    value != 0 && value != u64::MAX\n}\n\nfn vacant_slots<T>(capacity: usize) -> Result<Vec<Option<T>>, ContextVersionJournalErrorV1> {\n    let mut slots = Vec::new();\n    slots\n        .try_reserve_exact(capacity)\n        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;\n    slots.resize_with(capacity, || None);\n    Ok(slots)\n}\n\nfn free_slots(capacity: usize) -> Result<Vec<usize>, ContextVersionJournalErrorV1> {\n    let mut free = Vec::new();\n    free.try_reserve_exact(capacity)\n        .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;\n    free.extend((0..capacity).rev());\n    Ok(free)\n}\n\nimpl ContextVersionJournalV1 {\n    /// Models construction-only opt-in, with a fixed zero initial watermark.\n    pub fn new(\n        context_generation: u64,\n        allocation_capacity: usize,\n        writer_capacity: usize,\n    ) -> Result<Self, ContextVersionJournalErrorV1> {\n        if !issuable_context_id(context_generation) {\n            return Err(ContextVersionJournalErrorV1::InvalidContextGeneration);\n        }\n        if !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&allocation_capacity)\n            || !(1..=CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1).contains(&writer_capacity)\n        {\n            return Err(ContextVersionJournalErrorV1::InvalidCapacity);\n        }\n        Ok(Self {\n            context_generation,\n            allocation_capacity,\n            writer_capacity,\n            registration_watermark: 0,\n            reserved_count: 0,\n            writers: vacant_slots(writer_capacity)?,\n            free: free_slots(writer_capacity)?,\n            allocations: vacant_slots(allocation_capacity)?,\n            allocation_free: free_slots(allocation_capacity)?,\n            members: vacant_slots(allocation_capacity)?,\n            member_free: free_slots(allocation_capacity)?,\n            scratch: vacant_slots(allocation_capacity)?,\n            #[cfg(test)]\n            indexed_accesses: Cell::new(0),\n        })\n    }\n\n    pub const fn context_generation(&self) -> u64 {\n        self.context_generation\n    }\n\n    pub const fn allocation_capacity(&self) -> usize {\n        self.allocation_capacity\n    }\n\n    pub const fn writer_capacity(&self) -> usize {\n        self.writer_capacity\n    }\n\n    pub const fn registration_watermark(&self) -> u64 {\n        self.registration_watermark\n    }\n\n    /// The future exclusive Context owner checks this before minting an ID.\n    pub fn remaining_writer_slots(&self) -> usize {\n        self.free.len()\n    }\n\n    pub fn reserved_writer_count(&self) -> usize {\n        self.reserved_count\n    }\n\n    /// Registers an already-issued key. Gaps are legal; rejected keys do not\n    /// advance this watermark or undo the caller's existing ID consumption.\n    pub fn register_writer(\n        &mut self,\n        key: ContextWriterKeyV1,\n    ) -> Result<ContextWriterReferenceV1, ContextVersionJournalErrorV1> {\n        if key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::ForeignContext);\n        }\n        if !issuable_context_id(key.local) {\n            return Err(ContextVersionJournalErrorV1::InvalidWriterId);\n        }\n        if key.local <= self.registration_watermark {\n            return Err(ContextVersionJournalErrorV1::WriterReplay);\n        }\n        let slot = self\n            .next_free()\n            .ok_or(ContextVersionJournalErrorV1::WriterCapacity)?;\n        if self.read_slot(slot) != Some(&None) {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        let reserved_count = self\n            .reserved_count\n            .checked_add(1)\n            .filter(|count| *count <= self.writer_capacity)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        // Exclusive preflight fixes the free slot; commit has no fallible work.\n        self.pop_free();\n        self.store_slot(slot, Some(WriterEntryV1::Reserved(key)));\n        self.reserved_count = reserved_count;\n        self.registration_watermark = key.local;\n        Ok(ContextWriterReferenceV1 { slot, key })\n    }\n\n    /// Validates exact Reserved identity, not the latest registration order.\n    pub fn lookup_reserved(\n        &self,\n        reference: ContextWriterReferenceV1,\n    ) -> Result<ContextWriterKeyV1, ContextVersionJournalErrorV1> {\n        match self.read_slot(reference.slot).copied().flatten() {\n            Some(WriterEntryV1::Reserved(key))\n                if key == reference.key && key.context_generation == self.context_generation =>\n            {\n                Ok(key)\n            }\n            _ => Err(ContextVersionJournalErrorV1::InvalidReference),\n        }\n    }\n\n    /// Explicitly releases a Reserved slot before effects; never rolls back IDs.\n    pub fn abort_reserved(\n        &mut self,\n        reference: ContextWriterReferenceV1,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        self.lookup_reserved(reference)?;\n        if self.free.len() >= self.writer_capacity || self.free.len() >= self.free.capacity() {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        let reserved_count = self\n            .reserved_count\n            .checked_sub(1)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        self.store_slot(reference.slot, None);\n        self.push_free(reference.slot);\n        self.reserved_count = reserved_count;\n        Ok(())\n    }\n\n    /// Enrolls an existing allocation. No retirement or re-enrollment is implied.\n    pub fn enroll_allocation(\n        &mut self,\n        key: ContextAllocationKeyV1,\n        device: ContextJournalDeviceKeyV1,\n        byte_extent: u64,\n    ) -> Result<ContextAllocationReferenceV1, ContextVersionJournalErrorV1> {\n        if key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::ForeignContext);\n        }\n        if !issuable_context_id(key.local) {\n            return Err(ContextVersionJournalErrorV1::InvalidAllocationId);\n        }\n        if device.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::ForeignContext);\n        }\n        if !issuable_context_id(device.local) {\n            return Err(ContextVersionJournalErrorV1::InvalidDeviceId);\n        }\n        if byte_extent == 0 {\n            return Err(ContextVersionJournalErrorV1::InvalidExtent);\n        }\n        for index in 0..self.allocations.len() {\n            if self\n                .read_allocation(index)\n                .is_some_and(|entry| entry.key == key)\n            {\n                return Err(ContextVersionJournalErrorV1::AllocationReplay);\n            }\n        }\n        self.count_indexed_access();\n        let slot = self\n            .allocation_free\n            .last()\n            .copied()\n            .ok_or(ContextVersionJournalErrorV1::AllocationCapacity)?;\n        self.count_indexed_access();\n        if self.allocations.get(slot) != Some(&None) {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        self.count_indexed_access();\n        let _ = self.allocation_free.pop();\n        self.count_indexed_access();\n        self.allocations[slot] = Some(AllocationEntryV1 {\n            key,\n            device,\n            byte_extent,\n            attempt_epoch: 0,\n            content_lineage: 0,\n            pending_member: None,\n        });\n        Ok(ContextAllocationReferenceV1 { slot, key })\n    }\n\n    pub fn lookup_allocation(\n        &self,\n        reference: ContextAllocationReferenceV1,\n    ) -> Result<ContextAllocationStateV1, ContextVersionJournalErrorV1> {\n        let entry = self.exact_allocation(reference)?;\n        let pending_writer = match entry.pending_member {\n            None => None,\n            Some(slot) => {\n                self.count_indexed_access();\n                let member = self\n                    .members\n                    .get(slot)\n                    .and_then(Option::as_ref)\n                    .filter(|member| member.allocation == reference)\n                    .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n                Some(member.writer)\n            }\n        };\n        Ok(ContextAllocationStateV1 {\n            device: entry.device,\n            byte_extent: entry.byte_extent,\n            attempt_epoch: entry.attempt_epoch,\n            content_lineage: entry.content_lineage,\n            pending_writer,\n        })\n    }\n\n    pub fn lookup_writer(\n        &self,\n        reference: ContextWriterReferenceV1,\n    ) -> Result<ContextWriterStateV1, ContextVersionJournalErrorV1> {\n        let (key, state) = match self.read_slot(reference.slot).copied().flatten() {\n            Some(WriterEntryV1::Reserved(key)) => (key, ContextWriterStateV1::Reserved),\n            Some(WriterEntryV1::Pending { key, count, .. }) => (\n                key,\n                ContextWriterStateV1::Pending {\n                    member_count: count,\n                },\n            ),\n            Some(WriterEntryV1::Unknown { key, count, .. }) => (\n                key,\n                ContextWriterStateV1::Unknown {\n                    member_count: count,\n                },\n            ),\n            None => return Err(ContextVersionJournalErrorV1::InvalidReference),\n        };\n        if key != reference.key || key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::InvalidReference);\n        }\n        Ok(state)\n    }\n\n    /// The caller supplies an already canonical whole-allocation roster.\n    /// Full preflight precedes even scratch mutation; commit keeps the same borrow.\n    pub fn begin_write(\n        &mut self,\n        writer: ContextWriterReferenceV1,\n        canonical: &[ContextAllocationWriteV1],\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        self.lookup_reserved(writer)?;\n        let reserved_count = self\n            .reserved_count\n            .checked_sub(1)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        let count = canonical.len();\n        if count > self.allocation_capacity {\n            return Err(ContextVersionJournalErrorV1::RosterCapacity);\n        }\n        for pair in canonical.windows(2) {\n            if pair[0].allocation.key >= pair[1].allocation.key {\n                return Err(ContextVersionJournalErrorV1::NonCanonicalRoster);\n            }\n        }\n        for destination in canonical {\n            let entry = self.exact_allocation(destination.allocation)?;\n            if entry.device != destination.device {\n                return Err(ContextVersionJournalErrorV1::AllocationDeviceMismatch);\n            }\n            if entry.byte_extent != destination.byte_extent {\n                return Err(ContextVersionJournalErrorV1::AllocationExtentMismatch);\n            }\n            if entry.pending_member.is_some() {\n                return Err(ContextVersionJournalErrorV1::AllocationBusy);\n            }\n            entry\n                .attempt_epoch\n                .checked_add(1)\n                .ok_or(ContextVersionJournalErrorV1::EpochExhausted)?;\n        }\n        if count > self.member_free.len() {\n            return Err(ContextVersionJournalErrorV1::MemberCapacity);\n        }\n        if count > self.scratch.len() {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        // Free-slot uniqueness is a preserved global invariant, not an arena scan.\n        for index in 0..count {\n            let member = self.free_member_slot(index);\n            self.count_indexed_access();\n            if self.members.get(member) != Some(&None) {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n            self.count_indexed_access();\n            if self.scratch[index].is_some() {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n        }\n        for (index, destination) in canonical.iter().enumerate() {\n            let entry = self\n                .read_allocation(destination.allocation.slot)\n                .expect(\"whole-roster preflight retains exact allocations\");\n            let plan = BeginMemberPlanV1 {\n                member_slot: self.free_member_slot(index),\n                allocation: destination.allocation,\n                prior_lineage: entry.content_lineage,\n                attempt_epoch: entry.attempt_epoch + 1,\n            };\n            self.store_plan(index, plan);\n        }\n        let head = if count == 0 {\n            None\n        } else {\n            self.count_indexed_access();\n            Some(self.scratch[0].expect(\"complete member plan\").member_slot)\n        };\n        for index in 0..count {\n            self.count_indexed_access();\n            let plan = self.scratch[index].take().expect(\"complete member plan\");\n            let next = if index + 1 == count {\n                None\n            } else {\n                self.count_indexed_access();\n                Some(\n                    self.scratch[index + 1]\n                        .expect(\"complete next member plan\")\n                        .member_slot,\n                )\n            };\n            self.count_indexed_access();\n            let _ = self.member_free.pop();\n            self.count_indexed_access();\n            self.members[plan.member_slot] = Some(MemberEntryV1 {\n                writer,\n                allocation: plan.allocation,\n                prior_lineage: plan.prior_lineage,\n                attempt_epoch: plan.attempt_epoch,\n                next,\n            });\n            self.count_indexed_access();\n            let entry = self.allocations[plan.allocation.slot]\n                .as_mut()\n                .expect(\"retained exact allocation\");\n            entry.attempt_epoch = plan.attempt_epoch;\n            entry.pending_member = Some(plan.member_slot);\n        }\n        self.store_slot(\n            writer.slot,\n            Some(WriterEntryV1::Pending {\n                key: writer.key,\n                head,\n                count,\n            }),\n        );\n        self.reserved_count = reserved_count;\n        Ok(())\n    }\n\n    fn read_allocation(&self, slot: usize) -> Option<&AllocationEntryV1> {\n        self.count_indexed_access();\n        self.allocations.get(slot).and_then(Option::as_ref)\n    }\n\n    fn exact_allocation(\n        &self,\n        reference: ContextAllocationReferenceV1,\n    ) -> Result<&AllocationEntryV1, ContextVersionJournalErrorV1> {\n        self.read_allocation(reference.slot)\n            .filter(|entry| {\n                entry.key == reference.key\n                    && entry.key.context_generation == self.context_generation\n            })\n            .ok_or(ContextVersionJournalErrorV1::InvalidAllocationReference)\n    }\n\n    fn free_member_slot(&self, offset: usize) -> usize {\n        self.count_indexed_access();\n        self.member_free[self.member_free.len() - 1 - offset]\n    }\n\n    fn store_plan(&mut self, index: usize, plan: BeginMemberPlanV1) {\n        self.count_indexed_access();\n        self.scratch[index] = Some(plan);\n    }\n\n    fn count_indexed_access(&self) {\n        #[cfg(test)]\n        self.indexed_accesses.set(self.indexed_accesses.get() + 1);\n    }\n\n    fn read_slot(&self, slot: usize) -> Option<&Option<WriterEntryV1>> {\n        self.count_indexed_access();\n        self.writers.get(slot)\n    }\n\n    fn store_slot(&mut self, slot: usize, value: Option<WriterEntryV1>) {\n        self.count_indexed_access();\n        self.writers[slot] = value;\n    }\n\n    fn next_free(&self) -> Option<usize> {\n        self.count_indexed_access();\n        self.free.last().copied()\n    }\n\n    fn pop_free(&mut self) {\n        self.count_indexed_access();\n        let _ = self.free.pop();\n    }\n\n    fn push_free(&mut self, slot: usize) {\n        self.count_indexed_access();\n        self.free.push(slot);\n    }\n}\n\n#[cfg(test)]\nmod tests;\n"
+    },
+    {
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "text": "use super::*;\n\nimpl ContextVersionJournalV1 {\n    /// Settles a complete retained writer using an inert success premise.\n    pub fn settle_success(\n        &mut self,\n        writer: ContextWriterReferenceV1,\n        evidence: &ContextWriterSuccessEvidenceV1,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        self.settle_retained(writer, evidence.writer, true)\n    }\n\n    /// Preserves burned attempt epochs and prior lineage; no authority is minted.\n    pub fn settle_no_effect(\n        &mut self,\n        writer: ContextWriterReferenceV1,\n        evidence: &ContextWriterNoEffectEvidenceV1,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        self.settle_retained(writer, evidence.writer, false)\n    }\n\n    /// Retains the complete writer chain until separately authorized recovery.\n    pub fn mark_unknown(\n        &mut self,\n        writer: ContextWriterReferenceV1,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        let (head, count, unknown) = self.retained_header(writer, true)?;\n        self.validate_retained_chain(writer, head, count)?;\n        if !unknown {\n            self.store_slot(\n                writer.slot,\n                Some(WriterEntryV1::Unknown {\n                    key: writer.key,\n                    head,\n                    count,\n                }),\n            );\n        }\n        Ok(())\n    }\n\n    fn retained_header(\n        &self,\n        writer: ContextWriterReferenceV1,\n        allow_unknown: bool,\n    ) -> Result<(Option<usize>, usize, bool), ContextVersionJournalErrorV1> {\n        let (key, head, count, unknown) = match self.read_slot(writer.slot).copied().flatten() {\n            Some(WriterEntryV1::Pending { key, head, count }) => (key, head, count, false),\n            Some(WriterEntryV1::Unknown { key, head, count }) if allow_unknown => {\n                (key, head, count, true)\n            }\n            _ => return Err(ContextVersionJournalErrorV1::InvalidReference),\n        };\n        if key != writer.key || key.context_generation != self.context_generation {\n            return Err(ContextVersionJournalErrorV1::InvalidReference);\n        }\n        Ok((head, count, unknown))\n    }\n\n    fn validate_retained_chain(\n        &self,\n        writer: ContextWriterReferenceV1,\n        mut head: Option<usize>,\n        count: usize,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        if count > self.allocation_capacity || (count == 0) != head.is_none() {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        let mut previous_key = None;\n        for _ in 0..count {\n            let slot = head.ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n            self.count_indexed_access();\n            let member = self\n                .members\n                .get(slot)\n                .and_then(Option::as_ref)\n                .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n            if member.writer != writer\n                || previous_key.is_some_and(|key| key >= member.allocation.key)\n            {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n            let allocation = self\n                .exact_allocation(member.allocation)\n                .map_err(|_| ContextVersionJournalErrorV1::InvalidState)?;\n            if allocation.pending_member != Some(slot)\n                || allocation.attempt_epoch != member.attempt_epoch\n                || allocation.content_lineage != member.prior_lineage\n                || member.prior_lineage >= member.attempt_epoch\n            {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n            previous_key = Some(member.allocation.key);\n            head = member.next;\n        }\n        if head.is_some() {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        Ok(())\n    }\n\n    fn settle_retained(\n        &mut self,\n        writer: ContextWriterReferenceV1,\n        evidence: ContextWriterReferenceV1,\n        success: bool,\n    ) -> Result<(), ContextVersionJournalErrorV1> {\n        let (mut head, count, _) = self.retained_header(writer, false)?;\n        if evidence != writer {\n            return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);\n        }\n        self.validate_retained_chain(writer, head, count)?;\n        let writer_returns = self\n            .free\n            .len()\n            .checked_add(1)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        let member_returns = self\n            .member_free\n            .len()\n            .checked_add(count)\n            .ok_or(ContextVersionJournalErrorV1::InvalidState)?;\n        if writer_returns > self.writer_capacity\n            || writer_returns > self.free.capacity()\n            || member_returns > self.allocation_capacity\n            || member_returns > self.member_free.capacity()\n            || count > self.scratch.len()\n        {\n            return Err(ContextVersionJournalErrorV1::InvalidState);\n        }\n        for index in 0..count {\n            self.count_indexed_access();\n            if self.scratch[index].is_some() {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n        }\n\n        // All touched custody and return capacity are validated under this borrow.\n        for index in 0..count {\n            let slot = head.expect(\"validated complete retained chain\");\n            self.count_indexed_access();\n            let member = self.members[slot].expect(\"validated retained member\");\n            self.store_plan(\n                index,\n                BeginMemberPlanV1 {\n                    member_slot: slot,\n                    allocation: member.allocation,\n                    prior_lineage: member.prior_lineage,\n                    attempt_epoch: member.attempt_epoch,\n                },\n            );\n            head = member.next;\n        }\n        for index in 0..count {\n            self.count_indexed_access();\n            let plan = self.scratch[index]\n                .take()\n                .expect(\"complete settlement plan\");\n            self.count_indexed_access();\n            let allocation = self.allocations[plan.allocation.slot]\n                .as_mut()\n                .expect(\"validated exact retained allocation\");\n            if success {\n                allocation.content_lineage = plan.attempt_epoch;\n            }\n            allocation.pending_member = None;\n            self.count_indexed_access();\n            self.members[plan.member_slot] = None;\n            self.count_indexed_access();\n            self.member_free.push(plan.member_slot);\n        }\n        self.store_slot(writer.slot, None);\n        self.push_free(writer.slot);\n        Ok(())\n    }\n}\n"
+    }
+  ],
+  "historical_artifacts": [
+    {
+      "name": "r116-auxiliary-campaign-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-auxiliary-campaign-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-auxiliary-campaign.json",
+      "sha256": "3dabde720553872a82d529ef8705e86e6b9247cedca69b16bbc3774f230077d1"
+    },
+    {
+      "name": "r116-auxiliary-campaign.log",
+      "sha256": "34990fa4bcbd9c7ed8c685b3e983b82a5fb27b2875d820115d10eacea0d5a7f6"
+    },
+    {
+      "name": "r116-auxiliary-complete.json",
+      "sha256": "5af8d725e8ee47addd71ef18511f963650e9ad64f1ac490557e77816186e3695"
+    },
+    {
+      "name": "r116-auxiliary-gates.py",
+      "sha256": "52d529815574d01efc956a703456a04898f3656ec586725f2acf7647b80d8919"
+    },
+    {
+      "name": "r116-auxiliary-results.json",
+      "sha256": "d023375d00b6f689a80075a08ee7f8301b98dc7860f4511c2c4cb6d5ee7b4aa7"
+    },
+    {
+      "name": "r116-auxiliary-source-after.json",
+      "sha256": "659c443bcc48244f35088efe826b14a6b085f0b4496a971d6d1b49558a48675e"
+    },
+    {
+      "name": "r116-auxiliary-source-inputs.json",
+      "sha256": "659c443bcc48244f35088efe826b14a6b085f0b4496a971d6d1b49558a48675e"
+    },
+    {
+      "name": "r116-bind.log",
+      "sha256": "45da1831096211d92c1424650c7eccfb25ef37f63338d1feec54f7476a796acd"
+    },
+    {
+      "name": "r116-environment.json",
+      "sha256": "dbfc614d610537aca97bbd97e31166ea4daf840d428af5692c87f5c352e6dcac"
+    },
+    {
+      "name": "r116-final-ci-test-gate.log",
+      "sha256": "7614173c0974c8aa8202f60f5fc9a9ed8691211147a0004dab9299a3555f5b9b"
+    },
+    {
+      "name": "r116-final-clippy-all.log",
+      "sha256": "fc4393879a75853eb6b5a8939a32581dbc9760b180d915df59ff130af29f17b1"
+    },
+    {
+      "name": "r116-final-clippy-production.log",
+      "sha256": "e4384e0a39655dfdcf19bd5e62040f749fcd1d7994a4871cafcabafcc84c3da8"
+    },
+    {
+      "name": "r116-final-complete.json",
+      "sha256": "7c4b2b8659c8fe9eaad68f52861e4ddbbf5b06d0fb7e927456f66c74f84316c0"
+    },
+    {
+      "name": "r116-final-dependency-policy.log",
+      "sha256": "e4909791d89201a88e23213fca74159a2d5b8e869b5227635acbe74c893d6e25"
+    },
+    {
+      "name": "r116-final-dependency-tests.log",
+      "sha256": "75ff54e727b57e4bd7b88956ed0c92c4b9a416e6f0976707e8fb54aa385ac0bd"
+    },
+    {
+      "name": "r116-final-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-final-gnu-docs.log",
+      "sha256": "c020c7e80603bacd5de27882426b64bf1cc302b1ae98bb67e7a35d0d3678af0c"
+    },
+    {
+      "name": "r116-final-gnu-host.log",
+      "sha256": "06e53f974152ebedee9fb33b0b471287069731885b94de57bf80dff2347abf4e"
+    },
+    {
+      "name": "r116-final-macro-fixtures.log",
+      "sha256": "65951abb45354e7997139e0549777b9e0d3e66993e3dade8e9e013eaac72a374"
+    },
+    {
+      "name": "r116-final-musl-docs.log",
+      "sha256": "047a8e1a95cef4fc4e30769e5cbb1a646a43f8921bfa582fb1ac2a3f7d398b6d"
+    },
+    {
+      "name": "r116-final-musl-host-docs.log",
+      "sha256": "8980e399ef8078d046662a355b2b5a119d0c87165d5ff6709b067ce08e24578e"
+    },
+    {
+      "name": "r116-final-musl-host.log",
+      "sha256": "3234e652679d7fe59fb7a018a8f396deee52e59d6dbe07a3e7de6a2e6faff730"
+    },
+    {
+      "name": "r116-final-python.log",
+      "sha256": "67b702e6cccf823a8545f958e9d792bfefe2334f1652bc80ef56d782925745e6"
+    },
+    {
+      "name": "r116-final-source-after.json",
+      "sha256": "659c443bcc48244f35088efe826b14a6b085f0b4496a971d6d1b49558a48675e"
+    },
+    {
+      "name": "r116-final-source-gate.json",
+      "sha256": "4eba834c4b633ef30b4339b44df7aa0bb628f29ef92553d0c6d8bcd7e3892a85"
+    },
+    {
+      "name": "r116-final-source-inputs.json",
+      "sha256": "659c443bcc48244f35088efe826b14a6b085f0b4496a971d6d1b49558a48675e"
+    },
+    {
+      "name": "r116-final-standalone-lockfiles.log",
+      "sha256": "5b197fec191da1f00189be32e1791407ff625aa28e39bc6a4d4275a19ba59fcf"
+    },
+    {
+      "name": "r116-final-whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-freeze-contract-tests-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-freeze-contract-tests-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-freeze-contract-tests.json",
+      "sha256": "57b788de8cf4e88477687704c55f4950ef321bb22685979f0f62c4b5e0b0b93a"
+    },
+    {
+      "name": "r116-freeze-contract-tests.log",
+      "sha256": "fe9f82e1084499bd5954f47b2078bbf9a93d6284caee218a9387d15278441867"
+    },
+    {
+      "name": "r116-freeze-tests.js",
+      "sha256": "b67b53d190f37b82c0561cccea3af0969080d1adebe5be7e9d48d2bc7b8211dd"
+    },
+    {
+      "name": "r116-freeze.js",
+      "sha256": "cdc74bba0f1ee2ab2f8cac618d533ae053cdc326b0ba358dd0cc252c446b377b"
+    },
+    {
+      "name": "r116-frozen-journal-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-journal-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-journal.json",
+      "sha256": "d63b0468d8157212b8c3ef79b9994dfbc66be040696b908455cff8e178797e80"
+    },
+    {
+      "name": "r116-frozen-journal.log",
+      "sha256": "7b678f30157c4763886e78c21f489691bf41a91b14abfa324ade24db48b7b8b0"
+    },
+    {
+      "name": "r116-frozen-membership-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-membership-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-membership.json",
+      "sha256": "8f4163df659c52694fb264c8c7d00148875670528a304060c71d10f561daa116"
+    },
+    {
+      "name": "r116-frozen-membership.log",
+      "sha256": "32b7ec3735494b1403677f8735a88647ffd6d670ae75995ceed31de317ecafc3"
+    },
+    {
+      "name": "r116-frozen-settlement-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-settlement-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-settlement.json",
+      "sha256": "187a138ba515b190c0480cadb2a2c1702ff6021eeffa420081c87352fb5e01dc"
+    },
+    {
+      "name": "r116-frozen-settlement.log",
+      "sha256": "73b33cced7c08aec9db3afc6ec0306baf9050fb9ec27b93a717db0f11323fb35"
+    },
+    {
+      "name": "r116-frozen-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-traces-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-traces-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-frozen-traces.json",
+      "sha256": "baa850e7404b630e2b0c226122ba71d97619043e840889015f1521568df70cc1"
+    },
+    {
+      "name": "r116-frozen-traces.log",
+      "sha256": "98e7a7985ae96e6b54b597f4b40b348becd99e7516f320e6a7e698ce4b177e82"
+    },
+    {
+      "name": "r116-initial-format-source-after.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-initial-format-source.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-initial-format.json",
+      "sha256": "e5c35505c0e41a58a7a04379ce1fe7574cda05858d203c1e5d66066f60fc8a06"
+    },
+    {
+      "name": "r116-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-initial-journal-source-after.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-initial-journal-source.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-initial-journal.json",
+      "sha256": "d366bdb0c420fbb7c22c63c51d4e21f1d447bff8e854461951275be251c4c5a2"
+    },
+    {
+      "name": "r116-initial-journal.log",
+      "sha256": "8cb22948122361d1c26f1b8b2befa7195094a832234d73ff9926451937086cd4"
+    },
+    {
+      "name": "r116-initialization.log",
+      "sha256": "9ca7df0124ec1f59072e24eed1124c161d2400c9e76d3cc6cad5957c065471d7"
+    },
+    {
+      "name": "r116-issue-status.json",
+      "sha256": "9b052d3ddc07383f055214a4c86469363a7b2d3e3c3dc79988549e6cbd6f3e5d"
+    },
+    {
+      "name": "r116-linux-helpers.log",
+      "sha256": "c67fec60354510ac6300033649ec5e27479f33aaa38d98162a613eae75ed58e0"
+    },
+    {
+      "name": "r116-ordinary.log",
+      "sha256": "3411c3c66910dd6b9295f2a13bfb612414a2b3a86e2a36ed5f27e6120dbcf318"
+    },
+    {
+      "name": "r116-preliminary-gnu-all-source-after.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-preliminary-gnu-all-source.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-preliminary-gnu-all.json",
+      "sha256": "51ce7cf7af970b477d63539b8a33272bddacd53677988b1ae73a91596bc3bc52"
+    },
+    {
+      "name": "r116-preliminary-gnu-all.log",
+      "sha256": "863e3a0d0f235ff7e6ca4ff4db44c7ba112acedeba220906d7bf6fbbda0707c0"
+    },
+    {
+      "name": "r116-preliminary-musl-all-source-after.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-preliminary-musl-all-source.json",
+      "sha256": "ee1cf03bfc2e06530300e1dc195ebc6274d5327427ccc132c334e1291df9d29d"
+    },
+    {
+      "name": "r116-preliminary-musl-all.json",
+      "sha256": "6eb25374762e3aebfa4c5f257fcaf0e65c1f5f28e0d5d3f62f865cf0d2bc0c1c"
+    },
+    {
+      "name": "r116-preliminary-musl-all.log",
+      "sha256": "26536b0fb19efde05ed85f2cb2acbfcb25006429ee81065a4c8a2c0f4a06ce5e"
+    },
+    {
+      "name": "r116-preparation.log",
+      "sha256": "d62b6d7d7a1b5e11d3693f6ed237b375a48619bc24e1b53e5bd3de88cc4a08ad"
+    },
+    {
+      "name": "r116-production-audit.log",
+      "sha256": "400860e866d558eb288fcb5fa535c2f1df7461ba462f0c21f77e3b96009a228c"
+    },
+    {
+      "name": "r116-production-metadata.log",
+      "sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+    },
+    {
+      "name": "r116-production-metadata.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-proof-inventory.log",
+      "sha256": "71666f9ef118d670089a13bab3ca328ec739b8b3870abc98706f4b572884f2e5"
+    },
+    {
+      "name": "r116-qualification-collect.js",
+      "sha256": "e880d86c778536a25fc2c9fc6ce900dc1365e5667e0b02ac9d1aebefae943bdb"
+    },
+    {
+      "name": "r116-qualification-contract-tests-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-qualification-contract-tests-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-qualification-contract-tests.json",
+      "sha256": "7992e8f45b825665b6ace371470958cd3b30651cd00ec475545d3772532b25ed"
+    },
+    {
+      "name": "r116-qualification-contract-tests.log",
+      "sha256": "d2ca11ca9d6f0b5ea7e5c6abd917fdde4f0a0d4d3656e855ef06f90cb1eb61a4"
+    },
+    {
+      "name": "r116-qualification-evidence.js",
+      "sha256": "58515acd025415373b07682faf278355ffccaedd904cae5762d80d302f8e07d0"
+    },
+    {
+      "name": "r116-qualification-plan.js",
+      "sha256": "073c43c4b0ad332b9238f8a05e94b644f5e0cb63dc74b861536aa3a148e66149"
+    },
+    {
+      "name": "r116-qualification-prepare.js",
+      "sha256": "ff4bc7e8fae2ed0e2c5cb82eb47af4553e8216097d6586fe7253d358004bb29d"
+    },
+    {
+      "name": "r116-qualification-run.js",
+      "sha256": "00e815bbf2bed36c9251d2f05d294918bc90496db6c5b0efe9dcb00e854de035"
+    },
+    {
+      "name": "r116-qualification-tests.js",
+      "sha256": "4a1334759079ca319ec7e4aae00a7a1957ecd0c5b5fe7bebc4cdb0aca06029f1"
+    },
+    {
+      "name": "r116-registration.log",
+      "sha256": "e88e190c4fb42a1906ca8752e955e2463f3f0db1445bdbacd2e09ea9ec0e7a21"
+    },
+    {
+      "name": "r116-review-formatting-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-review-formatting-source.json",
+      "sha256": "51b44fa83442f0456d6405c403e761b9851a9ce872819bb4b4d0184d1fc472c4"
+    },
+    {
+      "name": "r116-review-formatting.json",
+      "sha256": "bd5fde662da9f55e2ecd78c0ce675bd46993382bf1dea6dec9effa2b0761b7ce"
+    },
+    {
+      "name": "r116-review-formatting.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-reviewed-format-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-format-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-format.json",
+      "sha256": "542ba9efd12626024ad9e7fa9c61103137527fb15252b68b8ff1f240fe1ee907"
+    },
+    {
+      "name": "r116-reviewed-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-reviewed-gnu-all-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-gnu-all-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-gnu-all.json",
+      "sha256": "fb1fc48b6f3794fa188183b7604670fcbfc4f0beaa65f4d0bafab7904ec84c33"
+    },
+    {
+      "name": "r116-reviewed-gnu-all.log",
+      "sha256": "431db9e2cddeecf4cf5fb18df1bd220b9e5b3cedf94107a241da7cacedc325f2"
+    },
+    {
+      "name": "r116-reviewed-journal-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-journal-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-journal.json",
+      "sha256": "347d49556f50df90a5e2c0909ac1342f186e73bd2d4efee85f69e1a5cefd4d3f"
+    },
+    {
+      "name": "r116-reviewed-journal.log",
+      "sha256": "1eedc07743b150bd01d8c82d3a5fbbd1f2aabef16c4d4a0a608f54ae95151f5c"
+    },
+    {
+      "name": "r116-reviewed-musl-all-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-musl-all-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-reviewed-musl-all.json",
+      "sha256": "456b79a577abd31d955d2bb585f37ebb5ac8b2ac21c644038696139424dbffcc"
+    },
+    {
+      "name": "r116-reviewed-musl-all.log",
+      "sha256": "53e6fc71504c98efebd5bedf78417355caf76fbe46b943e0f3989d0f999abe79"
+    },
+    {
+      "name": "r116-run-v1.js",
+      "sha256": "f95a569263d885f58101682445f29a42a2cc2a41c4f93d446e858cd9cb3fa515"
+    },
+    {
+      "name": "r116-runner-contract-tests-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-contract-tests-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-contract-tests.json",
+      "sha256": "932d61019095307ab38ebdc169ea47927ed4d756b071cefdb9081a3627302712"
+    },
+    {
+      "name": "r116-runner-contract-tests.log",
+      "sha256": "c118b9c11556a703e09ee89e8754ab912d3506cc626e6c5aeb0c029029905a5f"
+    },
+    {
+      "name": "r116-runner-tests.js",
+      "sha256": "7467e59e0b128ff1bc0624b8c448ed7826ffbaf2a7398d8b0214810ac4c89e78"
+    },
+    {
+      "name": "r116-runner-v1-fixture-clean-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-clean-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-clean.json",
+      "sha256": "a371ece6a099627861174eebc661272ad240dd77d9e911ebe020751180191e37"
+    },
+    {
+      "name": "r116-runner-v1-fixture-clean.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r116-runner-v1-fixture-failure-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-failure-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-failure.json",
+      "sha256": "c93c6a7ad1b3d3bdf9dfddfb6052e60f53e0a4cf6d30eef31a7dac8df4148b99"
+    },
+    {
+      "name": "r116-runner-v1-fixture-failure.log",
+      "sha256": "4e4f73e9de90e3b97c61389887c9a0348447d80e730b1636a5c335e10d23c8f6"
+    },
+    {
+      "name": "r116-runner-v1-fixture-inner-timeout-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-inner-timeout-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-inner-timeout.json",
+      "sha256": "179f37360b548b12834218885491a6fe5c0424df34f5594ffa0b0c384517025f"
+    },
+    {
+      "name": "r116-runner-v1-fixture-inner-timeout.log",
+      "sha256": "b668c414567271ed9333a23a809023bdceda30c3aca1b841c6a955d41513cd1d"
+    },
+    {
+      "name": "r116-runner-v1-fixture-spawn-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-spawn-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-spawn.json",
+      "sha256": "f6d4907c099af2ffef339c4deb2f626faa7a93c29f14d9b1f8616b96b2632aff"
+    },
+    {
+      "name": "r116-runner-v1-fixture-spawn.log",
+      "sha256": "19e3dcba876790b4cbcc551728cd5c52aa78feda3f5fd414086424168a4a9455"
+    },
+    {
+      "name": "r116-runner-v1-fixture-success-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-success-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-runner-v1-fixture-success.json",
+      "sha256": "2affc5a07a32712dbdb754814f94306781e9dc91214290dee459551971224492"
+    },
+    {
+      "name": "r116-runner-v1-fixture-success.log",
+      "sha256": "a510d386311cb8d26141984930dfb7d4a5b7b5ccae9de5720ada95fcc5069a8f"
+    },
+    {
+      "name": "r116-source-campaign-source-after.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-source-campaign-source.json",
+      "sha256": "c8c6c34f33c5f07139d0988d0607c5a2e096d131bebc6f5bdf5de7a13f5f3d33"
+    },
+    {
+      "name": "r116-source-campaign.json",
+      "sha256": "ce3a8c636cebaa50b5e4d3bc27c5874a5edb85a9da3c82bf7daf9a3480f4259e"
+    },
+    {
+      "name": "r116-source-campaign.log",
+      "sha256": "0608fbe9fbf731555f22ab654c4c549a59a5d0d80dd399e2712c514a556f89e0"
+    },
+    {
+      "name": "r116-source-gate.py",
+      "sha256": "7e808982ba31aeef428956c3fb5a54aab68f3f1e60fb2043236ff6d91890093a"
+    },
+    {
+      "name": "r116-transitions.log",
+      "sha256": "f770b378dfcca5096ddf61501565e016ef24b48b8f0c59bd2944ea6fb3439bfe"
+    },
+    {
+      "name": "v3candidate-clippy-source-after.json",
+      "sha256": "501e4c41af6c3aaaff7e0a369f619a33227a041f82a500970166a937158cc59e"
+    },
+    {
+      "name": "v3candidate-clippy-source.json",
+      "sha256": "501e4c41af6c3aaaff7e0a369f619a33227a041f82a500970166a937158cc59e"
+    },
+    {
+      "name": "v3candidate-clippy.json",
+      "sha256": "103ef6a9bf97b0fd297ea4a3173f3433e580e09cf6a68618006389b5f9fd3f58"
+    },
+    {
+      "name": "v3candidate-clippy.log",
+      "sha256": "357db476d0e9365bec6f365792b4c4a862299589d25cee495bb150e755dae9d9"
+    },
+    {
+      "name": "v3candidate-coverage-format-source-after.json",
+      "sha256": "3e997dca1b230ffe68a9c4503faa4dad64982be9787f8b342a661753460e5b0e"
+    },
+    {
+      "name": "v3candidate-coverage-format-source.json",
+      "sha256": "63c03ace9e2aea3d4c72e5930d353363fc464f6ba631ec1225047091db5bdcac"
+    },
+    {
+      "name": "v3candidate-coverage-format.json",
+      "sha256": "5cbfe7b61c179f9595624e0fe10346791a86297201d02c02500e59bdf543aaf6"
+    },
+    {
+      "name": "v3candidate-coverage-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "v3candidate-initial-format-source-after.json",
+      "sha256": "d94acc0a85fa617c081415685dc4c6a697e31a29e2f3296d25cf44f1e50b1766"
+    },
+    {
+      "name": "v3candidate-initial-format-source.json",
+      "sha256": "47b4759fcf435e891274d2088901ee9813ad6b80b06eaf7c1f3623cf4937d382"
+    },
+    {
+      "name": "v3candidate-initial-format.json",
+      "sha256": "723cec2944f3dba7f56dc131153ea57154cda0bdc5e2cde57ea840f7e8bbb833"
+    },
+    {
+      "name": "v3candidate-initial-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "v3candidate-initial-journal-source-after.json",
+      "sha256": "501e4c41af6c3aaaff7e0a369f619a33227a041f82a500970166a937158cc59e"
+    },
+    {
+      "name": "v3candidate-initial-journal-source.json",
+      "sha256": "501e4c41af6c3aaaff7e0a369f619a33227a041f82a500970166a937158cc59e"
+    },
+    {
+      "name": "v3candidate-initial-journal.json",
+      "sha256": "2f549f334e8162c12de810edc8aa86aceb95e6406604de38cf5a79380e327625"
+    },
+    {
+      "name": "v3candidate-initial-journal.log",
+      "sha256": "f4689a1382e05de08b272304c0c82d76055cf7a1d25b778f110f58c112711230"
+    },
+    {
+      "name": "v3candidate-lineage-clippy-source-after.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-clippy-source.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-clippy.json",
+      "sha256": "c85714566b12f709e6be0a24c588814f36faad68c54659eec8772bd4e694a9ad"
+    },
+    {
+      "name": "v3candidate-lineage-clippy.log",
+      "sha256": "2caafdd32d6c498bfdb916599e27b78fb13a6ffc416372eba3cc13333cc9dd7b"
+    },
+    {
+      "name": "v3candidate-lineage-format-source-after.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-format-source.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-format.json",
+      "sha256": "b7afbb16559875a99eaba62c35a4d9b68afbbc463dce8790e3d37d0c3f812461"
+    },
+    {
+      "name": "v3candidate-lineage-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "v3candidate-lineage-model-all-source-after.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-model-all-source.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-model-all.json",
+      "sha256": "45614b9a2105b66047e91f9064ffd84128c1c786825b2d6fedd9b4779823d0dd"
+    },
+    {
+      "name": "v3candidate-lineage-model-all.log",
+      "sha256": "009f14226b32f1a31a8b64e3c488e3214c4c1d470a63bc6bf842d103d61f29c5"
+    },
+    {
+      "name": "v3candidate-lineage-settlement-source-after.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-settlement-source.json",
+      "sha256": "fe3db3136c582aadffd6fefcd5fbedc48f10832a33781b8093552c7aa1f0fd36"
+    },
+    {
+      "name": "v3candidate-lineage-settlement.json",
+      "sha256": "3a845a811cd18ef5c80962e0aa7dcda05a59c7b35ab299df8526cab88a20e495"
+    },
+    {
+      "name": "v3candidate-lineage-settlement.log",
+      "sha256": "9f9308b7beb75d4b072a56e7f882fdd9dfc289707b3af7d026df4d27ff42e060"
+    },
+    {
+      "name": "v3candidate-model-all-source-after.json",
+      "sha256": "501e4c41af6c3aaaff7e0a369f619a33227a041f82a500970166a937158cc59e"
+    },
+    {
+      "name": "v3candidate-model-all-source.json",
+      "sha256": "501e4c41af6c3aaaff7e0a369f619a33227a041f82a500970166a937158cc59e"
+    },
+    {
+      "name": "v3candidate-model-all.json",
+      "sha256": "cc13298c5884e287992b7b314eafe7b166ef9daae0d3935ea31b08dc8b314caf"
+    },
+    {
+      "name": "v3candidate-model-all.log",
+      "sha256": "abd83292a6ed65e67ce97f479e3cb07b07e5b20bba07aa8dabf47dae17237f49"
+    },
+    {
+      "name": "v3candidate-negative-handoff.md",
+      "sha256": "653ab147f11d2173c14f3aca88d6d73c4ba10329daa7e638a2abe7d085191b6a"
+    },
+    {
+      "name": "v3candidate-reference-format-source-after.json",
+      "sha256": "4d7b57660534109411bec7e83b258ff4b97d0e781978ec877c8fae23ee912127"
+    },
+    {
+      "name": "v3candidate-reference-format-source.json",
+      "sha256": "0b8adc4852e0b5338ff4fd3bcddf4bb784d16fbe73232c09b3d84bd8960070f7"
+    },
+    {
+      "name": "v3candidate-reference-format.json",
+      "sha256": "b37f8417fa1fd4192f168265beffe62bc8889a0d79fe72cb7a16a05083ed72a0"
+    },
+    {
+      "name": "v3candidate-reference-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "v3candidate-run-v1.js",
+      "sha256": "701c2e71b377daab9e5dfa44f3f7ac196f3b53ead380cab61b732eda25c9e831"
+    }
+  ],
+  "mutations": [
+    {
+      "name": "skip-writer-identity",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "key != writer.key",
+          "false && key != writer.key"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 236,
+      "expected": [
+        "assertion `left == right` failed",
+        "InvalidState",
+        "InvalidReference"
+      ]
+    },
+    {
+      "name": "admit-reserved-settlement",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "            Some(WriterEntryV1::Pending { key, head, count }) => (key, head, count, false),",
+          "            Some(WriterEntryV1::Reserved(key)) => (key, None, 0, false),\n            Some(WriterEntryV1::Pending { key, head, count }) => (key, head, count, false),"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::exact_reserved_writers_reject_settlement_and_unknown_before_evidence",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 207,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidReference"
+      ]
+    },
+    {
+      "name": "skip-evidence-identity",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "evidence != writer",
+          "false && evidence != writer"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 241,
+      "expected": [
+        "assertion `left == right` failed",
+        "InvalidState",
+        "SettlementEvidenceMismatch"
+      ]
+    },
+    {
+      "name": "skip-member-writer",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "member.writer != writer",
+          "false && member.writer != writer"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 310,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "slot-only-allocation",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          ".exact_allocation(member.allocation)",
+          ".read_allocation(member.allocation.slot).ok_or(ContextVersionJournalErrorV1::InvalidAllocationReference)"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 310,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-allocation-backlink",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "allocation.pending_member != Some(slot)",
+          "false && allocation.pending_member != Some(slot)"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 310,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-admitted-epoch",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "allocation.attempt_epoch != member.attempt_epoch",
+          "false && allocation.attempt_epoch != member.attempt_epoch"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 310,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-prior-lineage-match",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "allocation.content_lineage != member.prior_lineage",
+          "false && allocation.content_lineage != member.prior_lineage"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::retained_prior_lineage_mismatch_below_admitted_epoch_rejects_atomically",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 351,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-strict-lineage-bound",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "member.prior_lineage >= member.attempt_epoch",
+          "false && member.prior_lineage >= member.attempt_epoch"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 310,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-exact-chain-tail",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "if head.is_some()",
+          "if false && head.is_some()"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::header_cardinality_and_noncanonical_chains_reject_atomically",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 389,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-canonical-order",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "previous_key.is_some_and(|key| key >= member.allocation.key)",
+          "false && previous_key.is_some_and(|key| key >= member.allocation.key)"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::header_cardinality_and_noncanonical_chains_reject_atomically",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 389,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "no-effect-advances-lineage",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "self.settle_retained(writer, evidence.writer, false)",
+          "self.settle_retained(writer, evidence.writer, true)"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 140,
+      "expected": [
+        "assertion `left == right` failed"
+      ]
+    },
+    {
+      "name": "no-effect-rolls-back-epoch",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "            allocation.pending_member = None;",
+          "            if !success { allocation.attempt_epoch = plan.prior_lineage; }\n            allocation.pending_member = None;"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 140,
+      "expected": [
+        "assertion `left == right` failed"
+      ]
+    },
+    {
+      "name": "success-keeps-old-lineage",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "allocation.content_lineage = plan.attempt_epoch;",
+          "allocation.content_lineage = plan.prior_lineage;"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 140,
+      "expected": [
+        "assertion `left == right` failed"
+      ]
+    },
+    {
+      "name": "early-writer-removal",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        let (mut head, count, _) = self.retained_header(writer, false)?;",
+          "        let (mut head, count, _) = self.retained_header(writer, false)?;\n        self.store_slot(writer.slot, None);"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 245,
+      "expected": [
+        "assertion `left == right` failed",
+        "Snapshot {"
+      ]
+    },
+    {
+      "name": "early-scratch-write",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        self.validate_retained_chain(writer, head, count)?;\n        let writer_returns",
+          "        if let Some(slot) = head {\n            if let Some(member) = self.members[slot] {\n                self.store_plan(0, BeginMemberPlanV1 {\n                    member_slot: slot,\n                    allocation: member.allocation,\n                    prior_lineage: member.prior_lineage,\n                    attempt_epoch: member.attempt_epoch,\n                });\n            }\n        }\n        self.validate_retained_chain(writer, head, count)?;\n        let writer_returns"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 311,
+      "expected": [
+        "assertion `left == right` failed",
+        "Snapshot {"
+      ]
+    },
+    {
+      "name": "skip-writer-physical-headroom",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "writer_returns > self.free.capacity()",
+          "false && writer_returns > self.free.capacity()"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 673,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-member-physical-headroom",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "member_returns > self.member_free.capacity()",
+          "false && member_returns > self.member_free.capacity()"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 673,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-writer-logical-headroom",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "writer_returns > self.writer_capacity",
+          "false && writer_returns > self.writer_capacity"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 673,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-member-logical-headroom",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "member_returns > self.allocation_capacity",
+          "false && member_returns > self.allocation_capacity"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 673,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "skip-vacant-scratch",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "self.scratch[index].is_some()",
+          "false && self.scratch[index].is_some()"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 673,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "reverse-member-returns",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        for index in 0..count {\n            self.count_indexed_access();\n            let plan = self.scratch[index]",
+          "        for index in (0..count).rev() {\n            self.count_indexed_access();\n            let plan = self.scratch[index]"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::settlements_return_exact_canonical_members_and_preserve_unrelated_storage",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 121,
+      "expected": [
+        "assertion `left == right` failed",
+        "Snapshot {"
+      ]
+    },
+    {
+      "name": "return-wrong-writer-slot",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "self.push_free(writer.slot);",
+          "self.push_free(0);"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::settlements_return_exact_canonical_members_and_preserve_unrelated_storage",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 121,
+      "expected": [
+        "assertion `left == right` failed",
+        "Snapshot {"
+      ]
+    },
+    {
+      "name": "settle-sticky-unknown",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "self.retained_header(writer, false)?",
+          "self.retained_header(writer, true)?"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::unknown_is_sticky_revalidated_and_retains_empty_and_nonempty_writers",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 180,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidReference"
+      ]
+    },
+    {
+      "name": "skip-repeated-unknown-validation",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        self.validate_retained_chain(writer, head, count)?;\n        if !unknown {",
+          "        if !unknown { self.validate_retained_chain(writer, head, count)?; }\n        if !unknown {"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 310,
+      "expected": [
+        "assertion `left == right` failed",
+        "Ok(())",
+        "InvalidState"
+      ]
+    },
+    {
+      "name": "destroy-disjoint-writer",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        self.store_slot(writer.slot, None);",
+          "        self.store_slot(writer.slot, None);\n        if count != 0 { self.store_slot((writer.slot + 2) % self.writer_capacity, None); }"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::reference_traces::independent_traces_preserve_disjoint_writers_and_lineage_below_watermark",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_reference_tests.rs",
+      "oracle_line": 385,
+      "expected": [
+        "assertion `left == right` failed",
+        "independent retained state: Success"
+      ]
+    },
+    {
+      "name": "reverse-unrelated-allocation-free-on-settle",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        self.push_free(writer.slot);\n        Ok(())",
+          "        self.push_free(writer.slot);\n        self.allocation_free.reverse();\n        Ok(())"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 836,
+      "expected": [
+        "assertion `left == right` failed",
+        "settlement changed allocation-free order: mode=0 count=0"
+      ]
+    },
+    {
+      "name": "reverse-unrelated-allocation-free-on-unknown",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs",
+      "edits": [
+        [
+          "        }\n        Ok(())\n    }\n\n    fn retained_header(",
+          "        }\n        self.allocation_free.reverse();\n        Ok(())\n    }\n\n    fn retained_header("
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 836,
+      "expected": [
+        "assertion `left == right` failed",
+        "settlement changed allocation-free order: mode=2 count=0"
+      ]
+    },
+    {
+      "name": "begin-bypasses-unknown-custody",
+      "path": "crates/fe2o3-runtime-model/src/context_version_journal.rs",
+      "edits": [
+        [
+          "            if entry.pending_member.is_some() {",
+          "            if entry.pending_member.is_some_and(|slot| {\n                let owner = self.members[slot].unwrap().writer;\n                matches!(self.writers[owner.slot], Some(WriterEntryV1::Pending { .. }))\n            }) {"
+        ]
+      ],
+      "test": "context_version_journal::tests::settlement::unknown_custody_rejects_fresh_reserved_begin_atomically",
+      "oracle_path": "crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs",
+      "oracle_line": 904,
+      "expected": [
+        "assertion `left == right` failed",
+        "Unknown custody must reject fresh Reserved Begin: position=0",
+        "Ok(())",
+        "AllocationBusy"
+      ]
+    }
+  ],
+  "entries": {
+    "r116-qualified-mut-skip-writer-identity.json": {
+      "kind": "run",
+      "predecessor": "r116-qualification-manifest.json",
+      "source_map_sha256": "90c95e173d4cc5bc88d326c00e2f7070d074eaf755a10f574e6b2c0749e77cf1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-writer-identity.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-writer-identity.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-admit-reserved-settlement.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-writer-identity.json",
+      "source_map_sha256": "d45ec42a21a38ce2dfaff754b7108d7ddd5fdfdcb194543b181923ec7245dd4c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::exact_reserved_writers_reject_settlement_and_unknown_before_evidence",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-admit-reserved-settlement.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-admit-reserved-settlement.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-evidence-identity.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-admit-reserved-settlement.json",
+      "source_map_sha256": "e40f0a551bbf6f2db7736e0bd50d17f27d49859c8123b195f78c2001b2651f91",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-evidence-identity.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-evidence-identity.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-member-writer.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-evidence-identity.json",
+      "source_map_sha256": "e85215893354ad70e3f799aa9a881c284e903f89a82557c26da6dca3f625f58c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-member-writer.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-member-writer.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-slot-only-allocation.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-member-writer.json",
+      "source_map_sha256": "dd207d41d05ad22bc6ba0b1cebb07931ddcfcccbc14845db88d782eba2b4d32c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-slot-only-allocation.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-slot-only-allocation.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-allocation-backlink.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-slot-only-allocation.json",
+      "source_map_sha256": "df0c0dea130df3c2d9d2d28b7c4f6961aff3377b0c4f3e69fb556af45074aa46",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-allocation-backlink.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-allocation-backlink.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-admitted-epoch.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-allocation-backlink.json",
+      "source_map_sha256": "f03da4ffc155e2de8a4a534e7107f1d3b6f1fc405701f1d9c5f424b55f292b02",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-admitted-epoch.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-admitted-epoch.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-prior-lineage-match.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-admitted-epoch.json",
+      "source_map_sha256": "7e96e4cf9482a168f628c7f9a4f6685e180cbf277177340408d44ceede7509a3",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::retained_prior_lineage_mismatch_below_admitted_epoch_rejects_atomically",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-prior-lineage-match.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-prior-lineage-match.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-strict-lineage-bound.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-prior-lineage-match.json",
+      "source_map_sha256": "4360fe91975d7f37e461894031822cbac8d8214c4182b56904a8df10f849f045",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-strict-lineage-bound.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-strict-lineage-bound.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-exact-chain-tail.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-strict-lineage-bound.json",
+      "source_map_sha256": "d76f728427c8ca260c0fb9fa3789182955b002a6ec9e7dac9f1d4b21e06ffcd1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::header_cardinality_and_noncanonical_chains_reject_atomically",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-exact-chain-tail.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-exact-chain-tail.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-canonical-order.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-exact-chain-tail.json",
+      "source_map_sha256": "7d568e36cf6eaa4948616cbc63c8a9bc04befde626c3360e1073f11c713f2d96",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::header_cardinality_and_noncanonical_chains_reject_atomically",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-canonical-order.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-canonical-order.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-no-effect-advances-lineage.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-canonical-order.json",
+      "source_map_sha256": "862c8f2b4a647bf187ba5b365d71d6fbb60e39c97a7ebb62f8f2d374a38e0b3e",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-no-effect-advances-lineage.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-no-effect-advances-lineage.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-no-effect-rolls-back-epoch.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-no-effect-advances-lineage.json",
+      "source_map_sha256": "63d983d78e9c98fea51fc5fcc1fb5275e39bc1e367efb7f9e72b39ac2bb18e31",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-no-effect-rolls-back-epoch.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-no-effect-rolls-back-epoch.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-success-keeps-old-lineage.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-no-effect-rolls-back-epoch.json",
+      "source_map_sha256": "442706053c846621aac8967e1b3af252c6a20702ca5e4cf879f8681477f73af6",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-success-keeps-old-lineage.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-success-keeps-old-lineage.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-early-writer-removal.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-success-keeps-old-lineage.json",
+      "source_map_sha256": "d27d8a8b9a9b377a0e900aa3314becb934287123843986b0c262535053b235ca",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-early-writer-removal.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-early-writer-removal.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-early-scratch-write.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-early-writer-removal.json",
+      "source_map_sha256": "14efae5905689953a7a63f81074a35d925a9dd07de6c9f119603ccf22c466474",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-early-scratch-write.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-early-scratch-write.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-writer-physical-headroom.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-early-scratch-write.json",
+      "source_map_sha256": "ee06fef8d48c491bb77be5cc399f8578b1cb4374de8c9f1faabf48b84ce72f46",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-writer-physical-headroom.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-writer-physical-headroom.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-member-physical-headroom.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-writer-physical-headroom.json",
+      "source_map_sha256": "44d9d6e3c463d26feee179b4be7c36d9ec0a6b8a1f515ef87e1eec4c86e455f8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-member-physical-headroom.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-member-physical-headroom.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-writer-logical-headroom.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-member-physical-headroom.json",
+      "source_map_sha256": "66af8eee1e764a291ec07bd2ab898f59c7337916c2b1ac8902e7afcd5abca7d7",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-writer-logical-headroom.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-writer-logical-headroom.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-member-logical-headroom.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-writer-logical-headroom.json",
+      "source_map_sha256": "b2806f10fd268a9a140aa4b7fe9343eea4046c454a44b7a2018e283b5ce776d7",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-member-logical-headroom.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-member-logical-headroom.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-vacant-scratch.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-member-logical-headroom.json",
+      "source_map_sha256": "797f760afaf187a1f8469e80bf3f22e394ac42f937267702a396876c04a5ba41",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-vacant-scratch.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-vacant-scratch.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-reverse-member-returns.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-vacant-scratch.json",
+      "source_map_sha256": "286ab2d3c2f9997566de5e2d2ff01af0d204f86999f73b5a35721b500966221d",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::settlements_return_exact_canonical_members_and_preserve_unrelated_storage",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-reverse-member-returns.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-reverse-member-returns.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-return-wrong-writer-slot.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-reverse-member-returns.json",
+      "source_map_sha256": "bfa8f5772cf55a884f2cc36ec1a42ff8353f4a180147e0245bd81efbacc77c0a",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::settlements_return_exact_canonical_members_and_preserve_unrelated_storage",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-return-wrong-writer-slot.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-return-wrong-writer-slot.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-settle-sticky-unknown.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-return-wrong-writer-slot.json",
+      "source_map_sha256": "1986a6cd9bda9f7808fa01635221285a5b42e5e44117490f4b30c56c5711a266",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::unknown_is_sticky_revalidated_and_retains_empty_and_nonempty_writers",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-settle-sticky-unknown.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-settle-sticky-unknown.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-skip-repeated-unknown-validation.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-settle-sticky-unknown.json",
+      "source_map_sha256": "94c08a8e34cc0027b5e6e58536833ad2867a1b5a58d1387423109529f4d5e406",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-skip-repeated-unknown-validation.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-skip-repeated-unknown-validation.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-destroy-disjoint-writer.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-skip-repeated-unknown-validation.json",
+      "source_map_sha256": "c8607538ec97aba369814d07e703fc9b8e2f3de000dad2da1c0a5c414efb58c8",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::reference_traces::independent_traces_preserve_disjoint_writers_and_lineage_below_watermark",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-destroy-disjoint-writer.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-destroy-disjoint-writer.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-reverse-unrelated-allocation-free-on-settle.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-destroy-disjoint-writer.json",
+      "source_map_sha256": "4bb1459c124081a1318c874742fa53ced0bc583ad2bf6ea0ce36aafce9d35633",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-reverse-unrelated-allocation-free-on-settle.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-reverse-unrelated-allocation-free-on-settle.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-reverse-unrelated-allocation-free-on-unknown.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-reverse-unrelated-allocation-free-on-settle.json",
+      "source_map_sha256": "a75e38e3b54c17981e4739cb0ba56070a096c14d61134507c027f3398b35451d",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-reverse-unrelated-allocation-free-on-unknown.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-reverse-unrelated-allocation-free-on-unknown.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-mut-begin-bypasses-unknown-custody.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-reverse-unrelated-allocation-free-on-unknown.json",
+      "source_map_sha256": "2fbf9268586c16a3b3ad741d20119647036d5797bfb5962a39d360c62c96b0b7",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::unknown_custody_rejects_fresh_reserved_begin_atomically",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r116-qualified-restoration-begin-bypasses-unknown-custody.json": {
+      "kind": "restoration",
+      "predecessor": "r116-qualified-mut-begin-bypasses-unknown-custody.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517"
+    },
+    "r116-qualified-restored-settlement.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restoration-begin-bypasses-unknown-custody.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::"
+      ],
+      "returncode": 0
+    },
+    "r116-qualified-restored-journal.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restored-settlement.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::"
+      ],
+      "returncode": 0
+    },
+    "r116-qualified-restored-membership.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restored-journal.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::membership::"
+      ],
+      "returncode": 0
+    },
+    "r116-qualified-restored-traces.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restored-membership.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-runtime-model",
+        "--all-features",
+        "--lib",
+        "context_version_journal::tests::settlement::reference_traces::"
+      ],
+      "returncode": 0
+    },
+    "r116-qualified-collector-validation.json": {
+      "kind": "run",
+      "predecessor": "r116-qualified-restored-traces.json",
+      "source_map_sha256": "54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r116-qualification-collect.js",
+        "--check"
+      ],
+      "returncode": 0
+    }
+  },
+  "clock": {
+    "contract": "r116-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "manifest",
+    "predecessor": {
+      "name": "r116-qualification-contract-tests.json",
+      "sha256": "7992e8f45b825665b6ace371470958cd3b30651cd00ec475545d3772532b25ed",
+      "observation": {
+        "utc_ms": 1789415045099,
+        "monotonic_ns": "14411287544462",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "source_verified": {
+      "utc_ms": 1789415222893,
+      "monotonic_ns": "14589081814653",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    }
+  },
+  "recorded_at": "2026-09-14T19:47:02.893Z"
+}

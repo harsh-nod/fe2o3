@@ -1,0 +1,49 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 42 tests
+test context_version_journal::tests::checked_add_allocator_edges_accept_max_minus_one_and_reject_max ... ok
+test context_version_journal::tests::abort_never_rolls_back_watermark_or_revives_old_keys ... ok
+test context_version_journal::tests::dropped_reference_retains_capacity_and_full_rejection_keeps_watermark ... ok
+test context_version_journal::tests::existing_ids_preserve_gaps_and_older_reserved_lookup_and_abort ... ok
+test context_version_journal::tests::full_key_and_slot_checks_reject_replay_and_every_substitution ... ok
+test context_version_journal::tests::internal_slot_and_capacity_invariants_reject_before_mutation ... ok
+test context_version_journal::tests::membership::allocation_writer_and_member_limits_have_independent_effects ... ok
+test context_version_journal::tests::membership::canonical_keys_not_slot_order_bind_complete_chains_for_older_reservations ... ok
+test context_version_journal::tests::membership::begin_routes_full_preflight_before_bounded_planning_and_commit ... ok
+test context_version_journal::tests::membership::empty_begin_retains_writer_capacity_without_members_or_epochs ... ok
+test context_version_journal::tests::membership::final_epoch_is_admitted_but_exhaustion_is_whole_roster_atomic ... ok
+test context_version_journal::tests::membership::enrollment_uses_complete_coordinates_without_an_allocation_watermark ... ok
+test context_version_journal::tests::membership::first_middle_last_bad_destinations_leave_every_owner_and_scratch_unchanged ... ok
+test context_version_journal::tests::membership::selected_private_slot_corruption_rejects_before_any_planning_write ... ok
+test context_version_journal::tests::membership::fixed_roster_work_and_storage_are_independent_of_unrelated_capacities ... ok
+test context_version_journal::tests::membership::stale_copied_and_foreign_references_never_alias_reused_slots ... ok
+test context_version_journal::tests::membership::whole_roster_order_and_capacity_precede_destination_validation ... ok
+test context_version_journal::tests::constructor_has_explicit_independent_bounds_and_zero_watermark ... ok
+test context_version_journal::tests::runtime_identity_and_operation_routing_contract_is_explicit ... ok
+test context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write ... ok
+test context_version_journal::tests::settlement::exact_reserved_writers_reject_settlement_and_unknown_before_evidence ... ok
+test context_version_journal::tests::settlement::final_admitted_epoch_settles_without_rolling_back_exhaustion ... ok
+test context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption ... ok
+test context_version_journal::tests::settlement::header_cardinality_and_noncanonical_chains_reject_atomically ... ok
+test context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps ... ok
+test context_version_journal::tests::settlement::reference_traces::independent_action_sequences_cover_replay_pressure_and_all_writer_phases ... ok
+test context_version_journal::tests::settlement::reference_traces::independent_traces_preserve_disjoint_writers_and_lineage_below_watermark ... ok
+test context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit ... ok
+test context_version_journal::tests::rejection_work_is_bounded_in_full_journals ... ok
+test context_version_journal::tests::settlement::release_headroom_and_scratch_reject_but_do_not_gate_unknown ... ok
+test context_version_journal::tests::settlement::retained_prior_lineage_mismatch_below_admitted_epoch_rejects_atomically ... ok
+test context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack ... ok
+test context_version_journal::tests::settlement::settlement_replay_cannot_alias_a_reused_writer_slot ... ok
+test context_version_journal::tests::settlement::settlement_routes_bounded_preflight_before_plan_and_commit ... ok
+test context_version_journal::tests::settlement::settlement_work_depends_on_touched_members_not_unrelated_populations ... ok
+test context_version_journal::tests::settlement::settlements_return_exact_canonical_members_and_preserve_unrelated_storage ... ok
+test context_version_journal::tests::settlement::unknown_custody_rejects_fresh_reserved_begin_atomically ... ok
+test context_version_journal::tests::settlement::unknown_is_sticky_revalidated_and_retains_empty_and_nonempty_writers ... ok
+test context_version_journal::tests::membership::short_traces_match_independent_writer_and_allocation_maps ... ok
+test context_version_journal::tests::short_traces_match_independent_active_writer_map ... ok
+test context_version_journal::tests::settlement::rejected_settlement_work_is_bounded_by_the_examined_prefix ... ok
+test context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 723 filtered out; finished in 15.42s
+

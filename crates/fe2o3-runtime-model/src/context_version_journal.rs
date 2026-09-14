@@ -2,12 +2,14 @@
 //!
 //! Model values are not runtime authority. The caller models one journal per
 //! fresh Context, configured before any local ID is minted. This module neither
-//! authenticates that premise nor allocates Context IDs. Settlement, production
-//! tickets and cross-run reuse remain separate transitions.
+//! authenticates that premise nor allocates Context IDs. Production
+//! tickets and cross-run reuse remain separate from these model transitions.
 
 use alloc::vec::Vec;
 #[cfg(test)]
 use core::cell::Cell;
+
+mod settlement;
 
 pub const CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1: usize = 1_048_576;
 
@@ -64,6 +66,19 @@ pub struct ContextAllocationWriteV1 {
 pub enum ContextWriterStateV1 {
     Reserved,
     Pending { member_count: usize },
+    Unknown { member_count: usize },
+}
+
+/// Inert model premise, not authenticated runtime completion authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContextWriterSuccessEvidenceV1 {
+    pub writer: ContextWriterReferenceV1,
+}
+
+/// Inert model premise; an ordinary backend error does not authenticate it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContextWriterNoEffectEvidenceV1 {
+    pub writer: ContextWriterReferenceV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +94,11 @@ pub struct ContextAllocationStateV1 {
 enum WriterEntryV1 {
     Reserved(ContextWriterKeyV1),
     Pending {
+        key: ContextWriterKeyV1,
+        head: Option<usize>,
+        count: usize,
+    },
+    Unknown {
         key: ContextWriterKeyV1,
         head: Option<usize>,
         count: usize,
@@ -136,10 +156,12 @@ pub enum ContextVersionJournalErrorV1 {
     NonCanonicalRoster,
     MemberCapacity,
     EpochExhausted,
+    SettlementEvidenceMismatch,
 }
 
 /// Construction is O(A + W), enrollment O(A), and canonical Begin O(k).
 /// Writer issuance, exact lookup and pre-effect abort remain O(1).
+/// Settlement and Unknown validation examine only the retained k members.
 #[derive(Debug)]
 pub struct ContextVersionJournalV1 {
     context_generation: u64,
@@ -395,6 +417,12 @@ impl ContextVersionJournalV1 {
             Some(WriterEntryV1::Pending { key, count, .. }) => (
                 key,
                 ContextWriterStateV1::Pending {
+                    member_count: count,
+                },
+            ),
+            Some(WriterEntryV1::Unknown { key, count, .. }) => (
+                key,
+                ContextWriterStateV1::Unknown {
                     member_count: count,
                 },
             ),

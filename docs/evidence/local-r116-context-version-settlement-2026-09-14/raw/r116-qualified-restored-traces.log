@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 2 tests
+test context_version_journal::tests::settlement::reference_traces::independent_traces_preserve_disjoint_writers_and_lineage_below_watermark ... ok
+test context_version_journal::tests::settlement::reference_traces::independent_action_sequences_cover_replay_pressure_and_all_writer_phases ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 763 filtered out; finished in 0.02s
+

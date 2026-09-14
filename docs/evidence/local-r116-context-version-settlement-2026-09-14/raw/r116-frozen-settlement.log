@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-2df671b1b24ba33f)
+
+running 19 tests
+test context_version_journal::tests::settlement::exact_reserved_writers_reject_settlement_and_unknown_before_evidence ... ok
+test context_version_journal::tests::settlement::final_admitted_epoch_settles_without_rolling_back_exhaustion ... ok
+test context_version_journal::tests::settlement::full_reference_and_evidence_rejections_precede_retained_corruption ... ok
+test context_version_journal::tests::settlement::no_effect_burns_epochs_and_success_advances_lineage_across_gaps ... ok
+test context_version_journal::tests::settlement::header_cardinality_and_noncanonical_chains_reject_atomically ... ok
+test context_version_journal::tests::settlement::every_retained_member_rejects_corruption_before_any_scratch_write ... ok
+test context_version_journal::tests::settlement::reference_traces::independent_traces_preserve_disjoint_writers_and_lineage_below_watermark ... ok
+test context_version_journal::tests::settlement::release_headroom_and_scratch_reject_but_do_not_gate_unknown ... ok
+test context_version_journal::tests::settlement::retained_prior_lineage_mismatch_below_admitted_epoch_rejects_atomically ... ok
+test context_version_journal::tests::settlement::settlement_preserves_nonempty_allocation_free_stack ... ok
+test context_version_journal::tests::settlement::settlement_replay_cannot_alias_a_reused_writer_slot ... ok
+test context_version_journal::tests::settlement::settlement_routes_bounded_preflight_before_plan_and_commit ... ok
+test context_version_journal::tests::settlement::reference_traces::independent_action_sequences_cover_replay_pressure_and_all_writer_phases ... ok
+test context_version_journal::tests::settlement::settlements_return_exact_canonical_members_and_preserve_unrelated_storage ... ok
+test context_version_journal::tests::settlement::unknown_custody_rejects_fresh_reserved_begin_atomically ... ok
+test context_version_journal::tests::settlement::unknown_is_sticky_revalidated_and_retains_empty_and_nonempty_writers ... ok
+test context_version_journal::tests::settlement::settlement_work_depends_on_touched_members_not_unrelated_populations ... ok
+test context_version_journal::tests::settlement::rejected_release_cost_covers_each_scratch_cell_and_return_limit ... ok
+test context_version_journal::tests::settlement::rejected_settlement_work_is_bounded_by_the_examined_prefix ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 1.19s
+

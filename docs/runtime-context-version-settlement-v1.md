@@ -1,14 +1,48 @@
 # Context Version Journal Settlement V1
 
-Status: V3 model implementation contract frozen on 2026-09-14 after source and
-test handoff review. An isolated implementation candidate is present, but is not
-integrated into this branch or accepted by immutable packet qualification.
-The parent is the locally accepted
+Status: locally accepted R116 executable settlement/cost model above R115,
+with [378 retained artifacts](evidence/local-r116-context-version-settlement-2026-09-14/README.md)
+and [two independent archive reviews](evidence/local-r116-context-version-settlement-2026-09-14/review.md).
+The implementation contract was frozen on 2026-09-14 after source and test
+handoff review. The model prerequisite is the locally accepted
 R113/V2 [membership model](runtime-context-version-membership-v1.md).
-See the [swarm map](runtime-swarm-next-packets.md). R113 acceptance does not
-qualify settlement or production integration.
+See the [swarm map](runtime-swarm-next-packets.md). Neither model checkpoint
+qualifies production integration.
 
-## Isolated Candidate
+<a id="integrated-candidate"></a>
+
+## Accepted R116 Checkpoint
+
+The original integrated candidate passed full GNU and musl dependency-closure
+runs, each with 2,744 tests passed and five ignored. Review then found two
+missing semantic oracles, not a production defect: preserving a nonempty
+allocation-free stack and rejecting a fresh Reserved writer that conflicts with
+Unknown-held allocations. Two tests were appended without changing the original
+29,353-byte test-file prefix or any other source file from that candidate.
+
+The reviewed source map is
+`54692ff83a852b8bdb3f7bd156cdd33bfea5a2b5cd21789665bb75ada9872517` across
+5,688 source identities. Formatting and all 42 focused journal tests pass,
+including nineteen settlement tests, eighteen behavioral and one source guard.
+The reviewed full GNU and musl runs each pass: 2,746 tests passed and five ignored
+across 48 libtest harnesses and one unchanged harnessless benchmark. Both exact
+rosters and source endpoints match; both children are closed with no live owned
+processes. Both full runs are separately recorded pre-freeze prerequisites,
+not executions of the subsequent fifteen-gate campaign.
+The original four integrated runs and ten isolated runs retain their original
+source maps, commands and test rosters; they do not qualify the expanded source.
+
+All 17 source gates and ten auxiliary gates pass, along with nine runner,
+31 freeze and 122 qualification-contract tests. All 29 compiled negatives fail
+at their exact behavioral assertions, with all 5,688 source identities restored
+after each. Frozen/restored settlement, journal, membership and reference-trace
+suites pass 19/42/12/2. The closed collector and both independent archive reviews
+pass. The two review-added tests cover actual subsequent free-slot selection
+and first/middle/last Unknown conflicts with spare member capacity.
+No production Context integration, authenticated proof, GPU execution or
+performance acceptance is added.
+
+## Isolated Candidate History
 
 The local `fe2o3-v3-settlement` candidate implements the three transitions,
 Unknown lookup and retained-chain auditing. Seventeen settlement tests now pass,
@@ -24,9 +58,8 @@ revision's 39 journal and 760 full-model passes remain separately recorded;
 they are not relabeled as executions of the changed source. The runner records
 remain local preliminary evidence, not an accepted or published packet.
 
-Remaining acceptance includes integration and fresh full dependency-closure
-GNU/musl checks, compiled behavioral negatives, exact restoration and immutable
-evidence review.
+The isolated results are preserved as history. R116's integrated qualification
+does not relabel those runs as evidence for the expanded source.
 Production Context hooks, authenticated receipts, formal correspondence, native
 execution, reuse and performance remain outside this model candidate.
 
@@ -81,6 +114,10 @@ Add public `ContextWriterStateV1::Unknown { member_count }`, the matching privat
 `WriterEntryV1::Unknown { key, head, count }`, and
 `ContextVersionJournalErrorV1::SettlementEvidenceMismatch`. Existing lookups
 must distinguish Unknown from Pending without releasing its allocation links.
+
+These additions extend public model enums and can break downstream exhaustive
+matches. No affected production consumer was found in this checkout; the
+crate's unpublished status does not establish external source compatibility.
 
 ## Transitions
 
