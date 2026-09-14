@@ -12944,6 +12944,29 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
     }
 
+    fn literal_unsigned_subtraction_upper_range_v1(
+        &self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+    ) -> Option<UnsignedRangeProofV1> {
+        if checked.operation() != SemanticCheckedBinaryOpV1::Subtract
+            || checked.left().ty() != checked.right().ty()
+            || self.unsigned_integer_bits(checked.left().ty()).is_none()
+        {
+            return None;
+        }
+        let SemanticOperandV1::Constant(minuend) = checked.left() else {
+            return None;
+        };
+        let SemanticConstantValueV1::Scalar(value) = minuend.value() else {
+            return None;
+        };
+        let maximum = self.scalar_unsigned_maximum(minuend.ty())?;
+        (value.bits() <= maximum).then_some(UnsignedRangeProofV1 {
+            minimum: 0,
+            maximum: value.bits(),
+        })
+    }
+
     fn assertion_range_operand_task_v1(operand: &SemanticOperandV1) -> AssertionRangeOperandTaskV1 {
         match operand {
             SemanticOperandV1::Constant(constant) => AssertionRangeOperandTaskV1::Constant {
@@ -13419,12 +13442,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                 )?
                                 .is_some();
                             let relational_range = match checked.operation() {
-                                SemanticCheckedBinaryOpV1::Subtract if authenticated => self
-                                    .scaled_quotient_remainder_upper_range_v1(
+                                SemanticCheckedBinaryOpV1::Subtract if authenticated => {
+                                    self.scaled_quotient_remainder_upper_range_v1(
                                         checked.left(),
                                         checked.right(),
                                         site,
-                                    )?,
+                                    )?
+                                    .or_else(|| {
+                                        // On the exact checked-success edge, unsigned K-rhs
+                                        // lies in [0,K], even when independent ranges overlap.
+                                        self.literal_unsigned_subtraction_upper_range_v1(checked)
+                                    })
+                                }
                                 SemanticCheckedBinaryOpV1::Multiply if authenticated => self
                                     .bounded_quotient_product_upper_range_v1(
                                         checked.left(),
@@ -27425,6 +27454,387 @@ mod tests {
             target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, target),
             unwind: SemanticUnwindActionV1::Unreachable,
         }
+    }
+
+    fn literal_subtraction_query_position_function() -> SemanticFunctionDeclV1 {
+        let capacity = || typed_constant(U64_TYPE, 8_192, 8);
+        projection_function_with_locals(
+            vec![
+                block(
+                    201,
+                    vec![
+                        typed_assignment(
+                            3,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Cast {
+                                kind: SemanticCastKindV1::Integer,
+                                operand: typed_operand(1, SCALAR_TYPE),
+                            },
+                        ),
+                        typed_assignment(
+                            4,
+                            BOOL_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::LessOrEqual,
+                                left: typed_operand(3, U64_TYPE),
+                                right: capacity(),
+                            },
+                        ),
+                    ],
+                    zero_switch(4, BOOL_TYPE, 4, 1),
+                ),
+                block(
+                    202,
+                    vec![typed_assignment(
+                        5,
+                        CHECKED_U64_TYPE,
+                        SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                            SemanticCheckedBinaryOpV1::Subtract,
+                            capacity(),
+                            typed_operand(3, U64_TYPE),
+                        )),
+                    )],
+                    checked_overflow_terminator(
+                        5,
+                        SemanticBinaryOpV1::Subtract,
+                        capacity(),
+                        typed_operand(3, U64_TYPE),
+                        2,
+                    ),
+                ),
+                block(
+                    203,
+                    vec![
+                        typed_assignment(
+                            6,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(checked_field_operand(5, 0, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            7,
+                            BOOL_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::LessThan,
+                                left: typed_operand(2, U64_TYPE),
+                                right: typed_operand(6, U64_TYPE),
+                            },
+                        ),
+                    ],
+                    zero_switch(7, BOOL_TYPE, 4, 3),
+                ),
+                block(
+                    204,
+                    vec![typed_assignment(
+                        8,
+                        CHECKED_U64_TYPE,
+                        SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                            SemanticCheckedBinaryOpV1::Add,
+                            typed_operand(3, U64_TYPE),
+                            typed_operand(2, U64_TYPE),
+                        )),
+                    )],
+                    checked_overflow_terminator(
+                        8,
+                        SemanticBinaryOpV1::Add,
+                        typed_operand(3, U64_TYPE),
+                        typed_operand(2, U64_TYPE),
+                        4,
+                    ),
+                ),
+                block(205, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(210, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(211, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(212, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(213, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(214, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(215, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(216, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(217, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(218, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn authenticated_literal_subtraction_bounds_paged_query_position() {
+        let types = assertion_proof_types();
+        let function = literal_subtraction_query_position_function();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        assert_eq!(
+            proof
+                .range_at_operand(&typed_operand(6, U64_TYPE), 3, 0)
+                .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: 8_192
+            }),
+        );
+        let proved = SemanticAssertProofsV1::analyze(&types, &function).unwrap();
+        assert!(
+            proved[1],
+            "the exact Le guard proves the producer subtraction"
+        );
+        assert!(
+            proved[3],
+            "the bounded subtraction result proves the later addition"
+        );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum LiteralSubtractionSuccessHostilityV1 {
+        Exact,
+        MissingAssertion,
+        NonDominatingAssertion,
+        WrongExpected,
+        WrongMessageOperation,
+        WrongMessageRight,
+        WrongConditionCarrier,
+        UnwindContinue,
+        MutatedCarrier,
+        EscapedCarrier,
+        UnmatchedOperation,
+        BeforeSuccess,
+    }
+
+    fn literal_subtraction_success_function(
+        minuend: u64,
+        hostility: LiteralSubtractionSuccessHostilityV1,
+    ) -> SemanticFunctionDeclV1 {
+        use LiteralSubtractionSuccessHostilityV1 as H;
+        let left = || typed_constant(U64_TYPE, u128::from(minuend), 8);
+        let operation = if matches!(hostility, H::UnmatchedOperation) {
+            SemanticCheckedBinaryOpV1::Add
+        } else {
+            SemanticCheckedBinaryOpV1::Subtract
+        };
+        let mut producer = vec![typed_assignment(
+            2,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                operation,
+                left(),
+                typed_operand(1, U64_TYPE),
+            )),
+        )];
+        if matches!(hostility, H::EscapedCarrier) {
+            producer.push(typed_assignment(
+                6,
+                CHECKED_U64_POINTER_TYPE,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: typed_place(2, CHECKED_U64_TYPE),
+                },
+            ));
+        }
+        let assertion = if matches!(hostility, H::MissingAssertion) {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2))
+        } else {
+            SemanticTerminatorKindV1::Assert {
+                condition: checked_field_operand(
+                    if matches!(hostility, H::WrongConditionCarrier) {
+                        5
+                    } else {
+                        2
+                    },
+                    1,
+                    BOOL_TYPE,
+                ),
+                expected: matches!(hostility, H::WrongExpected),
+                message: SemanticAssertMessageV1::Overflow {
+                    operation: if matches!(
+                        hostility,
+                        H::WrongMessageOperation | H::UnmatchedOperation
+                    ) {
+                        SemanticBinaryOpV1::Add
+                    } else {
+                        SemanticBinaryOpV1::Subtract
+                    },
+                    left: left(),
+                    right: typed_operand(
+                        if matches!(hostility, H::WrongMessageRight) {
+                            7
+                        } else {
+                            1
+                        },
+                        U64_TYPE,
+                    ),
+                },
+                target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 2),
+                unwind: if matches!(hostility, H::UnwindContinue) {
+                    SemanticUnwindActionV1::Continue
+                } else {
+                    SemanticUnwindActionV1::Unreachable
+                },
+            }
+        };
+        let mut consumer = Vec::new();
+        if matches!(hostility, H::MutatedCarrier) {
+            consumer.push(typed_assignment(
+                2,
+                CHECKED_U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(5, CHECKED_U64_TYPE)),
+            ));
+        }
+        consumer.push(typed_assignment(
+            3,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(checked_field_operand(2, 0, U64_TYPE)),
+        ));
+        projection_function_with_locals(
+            vec![
+                block(
+                    201,
+                    producer,
+                    if matches!(hostility, H::NonDominatingAssertion) {
+                        zero_switch(4, BOOL_TYPE, 1, 2)
+                    } else {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1))
+                    },
+                ),
+                block(202, vec![], assertion),
+                block(203, consumer, SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(210, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(211, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(212, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(213, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(214, BOOL_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(215, CHECKED_U64_TYPE, SemanticLocalRoleV1::Argument(2)),
+                local(
+                    216,
+                    CHECKED_U64_POINTER_TYPE,
+                    SemanticLocalRoleV1::Temporary,
+                ),
+                local(217, U64_TYPE, SemanticLocalRoleV1::Argument(3)),
+            ],
+        )
+    }
+
+    #[test]
+    fn authenticated_literal_subtraction_success_bounds_do_not_prove_the_producer() {
+        let types = assertion_proof_types();
+        for minuend in [0, 1, 8_192, u64::MAX] {
+            let function = literal_subtraction_success_function(
+                minuend,
+                LiteralSubtractionSuccessHostilityV1::Exact,
+            );
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert_eq!(
+                proof
+                    .range_at_operand(&typed_operand(3, U64_TYPE), 2, 1)
+                    .unwrap(),
+                Some(UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: u128::from(minuend)
+                }),
+            );
+            let proved = SemanticAssertProofsV1::analyze(&types, &function).unwrap();
+            assert_eq!(
+                proved[1],
+                minuend == u64::MAX,
+                "post-success facts must not circularly prove the producer"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_literal_subtraction_requires_exact_stable_dominating_success() {
+        use LiteralSubtractionSuccessHostilityV1 as H;
+        let types = assertion_proof_types();
+        for hostility in [
+            H::MissingAssertion,
+            H::NonDominatingAssertion,
+            H::WrongExpected,
+            H::WrongMessageOperation,
+            H::WrongMessageRight,
+            H::WrongConditionCarrier,
+            H::UnwindContinue,
+            H::MutatedCarrier,
+            H::EscapedCarrier,
+            H::UnmatchedOperation,
+            H::BeforeSuccess,
+        ] {
+            let function = literal_subtraction_success_function(8_192, hostility);
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            let actual = if matches!(hostility, H::BeforeSuccess) {
+                proof.range_at_operand(&checked_field_operand(2, 0, U64_TYPE), 1, 0)
+            } else {
+                proof.range_at_operand(
+                    &typed_operand(3, U64_TYPE),
+                    2,
+                    function.blocks()[2].statements().len(),
+                )
+            }
+            .unwrap();
+            assert!(
+                actual.is_none()
+                    || actual
+                        == Some(UnsignedRangeProofV1 {
+                            minimum: 0,
+                            maximum: u128::from(u64::MAX)
+                        }),
+                "{hostility:?}: {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_literal_subtraction_rejects_signed_unmatched_and_exhausted_forms() {
+        let types = assertion_proof_types();
+        let function = literal_subtraction_success_function(
+            8_192,
+            LiteralSubtractionSuccessHostilityV1::Exact,
+        );
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        for (operation, left, right) in [
+            (
+                SemanticCheckedBinaryOpV1::Subtract,
+                typed_constant(U64_TYPE, u128::from(u64::MAX) + 1, 16),
+                typed_operand(1, U64_TYPE),
+            ),
+            (
+                SemanticCheckedBinaryOpV1::Subtract,
+                typed_constant(I32_TYPE, 8_192, 4),
+                typed_operand(1, I32_TYPE),
+            ),
+            (
+                SemanticCheckedBinaryOpV1::Subtract,
+                typed_constant(U64_TYPE, 8_192, 8),
+                typed_operand(1, SCALAR_TYPE),
+            ),
+            (
+                SemanticCheckedBinaryOpV1::Subtract,
+                typed_operand(1, U64_TYPE),
+                typed_operand(7, U64_TYPE),
+            ),
+            (
+                SemanticCheckedBinaryOpV1::Add,
+                typed_constant(U64_TYPE, 8_192, 8),
+                typed_operand(1, U64_TYPE),
+            ),
+            (
+                SemanticCheckedBinaryOpV1::Multiply,
+                typed_constant(U64_TYPE, 8_192, 8),
+                typed_operand(1, U64_TYPE),
+            ),
+        ] {
+            assert_eq!(
+                proof.literal_unsigned_subtraction_upper_range_v1(
+                    &SemanticCheckedBinaryRvalueV1::new(operation, left, right)
+                ),
+                None
+            );
+        }
+        proof.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        assert!(matches!(
+            proof.range_at_operand(&typed_operand(3, U64_TYPE), 2, 1),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "uniform induction CFG analysis exceeds its work limit"
+            ))
+        ));
     }
 
     fn scaled_remainder_function(hostility: ScaledRemainderHostilityV1) -> SemanticFunctionDeclV1 {
