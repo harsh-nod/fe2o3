@@ -4,8 +4,8 @@ mod ownership_resource_tests {
     use crate::ProductionAnalysisResourcePhaseV1 as Phase;
     use crate::production_analysis::pliron_pass_contract::PlironStructuralIdentityProviderV1;
     use dialect_kernel::{
-        AccessKindAttr, DIALECT_NAME, IndexConstantOp, RankedAccessOp, RankedViewOp,
-        RankedViewType, ReturnOp, register_dialect,
+        AccessKindAttr, DIALECT_NAME, IndexConstantOp, InvocationIndexOp, RankedAccessOp,
+        RankedViewOp, RankedViewType, ReturnOp, register_dialect,
     };
     use pliron::{
         builtin::types::FunctionType, dialect::DialectName, op::Op, operation::verify_operation,
@@ -248,7 +248,7 @@ mod ownership_resource_tests {
     fn ownership_empty_does_not_skip_primary_race_storage_admission() {
         const FINDING_ROWS: usize = 4_096;
         let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
-        // Make race's own retained label payload exceed the absolute ceiling,
+        // A concurrent launch's possible fallback findings exceed the ceiling,
         // independently of earlier analyses' retained storage estimates.
         let name = "n".repeat(limits.max_peak_storage() / FINDING_ROWS + 1);
         let context = &mut Context::new();
@@ -263,6 +263,19 @@ mod ownership_resource_tests {
         assert!(
             input.identifier_bytes.checked_mul(FINDING_ROWS).unwrap() > limits.max_peak_storage()
         );
+        let singleton = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("singleton retains one diagnostic, not an exact-fallback finding vector");
+        assert!(singleton.is_clean());
+        assert!(singleton.race().is_clean());
+        assert!(singleton.preservation().is_exact_identity());
+        assert_eq!(singleton.preservation().certificates().len(), 9);
+        assert!(!singleton.grants_compiler_refinement_authority());
+        assert!(!singleton.grants_artifact_or_launch_authority());
+
+        InvocationIndexOp::new(context, 0, 2)
+            .get_operation()
+            .insert_at_front(function.get_entry_block(context), context);
+        assert_eq!(census(context, &function).operations, 68);
         let result = require_production_pliron_checks_before_lowering_v2(context, &function);
         assert!(
             matches!(

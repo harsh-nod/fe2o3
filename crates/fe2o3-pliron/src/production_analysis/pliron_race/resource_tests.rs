@@ -112,18 +112,19 @@ mod status_tests {
             ranked_accesses: 1,
             ..ProductionAnalysisInputCensusV1::default()
         };
-        // One effect and one invocation make 16 raw-evaluator queries. Each
-        // query visits one definition: 16*8 stack/map operations plus 16*3
+        // One effect and two invocations make 24 raw-evaluator queries. Each
+        // query visits one definition: 24*8 stack/map operations plus 24*3
         // query lifecycles. The single-query peak has six map-capacity units,
         // three eight-unit frames, and eight invocation decode items.
         // The single symbolic pair also prepays twelve root queries and
         // three comparisons: 12*4+3=51. These queries allocate nothing.
-        const EXACT_WORK: usize = 2_931;
+        const EXACT_WORK: usize = 3_067;
         const EXACT_RETAINED: usize = 1_272;
-        const EXACT_PEAK: usize = 68_366;
+        const EXACT_PEAK: usize = 68_502;
         let exact = race_resource_upper_bound_for_shape_v1(
             census,
-            Some((1, 1)),
+            Some((2, 1)),
+            None,
             ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK),
         )
         .unwrap();
@@ -133,7 +134,8 @@ mod status_tests {
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
-                Some((1, 1)),
+                Some((2, 1)),
+                None,
                 ProductionAnalysisResourceLimitsV1::new(EXACT_WORK - 1, EXACT_PEAK),
             ),
             Err(ProductionAnalysisResourceLimitV1 {
@@ -144,7 +146,8 @@ mod status_tests {
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
-                Some((1, 1)),
+                Some((2, 1)),
+                None,
                 ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK - 1),
             ),
             Err(ProductionAnalysisResourceLimitV1 {
@@ -165,6 +168,7 @@ mod status_tests {
         let bound = race_resource_upper_bound_for_shape_v1(
             census,
             Some((64, 1)),
+            None,
             ProductionAnalysisResourceLimitsV1::new(usize::MAX, 4_000_000),
         )
         .unwrap();
@@ -179,6 +183,7 @@ mod status_tests {
                 ..census
             },
             Some((64, 1)),
+            None,
             ProductionAnalysisResourceLimitsV1::new(usize::MAX, 4_000_000),
         )
         .unwrap();
@@ -188,6 +193,7 @@ mod status_tests {
             race_resource_upper_bound_for_shape_v1(
                 census,
                 Some((64, 1)),
+                None,
                 ProductionAnalysisResourceLimitsV1::new(
                     bound.work_upper_bound(),
                     bound.peak_storage_upper_bound()
@@ -199,6 +205,7 @@ mod status_tests {
             race_resource_upper_bound_for_shape_v1(
                 census,
                 Some((64, 1)),
+                None,
                 ProductionAnalysisResourceLimitsV1::new(
                     bound.work_upper_bound(),
                     bound.peak_storage_upper_bound() - 1
@@ -206,6 +213,237 @@ mod status_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn race_early_paths_charge_one_finding_and_its_construction() {
+        let census = ProductionAnalysisInputCensusV1 {
+            operations: 1,
+            ranked_accesses: 1,
+            ..ProductionAnalysisInputCensusV1::default()
+        };
+        for (shape, work) in [
+            (None, 1_051_203),
+            (Some((0, 1)), 1_051_203),
+            (Some((1, 1)), 2_707),
+        ] {
+            const RETAINED: usize = 1_272;
+            // Effect collection (88), four signal/class sets (8), one retained
+            // diagnostic and one construction temporary. No exact map/query.
+            const PEAK: usize = 88 + 8 + 2 * RETAINED;
+            let bound = race_resource_upper_bound_for_shape_v1(
+                census,
+                shape,
+                None,
+                ProductionAnalysisResourceLimitsV1::new(work, PEAK),
+            )
+            .unwrap();
+            assert_eq!(bound.work_upper_bound(), work);
+            assert_eq!(bound.retained_storage_upper_bound(), RETAINED);
+            assert_eq!(bound.peak_storage_upper_bound(), PEAK);
+            for limits in [
+                ProductionAnalysisResourceLimitsV1::new(work - 1, PEAK),
+                ProductionAnalysisResourceLimitsV1::new(work, PEAK - 1),
+            ] {
+                assert!(
+                    race_resource_upper_bound_for_shape_v1(census, shape, None, limits).is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn race_unreachable_fallback_does_not_precharge_ordered_finding_vectors() {
+        let census = ProductionAnalysisInputCensusV1 {
+            operations: 4_096,
+            blocks: 385,
+            ranked_accesses: 64,
+            identifier_bytes: 32_768,
+            ..ProductionAnalysisInputCensusV1::default()
+        };
+        let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
+        let bound = race_resource_upper_bound_for_shape_v1(census, None, None, limits).unwrap();
+        const PER_FINDING: usize = 3 * 8 + 32_768 + 64 + 1_024 + 160;
+        assert_eq!(bound.retained_storage_upper_bound(), PER_FINDING);
+        assert_eq!(
+            bound.peak_storage_upper_bound(),
+            64 * (8 + 16 + 32_768 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING
+        );
+        assert!(
+            race_resource_upper_bound_for_shape_v1(census, Some((2, 1)), None, limits).is_err()
+        );
+    }
+
+    #[test]
+    fn race_relation_shape_matches_domain_and_minimum_pair_work_gates() {
+        for extents in [
+            &[][..],
+            &[0],
+            &[1],
+            &[65_536],
+            &[77_791_232],
+            &[u64::MAX, 2],
+            &[u64::MAX, u64::MAX, u64::MAX],
+        ] {
+            assert_eq!(
+                presburger_invocation_shape_for_resource_v1(extents),
+                None,
+                "{extents:?}"
+            );
+        }
+        for (extents, expected) in [
+            (&[65_537][..], (65_537, 1)),
+            (&[262_144][..], (262_144, 1)),
+            (&[131_072, 1, 1][..], (131_072, 3)),
+        ] {
+            assert_eq!(
+                presburger_invocation_shape_for_resource_v1(extents),
+                Some(expected)
+            );
+        }
+        for extents in [&[262_145][..], &[131_073, 1, 1][..]] {
+            assert_eq!(presburger_invocation_shape_for_resource_v1(extents), None);
+        }
+    }
+
+    #[test]
+    fn race_relation_maps_are_temporary_and_pairs_bound_four_walks() {
+        let shape = Some((65_537, 1));
+        let (work, storage) = presburger_relation_resource_upper_bound_v1(shape, 1).unwrap();
+        assert_eq!(work, 65_537 * (16 * 8 * 8 + 128 * 8 + 256));
+        assert_eq!(storage, 65_537 * (9 * 8 + 64) + 8 * 8 * 8 + 64 * 8 + 128);
+        assert_eq!(
+            presburger_relation_resource_upper_bound_v1(shape, 0),
+            Ok((0, 0))
+        );
+        assert_eq!(
+            presburger_relation_resource_upper_bound_v1(shape, usize::MAX),
+            Ok((work * 3, storage))
+        );
+        assert_eq!(
+            presburger_relation_resource_upper_bound_v1(Some((usize::MAX, 1)), 1),
+            Err(race_resource_overflow_v1())
+        );
+        assert_eq!(
+            presburger_relation_resource_upper_bound_v1(Some((1, usize::MAX)), 1),
+            Err(race_resource_overflow_v1())
+        );
+        let census = ProductionAnalysisInputCensusV1 {
+            operations: 1,
+            ranked_accesses: 1,
+            ..ProductionAnalysisInputCensusV1::default()
+        };
+        let bound = race_resource_upper_bound_for_shape_v1(
+            census,
+            None,
+            shape,
+            ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        )
+        .unwrap();
+        assert_eq!(bound.retained_storage_upper_bound(), 1_272);
+        assert_eq!(bound.work_upper_bound(), 1_051_203 + work);
+        assert_eq!(bound.peak_storage_upper_bound(), 2_640 + storage);
+        assert_eq!(
+            race_resource_upper_bound_for_shape_v1(
+                census,
+                None,
+                shape,
+                ProductionAnalysisResourceLimitsV1::new(
+                    bound.work_upper_bound(),
+                    bound.peak_storage_upper_bound(),
+                ),
+            ),
+            Ok(bound)
+        );
+        assert_eq!(
+            race_resource_upper_bound_for_shape_v1(
+                census,
+                None,
+                shape,
+                ProductionAnalysisResourceLimitsV1::new(
+                    bound.work_upper_bound() - 1,
+                    bound.peak_storage_upper_bound(),
+                ),
+            ),
+            Err(ProductionAnalysisResourceLimitV1 {
+                phase: ProductionAnalysisResourcePhaseV1::RaceFreedom,
+                resource: "work upper bound",
+            })
+        );
+        assert!(
+            race_resource_upper_bound_for_shape_v1(
+                census,
+                None,
+                shape,
+                ProductionAnalysisResourceLimitsV1::new(
+                    bound.work_upper_bound(),
+                    bound.peak_storage_upper_bound() - 1
+                ),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn race_remainder_relation_enumerates_beyond_exact_trace_limit() {
+        use dialect_kernel::{IndexBinaryKindAttr, IndexBinaryOp, RankedViewType, ReturnOp};
+        use pliron::{builtin::types::FunctionType, dialect::DialectName, op::Op};
+
+        let context = &mut Context::new();
+        dialect_kernel::register_dialect(
+            context,
+            &DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        dialect_gpu::register_dialect(context).unwrap();
+        let function_type = FunctionType::get(context, vec![], vec![]);
+        let function = FuncOp::new(
+            context,
+            "remainder_relation_resource".try_into().unwrap(),
+            function_type,
+        );
+        let entry = function.get_entry_block(context);
+        let invocation = InvocationIndexOp::new(context, 0, 65_537);
+        let modulus = IndexConstantOp::new(context, 65_537);
+        let index = IndexBinaryOp::new(
+            context,
+            IndexBinaryKindAttr::Remainder,
+            invocation.result(context),
+            modulus.result(context),
+        );
+        let memory_type = RankedViewType::new(context, 32, true, vec![65_537]).unwrap();
+        let memory =
+            RankedViewOp::new_in_space(context, memory_type, vec![], MemorySpaceAttr::Global)
+                .unwrap();
+        let write = RankedAccessOp::new(
+            context,
+            AccessKindAttr::Write,
+            memory.result(context),
+            vec![index.result(context)],
+        )
+        .unwrap();
+        let ret = ReturnOp::new(context);
+        for operation in [
+            invocation.get_operation(),
+            modulus.get_operation(),
+            index.get_operation(),
+            memory.get_operation(),
+            write.get_operation(),
+            ret.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        let mut analyses = PlironAnalysisManagerV1::new(&function);
+        analyses.prepare_sparse_indices(context, &function);
+        let sparse = analyses.sparse_indices().unwrap();
+        assert_eq!(static_invocation_shape_for_resource_v1(sparse, None), None);
+        assert!(sparse.fact(index.result(context)).affine().is_none());
+        assert_eq!(
+            presburger_invocation_shape_for_resource_v1(sparse.launch_extents()),
+            Some((65_537, 1))
+        );
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        assert!(report.is_clean(), "{:#?}", report.findings());
     }
 
     #[test]
@@ -218,6 +456,7 @@ mod status_tests {
                     ..ProductionAnalysisInputCensusV1::default()
                 },
                 Some((1, 1)),
+                None,
                 ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
             ),
             Err(race_resource_overflow_v1())
@@ -256,6 +495,7 @@ mod status_tests {
             race_resource_upper_bound_for_shape_v1(
                 census,
                 Some((1, 1)),
+                None,
                 ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
             ),
             Err(race_resource_overflow_v1())
