@@ -12,7 +12,10 @@ use fe2o3_kernel_ir::{
     VerificationContractOperationV12, WorkgroupMemoryExtent,
 };
 
-use crate::{CanonicalKirInventoryErrorV1, CanonicalKirInventoryV1 as Inventory};
+use crate::{
+    CanonicalKirInventoryErrorV1, CanonicalKirInventoryV1 as Inventory,
+    CanonicalKirMustAliasErrorV1, CanonicalKirMustAliasLimitsV1, CanonicalKirMustAliasV1,
+};
 
 /// Exact immutable catalog and graph borrowed after structural binding checks.
 /// This does not authenticate source claims or prove pipeline lifecycle safety.
@@ -57,6 +60,8 @@ impl KernelIrContractCatalogBindingStorageV1 {
 pub enum KernelIrContractCatalogBindingErrorV1 {
     /// Metered inventory lookup failed.
     Inventory(CanonicalKirInventoryErrorV1),
+    /// Owner-bound storage-origin analysis failed closed.
+    Alias(CanonicalKirMustAliasErrorV1),
     /// Explicit logical work or storage admission failed.
     Resource(Resource),
     /// A closed definition or marker binding rule failed.
@@ -72,10 +77,19 @@ impl From<CanonicalKirInventoryErrorV1> for KernelIrContractCatalogBindingErrorV
         Self::Inventory(error)
     }
 }
+impl From<CanonicalKirMustAliasErrorV1> for KernelIrContractCatalogBindingErrorV1 {
+    fn from(error: CanonicalKirMustAliasErrorV1) -> Self {
+        match error {
+            CanonicalKirMustAliasErrorV1::Resource(error) => Self::Resource(error),
+            error => Self::Alias(error),
+        }
+    }
+}
 impl fmt::Display for KernelIrContractCatalogBindingErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Inventory(error) => error.fmt(formatter),
+            Self::Alias(error) => error.fmt(formatter),
             Self::Resource(error) => error.fmt(formatter),
             Self::Invalid(rule) => write!(
                 formatter,
@@ -91,12 +105,36 @@ type BindingError = KernelIrContractCatalogBindingErrorV1;
 /// immutable catalog, including exact pointer type, geometry, source packed
 /// layout, epoch type, and function-local value identity.
 ///
-/// Work is O(A log V + O + M(log A + log V)), where A is bindings, V definitions,
-/// O operations and M <= O pipeline markers;
-/// no raw sparse ID determines an allocation. The existing inventory is borrowed,
-/// not rebuilt. Scratch is empty; only a checked-view inline receipt transfers.
+/// Work is O(V + O + E + A log V + M(log A + log V)), where A is bindings,
+/// V definitions, O operations, E edge arguments and M <= O pipeline markers.
+/// No raw sparse ID determines an allocation. The existing inventory is borrowed,
+/// not rebuilt. The first marker lazily derives prepaid O(V + E + O) storage-origin
+/// scratch, which is dropped before restoring the caller's floor. Only the same
+/// checked-view inline receipt transfers. Bindings themselves remain direct
+/// physical allocations; aliases occur only at marker uses.
 /// This check does not validate source metadata or prove event-order correctness.
 pub fn check_kernel_ir_contract_catalog_v1<'a, 'g>(
+    inventory: &'a Inventory<'g>,
+    catalog: &'a Catalog,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        CheckedKernelIrContractCatalogV1<'a, 'g>,
+        KernelIrContractCatalogBindingStorageV1,
+    ),
+    BindingError,
+> {
+    let floor = budget.storage();
+    let result = check_catalog(inventory, catalog, budget);
+    let release = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or(Resource::Accounting)?;
+    budget.release_storage(release)?;
+    result
+}
+
+fn check_catalog<'a, 'g>(
     inventory: &'a Inventory<'g>,
     catalog: &'a Catalog,
     budget: &mut Budget<'_>,
@@ -180,6 +218,7 @@ pub fn check_kernel_ir_contract_catalog_v1<'a, 'g>(
         }
     }
     let mut markers = 0_usize;
+    let mut aliases = None;
     for operation in inventory.operations() {
         budget.charge_work(1)?;
         let OperationKind::VerificationContract(
@@ -197,7 +236,29 @@ pub fn check_kernel_ir_contract_catalog_v1<'a, 'g>(
             return Err(BindingError::Invalid("marker has results"));
         }
         let function = operation.coordinate.block.function;
-        let binding = find_binding(catalog.bindings(), function.0, storage.0, budget)?
+        if aliases.is_none() {
+            let (report, receipt) = CanonicalKirMustAliasV1::derive(
+                inventory,
+                CanonicalKirMustAliasLimitsV1::default(),
+                budget,
+            )?;
+            budget.reserve_storage(receipt.retained_storage())?;
+            aliases = Some(report);
+        }
+        let used = inventory
+            .uses()
+            .get(operation.operands.start)
+            .filter(|row| row.value == storage)
+            .ok_or(BindingError::Invalid("marker storage use"))?;
+        let origin = aliases
+            .as_ref()
+            .ok_or(BindingError::Invalid("marker storage analysis"))?
+            .allocation_for_definition(used.definition, budget)?
+            .and_then(|row| row.value)
+            .ok_or(BindingError::Invalid(
+                "marker storage has no unique allocation",
+            ))?;
+        let binding = find_binding(catalog.bindings(), function.0, origin.0, budget)?
             .ok_or(BindingError::Invalid("marker storage has no binding"))?;
         if binding.key != contract.index() {
             return Err(BindingError::Invalid(
@@ -216,7 +277,6 @@ pub fn check_kernel_ir_contract_catalog_v1<'a, 'g>(
     }
     let retained = size_of::<CheckedKernelIrContractCatalogV1<'_, '_>>();
     budget.reserve_storage(retained)?;
-    budget.release_storage(retained)?;
     Ok((
         CheckedKernelIrContractCatalogV1 {
             inventory,

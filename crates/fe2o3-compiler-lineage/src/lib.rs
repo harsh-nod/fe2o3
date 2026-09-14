@@ -7,6 +7,7 @@ mod error;
 mod multi_root_correspondence_payload_v2;
 mod multi_root_proof_roster_v2;
 mod multi_root_target_lineage_v2;
+mod multi_root_target_lineage_v3;
 mod native_neutral_module_v1;
 mod native_neutral_subject_v1;
 mod proof_binding;
@@ -39,11 +40,23 @@ pub use multi_root_proof_roster_v2::{
     MultiRootProofRosterKindV2, MultiRootProofRosterRootInputV2, MultiRootProofRosterRootV2,
     MultiRootProofRosterTranscriptV2,
 };
+pub use multi_root_proof_roster_v2::{
+    MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V3, MULTI_ROOT_PROOF_ROSTER_POLICY_V3,
+    MULTI_ROOT_PROOF_ROSTER_VERSION_V3, MultiRootProofRosterErrorV3, MultiRootProofRosterInputsV3,
+    MultiRootProofRosterKindV3, MultiRootProofRosterRootInputV3, MultiRootProofRosterRootV3,
+    MultiRootProofRosterTranscriptV3,
+};
 pub use multi_root_target_lineage_v2::{
     MAX_MULTI_ROOT_TARGET_BINDING_ROOTS_V2, MULTI_ROOT_TARGET_BINDING_MAGIC_V2,
     MULTI_ROOT_TARGET_BINDING_VERSION_V2, MultiRootTargetBindingInputsV2,
     MultiRootTargetBindingTranscriptV2, MultiRootTargetWorkgroupInputV2,
     MultiRootTargetWorkgroupV2,
+};
+pub use multi_root_target_lineage_v3::{
+    MAX_MULTI_ROOT_TARGET_BINDING_ROOTS_V3, MULTI_ROOT_TARGET_BINDING_MAGIC_V3,
+    MULTI_ROOT_TARGET_BINDING_VERSION_V3, MultiRootTargetBindingInputsV3,
+    MultiRootTargetBindingTranscriptV3, MultiRootTargetWorkgroupInputV3,
+    MultiRootTargetWorkgroupV3,
 };
 pub use native_neutral_module_v1::{
     NativeNeutralModuleErrorV1, NativeNeutralModuleRefV1, encode_native_neutral_module_v1,

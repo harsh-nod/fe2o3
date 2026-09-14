@@ -4,6 +4,10 @@ use fe2o3_kernel_descriptor::{KernelId as DescriptorKernelId, MAX_KERNELS, MAX_N
 
 use crate::{MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3, TargetLineageClaimV3};
 
+#[path = "multi_root_proof_roster_v3.rs"]
+mod native_roster_v3;
+pub use native_roster_v3::*;
+
 /// Wire version for every canonical multi-root proof-roster envelope.
 pub const MULTI_ROOT_PROOF_ROSTER_VERSION_V2: u16 = 2;
 /// Association-only policy for every canonical multi-root proof-roster envelope.
@@ -488,122 +492,136 @@ impl DecodedRosterV2 {
         let roster_identity = reader.fixed::<32>()?;
         require_nonzero_v2("compiler roster", roster_identity)?;
 
-        let permutation_count = reader.bounded_root_count("KernelId permutation count")?;
-        let mut canonical_kernel_order = Vec::new();
-        canonical_kernel_order
-            .try_reserve_exact(permutation_count)
-            .map_err(|_| MultiRootProofRosterErrorV2::AllocationFailed)?;
-        for _ in 0..permutation_count {
-            canonical_kernel_order.push(reader.u32()?);
-        }
-        validate_permutation_v2(&canonical_kernel_order, permutation_count)?;
-
-        let root_count = reader.bounded_root_count("root count")?;
-        if root_count != permutation_count {
-            return Err(MultiRootProofRosterErrorV2::CountMismatch {
-                field: "root and KernelId permutation counts",
-            });
-        }
-        let mut roots = Vec::new();
-        roots
-            .try_reserve_exact(root_count)
-            .map_err(|_| MultiRootProofRosterErrorV2::AllocationFailed)?;
-        let mut semantic_identities = BTreeSet::new();
-        let mut bindings = BTreeSet::new();
-        let mut logical_names = BTreeSet::new();
-        let mut exports = BTreeSet::new();
-        let mut kernels = BTreeSet::new();
-        let mut previous_root = None;
-        for _ in 0..root_count {
-            let semantic_root = reader.u32()?;
-            if previous_root.is_some_and(|previous| semantic_root <= previous) {
-                return Err(MultiRootProofRosterErrorV2::NonCanonicalRootOrder);
-            }
-            previous_root = Some(semantic_root);
-            let semantic_root_identity = reader.fixed::<32>()?;
-            require_nonzero_v2("semantic root", semantic_root_identity)?;
-            if !semantic_identities.insert(semantic_root_identity) {
-                return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
-                    field: "semantic root identity",
-                });
-            }
-            let kernel_binding = reader.fixed::<32>()?;
-            require_nonzero_v2("kernel binding", kernel_binding)?;
-            if !bindings.insert(kernel_binding) {
-                return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
-                    field: "kernel binding",
-                });
-            }
-            let source_rank = reader.u8()?;
-            if !(1..=3).contains(&source_rank) {
-                return Err(MultiRootProofRosterErrorV2::InvalidSourceRank {
-                    observed: source_rank,
-                });
-            }
-            if reader.fixed::<3>()? != [0; 3] {
-                return Err(MultiRootProofRosterErrorV2::NonZeroReserved {
-                    field: "root record",
-                });
-            }
-            let workgroup = [reader.u32()?, reader.u32()?, reader.u32()?];
-            if workgroup.contains(&0) {
-                return Err(MultiRootProofRosterErrorV2::ZeroWorkgroup);
-            }
-            let logical_name = reader.text("logical name", MAX_LOGICAL_NAME_BYTES_V2)?;
-            let export_symbol = reader.text("export symbol", MAX_NAME_BYTES)?;
-            let kernel_id = reader.text("kernel ID", MAX_NAME_BYTES)?;
-            let payload = reader.nonempty_bytes("root payload")?;
-            let logical = reader.text_at(logical_name);
-            let export = reader.text_at(export_symbol);
-            let kernel = reader.text_at(kernel_id);
-            if export != kernel {
-                return Err(MultiRootProofRosterErrorV2::RootFieldMismatch {
-                    field: "export symbol and kernel ID",
-                });
-            }
-            if !logical_names.insert(logical) {
-                return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
-                    field: "logical name",
-                });
-            }
-            if !exports.insert(export) {
-                return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
-                    field: "export symbol",
-                });
-            }
-            if !kernels.insert(kernel) {
-                return Err(MultiRootProofRosterErrorV2::DuplicateRootField { field: "kernel ID" });
-            }
-            roots.push(StoredRootV2 {
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                workgroup,
-                logical_name,
-                export_symbol,
-                kernel_id,
-                payload,
-            });
-        }
-        if !reader.is_finished() {
-            return Err(MultiRootProofRosterErrorV2::TrailingBytes {
-                trailing: bytes.len() - reader.offset,
-            });
-        }
-        validate_derived_kernel_order_v2(
-            &canonical_kernel_order,
-            roots.iter().map(|root| root.kernel_binding),
-        )?;
+        let (canonical_kernel_order, roots) = decode_root_rows_v1(&mut reader, 2)?;
         Ok(Self {
             kind,
             semantic_mir_sha256,
             neutral_kir,
             roster_identity,
-            canonical_kernel_order: canonical_kernel_order.into_boxed_slice(),
-            roots: roots.into_boxed_slice(),
+            canonical_kernel_order,
+            roots,
         })
     }
+}
+
+type DecodedRootRowsV1 = (Box<[u32]>, Box<[StoredRootV2]>);
+
+fn decode_root_rows_v1(
+    reader: &mut ReaderV2<'_>,
+    minimum_roots: usize,
+) -> Result<DecodedRootRowsV1, MultiRootProofRosterErrorV2> {
+    let permutation_count =
+        reader.bounded_root_count_with_minimum("KernelId permutation count", minimum_roots)?;
+    let mut canonical_kernel_order = Vec::new();
+    canonical_kernel_order
+        .try_reserve_exact(permutation_count)
+        .map_err(|_| MultiRootProofRosterErrorV2::AllocationFailed)?;
+    for _ in 0..permutation_count {
+        canonical_kernel_order.push(reader.u32()?);
+    }
+    validate_permutation_v2(&canonical_kernel_order, permutation_count)?;
+
+    let root_count = reader.bounded_root_count_with_minimum("root count", minimum_roots)?;
+    if root_count != permutation_count {
+        return Err(MultiRootProofRosterErrorV2::CountMismatch {
+            field: "root and KernelId permutation counts",
+        });
+    }
+    let mut roots = Vec::new();
+    roots
+        .try_reserve_exact(root_count)
+        .map_err(|_| MultiRootProofRosterErrorV2::AllocationFailed)?;
+    let mut semantic_identities = BTreeSet::new();
+    let mut bindings = BTreeSet::new();
+    let mut logical_names = BTreeSet::new();
+    let mut exports = BTreeSet::new();
+    let mut kernels = BTreeSet::new();
+    let mut previous_root = None;
+    for _ in 0..root_count {
+        let semantic_root = reader.u32()?;
+        if previous_root.is_some_and(|previous| semantic_root <= previous) {
+            return Err(MultiRootProofRosterErrorV2::NonCanonicalRootOrder);
+        }
+        previous_root = Some(semantic_root);
+        let semantic_root_identity = reader.fixed::<32>()?;
+        require_nonzero_v2("semantic root", semantic_root_identity)?;
+        if !semantic_identities.insert(semantic_root_identity) {
+            return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
+                field: "semantic root identity",
+            });
+        }
+        let kernel_binding = reader.fixed::<32>()?;
+        require_nonzero_v2("kernel binding", kernel_binding)?;
+        if !bindings.insert(kernel_binding) {
+            return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
+                field: "kernel binding",
+            });
+        }
+        let source_rank = reader.u8()?;
+        if !(1..=3).contains(&source_rank) {
+            return Err(MultiRootProofRosterErrorV2::InvalidSourceRank {
+                observed: source_rank,
+            });
+        }
+        if reader.fixed::<3>()? != [0; 3] {
+            return Err(MultiRootProofRosterErrorV2::NonZeroReserved {
+                field: "root record",
+            });
+        }
+        let workgroup = [reader.u32()?, reader.u32()?, reader.u32()?];
+        if workgroup.contains(&0) {
+            return Err(MultiRootProofRosterErrorV2::ZeroWorkgroup);
+        }
+        let logical_name = reader.text("logical name", MAX_LOGICAL_NAME_BYTES_V2)?;
+        let export_symbol = reader.text("export symbol", MAX_NAME_BYTES)?;
+        let kernel_id = reader.text("kernel ID", MAX_NAME_BYTES)?;
+        let payload = reader.nonempty_bytes("root payload")?;
+        let logical = reader.text_at(logical_name);
+        let export = reader.text_at(export_symbol);
+        let kernel = reader.text_at(kernel_id);
+        if export != kernel {
+            return Err(MultiRootProofRosterErrorV2::RootFieldMismatch {
+                field: "export symbol and kernel ID",
+            });
+        }
+        if !logical_names.insert(logical) {
+            return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
+                field: "logical name",
+            });
+        }
+        if !exports.insert(export) {
+            return Err(MultiRootProofRosterErrorV2::DuplicateRootField {
+                field: "export symbol",
+            });
+        }
+        if !kernels.insert(kernel) {
+            return Err(MultiRootProofRosterErrorV2::DuplicateRootField { field: "kernel ID" });
+        }
+        roots.push(StoredRootV2 {
+            semantic_root,
+            semantic_root_identity,
+            kernel_binding,
+            source_rank,
+            workgroup,
+            logical_name,
+            export_symbol,
+            kernel_id,
+            payload,
+        });
+    }
+    if !reader.is_finished() {
+        return Err(MultiRootProofRosterErrorV2::TrailingBytes {
+            trailing: reader.bytes.len() - reader.offset,
+        });
+    }
+    validate_derived_kernel_order_v2(
+        &canonical_kernel_order,
+        roots.iter().map(|root| root.kernel_binding),
+    )?;
+    Ok((
+        canonical_kernel_order.into_boxed_slice(),
+        roots.into_boxed_slice(),
+    ))
 }
 
 struct ReaderV2<'a> {
@@ -651,12 +669,13 @@ impl<'a> ReaderV2<'a> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 
-    fn bounded_root_count(
+    fn bounded_root_count_with_minimum(
         &mut self,
         field: &'static str,
+        minimum_roots: usize,
     ) -> Result<usize, MultiRootProofRosterErrorV2> {
         let count = self.u32()? as usize;
-        if !(2..=MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V2).contains(&count) {
+        if !(minimum_roots..=MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V2).contains(&count) {
             return Err(MultiRootProofRosterErrorV2::InvalidCount {
                 field,
                 observed: count,
@@ -716,21 +735,37 @@ impl<'a> ReaderV2<'a> {
 fn validate_inputs_v2(
     inputs: &MultiRootProofRosterInputsV2<'_>,
 ) -> Result<(), MultiRootProofRosterErrorV2> {
-    require_nonzero_v2("semantic MIR", inputs.semantic_mir_sha256)?;
-    require_nonzero_v2("compiler roster", inputs.roster_identity)?;
-    let root_count = inputs.roots.len();
-    if !(2..=MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V2).contains(&root_count) {
+    validate_root_inputs_v1(
+        inputs.semantic_mir_sha256,
+        inputs.roster_identity,
+        inputs.canonical_kernel_order,
+        inputs.roots,
+        2,
+    )
+}
+
+fn validate_root_inputs_v1(
+    semantic_mir_sha256: [u8; 32],
+    roster_identity: [u8; 32],
+    canonical_kernel_order: &[u32],
+    roots: &[MultiRootProofRosterRootInputV2<'_>],
+    minimum_roots: usize,
+) -> Result<(), MultiRootProofRosterErrorV2> {
+    require_nonzero_v2("semantic MIR", semantic_mir_sha256)?;
+    require_nonzero_v2("compiler roster", roster_identity)?;
+    let root_count = roots.len();
+    if !(minimum_roots..=MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V2).contains(&root_count) {
         return Err(MultiRootProofRosterErrorV2::InvalidCount {
             field: "root count",
             observed: root_count,
         });
     }
-    if inputs.canonical_kernel_order.len() != root_count {
+    if canonical_kernel_order.len() != root_count {
         return Err(MultiRootProofRosterErrorV2::CountMismatch {
             field: "root and KernelId permutation counts",
         });
     }
-    validate_permutation_v2(inputs.canonical_kernel_order, root_count)?;
+    validate_permutation_v2(canonical_kernel_order, root_count)?;
 
     let mut semantic_identities = BTreeSet::new();
     let mut bindings = BTreeSet::new();
@@ -738,7 +773,7 @@ fn validate_inputs_v2(
     let mut exports = BTreeSet::new();
     let mut kernels = BTreeSet::new();
     let mut previous_root = None;
-    for root in inputs.roots {
+    for root in roots {
         if previous_root.is_some_and(|previous| root.semantic_root <= previous) {
             return Err(MultiRootProofRosterErrorV2::NonCanonicalRootOrder);
         }
@@ -795,8 +830,8 @@ fn validate_inputs_v2(
         }
     }
     validate_derived_kernel_order_v2(
-        inputs.canonical_kernel_order,
-        inputs.roots.iter().map(|root| root.kernel_binding),
+        canonical_kernel_order,
+        roots.iter().map(|root| root.kernel_binding),
     )
 }
 

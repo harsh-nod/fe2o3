@@ -8,6 +8,9 @@ use fe2o3_kernel_ir::{
 
 const LIMIT: usize = 1_000_000;
 
+#[path = "canonical_kir_contract_catalog_alias_v1_tests.rs"]
+mod aliases;
+
 fn contract() -> Contract {
     Contract {
         key: 0,
@@ -203,7 +206,7 @@ fn empty_catalog_checks_empty_graph_with_exact_inline_storage() {
 
 #[test]
 fn nonempty_binding_work_and_storage_are_exact_without_peak_calibration() {
-    for (function_count, exact_work) in [(1, 40), (2, 90)] {
+    for (function_count, exact_work) in [(1, 95), (2, 191)] {
         let source = module(function_count, 0);
         let bindings = (0..function_count as u32).map(binding).collect::<Vec<_>>();
         let mut setup_work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
@@ -232,15 +235,19 @@ fn nonempty_binding_work_and_storage_are_exact_without_peak_calibration() {
             + inventory_storage.retained_storage();
         setup.release_storage(owned).unwrap();
         // Transfer the same caller-owned inputs between isolated boundary ledgers.
-        // One function: binding visit+value lookup = 1+2; seven operation visits;
-        // six markers each use one binding comparison and two value-index probes
-        // (each probe charges loop+comparison): 3+7+6*(1+4)=40.
-        // Two functions: 2*(1+4)+14+6*(2+6)+6*(1+2)=90, from exact sorted keys.
+        // Direct binding/marker checks cost 40/90 from the exact sorted keys.
+        // With V=2F, O=7F and no dependencies, origin analysis adds
+        // 4 + 2O + 5*(1+V) + 3V + V enqueues + V dequeues = 9+34F.
+        // Each of 6F marker queries adds two fixed units: totals 95 and 191.
+        // Engine header: 23 words. Each definition: four words + two flags.
+        // The report plus checked-view headers coexist below this engine peak.
+        let word = size_of::<usize>();
+        let peak = 23 * word + 2 * function_count * (4 * word + 2);
         let retained = size_of::<CheckedKernelIrContractCatalogV1<'_, '_>>();
         for (work_under, storage_under) in [(0, 0), (1, 0), (0, 1)] {
             let floor = 61 + owned;
             let mut work = CanonicalKernelIrWorkBudgetV1::new(11 + exact_work - work_under);
-            let mut budget = Budget::new(&mut work, floor + retained - storage_under);
+            let mut budget = Budget::new(&mut work, floor + peak - storage_under);
             budget.reserve_storage(floor).unwrap();
             budget.charge_work(11).unwrap();
             let result = check_kernel_ir_contract_catalog_v1(&inventory, &catalog, &mut budget);
@@ -250,6 +257,7 @@ fn nonempty_binding_work_and_storage_are_exact_without_peak_calibration() {
                     assert_eq!(checked.marker_count(), 6 * function_count);
                     assert_eq!(receipt.retained_storage(), retained);
                     assert_eq!(budget.work(), 11 + exact_work);
+                    assert_eq!(budget.peak_storage(), floor + peak);
                     budget.reserve_storage(receipt.retained_storage()).unwrap();
                     Some(receipt.retained_storage())
                 }
