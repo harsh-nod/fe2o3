@@ -17,7 +17,9 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrModuleV12,
 };
 
+mod catalog_transport;
 mod control;
+mod control_index;
 mod resources;
 mod scalar;
 
