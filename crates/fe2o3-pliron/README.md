@@ -50,6 +50,22 @@ handoff; Pliron handles, printer text, and diagnostics do not. The isolated
 pinned upstream LLVM 22.1.8 target machine and in-process LLD remain the sole
 machine-code and HSACO authority.
 
+## Immutable Canonical Analysis Scope
+
+`with_canonical_analysis_scope_v1` borrows one connected V12 owner, derives its
+inventory once, and lazily caches sparse scalar facts on first request. It
+cannot replace the owner or reuse facts by matching hashes. Mutation requires
+ending the scope and deriving fresh analyses for the changed graph. Returned
+values cannot borrow the local inventory or cached report.
+
+The caller reserves the graph's retained payload. Inventory and cached-report
+payloads remain reserved on the shared ledger until dropped; success and Result
+errors restore the incoming floor without rewinding work, peak storage, or
+failure history. Each cache request charges one lookup before inspecting the
+cache. Callbacks must not release live analysis floors. Stack-only scope framing,
+unrelated caller allocations, and panic recovery are outside this contract.
+This API is not a pass, a preservation proof, or production-pipeline activation.
+
 ## Boundary
 
 This crate does not define fe2o3 dialect operations, select a production
