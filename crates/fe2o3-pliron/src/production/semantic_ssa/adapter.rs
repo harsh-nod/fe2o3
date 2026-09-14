@@ -9,9 +9,11 @@ pub(super) struct SemanticTransparentBorrowSiteV1 {
 #[derive(Clone, Copy)]
 struct SemanticBorrowCandidateV1 {
     site: SemanticTransparentBorrowSiteV1,
+    reference_local: u32,
     source_local: u32,
     source_type: SemanticTypeIdV1,
     source_reference: Option<u32>,
+    parent: Option<usize>,
     valid: bool,
     consumers: u32,
     intrinsic_consumer: bool,
@@ -48,20 +50,22 @@ pub(super) fn transparent_borrow_sites_v1(
                     block: block_index as u32,
                     statement: statement_index as u32,
                 },
+                reference_local,
                 source_local: place.local().index(),
                 source_type: place.ty(),
                 source_reference,
+                parent: None,
                 valid: true,
                 consumers: 0,
                 intrinsic_consumer: false,
             };
             let index = candidates.len();
             candidates.push(candidate);
-            if duplicate_references.contains(&reference_local) {
-                candidates[index].valid = false;
-            } else if let Some(previous) = candidate_by_reference.insert(reference_local, index) {
-                candidates[previous].valid = false;
-                candidates[index].valid = false;
+            if !duplicate_references.contains(&reference_local)
+                && candidate_by_reference
+                    .insert(reference_local, index)
+                    .is_some()
+            {
                 candidate_by_reference.remove(&reference_local);
                 duplicate_references.insert(reference_local);
             }
@@ -70,25 +74,94 @@ pub(super) fn transparent_borrow_sites_v1(
     if candidates.is_empty() {
         return BTreeSet::new();
     }
+    let return_local = (!matches!(
+        function.abi().return_value().mode(),
+        SemanticAbiPassModeV1::Ignore,
+    ))
+    .then(|| {
+        function
+            .locals()
+            .iter()
+            .position(|local| matches!(local.role(), SemanticLocalRoleV1::Return))
+    })
+    .flatten();
+    let mut unscoped_references = BTreeSet::new();
+    let mut events = Vec::new();
+    let mut next_candidate = 0;
+    // Repeated MIR temporaries are indexed by their definition occurrence within
+    // a block. A use without a local definition disqualifies every occurrence
+    // of that temporary; this is not a cross-block reference alias analysis.
     for (block_index, block) in function.blocks().iter().enumerate() {
+        let first_candidate = next_candidate;
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let site = SemanticTransparentBorrowSiteV1 {
                 block: block_index as u32,
                 statement: statement_index as u32,
             };
+            events.clear();
+            if !duplicate_references.is_empty() {
+                append_statement_events_v1(statement.kind(), &mut events);
+                record_unscoped_reference_uses_v1(
+                    &events,
+                    &duplicate_references,
+                    &candidate_by_reference,
+                    &mut unscoped_references,
+                );
+            }
+            let definition = candidates
+                .get(next_candidate)
+                .filter(|candidate| candidate.site == site)
+                .map(|candidate| candidate.reference_local);
+            if let Some(reference) = definition {
+                if duplicate_references.contains(&reference) {
+                    candidate_by_reference.insert(reference, next_candidate);
+                }
+                next_candidate += 1;
+            }
             invalidate_reference_uses_in_statement_v1(
                 statement.kind(),
                 site,
                 &candidate_by_reference,
                 &mut candidates,
             );
+            for event in &events {
+                let reference = event.variable().get();
+                if duplicate_references.contains(&reference)
+                    && (matches!(event, SsaEventV1::Kill(_))
+                        || (matches!(event, SsaEventV1::Define(_))
+                            && definition != Some(reference)))
+                {
+                    candidate_by_reference.remove(&reference);
+                }
+            }
+        }
+        events.clear();
+        if !duplicate_references.is_empty() {
+            append_terminator_events_v1(block.terminator().kind(), return_local, &mut events);
+            record_unscoped_reference_uses_v1(
+                &events,
+                &duplicate_references,
+                &candidate_by_reference,
+                &mut unscoped_references,
+            );
         }
         validate_reference_uses_in_terminator_v1(
             block.terminator().kind(),
+            return_local,
             callables,
             &candidate_by_reference,
             &mut candidates,
         );
+        for candidate in &candidates[first_candidate..next_candidate] {
+            if duplicate_references.contains(&candidate.reference_local) {
+                candidate_by_reference.remove(&candidate.reference_local);
+            }
+        }
+    }
+    for candidate in &mut candidates {
+        if unscoped_references.contains(&candidate.reference_local) {
+            candidate.valid = false;
+        }
     }
 
     let mut accepted = BTreeSet::new();
@@ -105,11 +178,11 @@ pub(super) fn transparent_borrow_sites_v1(
                 break;
             }
             chain.push(current);
-            let Some(source_reference) = candidate.source_reference else {
+            if candidate.source_reference.is_none() {
                 accepted.extend(chain);
                 break;
-            };
-            let Some(parent) = candidate_by_reference.get(&source_reference).copied() else {
+            }
+            let Some(parent) = candidate.parent else {
                 break;
             };
             current = parent;
@@ -119,6 +192,23 @@ pub(super) fn transparent_borrow_sites_v1(
         .into_iter()
         .map(|candidate| candidates[candidate].site)
         .collect()
+}
+
+fn record_unscoped_reference_uses_v1(
+    events: &[SsaEventV1],
+    duplicate_references: &BTreeSet<u32>,
+    candidate_by_reference: &BTreeMap<u32, usize>,
+    unscoped_references: &mut BTreeSet<u32>,
+) {
+    for event in events {
+        let reference = event.variable().get();
+        if matches!(event, SsaEventV1::Use(_))
+            && duplicate_references.contains(&reference)
+            && !candidate_by_reference.contains_key(&reference)
+        {
+            unscoped_references.insert(reference);
+        }
+    }
 }
 
 fn invalidate_reference_place_v1(
@@ -202,6 +292,7 @@ fn invalidate_reference_uses_in_statement_v1(
                 if let Some(source_reference) = candidates[candidate].source_reference {
                     match candidate_by_reference.get(&source_reference).copied() {
                         Some(parent) if parent != candidate => {
+                            candidates[candidate].parent = Some(parent);
                             candidates[parent].consumers =
                                 candidates[parent].consumers.saturating_add(1);
                         }
@@ -273,6 +364,7 @@ fn invalidate_reference_uses_in_statement_v1(
 
 fn validate_reference_uses_in_terminator_v1(
     terminator: &SemanticTerminatorKindV1,
+    return_local: Option<usize>,
     callables: &[SemanticCallableDeclV1],
     candidate_by_reference: &BTreeMap<u32, usize>,
     candidates: &mut [SemanticBorrowCandidateV1],
@@ -347,9 +439,16 @@ fn validate_reference_uses_in_terminator_v1(
             invalidate_reference_operand_v1(condition, candidate_by_reference, candidates);
             invalidate_reference_assert_message_v1(message, candidate_by_reference, candidates);
         }
+        SemanticTerminatorKindV1::Return => {
+            // The ABI can make Return read a local without an explicit operand.
+            if let Some(local) = return_local
+                && let Some(candidate) = candidate_by_reference.get(&(local as u32))
+            {
+                candidates[*candidate].valid = false;
+            }
+        }
         SemanticTerminatorKindV1::Goto(_)
         | SemanticTerminatorKindV1::FalseEdge { .. }
-        | SemanticTerminatorKindV1::Return
         | SemanticTerminatorKindV1::UnwindResume
         | SemanticTerminatorKindV1::UnwindTerminate
         | SemanticTerminatorKindV1::Abort

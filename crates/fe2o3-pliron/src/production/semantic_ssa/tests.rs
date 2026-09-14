@@ -4,6 +4,9 @@ use super::*;
 #[path = "partial_move_dynamic_destination_tests.rs"]
 mod partial_move_dynamic_destination_tests;
 
+#[path = "transparent_borrow_occurrence_tests.rs"]
+mod transparent_borrow_occurrence_tests;
+
 use crate::ProductionSemanticMirLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, InertSemanticMirRequestV1, SemanticAbiIdentityV1,
