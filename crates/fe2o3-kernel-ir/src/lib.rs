@@ -56,6 +56,7 @@
 
 mod canonical_graph_visitors_v1;
 mod canonical_kir_coordinates_v1;
+mod canonical_kir_transition_v1;
 mod canonical_kir_v10;
 mod canonical_kir_v11;
 mod canonical_kir_v12;
@@ -118,6 +119,7 @@ mod wire;
 
 pub use canonical_graph_visitors_v1::*;
 pub use canonical_kir_coordinates_v1::*;
+pub use canonical_kir_transition_v1::*;
 pub use canonical_kir_v5::*;
 pub use canonical_kir_v6::*;
 pub use canonical_kir_v7::*;
