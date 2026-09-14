@@ -150,6 +150,74 @@ The following boundaries remain closed:
   hardware execution, or formal compiler verification follows from this
   shared-verifier boundary.
 
+## Canonical Transition Receipts
+
+The [transition receipt codec](../crates/fe2o3-kernel-ir/src/canonical_kir_transition_receipt_v1.rs)
+serializes the fixed scalar/CFG checker's occurrence map, not an executable or
+a proof of compiler correctness. Its move-only `InertCanonicalKirTransitionReceiptV1`
+owns nine typed row slices and their canonical bytes. Endpoint digest/length
+pairs are inert locators; decoding cannot create a verified graph identity.
+
+The [analysis admission API](../crates/fe2o3-kernel-analysis/src/canonical_kir_transition_receipt_v1.rs)
+compares these locators against two actual, already verified inventories, then
+runs the existing transition checker on those inventories and the decoded rows.
+The resulting checked view borrows both supplied inventories and the receipt.
+Matching endpoint hashes alone do not admit the transition, authenticate original
+source-owner custody, or establish a formal semantic-refinement theorem.
+
+The wire schema fixes V12 endpoints and checker policy 1. All integers are
+little-endian; the 132-byte header contains:
+
+```text
+magic[8] = "F2NTR1\0\0"
+schema:u16 = 1 | checker_policy:u16 = 1 | total_length:u32
+input_digest[32] | input_canonical_length:u64
+output_digest[32] | output_canonical_length:u64
+n_functions:u32 | n_blocks:u32 | n_segments:u32 | n_operations:u32
+n_definitions:u32 | n_definition_outputs:u32 | n_uses:u32
+n_edges:u32 | n_edge_arguments:u32
+```
+
+The nine slices follow this count order. Their fixed row widths are respectively
+8, 16, 24, 36, 28, 24, 40, 24, and 32 bytes. Coordinates use function/block/operation
+ordinals and successor occurrences, not raw pointers, host enum layouts, or
+debug strings. Repeated edges to the same block remain distinct. The
+[row grammar](../crates/fe2o3-kernel-ir/src/canonical_kir_transition_receipt_v1_rows.rs)
+defines the closed coordinate, origin, connector, and descendant tags.
+
+Unknown tags or policies, nonzero padding, malformed count/length products,
+truncation, trailing data, and nonpartitioning ranges reject. Block ranges must
+be nonempty and partition all segments; definition ranges partition descendants
+and may be empty only at the current cursor. Graph-dependent coverage and rewrite
+legality are still checked by analysis, not by the codec.
+
+The complete frame is capped at 4 MiB. An enclosing association must additionally
+enforce its own aggregate limit; a maximum-size row receipt need not fit beside
+other association data. Its inert digest is SHA-256 of the 39-byte domain
+`FE2O3/CANONICAL-KIR-TRANSITION-ROWS/V1\0`, the frame length as u64, and the frame.
+
+For frame length L, total row count N, block-plus-definition count Q, and domain
+length D=39, the codec's logical resource contract is:
+
+```text
+retained_storage = sizeof(receipt) + L + sum(count_i * sizeof(typed_row_i))
+encode_work = 1 + Q + 2*L + N + D + 8
+decode_work = 1 + 3*L + N + Q + D + 8
+```
+
+The complete retained storage is reserved before owned allocation, and every
+returned Vec capacity must equal its requested count. Caller-owned input bytes
+or rows remain separately reserved. Ordinary errors and caught unwinds restore
+the incoming storage floor after dropping codec-owned temporaries. Success
+transfers an explicit retained-storage receipt for reservation before subsequent
+controlled allocation. Work, peaks, and failure history accumulate. These are
+logical payload bounds, not allocator metadata or RSS limits. Analysis adds 80
+work units for the two endpoint comparisons before invoking the unchanged checker.
+
+This infrastructure does not activate a production optimizer, admit new host
+proof formats, transport source contracts by itself, or establish verified output
+memory. Those require their own complete replay and admission paths.
+
 ## Regression Targets
 
 These commands exercise this boundary; listing them is not a passing test
@@ -158,6 +226,9 @@ receipt or hardware/formal qualification:
 ~~~sh
 cargo test --locked -p fe2o3-kernel-ir --lib verification_diagnostics_v1
 cargo test --locked -p fe2o3-kernel-ir --lib canonical_kir_v12
+cargo test --locked -p fe2o3-kernel-ir --lib canonical_kir_transition_receipt_v1
+cargo test --locked -p fe2o3-kernel-ir --doc InertCanonicalKirTransitionReceiptV1
+cargo test --locked -p fe2o3-kernel-analysis --lib canonical_kir_transition_v1
 cargo test --locked -p fe2o3-kernel-ir --test inert_v12 --test vector_v12 \
   --test verification_contract_v12 --test wire_preflight_order \
   --test v12_effect_consumer_closure

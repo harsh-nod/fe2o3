@@ -20,6 +20,7 @@ use fe2o3_kernel_ir::{
 mod catalog_transport;
 mod control;
 mod control_index;
+mod receipt_wire;
 mod resources;
 mod scalar;
 
@@ -356,6 +357,7 @@ fn accepted(a: &Inventory<'_>, b: &Inventory<'_>, rows: &Rows, floor: usize) {
     };
     budget.release_storage(storage.retained_storage()).unwrap();
     assert_eq!(budget.storage(), floor);
+    receipt_wire::roundtrip(a, b, rows, &mut budget);
 }
 fn rejected(a: &Inventory<'_>, b: &Inventory<'_>, rows: &Rows, floor: usize) -> Error {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
