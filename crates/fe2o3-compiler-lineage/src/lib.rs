@@ -7,6 +7,8 @@ mod error;
 mod multi_root_correspondence_payload_v2;
 mod multi_root_proof_roster_v2;
 mod multi_root_target_lineage_v2;
+mod native_neutral_module_v1;
+mod native_neutral_subject_v1;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
@@ -42,6 +44,13 @@ pub use multi_root_target_lineage_v2::{
     MULTI_ROOT_TARGET_BINDING_VERSION_V2, MultiRootTargetBindingInputsV2,
     MultiRootTargetBindingTranscriptV2, MultiRootTargetWorkgroupInputV2,
     MultiRootTargetWorkgroupV2,
+};
+pub use native_neutral_module_v1::{
+    NativeNeutralModuleErrorV1, NativeNeutralModuleRefV1, encode_native_neutral_module_v1,
+};
+pub use native_neutral_subject_v1::{
+    InertNativeNeutralSubjectV1, NATIVE_NEUTRAL_SUBJECT_BYTES_V1, NATIVE_NEUTRAL_SUBJECT_POLICY_V1,
+    NATIVE_NEUTRAL_SUBJECT_VERSION_V1, NativeNeutralSubjectErrorV1, NativeNeutralSubjectIdentityV1,
 };
 pub use proof_binding::{
     INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V3, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V3,

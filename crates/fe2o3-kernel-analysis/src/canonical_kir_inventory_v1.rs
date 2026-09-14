@@ -231,6 +231,29 @@ impl<'g> CanonicalKirInventoryV1<'g> {
     pub fn definitions(&self) -> &[CanonicalKirDefinitionRefV1<'g>] {
         &self.definitions
     }
+    /// Metered exact-name query through the already derived function index.
+    pub fn function_for_name(
+        &self,
+        name: &str,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<&CanonicalKirFunctionRefV1<'g>>> {
+        Ok(find_function(&self.function_index, name, budget)?
+            .and_then(|coordinate| self.functions.get(coordinate.0 as usize)))
+    }
+
+    /// Metered function-qualified sparse BlockId query without a graph rescan.
+    pub fn block_for_id(
+        &self,
+        function: FunctionCoordinate,
+        block: BlockId,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<&CanonicalKirBlockRefV1<'g>>> {
+        Ok(find(&self.block_index, budget, |row, budget| {
+            budget.charge_work(1)?;
+            Ok((row.0.function, row.1).cmp(&(function, block)))
+        })?
+        .and_then(|position| self.blocks.get(self.block_index[position].2)))
+    }
     pub fn operations(&self) -> &[CanonicalKirOperationRefV1<'g>] {
         &self.operations
     }
