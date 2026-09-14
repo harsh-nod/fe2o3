@@ -224,13 +224,35 @@ fn verifier_rejects_ambiguous_selection_intents() {
         SelectionPolicyAttr::SafeFallback,
     );
     assert!(verify_op(&fallback_same, &context).is_err());
+}
 
+#[test]
+fn verifier_rejects_reserved_graph_identity_after_raw_corruption() {
+    let mut context = Context::new();
+    register_dialect(&mut context).expect("dispatch registration");
     let zero_graph = GraphIntentOp::new(
         &mut context,
-        DispatchIdAttr::new([0; 4]),
+        id(350),
         GraphCapacityAttr::Nodes16,
         DispatchModeAttr::PersistentService,
     );
+    assert!(verify_op(&zero_graph, &context).is_ok());
+    assert!(
+        zero_graph
+            .try_set_attr_dispatch_graph_intent_graph_id(&context, DispatchIdAttr::new([0; 4]))
+            .is_err()
+    );
+    assert!(verify_op(&zero_graph, &context).is_ok());
+    // Bypass typed preflight deliberately to test the independent verifier.
+    zero_graph
+        .get_operation()
+        .deref_mut(&context)
+        .attributes
+        .set(
+            dialect_dispatch::graph_intent_op_attr_names::ATTR_KEY_DISPATCH_GRAPH_INTENT_GRAPH_ID
+                .clone(),
+            DispatchIdAttr::new([0; 4]),
+        );
     assert!(verify_op(&zero_graph, &context).is_err());
 }
 
