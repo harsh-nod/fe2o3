@@ -1,0 +1,92 @@
+{
+  "source_head": "4a49234a03fc3759bd1d3ca330197619b4ae8ab0",
+  "source_map_sha256": "4306c2aa146a9f31b15edd086767157002e4f526efbe65e28d23539aef6e03a1",
+  "started_at": "2026-09-14T20:56:15.961Z",
+  "finished_at": "2026-09-14T20:56:51.764Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::returning_native_failures_retain_every_control_position_and_exact_prefix",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r117-qualified-mut-remove-active-custody.log",
+  "source": "/home/harsh/.codex-tmp/r117-qualified-mut-remove-active-custody-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r117-qualified-mut-remove-active-custody-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r117-run-v1.js",
+    "sha256": "b3fa2df1aae1e9422cf667def198298925d38add29a66638c46c1239db92e47c"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 976932,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789419411771,
+        "monotonic_ns": "18777960123439",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 35.802693924,
+  "verification_elapsed_seconds": 0.302429926,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r117-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r117-qualified-restoration-permit-cleanup-retry.json",
+      "sha256": "14e6f5a04d181ef302adfa90b0f583bf3f7d77969c7da411343531de7c098e49",
+      "observation": {
+        "utc_ms": 1789419375101,
+        "monotonic_ns": "18741289417297",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789419375961,
+      "monotonic_ns": "18742149823458",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789419411764,
+      "monotonic_ns": "18777952517382",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789419412066,
+      "monotonic_ns": "18778254947308",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

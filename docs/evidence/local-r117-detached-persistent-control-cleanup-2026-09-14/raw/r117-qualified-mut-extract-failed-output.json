@@ -1,0 +1,92 @@
+{
+  "source_head": "4a49234a03fc3759bd1d3ca330197619b4ae8ab0",
+  "source_map_sha256": "2583751bf33c9b36ff5a82f5308a0a9d656d9045f2b62c52f7ae96829817fb9c",
+  "started_at": "2026-09-14T20:57:30.733Z",
+  "finished_at": "2026-09-14T20:58:06.901Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::returning_native_failures_retain_every_control_position_and_exact_prefix",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r117-qualified-mut-extract-failed-output.log",
+  "source": "/home/harsh/.codex-tmp/r117-qualified-mut-extract-failed-output-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r117-qualified-mut-extract-failed-output-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r117-run-v1.js",
+    "sha256": "b3fa2df1aae1e9422cf667def198298925d38add29a66638c46c1239db92e47c"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 981131,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789419486909,
+        "monotonic_ns": "18853098117874",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 36.167998286,
+  "verification_elapsed_seconds": 0.266231721,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r117-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r117-qualified-restoration-accept-incomplete-callback.json",
+      "sha256": "1dda6103aff760f233d1a9bf2aaca985aa79e997fd771340cc36d8add96c5eb2",
+      "observation": {
+        "utc_ms": 1789419449805,
+        "monotonic_ns": "18815993862565",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789419450733,
+      "monotonic_ns": "18816921942292",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789419486901,
+      "monotonic_ns": "18853089940578",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789419487167,
+      "monotonic_ns": "18853356172299",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

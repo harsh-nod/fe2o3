@@ -3,8 +3,8 @@
 <a id="renewed-swarm-dispatch"></a>
 
 The latest [post-R114 dispatch](runtime-swarm-dispatch-r114.md) records the
-current three-lane handoffs: qualification of Native's detached persistent
-controls and Admission's C1/C2 candidates, independent C3 coverage, and
+current three-lane handoffs: Native's persistent returned-data cleanup,
+qualification of Admission's C1/C2/C3 candidates, and
 Resources' V4-J1 proof handoff above the locally accepted
 [V3 settlement model](runtime-context-version-settlement-v1.md).
 Its immediate assignments supersede the older checkpoint tables below, whose
@@ -25,18 +25,25 @@ two subsequently appended review tests mean those runs are preliminary history,
 not final-source prerequisites. The original
 isolated 761-model/40-journal results remain separately recorded.
 
-Native's isolated `fe2o3-detached-control` candidate now passes 31 control tests
-(sixteen new, fifteen retained), formatting and strict KFD Clippy. Its initial
-source-guard and Clippy failures remain recorded. It is not integrated or
-qualified; persistent-data bridges, live/queue composition and N5 remain open.
-This candidate does not extend the accepted Native checkpoint below.
+Current accepted Native checkpoint: [R117 detached persistent-control cleanup](runtime-detached-persistent-control-cleanup-v1.md),
+with [372 retained artifacts](evidence/local-r117-detached-persistent-control-cleanup-2026-09-14/README.md).
+GNU/musl each pass 2,762 tests with five ignored. All 17 source gates, ten
+auxiliary checks, 16/15/37/7/9 frozen/restored suites and 32 compiled negatives
+pass. Nine runner, 31 freeze and 117 qualification-contract tests pass. All
+5,689 source identities, the closed collector and both independent archive
+reviews pass. Isolated failures retain their original maps. Acceptance covers
+scripted lower detached controls only; persistent-data bridges, live/queue
+composition, N5, native, formal, memory and performance remain open.
+Native next takes the [persistent returned-data handoff](runtime-persistent-returned-data-cleanup-v1.md).
 
 C2 now has a separate `fe2o3-c2-identity` candidate: four descriptor-identity
 tests, all 719 runtime-library tests, strict Clippy and formatting pass. It is
 not integrated or qualified; full dependency-closure and nineteen compiled
-negatives remain pending. C3 and actual generated ISSUE/COMPLETE remain open.
+negatives remain pending. C3's isolated candidate passes five new lifecycle
+tests, all 720 runtime-library tests and strict Clippy; integration and full
+qualification remain pending. Actual generated ISSUE/COMPLETE remains open.
 
-Accepted Native checkpoint: [R115/N4-R2 lower returning-control cleanup](runtime-returning-control-cleanup-v1.md),
+Preceding Native checkpoint: [R115/N4-R2 lower returning-control cleanup](runtime-returning-control-cleanup-v1.md),
 with [285 retained artifacts](evidence/local-r115-returning-control-cleanup-2026-09-14/README.md).
 GNU/musl each pass 2,727 tests with five ignored across 48 libtest harnesses and
 one unchanged harnessless benchmark. All 17 source gates, ten auxiliary checks,
@@ -45,7 +52,7 @@ one unchanged harnessless benchmark. All 17 source gates, ten auxiliary checks,
 the closed collector and both independent archive reviews pass. This accepts
 only the lower returning-control subset, not persistent/data cleanup, live
 transport, queue teardown, native execution, formal refinement or performance.
-Native next takes the [detached-persistent handoff](runtime-detached-persistent-control-cleanup-v1.md).
+R117 subsequently adds the lower detached-persistent boundary above.
 
 Historical checkpoint: [R114/N4-R1 pristine control cleanup](runtime-pristine-control-cleanup-v1.md),
 with [254 retained artifacts](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md).
@@ -753,9 +760,9 @@ open.
 | Locally accepted Native packets | Primary + Native review | Replacement inputs, ordinary and pristine rebind | R103/R104/R105 retain their named CPU/shared-sequence acceptance; no original-engine or hardware qualification |
 | Locally accepted initializers | Primary + Native/Resources review | R106/N3-C coherent and R107/N3-D device initialization custody | Named CPU/shared-sequence acceptance only; reuse the accepted lower helpers, not a duplicate initializer |
 | Locally accepted live insertion | Primary + Native/Resources review | R109/N3-L1 initialized-device, R110/N3-L2 initialized coherent, R111/N3-L3-C uninitialized coherent and R112/N3-L3-D uninitialized device insertion | Named CPU/shared-sequencer and concrete public missing-engine boundaries: R109/R110 facades versus R111/R112 direct APIs. No native success or formal refinement claim |
-| Next Native packets | Native | Qualify detached persistent controls; remaining persistent/data/live/queue cleanup, then N5 DATA-ADOPT | R114 pristine and R115 lower returning subsets are accepted at their CPU boundaries. Live paths require retained lower custody; confirmed disposal alone permits slot reuse |
+| Next Native packets | Native | Implement persistent returned-data cleanup; remaining data/live/queue cleanup, then N5 DATA-ADOPT | R114 pristine, R115 returning and R117 detached controls are accepted at their CPU boundaries. Live paths retain custody through settlement; confirmed disposal alone does not permit slot reuse |
 | First Admission packet | Admission | CO-2A: Context submission-identity tests | Existing validators; eight ingresses, stale/reused IDs and preserved precedence |
-| Next Admission packets | Admission | Qualify isolated C2 descriptor identity; implement C3 private reply/custody coverage | Existing source matching and R80/R83 lifecycle; no invented completion adapter |
+| Next Admission packets | Admission | Qualify isolated C2 descriptor identity and C3 private reply/custody coverage | Existing source matching and R80/R83 lifecycle; no invented completion adapter |
 | First Resources packets | Resources | V4-J1 issuance proofs, then membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models; actual solver results and Rust/model correspondence remain pending |
 | Next Resources packets | Resources | VER-1A.3 journal, .4/.5 hooks, complete VER-1B, then VER-2 leases | Exact Context IDs; complete mutation coverage, ordered writers and recovery before reuse |
 | Native/runtime integration | Primary + Native/Admission | N3/N4 -> DATA-ADOPT -> ISSUE -> CO-4/COMPLETE -> generated typed API -> GRAPH/DRAIN | C1/C2/C3 join ISSUE; real publication/completion identity, exact readback and custody; cross-run reuse also needs V7/V8 |

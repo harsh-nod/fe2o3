@@ -1,0 +1,92 @@
+{
+  "source_head": "4a49234a03fc3759bd1d3ca330197619b4ae8ab0",
+  "source_map_sha256": "a57b8dd95497fdfa5d1559b6d7bb63ed1ed3409779af21099eea89ff852c5da1",
+  "started_at": "2026-09-14T21:08:34.265Z",
+  "finished_at": "2026-09-14T21:09:10.317Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r117-qualified-mut-detached-drop-panic-root.log",
+  "source": "/home/harsh/.codex-tmp/r117-qualified-mut-detached-drop-panic-root-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r117-qualified-mut-detached-drop-panic-root-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r117-run-v1.js",
+    "sha256": "b3fa2df1aae1e9422cf667def198298925d38add29a66638c46c1239db92e47c"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1018555,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789420150322,
+        "monotonic_ns": "19516511300686",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 36.051469206,
+  "verification_elapsed_seconds": 0.272807522,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r117-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r117-qualified-restoration-detached-drop-error-root.json",
+      "sha256": "16e8c7e4fdef744d8ba7572a4f74fb5310253a6b58dd522c1eab09283af9e463",
+      "observation": {
+        "utc_ms": 1789420113375,
+        "monotonic_ns": "19479564304671",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789420114265,
+      "monotonic_ns": "19480453875703",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789420150317,
+      "monotonic_ns": "19516505344909",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789420150589,
+      "monotonic_ns": "19516778152431",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

@@ -8,7 +8,10 @@ mod tests;
 pub(crate) use tests::{PreparationOwnerRefsV1, PrimaryPreparationSnapshotV1};
 
 #[cfg(test)]
-pub(in crate::queue) use tests::control_release_fixture_v1;
+pub(in crate::queue) use tests::{
+    control_release_fixture_v1, single_persistent_control_fixture_v1,
+    three_persistent_control_fixture_v1,
+};
 
 use super::*;
 use crate::shared_memory::{

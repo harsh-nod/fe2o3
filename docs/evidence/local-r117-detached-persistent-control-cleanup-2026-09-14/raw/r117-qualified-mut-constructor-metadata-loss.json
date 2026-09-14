@@ -1,0 +1,92 @@
+{
+  "source_head": "4a49234a03fc3759bd1d3ca330197619b4ae8ab0",
+  "source_map_sha256": "4d03495fd78d6c59a89e5093eb6007800bd5c7a5eaa1d9f54b2828852e549700",
+  "started_at": "2026-09-14T20:51:55.028Z",
+  "finished_at": "2026-09-14T20:52:32.547Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::returning_populated_preparation_metadata_survives_rejection_and_cleanup",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r117-qualified-mut-constructor-metadata-loss.log",
+  "source": "/home/harsh/.codex-tmp/r117-qualified-mut-constructor-metadata-loss-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r117-qualified-mut-constructor-metadata-loss-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r117-run-v1.js",
+    "sha256": "b3fa2df1aae1e9422cf667def198298925d38add29a66638c46c1239db92e47c"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 965093,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789419152554,
+        "monotonic_ns": "18518742419402",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 37.518890863,
+  "verification_elapsed_seconds": 0.271386998,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r117-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r117-qualification-manifest.json",
+      "sha256": "a218d053445626ba3fb66a16122b213c111299753532d471c33d55d33529c0b9",
+      "observation": {
+        "utc_ms": 1789419113003,
+        "monotonic_ns": "18479191917489",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789419115028,
+      "monotonic_ns": "18481216534084",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789419152547,
+      "monotonic_ns": "18518735424947",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789419152818,
+      "monotonic_ns": "18519006811945",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

@@ -10,13 +10,22 @@ Earlier 2,744-test full runs retain their original source cohort. This accepts
 executable-model settlement only, not production Context, authenticated proofs,
 native execution or performance. Resources next takes V4-J1 issuance proofs.
 
-The isolated detached-control candidate passes 31 control tests, formatting
-and strict Clippy, but is not integrated or qualified. It does not extend
-R115's accepted Native boundary below.
+Current Native checkpoint: [R117 detached persistent controls are locally accepted](runtime-detached-persistent-control-cleanup-v1.md)
+with [372 retained artifacts](evidence/local-r117-detached-persistent-control-cleanup-2026-09-14/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,762 tests with
+five ignored; all 17 source gates, ten auxiliary checks, 16/15/37/7/9 restored
+suites and 32 compiled negatives pass. Nine runner, 31 freeze and 117
+qualification-contract tests pass; all 5,689 source identities are restored.
+The isolated candidate's two failed attempts remain separately recorded.
+This accepts only scripted lower detached-control cleanup, not persistent-data
+bridges, live/queue composition, native, formal, memory-bound or performance
+qualification. Native next takes [persistent returned-data cleanup](runtime-persistent-returned-data-cleanup-v1.md).
 
 The isolated C2 descriptor-identity candidate passes four new tests, all 719
 runtime-library tests, strict Clippy and formatting. Integration and complete
 qualification, including nineteen prospective compiled negatives, remain open.
+C3's isolated candidate passes five new lifecycle tests, all 720 runtime-library
+tests and strict Clippy. It remains unintegrated and unqualified.
 
 R115 progression: [lower returning-control cleanup](runtime-returning-control-cleanup-v1.md)
 is now locally accepted with [285 retained artifacts](evidence/local-r115-returning-control-cleanup-2026-09-14/README.md)
@@ -24,8 +33,8 @@ and two passing independent archive reviews. GNU/musl each pass 2,727 tests with
 five ignored; all 17 source gates, ten auxiliary checks, 15/37/7/9 restored
 suites and 16 compiled negatives pass. This accepts only the lower returning
 subset, not persistent/data cleanup, live retake, queue teardown, native,
-formal or performance qualification. Native next takes the
-[detached-persistent handoff](runtime-detached-persistent-control-cleanup-v1.md).
+formal or performance qualification. R117 subsequently adds the lower
+detached-persistent boundary above.
 
 R114 locally accepts [pristine control cleanup and terminal parent transport](runtime-pristine-control-cleanup-v1.md).
 The [254-artifact evidence packet](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md)
@@ -36,7 +45,7 @@ A1/A2 and full HIP/HSA parity are not complete.
 
 The original work breakdown was refreshed against accepted source
 `9eaf19141e8af6ade490feba3062c8b49d9b38ca` and the open issues on 2026-09-13.
-The R115/R116 progressions above update the current assignments; the original
+The R115/R116/R117 progressions above update the current assignments; the original
 R114 boundary and handoff details remain historical evidence.
 
 ## Historical R114 Boundary
@@ -63,7 +72,7 @@ serialized builds, proof/hardware scheduling and signed dual-remote publication.
 
 | Owner | Immediate Packet | Following Queue |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | Qualify and integrate the isolated N4-R2 detached persistent-control candidate | Persistent returned-data/ordinary bridges, data cleanup, applicable live/queue teardown, then N5 DATA-ADOPT |
+| Native: `native_replacement_handoff` | Implement persistent returned-data cleanup above R117 | Ordinary bridges, data cleanup, applicable live/queue teardown, then N5 DATA-ADOPT |
 | Admission: `submission_identity_handoff` | Qualify and integrate isolated C1; C2/C3 coverage can advance independently | Joint I2 ISSUE, C4 COMPLETE, C5 typed future/join, C6 generated GRAPH/DRAIN |
 | Resources: `r102_evidence_review` | V4-J1 issuance proofs above accepted executable V1/V2/V3 models | Membership/settlement proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
 | Primary | Integrate one reviewed packet at a time; own Q1/Q2/Q3 and release gate #277 | Coordinate A3-A7 and publish only the evidence actually obtained |
@@ -77,7 +86,7 @@ Native's tests, and Resources supplies settlement/accounting contracts.
 
 | Lane | Independent Start | Does Not Yet Close |
 | --- | --- | --- |
-| Native | Qualify the isolated N4-R2 detached persistent-control candidate against its reviewed handoff | Persistent returned-data bridges, data disposal, live retake, queue teardown, N5 adoption |
+| Native | Implement the reviewed persistent returned-data handoff | Data disposal, live retake, queue teardown, N5 adoption |
 | Admission | Integrate and qualify the isolated C1 candidate; C2-A/B and C3-A/B can be prepared independently | Actual generated ISSUE, COMPLETE, typed output or graph execution |
 | Resources | Implement V4-J1's reviewed issuance-proof handoff; M1-M3 design remains independently ready | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
 | Primary | Specify Q1/Q2/Q3 evidence contracts and #277's missing feature-enabled release audit | New proof, hardware, release-policy or performance acceptance |
@@ -89,16 +98,18 @@ solver or hardware jobs running unattended.
 
 ## Native Packets
 
-1. **N4-R2 detached persistent controls:** Qualify and integrate the isolated
-   candidate against the [reviewed handoff](runtime-detached-persistent-control-cleanup-v1.md) for
+1. **N4-R2 detached persistent controls, accepted R117:** The
+   [qualified contract](runtime-detached-persistent-control-cleanup-v1.md) for
    `release_detached_persistent_control_v1` in
-   `crates/fe2o3-kfd/src/queue_dispatch_binding.rs`. Root the complete owner
-   before generation/state validation, preserve the separate detached data
-   owner, and share kernarg-first, **forward code order** cleanup. This unit
+   `crates/fe2o3-kfd/src/queue_dispatch_binding.rs` roots the complete owner
+   before generation/state validation, preserves the separate detached data
+   owner, and shares kernarg-first, **forward code order** cleanup. This unit
    result needs no returned-data allocation or extraction. R115 already
    accepts the lower `release_non_data_after_recycle` and
    `release_non_data_for_returning_destroy` paths.
-2. **Persistent/ordinary bridges and data cleanup:** Preserve each API's exact
+2. **Persistent/ordinary bridges and data cleanup:** Start the
+   [reviewed persistent returned-data handoff](runtime-persistent-returned-data-cleanup-v1.md).
+   Preserve each API's exact
    returned-data-on-error behavior. Cover every supported host/device and
    initialized/uninitialized variant, retained charges, untouched suffix and
    completed prefix. No repeated disposal or duplicate refund.
@@ -153,9 +164,9 @@ bridges separately preserve their existing returned-data-on-error contract.
 | C3-A | New `async_engine/tests/owned_tests/preparation_tests/completion_tests.rs`; existing reservation/adoption fixtures | Two-owner isolation, Stop before disposal, A-success/B-failure/C-retained retirement, exact holds/credits and no retry or second reply. |
 | C3-B | Same module; existing completion cell and identifiable wakers | Only the latest correct waker fires; panicking wake cannot lose custody or settle twice. Use a test-only borrowed accessor, not a cloned consumer. |
 
-Paths in this table are relative to `crates/fe2o3-runtime/src`. C2's new file
-exists in its isolated tested worktree, but is not integrated; C3's proposed
-module remains absent. Shared-file edits need one integrating owner.
+Paths in this table are relative to `crates/fe2o3-runtime/src`. C2 and C3 modules
+exist in their isolated tested worktrees, but are not integrated. Shared-file
+edits need one integrating owner.
 Do not introduce a dummy native completion
 adapter. Existing ordinary async, graph/drain and decoder machinery is extended.
 

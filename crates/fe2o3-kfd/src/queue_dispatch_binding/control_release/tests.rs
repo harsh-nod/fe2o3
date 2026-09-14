@@ -8,6 +8,9 @@ use crate::shared_memory::{
 type Root = ReturningControlCleanupCustodyV1;
 type Mode = ReturningControlModeV1;
 
+#[path = "detached_tests.rs"]
+mod detached;
+
 #[derive(Debug, Eq, PartialEq)]
 struct HostFacts {
     gpu_va: u64,
@@ -488,17 +491,23 @@ fn assert_interrupted(r: &mut Root, before: &Snapshot, index: usize, owner: &str
                 std::any::TypeId::of::<crate::shared_memory::GttExecutableImmutableV1>(),
         }
     );
-    assert!(
-        r.returned.capacity() >= before.data.len(),
-        "return capacity precedes disposal"
-    );
-    assert_eq!(
-        r.returned_generation,
-        Some(match before.mode {
-            Mode::AfterRecycle => before.generation.returned_generation().unwrap(),
-            Mode::ReturningDestroy => before.generation.returning_destroy_generation().unwrap(),
-        })
-    );
+    if matches!(before.mode, Mode::DetachedPersistent { .. }) {
+        assert_eq!(r.returned.capacity(), 0);
+        assert_eq!(r.returned_generation, None);
+    } else {
+        assert!(
+            r.returned.capacity() >= before.data.len(),
+            "return capacity precedes disposal"
+        );
+        assert_eq!(
+            r.returned_generation,
+            Some(match before.mode {
+                Mode::AfterRecycle => before.generation.returned_generation().unwrap(),
+                Mode::ReturningDestroy => before.generation.returning_destroy_generation().unwrap(),
+                Mode::DetachedPersistent { .. } => unreachable!(),
+            })
+        );
+    }
     assert_eq!(active.owner, owner);
     assert_eq!(after.kernarg, None);
     assert_eq!(after.code, before.code[index..]);

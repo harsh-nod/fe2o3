@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::returning_success_preserves_exact_data_premises_storage_and_forward_order ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::returning_success_preserves_exact_data_premises_storage_and_forward_order stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::returning_success_preserves_exact_data_premises_storage_and_forward_order' (968757) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:303:9:
+assertion `left == right` failed: exact native identities and order
+  left: [UnmapGpu(3, 0), UnmapCpu(155648, 129686738987872, 4096), Free(3), ReleaseVa(155648, 4096), UnmapGpu(2, 0), UnmapCpu(143360, 129686738977232, 8192), Free(2), ReleaseVa(143360, 8192), UnmapGpu(1, 0), UnmapCpu(131072, 129686738963088, 8192), Free(1), ReleaseVa(131072, 8192)]
+ right: [UnmapGpu(3, 0), UnmapCpu(155648, 129686738987872, 4096), Free(3), ReleaseVa(155648, 4096), UnmapGpu(1, 0), UnmapCpu(131072, 129686738963088, 8192), Free(1), ReleaseVa(131072, 8192), UnmapGpu(2, 0), UnmapCpu(143360, 129686738977232, 8192), Free(2), ReleaseVa(143360, 8192)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::returning_success_preserves_exact_data_premises_storage_and_forward_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1133 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

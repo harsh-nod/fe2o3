@@ -1,8 +1,63 @@
 # Detached Persistent Control Cleanup V1
 
-Status: reviewed implementation handoff, not implemented or qualified. This is
-the next lower cleanup packet above [locally accepted R115 returning-control cleanup](runtime-returning-control-cleanup-v1.md).
-R115's lower returning paths do not qualify this detached-persistent path.
+Status: R117 locally accepted at the scripted lower CPU/source boundary, with
+[retained evidence and two independent reviews](evidence/local-r117-detached-persistent-control-cleanup-2026-09-14/README.md).
+This extends [R115 returning-control cleanup](runtime-returning-control-cleanup-v1.md)
+only to the detached-persistent path described below.
+
+## Integrated Candidate
+
+The reviewed six-source-file candidate was integrated byte-for-byte above R116
+`4a49234a03fc3759bd1d3ca330197619b4ae8ab0`. Its source map is
+`c7cbc3c52eb29d3eaf70cfe9fdf964a9f5c092eb439cad26d1706874f51735be` across
+5,689 source identities. Fresh formatting and all 31 focused control tests pass.
+Fresh GNU and musl dependency-closure runs each pass 2,762 tests with five
+ignored across 48 libtest harnesses and one unchanged harnessless benchmark.
+Both children are closed, their owned process groups are empty and all source
+endpoints match. Nine runner, 31 freeze and 117 qualification-contract tests also
+pass. All 17 source gates and ten auxiliary checks pass. Frozen/restored
+detached, returning, pristine, lower-cleanup and transport suites pass 16/15/37/7/9.
+All 32 compiled negative executions reach their exact behavioral assertions,
+covering 28 distinct mutations: twelve detached-specific mutations, sixteen
+retained R115 mutations and four shared mutations checked against detached
+oracles as well. Every negative restores all 5,689 source identities.
+The closed collector and both independent reviews verify all 372 raw artifacts,
+including the separate isolated history below. Source evidence establishes
+endpoint equality, not continuous immutability.
+
+## Isolated Candidate History
+
+The local `fe2o3-detached-control` worktree above R115
+`4756971168f6b4f2c33d217f5d476ccde8ea2740` now implements the explicit detached
+mode and unit-result wrapper. Six source files differ, including a new detached
+test module and test-only preparation constructors; no feature or public API
+change is added. The existing returning driver and borrowed cleanup adapter are
+shared, with no detached return allocation or conversion.
+
+The current source map is
+`60adae0665fc2995e98e6f647e630c26fbbe4c7e6e20eb603fec05c1986a8d4d` across
+5,686 source identities. GNU focused control tests pass 31/31: all fifteen R115
+regressions plus sixteen new tests, fifteen behavioral and one routing guard.
+Formatting and strict all-feature/all-target KFD Clippy pass on the same map.
+The seven `detachedcandidate-*` runner records retain an initial routing-guard
+failure caused by a formatter-inserted comma and a later Clippy style failure;
+neither is relabeled as a passing run. Every recorded child is closed and its
+owned process group is empty.
+
+The new matrices cover separately owned detached data, generation/state
+precedence, zero return storage, every control position and destructive prefix,
+currentness, partial unmap, projection and actual certificate-commit rejection,
+incomplete callbacks, one-shot cleanup and wrapper retention. Genuine single-
+and three-binding preparation fixtures preserve populated code/packet metadata.
+Lower state-premise fixtures intentionally do not supply authenticated binding
+admission. Fresh/cancelled-only generation paired with detached controls is a
+separately identified corruption case, not a reachable successful detach.
+
+Those isolated runs did not qualify integration. The accepted integrated R117
+checks, compiled negatives, exact restoration and independent evidence reviews
+are recorded separately above. These local
+scripted tests do not establish live Linux/KFD execution, live-model transport,
+queue teardown, formal correspondence, total memory bounds or performance.
 
 ## Boundary
 
@@ -14,8 +69,9 @@ interfaces. Primary owns shared edits and integration.
 
 The input's data was already detached and returned to its separate owner. This
 method returns `Result<(), Gfx942DispatchBindingErrorV1>` and has no returned-data
-on-error API. The separate `release_persistent_data*` bridges, ordinary data
-disposal, live model-loan transport and queue teardown remain later packets.
+on-error API. The separate [`release_persistent_data*` bridges](runtime-persistent-returned-data-cleanup-v1.md),
+ordinary data disposal, live model-loan transport and queue teardown remain
+later packets.
 
 ## Ownership And Validation
 

@@ -12,7 +12,7 @@ Original integrated 2,744-test runs and isolated candidates retain their own
 source cohorts. Production Context integration, authenticated receipts, proofs,
 recovery/reuse, native execution and performance remain unqualified.
 
-The accepted Native checkpoint remains R115's
+The preceding Native checkpoint is R115's
 [lower returning-control cleanup](runtime-returning-control-cleanup-v1.md):
 GNU/musl each pass 2,727 tests with five ignored; 17 source gates, ten auxiliary
 checks, 15/37/7/9 frozen/restored suites and 16 compiled negatives pass. Nine
@@ -22,14 +22,24 @@ and both independent reviews verify all 5,685 source identities and
 Persistent/data cleanup, live transport, queue teardown, native execution,
 formal refinement and performance remain unqualified.
 
-In progress, not accepted: Native's isolated detached-control candidate passes
-31 control tests and strict Clippy, but still needs integration and complete
-qualification. Its preliminary source-guard and Clippy failures remain recorded.
+Current accepted Native checkpoint: R117
+[detached persistent-control cleanup](runtime-detached-persistent-control-cleanup-v1.md).
+GNU/musl each pass 2,762 tests with five ignored; all 17 source gates, ten
+auxiliary checks, 16/15/37/7/9 frozen/restored suites and 32 compiled negatives
+pass. Nine runner, 31 freeze and 117 qualification-contract tests pass. The
+closed collector and both independent reviews verify all 5,689 source identities
+and [372 raw artifacts](evidence/local-r117-detached-persistent-control-cleanup-2026-09-14/README.md).
+The isolated cohort's two preliminary failures retain their original maps.
+Native next implements the [persistent returned-data handoff](runtime-persistent-returned-data-cleanup-v1.md).
+Data disposal, live/queue composition, native/formal/memory/performance closure
+remain unqualified.
 
 C2's separate `fe2o3-c2-identity` candidate passes its four new descriptor tests,
 all 719 runtime-library tests, strict Clippy and formatting. It remains
 unintegrated and unqualified, with full dependency-closure and nineteen compiled
-negatives pending. C3 has no implementation candidate yet.
+negatives pending. C3's separate `fe2o3-c3-lifecycle` candidate passes five new
+lifecycle tests, all 720 runtime-library tests and strict Clippy. It is not
+integrated or qualified; full closure and compiled negatives remain pending.
 
 Historical R114 locally accepts
 [pristine control cleanup and parent transport](runtime-pristine-control-cleanup-v1.md):
@@ -40,8 +50,8 @@ independent reviews verify all 5,683 source identities and
 [254 raw artifacts](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md).
 This adds CPU/test acceptance only, not native, formal or performance evidence.
 
-Reviewed through R116, above accepted R115
-`4756971168f6b4f2c33d217f5d476ccde8ea2740`. Historical R114
+Reviewed through R117, above accepted R116
+`4a49234a03fc3759bd1d3ca330197619b4ae8ab0`. Historical R114
 `9eaf19141e8af6ade490feba3062c8b49d9b38ca` and its later planning parent
 `0265025b96f25a7cb79c97b576bb25cb38b15df5` retain their original boundaries.
 [Issue #182](https://github.com/harsh-nod/fe2o3/issues/182) remains open; its GitHub
@@ -97,15 +107,16 @@ The [R111 uninitialized-coherent packet](runtime-uninitialized-coherent-insertio
 is now locally accepted after full/focused/auxiliary checks, fourteen compiled
 negatives, exact restoration and independent archive review. Refreshed read-only
 handoffs established C1 and V2 as independent packets. With V2 locally accepted
-as R113, N4-R1 as R114, lower returning controls as R115 and
+as R113, N4-R1 as R114, lower returning controls as R115,
 [V3 settlement](runtime-context-version-settlement-v1.md) as R116,
-Native qualifies detached persistent-control cleanup, Admission qualifies C1/C2
-and prepares C3, and Resources takes the V4-J1 issuance-proof handoff.
+and detached persistent controls as R117, Native takes persistent returned-data
+cleanup, Admission qualifies C1/C2/C3, and Resources takes the V4-J1
+issuance-proof handoff.
 Primary integrates one reviewed packet at a time.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N4-R2 detached persistent-control cleanup | Follow the [reviewed handoff](runtime-detached-persistent-control-cleanup-v1.md): root the full owner before validation, preserve generation/state precedence, detached data ownership and kernarg-first/forward-code cleanup |
+| Native: `native_replacement_handoff` | N4-R2 persistent returned-data bridges | Follow the [reviewed handoff](runtime-persistent-returned-data-cleanup-v1.md): full-owner custody, pre-effect output capacity, explicit readiness and exact returned-data-on-error behavior |
 | Admission: `submission_identity_handoff` | C1 submission-identity test matrix | New `fe2o3-runtime/src/context/tests/submission_identity_tests.rs`; Primary owns integration of the candidate's Context wiring and mock cancel-entry counter |
 | Resources: `r102_evidence_review` | V4-J1 issuance proofs, then membership/settlement proofs | Existing journal semantics; actual positive/negative solver evidence and separate Rust/model correspondence |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |
@@ -124,8 +135,8 @@ not a completed implementation packet.
 
 | Wave | Native | Admission | Resources | Primary And Exit |
 | --- | --- | --- | --- | --- |
-| 0: independent starts after R116 | Qualify isolated N4-R2 detached persistent controls | Qualify C1 identity matrix: 80 rejection cells plus valid controls | V4-J1 issuance-proof handoff | Qualify one reviewed packet at a time above accepted R116; preserve each isolated candidate's original base |
-| 1: cleanup, lifecycle and proofs | Remaining persistent/ordinary controls, then data disposal; applicable N4-L and N4-Q paths | Qualify C2 generated descriptor identity; implement C3 retained-owner lifecycle coverage | Membership/settlement proofs and M1/M2/M3 contracts can advance independently | Serialize shared-file edits and builds; require exact ownership, failure-atomicity and negative-test evidence per packet |
+| 0: independent starts after R117 | Implement persistent returned-data cleanup | Qualify C1 identity matrix: 80 rejection cells plus valid controls | V4-J1 issuance-proof handoff | Qualify one reviewed packet at a time above accepted R117; preserve each isolated candidate's original base |
+| 1: cleanup, lifecycle and proofs | Remaining ordinary controls, then data disposal; applicable N4-L and N4-Q paths | Qualify isolated C2 descriptor identity and C3 retained-owner lifecycle coverage | Membership/settlement proofs and M1/M2/M3 contracts can advance independently | Serialize shared-file edits and builds; require exact ownership, failure-atomicity and negative-test evidence per packet |
 | 2: generated execution | N5 DATA-ADOPT, then joint I2 actual ISSUE | I2, C4 COMPLETE, C5 typed output and C6 GRAPH/DRAIN | Approve mutation-hook policy; integrate V5/V6 for journal-enabled paths | Join actual production ownership paths; fixtures do not supply external Worker/compiler authority |
 | 3: reuse and resource closure | Integrate compound backing/control/slot admission and native residency | Exercise reused generated graphs and bounded retained replies | V7 complete writers/recovery, V8 input leases; integrate M1-M4 total retained-memory limits | Cross-run reuse requires complete mutation coverage and exclusive graph reservation; kernel reuse also needs admitted effects |
 | Qualification, incremental throughout | Native depth, disposal, pressure and physical-overlap observations | Wake/cancel/drain and complete-output oracles | Version/accounting correspondence and retained-resource bounds | Q1 authenticated proofs, Q2 native evidence, Q3 matched HIP/HSA measurements remain separate acceptance gates |
@@ -133,8 +144,8 @@ not a completed implementation packet.
 C1/C2/C3 extend coverage around existing validators and lifecycle machinery.
 C1's isolated candidate passes nine focused tests, all 724 runtime-library
 tests and strict all-feature/all-target Clippy; it is not integrated or accepted.
-C2 has an isolated tested implementation; neither its module nor C3's proposed
-module is integrated. Ordinary async, graph and
+C2 and C3 have isolated tested implementations; neither module is integrated.
+Ordinary async, graph and
 drain APIs already exist. I2/C4/C5/C6 compose the missing generated production path rather
 than replace those APIs. A first non-reusing generated launch does not wait for
 V7/V8, but a journal-enabled launch must have its production journal and hooks.
@@ -159,7 +170,8 @@ performance. Their detailed owners remain in the later-milestone table below.
 | N3-L3-D / R112 | Locally accepted: uninitialized device insertion | Actual None/Unmapped/Mapped custody, per-call native attempt and map progress use borrowed lower cores. DEVICE_LOCAL and hole-or-append policy remain intact. Twenty-six new functions, sixteen compiled negatives and full/focused/auxiliary/restoration/archive checks pass; native/formal/performance qualification remains open. |
 | N4-R1 / R114 | Locally accepted: pristine active-control cleanup and terminal transport | Exact mapped/unmapped/disposed custody, untouched data/continuation, one-shot cleanup and restored-parent transport pass the [bounded qualification](runtime-pristine-control-cleanup-v1.md). Other cleanup routes and native/formal/performance evidence remain open. |
 | N4-R2 returning subset / R115 | Locally accepted: lower consuming returning-control cleanup | Full-owner custody precedes validation and return-capacity reservation precedes disposal. Exact forward order, returned data and interrupted receipts pass the [bounded qualification](runtime-returning-control-cleanup-v1.md). Live/queue composition remains open. |
-| N4-R2 remaining | Detached persistent controls, persistent returned-data bridges and ordinary cleanup | Begin with the [detached-persistent contract](runtime-detached-persistent-control-cleanup-v1.md). Reuse existing custody and preserve each API's exact validation and returned-data-on-error behavior. Mixed ordinary release also needs typed data cleanup. |
+| N4-R2 detached subset / R117 | Locally accepted: detached persistent-control cleanup | Full-owner custody, exact generation/state precedence, separate detached-data ownership and zero output allocation/conversion pass the [bounded qualification](runtime-detached-persistent-control-cleanup-v1.md). Live/queue composition remains open. |
+| N4-R2 remaining | Persistent returned-data bridges and ordinary cleanup | Begin with the [persistent returned-data contract](runtime-persistent-returned-data-cleanup-v1.md). Reuse existing custody and preserve each API's exact validation and returned-data-on-error behavior. Mixed ordinary release also needs typed data cleanup. |
 | N4-R: data extension | Lower data cleanup and mixed-roster release | Reuse the common cleanup contract; mixed rosters join R2. Cover all host/device and initialized/uninitialized variants. Exact records/charges and untouched owners survive every failed destructive prefix; no repeated free or duplicate refund. |
 | N4-L | Live detach and data/control release | Each route needs its applicable lower cleanup contract. Retain input, returned owners and disposed receipts outside the model loan through retake/commit. Failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
 | N4-QA | Auxiliary destruction | Needs applicable lower/live cleanup contracts. Keep the taken lane and parent through every queue/event/doorbell/resource/signal teardown prefix. Failed destruction cannot expose a reusable slot. |
@@ -180,7 +192,7 @@ auxiliary. CPU fixtures are not live Linux/KFD qualification.
 | --- | --- | --- |
 | C1 | Submission identity across eight existing ingresses | Ready now: five coordinates give forty pending plus forty retained-success rejection cells with valid controls. Genuine cached completion, released backend-ID reuse and destroyed-stream semantics; rejection preserves supplied handles, owners and pre-existing callbacks before any backend entry. |
 | C2 | Generated descriptor identity | Qualify and integrate the isolated four-test candidate: both match directions, source identity after transfer, and later artifact/authority/currentness substitution. Full closure and nineteen compiled negatives remain pending. Descriptions do not grant native authority. |
-| C3 | Reply and retained-owner lifecycle gaps | Independently ready on existing lifecycle fixtures. Two-owner isolation, Stop before disposal, A-success/B-failure/C-retained retirement, latest-waker and panicking-wake behavior; repeated progress cannot retry failed retirement. |
+| C3 | Reply and retained-owner lifecycle gaps | Qualify the isolated five-test candidate: two-owner isolation, Stop before disposal, A-success/B-failure/C-retained retirement, latest-waker and panicking-wake behavior; exact holds, reply credits and actual callback/drop thread identities. Full closure and decisive compiled negatives remain pending. |
 | I2, joint Native | Actual generated ISSUE | N5 + C1/C2/preissue-C3; specify the Resources mutation hook first. Bind one submission/permit to actual lane, queue, publication and allocation incarnations. Never retry uncertain publication. First non-reusing ISSUE does not require V7/V8. |
 | C4 | Generated COMPLETE | Needs I2. Exact completion, full readback, closing currentness and native disposition precede decode/readiness; reject stale, foreign, partial and repeated observations. |
 | C5 | Generated typed-output future and blocking join | Needs C4. Share one async path; test bounded admission, wake races, observer loss, cancellation, reentrancy and owner-local non-Send contracts. |
@@ -197,7 +209,7 @@ retained; full immutable qualification and integration are still pending.
 Snapshots include retained records, callback storage and
 probes, mock backend fields and aggregate allocation-credit usage; they do not
 inspect private credit-account identity/storage. C2's tested module exists only
-in its isolated worktree; C3's proposed module remains absent.
+in its isolated worktree; C3's module exists only in its separate tested worktree.
 Generated preparation still installs no production adoption hooks; these are
 integration gaps, not a missing-runtime rewrite. Protected production cells also
 need the external Worker/compiler authority described below.
@@ -374,9 +386,9 @@ obligation, followed by membership and settlement proof packets.
 
 ## Qualification And Integration Order
 
-1. Qualify detached persistent controls and C1/C2; advance V4-J1 proofs
-   independently above accepted R116;
-   C3 and M1/M2/M3 design work need not wait for those packets. Primary
+1. Implement persistent returned-data cleanup and qualify C1/C2/C3; advance
+   V4-J1 proofs independently above accepted R117.
+   M1/M2/M3 design work need not wait for those packets. Primary
    serializes shared edits and builds, preserving each isolated candidate's
    preliminary evidence and the accepted V1/V2/V3 evidence.
 2. Join required N3/N4 into N5; join N5 and C1/C2/C3 into I2, then C4/C5/C6.

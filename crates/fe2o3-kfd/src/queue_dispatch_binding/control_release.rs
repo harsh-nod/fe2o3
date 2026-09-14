@@ -1,4 +1,4 @@
-//! Returning dispatch controls retain their complete owner through cleanup.
+//! Returning and detached dispatch controls retain their complete owner through cleanup.
 
 use super::*;
 use crate::shared_memory::ControlCleanupCustodyV1;
@@ -13,6 +13,7 @@ mod tests;
 pub(in crate::queue) enum ReturningControlModeV1 {
     AfterRecycle,
     ReturningDestroy,
+    DetachedPersistent { expected_generation: u64 },
 }
 
 /// Completion stays in this root until the caller explicitly transfers it.
@@ -70,31 +71,45 @@ impl ReturningControlCleanupCustodyV1 {
         }
         self.started = true;
         let generation = match self.mode {
-            ReturningControlModeV1::AfterRecycle => self.generation.returned_generation()?,
+            ReturningControlModeV1::AfterRecycle => Some(self.generation.returned_generation()?),
             ReturningControlModeV1::ReturningDestroy => {
-                self.generation.returning_destroy_generation()?
+                Some(self.generation.returning_destroy_generation()?)
+            }
+            ReturningControlModeV1::DetachedPersistent {
+                expected_generation,
+            } => {
+                validate_detached_persistent_control_release_state_v1(
+                    self.persistent_control,
+                    self.data.len(),
+                    self.data_premises.len(),
+                    self.generation.returned_generation()?,
+                    expected_generation,
+                )?;
+                None
             }
         };
-        if self.data.len() != self.data_premises.len() {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: self.data.len().min(self.data_premises.len()),
-                detail: "retained data/premise cardinality",
-            });
-        }
-        let capacity = self.data.len();
-        #[cfg(test)]
-        let capacity = self.return_capacity_override.unwrap_or(capacity);
-        self.returned.try_reserve_exact(capacity).map_err(|_| {
-            Gfx942DispatchBindingErrorV1::HostAllocationCapacity {
-                operation: "returning dispatch data",
+        if let Some(generation) = generation {
+            if self.data.len() != self.data_premises.len() {
+                return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: self.data.len().min(self.data_premises.len()),
+                    detail: "retained data/premise cardinality",
+                });
             }
-        })?;
-        if self.returned.capacity() < self.data.len() {
-            return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {
-                operation: "returning dispatch data",
-            });
+            let capacity = self.data.len();
+            #[cfg(test)]
+            let capacity = self.return_capacity_override.unwrap_or(capacity);
+            self.returned.try_reserve_exact(capacity).map_err(|_| {
+                Gfx942DispatchBindingErrorV1::HostAllocationCapacity {
+                    operation: "returning dispatch data",
+                }
+            })?;
+            if self.returned.capacity() < self.data.len() {
+                return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {
+                    operation: "returning dispatch data",
+                });
+            }
+            self.returned_generation = Some(generation);
         }
-        self.returned_generation = Some(generation);
 
         self.active_control = Some(ControlCleanupCustodyV1::kernarg(
             self.kernarg
@@ -108,10 +123,12 @@ impl ReturningControlCleanupCustodyV1 {
             self.release_active_control(memory)?;
         }
 
-        // Capacity and cardinality were checked before any disposal callback.
-        for (authority, premise) in self.data.drain(..).zip(self.data_premises.drain(..)) {
-            self.returned
-                .push(ReturnedDispatchDataLeaseV1 { authority, premise });
+        if generation.is_some() {
+            // Capacity and cardinality were checked before any disposal callback.
+            for (authority, premise) in self.data.drain(..).zip(self.data_premises.drain(..)) {
+                self.returned
+                    .push(ReturnedDispatchDataLeaseV1 { authority, premise });
+            }
         }
         self.complete = true;
         Ok(())
@@ -133,7 +150,8 @@ impl ReturningControlCleanupCustodyV1 {
     pub(in crate::queue) fn take_completed(
         &mut self,
     ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
-        if !self.complete {
+        if !self.complete || matches!(self.mode, ReturningControlModeV1::DetachedPersistent { .. })
+        {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
         }
         let generation = self
@@ -153,11 +171,38 @@ pub(super) fn release_returning_with_v1(
     retain: impl FnOnce(ReturningControlCleanupCustodyV1),
 ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
     let result = catch_unwind(AssertUnwindSafe(|| {
+        if matches!(root.mode, ReturningControlModeV1::DetachedPersistent { .. }) {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
         root.release_in_place(memory)?;
         root.take_completed()
     }));
     match result {
         Ok(Ok(returned)) => Ok(returned),
+        Ok(Err(error)) => {
+            retain(root);
+            Err(error)
+        }
+        Err(payload) => {
+            retain(root);
+            resume_unwind(payload)
+        }
+    }
+}
+
+pub(super) fn release_detached_persistent_with_v1(
+    mut root: ReturningControlCleanupCustodyV1,
+    memory: &mut impl PristineControlReleaseV1,
+    retain: impl FnOnce(ReturningControlCleanupCustodyV1),
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if !matches!(root.mode, ReturningControlModeV1::DetachedPersistent { .. }) {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        root.release_in_place(memory)
+    }));
+    match result {
+        Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => {
             retain(root);
             Err(error)

@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.73s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::detached::detached_success_preserves_separate_data_metadata_order_and_zero_return_storage ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::detached::detached_success_preserves_separate_data_metadata_order_and_zero_return_storage stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::detached::detached_success_preserves_separate_data_metadata_order_and_zero_return_storage' (1010203) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/detached_tests.rs:146:5:
+assertion `left == right` failed
+  left: []
+ right: [Premise { value: RetainedDataPremiseV1 { layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, role_identity: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], valid_bytes: 17, effect: None, initialized_content: None, fully_initialized: false, writable_ranges: [], completed_snapshots: [] }, storage: [(8, 0), (8, 0)] }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::detached::detached_success_preserves_separate_data_metadata_order_and_zero_return_storage
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1133 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

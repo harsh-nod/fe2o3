@@ -17,6 +17,95 @@ pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourc
     (memory, custody.take_completed().unwrap())
 }
 
+pub(in crate::queue) fn single_persistent_control_fixture_v1() -> (Memory, DispatchResourceOwnerV1)
+{
+    let mut memory = Memory::new(true);
+    let data = memory.device(true);
+    let programs = programs();
+    let packets = [packet(0)];
+    let identity = persistent_fixed_dispatch_control_identity_v1(
+        super::super::tests::persistent_control_test_queue(41),
+        &programs,
+        &packets,
+        data.layout(),
+        true,
+        Gfx942DeviceContentRoleV1::new([0x61; 32], 0).unwrap(),
+        data.sdma_storage_identity(),
+    )
+    .unwrap();
+    let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, vec![data]);
+    prepare_persistent_fixed_dispatch_resources_v1(
+        &mut memory,
+        &programs,
+        &mut preparation,
+        Some(7),
+        identity,
+    )
+    .unwrap();
+    (memory, preparation.take_completed().unwrap())
+}
+
+pub(in crate::queue) fn three_persistent_control_fixture_v1() -> (Memory, DispatchResourceOwnerV1) {
+    use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
+    let image =
+        include_bytes!("../../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
+    let program = validate(image, AdmittedProfile::Gfx942XnackOffCov6)
+        .unwrap()
+        .bind_kernel("vecadd")
+        .unwrap()
+        .reconcile_dispatch_abi(
+            [0x71; 32],
+            &[
+                KernelGlobalBufferAbiV1::new(0, "arg0.data", 0, 4, ArgumentAccess::ReadOnly),
+                KernelGlobalBufferAbiV1::new(2, "arg1.data", 16, 4, ArgumentAccess::ReadOnly),
+                KernelGlobalBufferAbiV1::new(4, "arg2.data", 32, 4, ArgumentAccess::WriteOnly),
+            ],
+        )
+        .unwrap();
+    let mut bytes = [0; 48];
+    for offset in [8, 24, 40] {
+        bytes[offset..offset + 8].copy_from_slice(&1024_u64.to_le_bytes());
+    }
+    let packets = [Gfx942FixedDispatchPacketV1::new(
+        0,
+        AqlDispatchGeometryV1::new([1024, 1, 1], [256, 1, 1]).unwrap(),
+        0,
+        bytes.into(),
+        vec![
+            Gfx942DispatchBufferBindingV1::new(0, 0, 0, 4096),
+            Gfx942DispatchBufferBindingV1::new(2, 1, 0, 4096),
+            Gfx942DispatchBufferBindingV1::new(4, 2, 0, 4096),
+        ]
+        .into_boxed_slice(),
+    )];
+    let mut memory = Memory::new(true);
+    let data = vec![
+        memory.device(true),
+        memory.device(true),
+        memory.device(true),
+    ];
+    let identity = three_binding_persistent_fixed_dispatch_control_identity_v1(
+        super::super::tests::persistent_control_test_queue(42),
+        core::slice::from_ref(&program),
+        &packets,
+        core::array::from_fn(|i| data[i].layout()),
+        [true; 3],
+        core::array::from_fn(|i| Gfx942DeviceContentRoleV1::new([0x62; 32], i as u32).unwrap()),
+        core::array::from_fn(|i| data[i].sdma_storage_identity()),
+    )
+    .unwrap();
+    let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
+    prepare_three_binding_persistent_fixed_dispatch_resources_v1(
+        &mut memory,
+        &[program],
+        &mut preparation,
+        Some(7),
+        identity,
+    )
+    .unwrap();
+    (memory, preparation.take_completed().unwrap())
+}
+
 #[test]
 fn preparation_bind_callers_root_before_loan_and_transfer_after_settlement() {
     let source = include_str!("../queue_live/fixed_dispatch.rs");

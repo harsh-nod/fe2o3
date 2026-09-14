@@ -1,0 +1,39 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-detached-control/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.90s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 31 tests
+test queue::dispatch_binding::control_release::tests::detached::detached_consuming_method_roots_owner_before_generation_validation ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_cleanup_allows_cancelled_later_reservation_and_exhausted_next_generation ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_and_returning_wrappers_reject_wrong_modes_without_losing_outputs ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_actual_commit_rejection_keeps_native_settlement_without_model_commit ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_generation_errors_precede_malformed_state_without_cleanup_entry ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_incomplete_callback_retains_active_owner_and_cannot_retry_or_extract ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_generation_rejects_with_otherwise_valid_detached_state ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_projection_failures_keep_native_receipts_and_uncommitted_model ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_partial_unmap_never_advances_or_reconstructs_authority ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_real_preparation_preserves_populated_metadata_and_separate_native_data ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_native_errors_and_panics_preserve_each_control_and_destructive_prefix ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_state_cardinality_and_generation_mismatch_retain_exact_owner ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_success_preserves_separate_data_metadata_order_and_zero_return_storage ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_currentness_boundaries_keep_exact_mapped_unmapped_and_disposed_custody ... ok
+test queue::dispatch_binding::control_release::tests::returning_cancelled_only_history_returns_zero_without_recycle ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete ... ok
+test queue::dispatch_binding::control_release::tests::returning_consuming_methods_use_shared_root_before_validation ... ok
+test queue::dispatch_binding::control_release::tests::returning_cardinality_and_capacity_reject_before_native_entry ... ok
+test queue::dispatch_binding::control_release::tests::returning_actual_commit_rejection_retains_native_settlement_without_model_commit ... ok
+test queue::dispatch_binding::control_release::tests::returning_incomplete_callbacks_cannot_advance_extract_or_retry ... ok
+test queue::dispatch_binding::control_release::tests::returning_generation_rejection_precedes_cardinality_and_preserves_full_owner ... ok
+test queue::dispatch_binding::control_release::tests::returning_modes_preserve_cancelled_history_max_recycle_and_exhaustion ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_real_preparation_error_and_panic_keep_metadata_controls_and_data ... ok
+test queue::dispatch_binding::control_release::tests::returning_partial_unmap_keeps_original_authority_at_each_position ... ok
+test queue::dispatch_binding::control_release::tests::returning_populated_preparation_metadata_survives_rejection_and_cleanup ... ok
+test queue::dispatch_binding::control_release::tests::returning_native_failures_retain_every_control_position_and_exact_prefix ... ok
+test queue::dispatch_binding::control_release::tests::returning_populated_metadata_survives_real_destructive_errors_and_panics ... ok
+test queue::dispatch_binding::control_release::tests::returning_projection_failures_retain_disposal_receipt_and_uncommitted_model ... ok
+test queue::dispatch_binding::control_release::tests::returning_success_preserves_exact_data_premises_storage_and_forward_order ... ok
+test queue::dispatch_binding::control_release::tests::returning_wrapper_retains_full_root_before_error_or_original_panic ... ok
+test queue::dispatch_binding::control_release::tests::returning_currentness_failures_preserve_mapped_unmapped_and_disposed_custody ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 1103 filtered out; finished in 0.21s
+

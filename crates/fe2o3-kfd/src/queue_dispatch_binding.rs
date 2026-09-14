@@ -2224,14 +2224,16 @@ impl DispatchResourceOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         expected_generation: u64,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.validate_detached_persistent_control_release_v1(expected_generation)?;
-        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
-        memory.release(kernarg)?;
-        for code in self.code {
-            let code = memory.unmap_executable_from_gpu(code.into_token())?;
-            memory.release_executable(code)?;
-        }
-        Ok(())
+        control_release::release_detached_persistent_with_v1(
+            control_release::ReturningControlCleanupCustodyV1::new(
+                self,
+                control_release::ReturningControlModeV1::DetachedPersistent {
+                    expected_generation,
+                },
+            ),
+            memory,
+            core::mem::forget,
+        )
     }
 
     pub(super) fn detach_persistent_replay_data_after_recycle_v1(

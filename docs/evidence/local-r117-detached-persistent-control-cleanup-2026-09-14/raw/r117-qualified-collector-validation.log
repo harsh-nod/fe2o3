@@ -1,0 +1,187 @@
+{
+  "source_head": "4a49234a03fc3759bd1d3ca330197619b4ae8ab0",
+  "accepted_parent": "4a49234a03fc3759bd1d3ca330197619b4ae8ab0",
+  "source_map_sha256": "c7cbc3c52eb29d3eaf70cfe9fdf964a9f5c092eb439cad26d1706874f51735be",
+  "scope": "scripted lower detached persistent-control cleanup custody; local CPU/source tests",
+  "source_identities": 5689,
+  "changed_source": [
+    "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/detached_tests.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/tests.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs"
+  ],
+  "full": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2762,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2762,
+      "failed": 0,
+      "ignored": 5
+    }
+  },
+  "source_gates": 17,
+  "source_gate_prerequisites": [
+    "r117-reviewed-gnu-all",
+    "r117-reviewed-musl-all"
+  ],
+  "subsequent_source_gates": 15,
+  "auxiliary_gates": 10,
+  "initial_runs": [
+    "r117-initial-format",
+    "r117-initial-controls"
+  ],
+  "isolated_candidate_history": {
+    "runs": 7,
+    "artifacts": 30,
+    "source_head": "4756971168f6b4f2c33d217f5d476ccde8ea2740",
+    "source_map_sha256": "60adae0665fc2995e98e6f647e630c26fbbe4c7e6e20eb603fec05c1986a8d4d",
+    "retained_failed_attempts": 2,
+    "accepted_as_integrated_prerequisite": false
+  },
+  "focused": {
+    "detached": 16,
+    "returning": 15,
+    "pristine": 37,
+    "cleanup": 7,
+    "transport": 9
+  },
+  "compiled_negatives": 32,
+  "distinct_mutations": 28,
+  "mutation_source_groups": [
+    [
+      "accept-incomplete-callback",
+      "detached-accept-incomplete-callback"
+    ],
+    [
+      "admit-unrecycled-mode"
+    ],
+    [
+      "constructor-metadata-loss"
+    ],
+    [
+      "corrupt-returned-premise"
+    ],
+    [
+      "detached-admit-unrecycled-generation"
+    ],
+    [
+      "detached-allocate-return-storage"
+    ],
+    [
+      "detached-constructor-data-loss"
+    ],
+    [
+      "detached-convert-returned-data"
+    ],
+    [
+      "detached-drop-error-root"
+    ],
+    [
+      "detached-drop-panic-root"
+    ],
+    [
+      "detached-ignore-expected-generation"
+    ],
+    [
+      "detached-ignore-state-validation"
+    ],
+    [
+      "detached-permit-cleanup-retry",
+      "permit-cleanup-retry"
+    ],
+    [
+      "detached-remove-active-custody",
+      "remove-active-custody"
+    ],
+    [
+      "detached-reverse-control-order",
+      "reverse-control-order"
+    ],
+    [
+      "detached-swallow-generation-error"
+    ],
+    [
+      "detached-truncate-code-cleanup"
+    ],
+    [
+      "detached-unit-wrapper-admits-returning"
+    ],
+    [
+      "drop-error-root"
+    ],
+    [
+      "drop-panic-root"
+    ],
+    [
+      "extract-failed-output"
+    ],
+    [
+      "late-return-capacity"
+    ],
+    [
+      "returning-wrapper-admits-detached"
+    ],
+    [
+      "reverse-returned-authorities"
+    ],
+    [
+      "skip-cardinality"
+    ],
+    [
+      "skip-return-capacity-check"
+    ],
+    [
+      "swallow-generation-rejection"
+    ],
+    [
+      "truncate-returned-output"
+    ]
+  ],
+  "new_behavioral_tests": 15,
+  "new_source_guards": 1,
+  "qualification_contract_tests": 117,
+  "runner_contract_tests": 9,
+  "freeze_contract_tests": 31,
+  "doctest_relocations": [
+    [
+      "queue_dispatch_binding.rs",
+      "queue::dispatch_binding::Gfx942DispatchBatchV1",
+      3047,
+      3049
+    ],
+    [
+      "queue_dispatch_binding.rs",
+      "queue::dispatch_binding::Gfx942DispatchBatchV1",
+      3057,
+      3059
+    ],
+    [
+      "queue_dispatch_binding.rs",
+      "queue::dispatch_binding::Gfx942DispatchBatchV1",
+      3065,
+      3067
+    ],
+    [
+      "queue_dispatch_binding.rs",
+      "queue::dispatch_binding::Gfx942CompletedDispatchBatchV1",
+      3091,
+      3093
+    ]
+  ],
+  "harnessless_benchmark_targets_per_full_run": 1,
+  "formal_qualification": false,
+  "native_qualification": false,
+  "performance_qualification": false,
+  "detached_persistent_control_cleanup_qualification": true,
+  "persistent_data_cleanup_qualification": false,
+  "live_model_transport_qualification": false,
+  "queue_teardown_qualification": false,
+  "total_memory_qualification": false
+}

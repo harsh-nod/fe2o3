@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.99s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete' (1020360) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6933:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete' (1020360) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/detached_tests.rs:820:13:
+assertion `left == right` failed
+  left: false
+ right: true
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1133 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`
