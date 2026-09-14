@@ -1627,12 +1627,101 @@ impl ProductionRankedSemanticProgramV1 {
     }
 }
 
+const MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1: usize = 128;
+
+#[derive(Debug)]
+struct DeterministicProjectionRootDiagnosticV1 {
+    root: SemanticFunctionIdV1,
+    body: SemanticFunctionIdV1,
+    name: [u8; MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1],
+    name_len: usize,
+    truncated: bool,
+}
+
+impl DeterministicProjectionRootDiagnosticV1 {
+    fn new(root: SemanticFunctionIdV1, body: SemanticFunctionIdV1, name: &[u8]) -> Self {
+        let name_len = name.len().min(MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1);
+        let mut bounded_name = [0; MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1];
+        bounded_name[..name_len].copy_from_slice(&name[..name_len]);
+        Self {
+            root,
+            body,
+            name: bounded_name,
+            name_len,
+            truncated: name.len() > name_len,
+        }
+    }
+}
+
+impl fmt::Display for DeterministicProjectionRootDiagnosticV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.name[..self.name_len].escape_ascii())?;
+        if self.truncated {
+            formatter.write_str("...")?;
+        }
+        write!(
+            formatter,
+            " (semantic root {}, body {})",
+            self.root.index(),
+            self.body.index()
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeterministicProjectionOperandDiagnosticV1 {
+    Scalar(u128),
+    Place { local: u32, projections: usize },
+    NonScalarConstant,
+}
+
+impl DeterministicProjectionOperandDiagnosticV1 {
+    fn new(operand: &SemanticOperandV1) -> Self {
+        match operand {
+            SemanticOperandV1::Constant(constant) => match constant.value() {
+                SemanticConstantValueV1::Scalar(value) => Self::Scalar(value.bits()),
+                _ => Self::NonScalarConstant,
+            },
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => Self::Place {
+                local: place.local().index(),
+                projections: place.projections().len(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DeterministicProjectionSiteDiagnosticV1 {
+    block: usize,
+    statement: usize,
+    destination: u32,
+    source: SemanticSourceProvenanceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeterministicDivisorSummaryDiagnosticV1 {
+    ConstantZero,
+    Exact,
+    Derived,
+}
+
+#[derive(Debug)]
+pub(crate) struct DeterministicDivisorDiagnosticV1 {
+    root: Option<DeterministicProjectionRootDiagnosticV1>,
+    site: Option<DeterministicProjectionSiteDiagnosticV1>,
+    operation: SemanticBinaryOpV1,
+    left: DeterministicProjectionOperandDiagnosticV1,
+    right: DeterministicProjectionOperandDiagnosticV1,
+    summary: DeterministicDivisorSummaryDiagnosticV1,
+}
+
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
+    UnprovenDeterministicDivisor(Box<DeterministicDivisorDiagnosticV1>),
     UnresolvedCallableEffect {
         block: usize,
         source: SemanticSourceProvenanceV1,
@@ -1669,6 +1758,43 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
     ),
 }
 
+impl ProductionRankedProjectionErrorV1 {
+    fn with_deterministic_root_context(
+        mut self,
+        root: SemanticFunctionIdV1,
+        body: SemanticFunctionIdV1,
+        name: &[u8],
+    ) -> Self {
+        if let Self::UnprovenDeterministicDivisor(diagnostic) = &mut self {
+            diagnostic.root = Some(DeterministicProjectionRootDiagnosticV1::new(
+                root, body, name,
+            ));
+        }
+        self
+    }
+
+    fn with_deterministic_assignment_context(
+        mut self,
+        block: usize,
+        statement: usize,
+        destination: u32,
+        source: SemanticSourceProvenanceV1,
+    ) -> Self {
+        if let Self::UnprovenDeterministicDivisor(diagnostic) = &mut self
+            && diagnostic.site.is_none()
+        {
+            // Recursive dependency failures keep their innermost assignment.
+            diagnostic.site = Some(DeterministicProjectionSiteDiagnosticV1 {
+                block,
+                statement,
+                destination,
+                source,
+            });
+        }
+        self
+    }
+}
+
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1694,6 +1820,27 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 write!(
                     formatter,
                     "semantic-to-ranked projection incomplete: {detail}"
+                )
+            }
+            Self::UnprovenDeterministicDivisor(diagnostic) => {
+                formatter.write_str("semantic-to-ranked projection incomplete: a division or remainder used for deterministic control lacks a statically nonzero divisor")?;
+                if let Some(root) = &diagnostic.root {
+                    write!(formatter, "; root {root}")?;
+                }
+                if let Some(site) = diagnostic.site {
+                    write!(
+                        formatter,
+                        "; semantic block bb{}, statement {}, destination _{} at {}",
+                        site.block,
+                        site.statement,
+                        site.destination,
+                        source_label(site.source)
+                    )?;
+                }
+                write!(
+                    formatter,
+                    "; expression {:?}({:?}, {:?}); divisor summary {:?}",
+                    diagnostic.operation, diagnostic.left, diagnostic.right, diagnostic.summary
                 )
             }
             Self::UnresolvedCallableEffect {
@@ -1799,6 +1946,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::Compile { error, .. } => Some(error),
             Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
+            | Self::UnprovenDeterministicDivisor(_)
             | Self::UnresolvedCallableEffect { .. }
             | Self::UnresolvedDropEffect { .. }
             | Self::MissingAllocationProvenance { .. }
@@ -2881,7 +3029,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             &input.source_launch,
             *source_root,
             root_references,
-        )?;
+        )
+        .map_err(|error| {
+            error.with_deterministic_root_context(
+                semantic_root,
+                selection.body(),
+                input.logical_name.as_bytes(),
+            )
+        })?;
         if root.kernel_binding != input.kernel_binding {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a projected ranked root with a substituted kernel binding",
@@ -10038,6 +10193,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
     ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
         match definition {
             DeterministicScalarDefinitionV1::Assignment { block, statement } => {
+                let source = self.function.blocks()[block].statements()[statement].source();
                 let value = self.function.blocks()[block].statements()[statement]
                     .kind()
                     .clone();
@@ -10045,6 +10201,14 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                     unreachable!("indexed deterministic assignment changed kind")
                 };
                 self.resolve_rvalue(assignment.value().kind().clone())
+                    .map_err(|error| {
+                        error.with_deterministic_assignment_context(
+                            block,
+                            statement,
+                            assignment.destination().local().index(),
+                            source,
+                        )
+                    })
             }
             DeterministicScalarDefinitionV1::Call { block } => {
                 let terminator = self.function.blocks()[block].terminator().kind().clone();
@@ -10353,11 +10517,11 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
     fn resolve_binary(
         &mut self,
         operation: SemanticBinaryOpV1,
-        left: &SemanticOperandV1,
-        right: &SemanticOperandV1,
+        left_operand: &SemanticOperandV1,
+        right_operand: &SemanticOperandV1,
     ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
-        let left = self.resolve_operand(left)?;
-        let right = self.resolve_operand(right)?;
+        let left = self.resolve_operand(left_operand)?;
+        let right = self.resolve_operand(right_operand)?;
         let Some(kind) = deterministic_index_binary_kind_v1(operation) else {
             return self.derive([left, right]);
         };
@@ -10369,9 +10533,30 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             IndexBinaryKindAttr::Divide | IndexBinaryKindAttr::Remainder
         ) && !matches!(right, DeterministicScalarSummaryV1::Constant(value) if value != 0)
         {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a division or remainder used for deterministic control lacks a statically nonzero divisor",
-            ));
+            // Diagnostic allocation is fixed-size and only occurs on the
+            // existing rejection path; it carries no proof or authority.
+            return Err(
+                ProductionRankedProjectionErrorV1::UnprovenDeterministicDivisor(Box::new(
+                    DeterministicDivisorDiagnosticV1 {
+                        root: None,
+                        site: None,
+                        operation,
+                        left: DeterministicProjectionOperandDiagnosticV1::new(left_operand),
+                        right: DeterministicProjectionOperandDiagnosticV1::new(right_operand),
+                        summary: match right {
+                            DeterministicScalarSummaryV1::Constant(_) => {
+                                DeterministicDivisorSummaryDiagnosticV1::ConstantZero
+                            }
+                            DeterministicScalarSummaryV1::Exact(_) => {
+                                DeterministicDivisorSummaryDiagnosticV1::Exact
+                            }
+                            DeterministicScalarSummaryV1::Derived(_) => {
+                                DeterministicDivisorSummaryDiagnosticV1::Derived
+                            }
+                        },
+                    },
+                )),
+            );
         }
         let lhs = self.materialize(left)?;
         let rhs = self.materialize(right)?;
@@ -21404,6 +21589,7 @@ fn retain_incomplete(
     match result {
         Err(
             error @ (ProductionRankedProjectionErrorV1::Incomplete(_)
+            | ProductionRankedProjectionErrorV1::UnprovenDeterministicDivisor(_)
             | ProductionRankedProjectionErrorV1::UnresolvedCallableEffect { .. }
             | ProductionRankedProjectionErrorV1::UnresolvedDropEffect { .. }),
         ) => {
@@ -29167,28 +29353,173 @@ mod tests {
 
     #[test]
     fn deterministic_scalar_projection_rejects_partial_dynamic_or_zero_division() {
-        for divisor in [tensor_operand(2), constant(0)] {
-            let function = deterministic_expression_switch(
-                vec![scalar_assignment(
+        for operation in [SemanticBinaryOpV1::Divide, SemanticBinaryOpV1::Remainder] {
+            for divisor in [tensor_operand(2), constant(0)] {
+                let expected_operand = DeterministicProjectionOperandDiagnosticV1::new(&divisor);
+                let function = deterministic_expression_switch(
+                    vec![scalar_assignment(
+                        3,
+                        scalar_binary(operation, tensor_operand(1), divisor),
+                    )],
+                    deterministic_expression_locals(true),
                     3,
-                    scalar_binary(SemanticBinaryOpV1::Divide, tensor_operand(1), divisor),
-                )],
-                deterministic_expression_locals(true),
-                3,
-            );
-            assert!(matches!(
-                deterministic_scalar_switch_projection(
+                );
+                let Err(error) = deterministic_scalar_switch_projection(
                     &[],
                     &function,
                     &vec![None; function.locals().len()],
                     vec![],
                     0,
-                ),
-                Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a division or remainder used for deterministic control lacks a statically nonzero divisor"
-                ))
-            ));
+                ) else {
+                    panic!("partial division must still reject");
+                };
+                let ProductionRankedProjectionErrorV1::UnprovenDeterministicDivisor(diagnostic) =
+                    error
+                else {
+                    panic!("expected typed divisor rejection: {error:?}");
+                };
+                assert_eq!(diagnostic.operation, operation);
+                assert_eq!(diagnostic.right, expected_operand);
+                assert_eq!(
+                    diagnostic.summary,
+                    if expected_operand == DeterministicProjectionOperandDiagnosticV1::Scalar(0) {
+                        DeterministicDivisorSummaryDiagnosticV1::ConstantZero
+                    } else {
+                        DeterministicDivisorSummaryDiagnosticV1::Exact
+                    }
+                );
+                let site = diagnostic.site.expect("assignment attribution");
+                assert_eq!((site.block, site.statement, site.destination), (0, 0, 3));
+                assert_eq!(site.source, SemanticSourceProvenanceV1::unavailable());
+            }
         }
+    }
+
+    #[test]
+    fn deterministic_divisor_diagnostics_preserve_nonzero_literal_acceptance() {
+        for operation in [SemanticBinaryOpV1::Divide, SemanticBinaryOpV1::Remainder] {
+            for divisor in [1, 16] {
+                let function = deterministic_expression_switch(
+                    vec![scalar_assignment(
+                        3,
+                        scalar_binary(operation, tensor_operand(1), constant(divisor)),
+                    )],
+                    deterministic_expression_locals(true),
+                    3,
+                );
+                let (switches, operations, _) = deterministic_scalar_switch_projection(
+                    &[],
+                    &function,
+                    &vec![None; function.locals().len()],
+                    vec![],
+                    0,
+                )
+                .unwrap();
+                assert!(switches[0].is_some());
+                let expected = deterministic_index_binary_kind_v1(operation).unwrap();
+                assert!(operations.iter().any(|operation| matches!(operation,
+                    ProductionRankedOperationV1::IndexBinary { kind, .. } if *kind == expected
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn deterministic_divisor_diagnostics_keep_innermost_assignment_and_root() {
+        let origin = SemanticSourceOriginV1::new(
+            SemanticSourceFileIdentityV1::from_sha256(bytes(0xab)),
+            100,
+            120,
+            37,
+            11,
+            37,
+            31,
+        )
+        .unwrap();
+        let source = SemanticSourceProvenanceV1::new(Some(origin), Some(origin));
+        let inner = scalar_assignment(
+            4,
+            scalar_binary(
+                SemanticBinaryOpV1::Remainder,
+                tensor_operand(1),
+                tensor_operand(2),
+            ),
+        );
+        let function = deterministic_expression_switch(
+            vec![
+                SemanticStatementV1::new(source, inner.kind().clone()),
+                scalar_assignment(
+                    3,
+                    scalar_binary(
+                        SemanticBinaryOpV1::Divide,
+                        tensor_operand(1),
+                        tensor_operand(4),
+                    ),
+                ),
+            ],
+            deterministic_expression_locals(true),
+            3,
+        );
+        let Err(error) = deterministic_scalar_switch_projection(
+            &[],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        ) else {
+            panic!("nested partial divisor must reject");
+        };
+        let error = error.with_deterministic_root_context(
+            SemanticFunctionIdV1::from_index(7),
+            SemanticFunctionIdV1::from_index(9),
+            b"diagnostic_root",
+        );
+        let rendered = error.to_string();
+        assert!(rendered.contains("root diagnostic_root (semantic root 7, body 9)"));
+        assert!(rendered.contains("semantic block bb0, statement 0, destination _4"));
+        assert!(rendered.contains("Rust source abababababab:37:11"));
+        assert!(rendered.contains("expression Remainder"));
+        let ProductionRankedProjectionErrorV1::UnprovenDeterministicDivisor(diagnostic) = error
+        else {
+            panic!("typed error lost");
+        };
+        assert_eq!(diagnostic.site.unwrap().source, source);
+        assert_eq!(
+            diagnostic.right,
+            DeterministicProjectionOperandDiagnosticV1::Place {
+                local: 2,
+                projections: 0
+            }
+        );
+    }
+
+    #[test]
+    fn deterministic_divisor_root_diagnostic_is_bounded_and_escaped() {
+        let mut name = vec![b'x'; MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1 * 4];
+        name[3] = b'\n';
+        name[4] = 0xff;
+        let root = DeterministicProjectionRootDiagnosticV1::new(
+            SemanticFunctionIdV1::from_index(7),
+            SemanticFunctionIdV1::from_index(9),
+            &name,
+        );
+        assert_eq!(root.name_len, MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1);
+        assert!(root.truncated);
+        let rendered = root.to_string();
+        assert!(!rendered.contains('\n'));
+        assert!(rendered.contains("\\n\\xff"));
+        assert!(rendered.ends_with("... (semantic root 7, body 9)"));
+        assert!(rendered.len() <= 4 * MAX_DETERMINISTIC_DIAGNOSTIC_ROOT_BYTES_V1 + 64);
+        let unchanged = ProductionRankedProjectionErrorV1::Incomplete("another rejection")
+            .with_deterministic_root_context(
+                SemanticFunctionIdV1::from_index(7),
+                SemanticFunctionIdV1::from_index(9),
+                &name,
+            );
+        assert!(matches!(
+            unchanged,
+            ProductionRankedProjectionErrorV1::Incomplete("another rejection")
+        ));
     }
 
     #[test]
