@@ -196,6 +196,28 @@ allocation, along with other retained hash-table costs, still need resource
 closure. These checks do not establish formal compiler verification. Native
 Switch and vector memory operations are not admitted by this migration.
 
+Concrete pipeline lifecycles may span an acyclic CFG when all normal paths
+consume the same exact Create, event and access occurrences in order. A shared
+control view validates actual successor ordinals, including repeated edges;
+per-pipeline cursors check joins and normal returns without enumerating paths.
+Empty diamonds and reordered block storage are supported. Normal bypasses,
+distinct branch-local event copies, unreachable lifecycle sites and reachable
+cycles are rejected. A trap may precede the lifecycle or follow Create alone,
+but cannot discharge a partially executed lifecycle. Existing same-block and
+recognized dynamic-loop routes retain their separate semantics.
+
+This check retains the existing constant epoch/slot and initialized-coordinate
+requirements. It does not infer values from ambiguous edge arguments, establish
+new barrier convergence facts, or grant source/output refinement authority.
+The fixed resource preflight includes the cached CFG and one pipeline's scratch;
+standalone diagnostics reserve the same bound before discovery. These remain
+logical phase bounds, not allocator/RSS or formal execution-cost proofs.
+Cross-block regressions also run through the closed public entry point:
+
+```sh
+cargo test -p fe2o3-pliron --test production_static_pipeline_cfg
+```
+
 The relocated textual suites are under `src/production_analysis/tests/lit/`
 and `src/production_analysis/tests/protocol-lit/`. Run them with:
 

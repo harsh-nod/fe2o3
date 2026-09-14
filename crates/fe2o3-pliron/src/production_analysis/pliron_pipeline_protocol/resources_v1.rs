@@ -68,6 +68,49 @@ fn pipeline_equivalence_unique_pair_upper_bound_v1(
     Ok(values.saturating_mul(values).min(query_expansions))
 }
 
+// The census cannot yet distinguish dynamic, same-block and cross-block
+// creates, so every create reserves the bounded concrete CFG attempt. No cap
+// changes, certificate storage or per-pipeline retained graph is introduced.
+fn pipeline_concrete_cfg_resource_delta_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<(usize, usize), ProductionAnalysisResourceLimitV1> {
+    if census.pipeline_creates == 0 {
+        return Ok((0, 0));
+    }
+    let sites = checked_pipeline_sum_v1(&[1, census.pipeline_events, census.ranked_accesses])?;
+    // One ordinal-control/reachability/topology walk, then at most one dense
+    // site registration, order construction and cursor pass per creation.
+    let shared = checked_pipeline_product_v1(
+        checked_pipeline_sum_v1(&[census.blocks, census.successors, 1])?,
+        32,
+    )?;
+    let each = checked_pipeline_product_v1(
+        checked_pipeline_sum_v1(&[
+            census.blocks,
+            census.successors,
+            census.operations,
+            sites,
+            1,
+        ])?,
+        32,
+    )?;
+    let work = checked_pipeline_sum_v1(&[
+        shared,
+        checked_pipeline_product_v1(census.pipeline_creates, each)?,
+    ])?;
+    // 16B+E+32 includes the retained discovery successor roster and shared
+    // CFG arrays/frontiers. O+2R+B+16 includes one-word sentinel ordinals,
+    // two-word borrowed action rows, incoming cursors and vector headers.
+    let temporary = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(census.blocks, 17)?,
+        census.successors,
+        census.operations,
+        checked_pipeline_product_v1(sites, 2)?,
+        48,
+    ])?;
+    Ok((work, temporary))
+}
+
 /// Preflights CFG loop discovery, dominance fixed points, per-pipeline
 /// schedule correlation, memoized uniformity proofs, and bounded
 /// expression-equivalence searches.
@@ -94,6 +137,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         )?;
         return limits.require(ProductionAnalysisResourcePhaseV1::PipelineProtocol, bound);
     }
+    let (concrete_work, concrete_temporary) = pipeline_concrete_cfg_resource_delta_v1(census)?;
     let blocks_squared = checked_pipeline_product_v1(census.blocks, census.blocks)?;
     let blocks_cubed = checked_pipeline_product_v1(blocks_squared, census.blocks.max(1))?;
     let equivalence_queries = pipeline_equivalence_query_upper_bound_v1(census)?;
@@ -131,6 +175,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         blocks_cubed,
         equivalence_work,
         uniformity_work,
+        concrete_work,
     ])?;
     let certificates = census.pipeline_creates;
     let findings = census
@@ -157,6 +202,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         checked_pipeline_product_v1(findings, MAX_PLIRON_PIPELINE_DIAGNOSTIC_BYTES_V1 + 32)?,
     ])?;
     let temporary = checked_pipeline_sum_v1(&[
+        concrete_temporary,
         // Dominator fixed points overlap CFG inventories and the current loop
         // candidate's predecessor/member/frontier construction.
         checked_pipeline_product_v1(blocks_squared, 6)?,

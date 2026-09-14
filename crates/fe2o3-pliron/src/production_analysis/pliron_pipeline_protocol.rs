@@ -346,6 +346,26 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             certificates: Vec::new(),
         };
     }
+    // The production descriptor prepays this phase, including its nested
+    // barrier/workgroup-memory attempts. A census alone is not that admission;
+    // those closed callers own the descriptor. Standalone diagnostics have no
+    // descriptor and reserve their own cumulative phase before discovery.
+    if authenticated_census.is_none()
+        && analyses
+            .remaining_resource_limits(ProductionAnalysisResourcePhaseV1::PipelineProtocol)
+            .and_then(|limits| preflight_pipeline_protocol_resource_upper_bound_v1(census, limits))
+            .and_then(|bound| {
+                analyses.admit_retained_resource_upper_bound(
+                    ProductionAnalysisResourcePhaseV1::PipelineProtocol,
+                    bound,
+                )
+            })
+            .is_err()
+    {
+        return report(PlironPipelineProtocolFindingV1::AnalysisIncomplete {
+            detail: "pipeline protocol exceeded its cumulative work or storage limit".to_owned(),
+        });
+    }
     let unique_pair_limit = match pipeline_equivalence_unique_pair_upper_bound_v1(census) {
         Ok(limit) => limit,
         Err(_) => return equivalence_resource_failure_report_v1(),
@@ -471,6 +491,11 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             });
     }
     let mut certificates = Vec::new();
+    let mut control = PipelineControlContextV1 {
+        inventory: &inventory,
+        discovery: &loop_discovery,
+        concrete: None,
+    };
     let uniformity_visit_limit = inventory.operations().len();
     for (pointer, site, pipeline_type, view) in creates {
         let Some(pipeline_type) = pipeline_type else {
@@ -491,13 +516,12 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
         }
         match verify_one_pipeline(
             context,
-            &loop_discovery.dominators,
+            &mut control,
             site,
             pipeline_type.buffers(),
             pipeline_type.prefetch_distance(),
             &schedule,
             accesses.get(&view).map_or(&[], Vec::as_slice),
-            &loop_discovery.loops,
             &uniform_roots,
             uniformity_visit_limit,
             &mut equivalence_resources,
@@ -520,6 +544,7 @@ fn pipeline_protocol_inventory_census_v1(
     inventory: &BoundedPlironFunctionInventoryV1,
 ) -> Option<ProductionAnalysisInputCensusV1> {
     let mut operands = 0_usize;
+    let mut successors = 0_usize;
     let mut max_operation_arity = 0_usize;
     let mut results = 0_usize;
     let mut pipeline_creates = 0_usize;
@@ -533,6 +558,7 @@ fn pipeline_protocol_inventory_census_v1(
         let operand_arity = raw.get_num_operands();
         let arity = operand_arity.checked_add(raw.get_num_results())?;
         operands = operands.checked_add(operand_arity)?;
+        successors = successors.checked_add(raw.get_num_successors())?;
         results = results.checked_add(raw.get_num_results())?;
         max_operation_arity = max_operation_arity.max(arity);
         let operation = Operation::get_op_dyn(site.pointer(), context);
@@ -562,6 +588,7 @@ fn pipeline_protocol_inventory_census_v1(
         operations: inventory.operations().len(),
         operands,
         results,
+        successors,
         block_arguments,
         max_operation_arity,
         pipeline_creates,
@@ -626,23 +653,27 @@ struct CanonicalEpochLoopV1 {
 struct EpochLoopDiscoveryV1 {
     loops: Vec<CanonicalEpochLoopV1>,
     dominators: Vec<HashSet<usize>>,
+    cfg_successors: Vec<Vec<usize>>,
 }
+
+include!("pliron_pipeline_protocol/concrete_cfg_v1.rs");
 
 #[allow(clippy::too_many_arguments)]
 fn verify_one_pipeline(
     context: &Context,
-    dominators: &[HashSet<usize>],
+    control: &mut PipelineControlContextV1<'_>,
     pipeline: PlironOperationSiteV1,
     buffers: u32,
     distance: u32,
     schedule: &[EventSiteV1],
     accesses: &[AccessSiteV1],
-    loops: &[CanonicalEpochLoopV1],
     uniform_roots: &HashSet<Value>,
     uniformity_visit_limit: usize,
     equivalence_resources: &mut EquivalenceResourceMeterV1,
 ) -> Result<PlironPipelineProtocolCertificateV1, PlironPipelineProtocolFindingV1> {
-    let mut containing = loops
+    let discovery = control.discovery;
+    let mut containing = discovery
+        .loops
         .iter()
         .filter(|summary| {
             schedule
@@ -651,8 +682,19 @@ fn verify_one_pipeline(
         })
         .collect::<Vec<_>>();
     if containing.is_empty() {
-        let (epochs, staged_writes, consuming_reads, access_refinement_proven) =
-            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses)?;
+        let same_block = schedule
+            .iter()
+            .map(|event| event.site)
+            .chain(accesses.iter().map(|access| access.site))
+            .all(|site| site.block() == pipeline.block());
+        let (epochs, staged_writes, consuming_reads, access_refinement_proven) = if same_block {
+            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses)?
+        } else {
+            let actions = verify_cross_block_concrete_trace_v1(
+                context, control, pipeline, schedule, accesses,
+            )?;
+            verify_ordered_concrete_schedule(context, pipeline, buffers, &actions)?
+        };
         return Ok(PlironPipelineProtocolCertificateV1 {
             pipeline_block: pipeline.block(),
             pipeline_operation: pipeline.operation(),
@@ -683,7 +725,12 @@ fn verify_one_pipeline(
     }
     if summary.body_members.contains(&pipeline.block())
         || summary.header == pipeline.block()
-        || !pipeline_creation_dominates_schedule(dominators, pipeline, schedule, accesses)
+        || !pipeline_creation_dominates_schedule(
+            &discovery.dominators,
+            pipeline,
+            schedule,
+            accesses,
+        )
     {
         return Err(invalid(
             pipeline,
@@ -912,32 +959,41 @@ fn verify_concrete_schedule(
             "non-loop pipeline events span multiple blocks, so execution order is not unique",
         ));
     }
-    let mut ordered = schedule.to_vec();
-    ordered.sort_by_key(|event| event.site.operation());
+    if let Some(access) = accesses
+        .iter()
+        .find(|access| access.site.block() != first_block)
+    {
+        return Err(invalid(
+            pipeline,
+            Some(access.site),
+            "a straight-line pipeline access is outside the entry block",
+        ));
+    }
+    let mut actions = schedule
+        .iter()
+        .map(ConcreteActionV1::Event)
+        .chain(accesses.iter().map(ConcreteActionV1::Access))
+        .collect::<Vec<_>>();
+    actions.sort_by_key(|action| match action {
+        ConcreteActionV1::Event(event) => (event.site.operation(), 1_u8),
+        ConcreteActionV1::Access(access) => (access.site.operation(), 0_u8),
+    });
+    verify_ordered_concrete_schedule(context, pipeline, buffers, &actions)
+}
+
+fn verify_ordered_concrete_schedule(
+    context: &Context,
+    pipeline: PlironOperationSiteV1,
+    buffers: u32,
+    actions: &[ConcreteActionV1<'_>],
+) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let mut slots = vec![SlotStateV1::Free; buffers as usize];
     let mut epochs = HashSet::new();
-    let mut ordered_accesses = accesses.to_vec();
-    ordered_accesses.sort_by_key(|access| access.site.operation());
-    let mut next_event = 0;
-    let mut next_access = 0;
     let mut staged_writes = 0;
     let mut consuming_reads = 0;
     let mut initialized = HashMap::<u64, HashSet<Vec<Value>>>::new();
-    while next_event < ordered.len() || next_access < ordered_accesses.len() {
-        let event_precedes = next_access == ordered_accesses.len()
-            || (next_event < ordered.len()
-                && ordered[next_event].site.operation()
-                    < ordered_accesses[next_access].site.operation());
-        if !event_precedes {
-            let access = ordered_accesses[next_access].clone();
-            next_access += 1;
-            if access.site.block() != first_block {
-                return Err(invalid(
-                    pipeline,
-                    Some(access.site),
-                    "a straight-line pipeline access is outside the entry block",
-                ));
-            }
+    for action in actions.iter().copied() {
+        if let ConcreteActionV1::Access(access) = action {
             let Some(slot) = index_constant(context, access.slot) else {
                 return Err(invalid(
                     pipeline,
@@ -996,8 +1052,9 @@ fn verify_concrete_schedule(
             }
             continue;
         }
-        let event = ordered[next_event];
-        next_event += 1;
+        let ConcreteActionV1::Event(event) = action else {
+            unreachable!("access actions continue above")
+        };
         let Some(kind) = event.kind else {
             return Err(invalid(
                 pipeline,
@@ -1112,3 +1169,5 @@ fn report(finding: PlironPipelineProtocolFindingV1) -> PlironPipelineProtocolRep
 }
 
 include!("pliron_pipeline_protocol/resource_tests.rs");
+
+include!("pliron_pipeline_protocol/concrete_cfg_v1_tests.rs");
