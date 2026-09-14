@@ -1,5 +1,14 @@
 # Runtime Swarm Dispatch After R114
 
+R115 progression: [lower returning-control cleanup](runtime-returning-control-cleanup-v1.md)
+is now locally accepted with [285 retained artifacts](evidence/local-r115-returning-control-cleanup-2026-09-14/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,727 tests with
+five ignored; all 17 source gates, ten auxiliary checks, 15/37/7/9 restored
+suites and 16 compiled negatives pass. This accepts only the lower returning
+subset, not persistent/data cleanup, live retake, queue teardown, native,
+formal or performance qualification. Native next takes the
+[detached-persistent handoff](runtime-detached-persistent-control-cleanup-v1.md).
+
 R114 locally accepts [pristine control cleanup and terminal parent transport](runtime-pristine-control-cleanup-v1.md).
 The [254-artifact evidence packet](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md)
 passes independent review. This supersedes the [candidate dispatch](runtime-swarm-dispatch-r114-candidate.md),
@@ -7,11 +16,12 @@ not the retained contracts and history in the [complete packet map](runtime-swar
 Issue [#182](https://github.com/harsh-nod/fe2o3/issues/182) remains open;
 A1/A2 and full HIP/HSA parity are not complete.
 
-This work breakdown was refreshed against accepted source
+The original work breakdown was refreshed against accepted source
 `9eaf19141e8af6ade490feba3062c8b49d9b38ca` and the open issues on 2026-09-13.
-It records reviewed assignments, not acceptance of the next implementation.
+The R115 progression above updates the current assignments; the original
+R114 boundary and handoff details remain historical evidence.
 
-## Accepted Boundary
+## Historical R114 Boundary
 
 GNU and musl each pass 2,712 tests with five ignored across 48 libtest harnesses
 and the unchanged harnessless CSV benchmark. All 17 source gates, ten auxiliary
@@ -35,9 +45,9 @@ serialized builds, proof/hardware scheduling and signed dual-remote publication.
 
 | Owner | Immediate Packet | Following Queue |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N4-R2 returning-control cleanup, reusing the accepted R114 lower adapter | Persistent/ordinary bridges, data cleanup, applicable live/queue teardown, then N5 DATA-ADOPT |
+| Native: `native_replacement_handoff` | N4-R2 detached persistent-control cleanup above locally accepted R115 | Persistent returned-data/ordinary bridges, data cleanup, applicable live/queue teardown, then N5 DATA-ADOPT |
 | Admission: `submission_identity_handoff` | Qualify and integrate isolated C1; C2/C3 coverage can advance independently | Joint I2 ISSUE, C4 COMPLETE, C5 typed future/join, C6 generated GRAPH/DRAIN |
-| Resources: `r102_evidence_review` | Freeze V3 settlement and implement its model/cost tests | V4 proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
+| Resources: `r102_evidence_review` | Integrate and qualify the isolated V3 settlement model/cost candidate | V4 proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
 | Primary | Integrate one reviewed packet at a time; own Q1/Q2/Q3 and release gate #277 | Coordinate A3-A7 and publish only the evidence actually obtained |
 
 ### Ready Now
@@ -49,9 +59,9 @@ Native's tests, and Resources supplies settlement/accounting contracts.
 
 | Lane | Independent Start | Does Not Yet Close |
 | --- | --- | --- |
-| Native | R115 / N4-R2 returning-control root and its production-used lower adapter tests | Persistent bridges, data disposal, live retake, queue teardown, N5 adoption |
+| Native | N4-R2 detached persistent-control root using the reviewed handoff | Persistent returned-data bridges, data disposal, live retake, queue teardown, N5 adoption |
 | Admission | Integrate and qualify the isolated C1 candidate; C2-A/B and C3-A/B can be prepared independently | Actual generated ISSUE, COMPLETE, typed output or graph execution |
-| Resources | Freeze V3's settlement contract, then model/cost implementation; start V4's accepted V1/V2 properties and M1-M3 design independently | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
+| Resources | Integrate and qualify the isolated V3 settlement candidate; start V4's accepted V1/V2 properties and M1-M3 design independently | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
 | Primary | Specify Q1/Q2/Q3 evidence contracts and #277's missing feature-enabled release audit | New proof, hardware, release-policy or performance acceptance |
 
 Each handoff names source ownership, prerequisites, exact positive/rejection
@@ -61,12 +71,15 @@ solver or hardware jobs running unattended.
 
 ## Native Packets
 
-1. **N4-R2 returning controls:** Start with `release_non_data_after_recycle`,
-   `release_non_data_for_returning_destroy` and shared `release_non_data` in
-   `crates/fe2o3-kfd/src/queue_dispatch_binding.rs`. Root the entire owner before
-   validation; reserve returned-data capacity before disposal. Reuse
-   `ControlCleanupCustodyV1`, but preserve kernarg-first, **forward code order**.
-   R114's pristine orchestration deliberately uses reverse code order.
+1. **N4-R2 detached persistent controls:** Apply the
+   [reviewed handoff](runtime-detached-persistent-control-cleanup-v1.md) to
+   `release_detached_persistent_control_v1` in
+   `crates/fe2o3-kfd/src/queue_dispatch_binding.rs`. Root the complete owner
+   before generation/state validation, preserve the separate detached data
+   owner, and share kernarg-first, **forward code order** cleanup. This unit
+   result needs no returned-data allocation or extraction. R115 already
+   accepts the lower `release_non_data_after_recycle` and
+   `release_non_data_for_returning_destroy` paths.
 2. **Persistent/ordinary bridges and data cleanup:** Preserve each API's exact
    returned-data-on-error behavior. Cover every supported host/device and
    initialized/uninitialized variant, retained charges, untouched suffix and
@@ -83,7 +96,7 @@ R2's decisive tests cover first/middle/last controls, unmap/free/VA-release and
 currentness failures, model-commit rejection, incomplete callbacks, one-shot
 retry rejection, exact returned data and pre-effect validation/capacity failure.
 
-### R115 Handoff
+### Accepted R115 Lower Contract
 
 The returning root must own the complete original dispatch before generation
 validation, then validate data/premise cardinality and reserve return capacity
@@ -129,8 +142,9 @@ adapter. Existing ordinary async, graph/drain and decoder machinery is extended.
 
 ## Resources Packets
 
-Freeze the [V3 settlement draft](runtime-context-version-settlement-v1.md), then
-implement Success, NoEffect and sticky Unknown. Validate the complete touched
+Integrate and qualify the isolated candidate for the
+[V3 settlement contract](runtime-context-version-settlement-v1.md), frozen on
+2026-09-14: Success, NoEffect and sticky Unknown. Validate the complete touched
 chain before mutation; preserve burned epochs and disjoint writers. Reuse the
 seven vectors with O(k) touched work, no commit-time growth and no unrelated
 arena scans. Require independent reference traces, full test auditors,
@@ -147,7 +161,7 @@ Model evidence does not authenticate a production completion or NoEffect receipt
 
 | Packet | Bounded Deliverable And Exit |
 | --- | --- |
-| V3 | Add settlement and public/private Unknown to the existing journal model. Freeze full-reference inert evidence and error precedence before coding. Success advances lineage; NoEffect preserves lineage and burned epochs; Unknown retains the complete chain. |
+| V3 | Add settlement and public/private Unknown to the existing journal model using the frozen full-reference inert evidence and error precedence. Success advances lineage; NoEffect preserves lineage and burned epochs; Unknown retains the complete chain. |
 | V4 | Authenticate named issuance/membership/settlement properties with solver results, negative mutations and actual Rust/model correspondence. Stable V1/V2 work can start before V3 completes. |
 | V5/V6 | Join the production Context journal and initial mutation hooks using authentic existing IDs and private move-only tickets. Begin precedes effects; settlement precedes callbacks. A backend error is not NoEffect authority. |
 | V7 | Cover every mutation family, bounded ordered writers and explicit Unknown recovery. Host-write/copy-only coverage is insufficient. |

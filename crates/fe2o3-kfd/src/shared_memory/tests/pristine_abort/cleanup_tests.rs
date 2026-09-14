@@ -193,7 +193,7 @@ fn device_records(e: &SharedMemoryEngine<FakeBackend>) -> Vec<DeviceSnapshot> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Snapshot {
+pub(crate) struct Snapshot {
     model: MemoryLifecycleStateV1,
     identity: fe2o3_runtime_model::DeviceIdentityStateV1,
     certificate: Option<crate::queue::QueueCertificateSnapshotV1>,
@@ -211,6 +211,149 @@ struct Snapshot {
     currentness: usize,
     process_poisoned: usize,
     storage: [(usize, usize); 2],
+}
+
+impl PristineAbortMemoryFixtureV1 {
+    pub(crate) fn memory_snapshot(&self) -> Snapshot {
+        let f = &self.fixture;
+        let e = &f.engine;
+        Snapshot {
+            model: f.foundation.memory().clone(),
+            identity: f.foundation.identity().clone(),
+            certificate: f.foundation.certificate_snapshot_for_test(),
+            controls: Vec::new(),
+            records: allocation_records(e),
+            devices: device_records(e),
+            phase: e.phase,
+            retained_va: e.retained_gpu_va_bytes,
+            usage: (
+                e.host_backing_account.as_ref().map(|a| a.usage()),
+                f.usage(),
+            ),
+            calls: e.backend.cleanup_calls.clone(),
+            operations: e.backend.operations.clone(),
+            currentness: e.backend.currentness_calls,
+            process_poisoned: self.process_poisoned,
+            storage: [
+                (e.allocations.as_ptr() as usize, e.allocations.capacity()),
+                (
+                    e.device_memory.as_ptr() as usize,
+                    e.device_memory.capacity(),
+                ),
+            ],
+        }
+    }
+}
+
+impl Snapshot {
+    pub(crate) fn assert_control_transition(
+        &self,
+        memory: &PristineAbortMemoryFixtureV1,
+        order: &[SharedGttAllocationIdentityV1],
+        completed: usize,
+        unmapped: bool,
+        partial_calls: usize,
+        active_native: Option<(bool, usize, bool, bool)>,
+    ) {
+        let after = memory.memory_snapshot();
+        let mut expected_model = self.model.clone();
+        for (index, id) in order
+            .iter()
+            .enumerate()
+            .take(completed + usize::from(unmapped))
+        {
+            let (reservation, allocation, mapping) =
+                model_keys(memory.fixture.vm, id.id, id.generation);
+            expected_model = project_unmap(&expected_model, mapping).unwrap();
+            if index < completed {
+                expected_model =
+                    project_release(&expected_model, reservation, allocation, mapping).unwrap();
+            }
+        }
+        assert_eq!(
+            after.model, expected_model,
+            "exact committed cleanup prefix"
+        );
+        let mut expected_calls = self.calls.clone();
+        for (index, id) in order
+            .iter()
+            .enumerate()
+            .take(completed + usize::from(partial_calls > 0))
+        {
+            assert_eq!(id.session_id, memory.fixture.engine.session_id);
+            let r = self
+                .records
+                .iter()
+                .find(|r| (r.id, r.generation) == (id.id, id.generation))
+                .unwrap();
+            let m = r.mapping.as_ref().unwrap();
+            let reservation = r.reservation.unwrap();
+            let calls = [
+                CleanupCallV1::UnmapGpu(r.handle.unwrap(), 0),
+                CleanupCallV1::UnmapCpu(m.address, m.pointer, m.bytes.len()),
+                CleanupCallV1::Free(r.handle.unwrap()),
+                CleanupCallV1::ReleaseVa(reservation.0, reservation.1),
+            ];
+            expected_calls.extend(calls.into_iter().take(if index < completed {
+                4
+            } else {
+                partial_calls
+            }));
+        }
+        assert_eq!(
+            after.calls, expected_calls,
+            "exact native identities and order"
+        );
+        assert_eq!(after.devices, self.devices);
+        assert_eq!(after.usage, self.usage);
+        assert_eq!(after.storage, self.storage);
+        assert_eq!(after.identity, self.identity);
+        let mut released_va = 0;
+        for r in &self.records {
+            let index = order
+                .iter()
+                .position(|id| id.id == r.id && id.generation == r.generation);
+            let expectation = if index.is_some_and(|i| i < completed) {
+                Some((true, 4, true, true))
+            } else if index == Some(completed) {
+                active_native
+            } else {
+                None
+            };
+            let expected = if let Some((unmapped, prefix, settled, free_attempted)) = expectation {
+                let mut record = expected_native_record(r, unmapped, prefix, settled);
+                record.free_attempted |= free_attempted;
+                if settled {
+                    released_va += r.layout.gpu_va_bytes();
+                }
+                record
+            } else {
+                r.clone()
+            };
+            assert_eq!(
+                after.records.iter().find(|a| a.id == r.id).unwrap(),
+                &expected,
+                "exact native record"
+            );
+        }
+        assert_eq!(after.records.len(), self.records.len());
+        assert_eq!(after.retained_va, self.retained_va - released_va);
+        assert_eq!(after.process_poisoned, self.process_poisoned);
+        match (&self.certificate, &after.certificate) {
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    (a.0, a.1, a.2, a.3, a.4, a.5),
+                    (b.0, b.1, b.2, b.3, b.4, b.5)
+                );
+            }
+            (None, None) => {}
+            _ => panic!("cleanup changed certificate identity"),
+        }
+    }
+
+    pub(crate) fn assert_certificate_revision(&self, revision: u64) {
+        assert_eq!(self.certificate.as_ref().map(|c| c.6), Some(revision));
+    }
 }
 
 struct Fixture {
@@ -245,37 +388,13 @@ impl Fixture {
     }
 
     fn snapshot(&self) -> Snapshot {
-        let f = &self.memory.fixture;
-        let e = &f.engine;
-        Snapshot {
-            model: f.foundation.memory().clone(),
-            identity: f.foundation.identity().clone(),
-            certificate: f.foundation.certificate_snapshot_for_test(),
-            controls: self
-                .controls
-                .iter()
-                .map(ControlCleanupCustodyV1::observation)
-                .collect(),
-            records: allocation_records(e),
-            devices: device_records(e),
-            phase: e.phase,
-            retained_va: e.retained_gpu_va_bytes,
-            usage: (
-                e.host_backing_account.as_ref().map(|a| a.usage()),
-                f.usage(),
-            ),
-            calls: e.backend.cleanup_calls.clone(),
-            operations: e.backend.operations.clone(),
-            currentness: e.backend.currentness_calls,
-            process_poisoned: self.memory.process_poisoned,
-            storage: [
-                (e.allocations.as_ptr() as usize, e.allocations.capacity()),
-                (
-                    e.device_memory.as_ptr() as usize,
-                    e.device_memory.capacity(),
-                ),
-            ],
-        }
+        let mut snapshot = self.memory.memory_snapshot();
+        snapshot.controls = self
+            .controls
+            .iter()
+            .map(ControlCleanupCustodyV1::observation)
+            .collect();
+        snapshot
     }
 
     fn clear_faults(&mut self) {
@@ -438,9 +557,18 @@ fn expected_record(
     native_prefix: usize,
     settled: bool,
 ) -> RecordSnapshot {
-    let mut r = record(before, index).clone();
+    expected_native_record(record(before, index), unmapped, native_prefix, settled)
+}
+
+fn expected_native_record(
+    before: &RecordSnapshot,
+    unmapped: bool,
+    native_prefix: usize,
+    settled: bool,
+) -> RecordSnapshot {
+    let mut r = before.clone();
     if unmapped {
-        r.phase = if index == 0 {
+        r.phase = if r.profile == SharedGttProfileV1::Kernarg {
             SharedAllocationPhaseV1::CpuWritable
         } else {
             SharedAllocationPhaseV1::ExecutableImmutable

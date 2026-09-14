@@ -7,6 +7,9 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::{PreparationOwnerRefsV1, PrimaryPreparationSnapshotV1};
 
+#[cfg(test)]
+pub(in crate::queue) use tests::control_release_fixture_v1;
+
 use super::*;
 use crate::shared_memory::{
     GttCpuWritableV1, GttExecutableImmutableV1, RetainedDispatchDataRosterV1,

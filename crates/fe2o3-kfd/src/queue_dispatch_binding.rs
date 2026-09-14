@@ -7,6 +7,9 @@
 
 #![allow(dead_code)]
 
+#[path = "queue_dispatch_binding/control_release.rs"]
+pub(crate) mod control_release;
+
 #[path = "queue_dispatch_binding/preparation.rs"]
 pub(crate) mod preparation;
 pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
@@ -2670,8 +2673,10 @@ impl DispatchResourceOwnerV1 {
         self,
         memory: &mut SharedGttMemorySessionV1,
     ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
-        let generation = self.generation.returned_generation()?;
-        self.release_non_data(memory, generation)
+        self.release_non_data(
+            memory,
+            control_release::ReturningControlModeV1::AfterRecycle,
+        )
     }
 
     /// Releases code and kernarg while returning never-published or recycled data.
@@ -2679,8 +2684,10 @@ impl DispatchResourceOwnerV1 {
         self,
         memory: &mut SharedGttMemorySessionV1,
     ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
-        let generation = self.generation.returning_destroy_generation()?;
-        self.release_non_data(memory, generation)
+        self.release_non_data(
+            memory,
+            control_release::ReturningControlModeV1::ReturningDestroy,
+        )
     }
 
     /// Releases code and kernarg while returning the persistent data owner on
@@ -2758,27 +2765,13 @@ impl DispatchResourceOwnerV1 {
     fn release_non_data(
         self,
         memory: &mut SharedGttMemorySessionV1,
-        generation: u64,
+        mode: control_release::ReturningControlModeV1,
     ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
-        if self.data.len() != self.data_premises.len() {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: self.data.len().min(self.data_premises.len()),
-                detail: "retained data/premise cardinality",
-            });
-        }
-        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
-        memory.release(kernarg)?;
-        for code in self.code {
-            let code = memory.unmap_executable_from_gpu(code.into_token())?;
-            memory.release_executable(code)?;
-        }
-        let data = self
-            .data
-            .into_iter()
-            .zip(self.data_premises)
-            .map(|(authority, premise)| ReturnedDispatchDataLeaseV1 { authority, premise })
-            .collect();
-        Ok(ReturnedDispatchDataV1 { generation, data })
+        control_release::release_returning_with_v1(
+            control_release::ReturningControlCleanupCustodyV1::new(self, mode),
+            memory,
+            core::mem::forget,
+        )
     }
 
     fn require_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {

@@ -219,6 +219,22 @@ impl PristineAbortMemoryFixtureV1 {
         ));
     }
 
+    pub(crate) fn exhaust_control_commit(&mut self, ordinal: usize, release: bool) {
+        let f = &mut self.fixture;
+        f.foundation
+            .mint_invariant_certificate(f.engine.session_id, f.device, f.vm)
+            .unwrap();
+        self.projection_fault = Some((
+            ordinal,
+            if release {
+                control_cleanup::CleanupStageV1::ReleaseCommit
+            } else {
+                control_cleanup::CleanupStageV1::UnmapCommit
+            },
+            transitions::ProjectionFaultV1::ExhaustRevision,
+        ));
+    }
+
     pub(crate) fn is_quarantined(&self) -> bool {
         self.fixture.engine.phase == SharedMemorySessionPhaseV1::Quarantined
     }

@@ -89,6 +89,14 @@ struct DataRecordObservation {
 }
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn fail_cleanup(&mut self, operation: &'static str, panic: bool) {
+        if panic {
+            self.fixture.engine.backend.panic_operation = Some(operation);
+        } else {
+            self.fixture.engine.backend.fail_operation = Some(operation);
+        }
+    }
+
     pub(crate) fn retain_replay(
         &self,
         data: &mut Option<Gfx942FixedDispatchDataV1>,

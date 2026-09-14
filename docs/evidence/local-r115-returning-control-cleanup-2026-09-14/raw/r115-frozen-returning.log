@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 15 tests
+test queue::dispatch_binding::control_release::tests::returning_consuming_methods_use_shared_root_before_validation ... ok
+test queue::dispatch_binding::control_release::tests::returning_cancelled_only_history_returns_zero_without_recycle ... ok
+test queue::dispatch_binding::control_release::tests::returning_cardinality_and_capacity_reject_before_native_entry ... ok
+test queue::dispatch_binding::control_release::tests::returning_generation_rejection_precedes_cardinality_and_preserves_full_owner ... ok
+test queue::dispatch_binding::control_release::tests::returning_incomplete_callbacks_cannot_advance_extract_or_retry ... ok
+test queue::dispatch_binding::control_release::tests::returning_modes_preserve_cancelled_history_max_recycle_and_exhaustion ... ok
+test queue::dispatch_binding::control_release::tests::returning_actual_commit_rejection_retains_native_settlement_without_model_commit ... ok
+test queue::dispatch_binding::control_release::tests::returning_partial_unmap_keeps_original_authority_at_each_position ... ok
+test queue::dispatch_binding::control_release::tests::returning_populated_preparation_metadata_survives_rejection_and_cleanup ... ok
+test queue::dispatch_binding::control_release::tests::returning_populated_metadata_survives_real_destructive_errors_and_panics ... ok
+test queue::dispatch_binding::control_release::tests::returning_success_preserves_exact_data_premises_storage_and_forward_order ... ok
+test queue::dispatch_binding::control_release::tests::returning_wrapper_retains_full_root_before_error_or_original_panic ... ok
+test queue::dispatch_binding::control_release::tests::returning_native_failures_retain_every_control_position_and_exact_prefix ... ok
+test queue::dispatch_binding::control_release::tests::returning_projection_failures_retain_disposal_receipt_and_uncommitted_model ... ok
+test queue::dispatch_binding::control_release::tests::returning_currentness_failures_preserve_mapped_unmapped_and_disposed_custody ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1103 filtered out; finished in 0.10s
+

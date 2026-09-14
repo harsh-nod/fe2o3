@@ -1,10 +1,34 @@
-# Context Version Journal Settlement V1: Design Draft
+# Context Version Journal Settlement V1
 
-Status: reviewed design decisions for V3, not a frozen implementation contract,
-implemented API or qualification result. The parent is the locally accepted
+Status: V3 model implementation contract frozen on 2026-09-14 after source and
+test handoff review. An isolated implementation candidate is present, but is not
+integrated into this branch or accepted by immutable packet qualification.
+The parent is the locally accepted
 R113/V2 [membership model](runtime-context-version-membership-v1.md).
-See the [swarm map](runtime-swarm-next-packets.md). V3 contract freeze is next;
-R113 acceptance does not qualify settlement or production integration.
+See the [swarm map](runtime-swarm-next-packets.md). R113 acceptance does not
+qualify settlement or production integration.
+
+## Isolated Candidate
+
+The local `fe2o3-v3-settlement` candidate implements the three transitions,
+Unknown lookup and retained-chain auditing. Seventeen settlement tests now pass,
+including independent map/phase traces, exact rejection snapshots, disjoint
+Pending/Unknown writers, below-watermark settlement, lineage gaps, slot replay,
+capacity independence and touched-prefix work counts. Sixteen are behavioral
+tests and one is a supplemental structural guard.
+
+The current candidate passes all 761 model tests with two ignored, including
+40 journal tests, and strict all-feature/all-target Clippy. These are fresh runs
+after the seventeenth lineage-isolation test was added. The earlier sixteen-test
+revision's 39 journal and 760 full-model passes remain separately recorded;
+they are not relabeled as executions of the changed source. The runner records
+remain local preliminary evidence, not an accepted or published packet.
+
+Remaining acceptance includes integration and fresh full dependency-closure
+GNU/musl checks, compiled behavioral negatives, exact restoration and immutable
+evidence review.
+Production Context hooks, authenticated receipts, formal correspondence, native
+execution, reuse and performance remain outside this model candidate.
 
 ## Boundary
 
@@ -12,7 +36,7 @@ Extend the executable model's retained writer/member state only. Do not add a
 production Context consumer, allocator, ID map, authenticated receipt producer,
 native completion path, recovery operation or cross-run reuse permission.
 
-Proposed operations are `settle_success`, `settle_no_effect` and `mark_unknown`.
+The model operations are `settle_success`, `settle_no_effect` and `mark_unknown`.
 Success and NoEffect take a borrowed inert projection binding the complete
 writer reference: slot, Context generation, local identity and writer kind.
 These projections describe a model premise; freely constructing one supplies
@@ -23,6 +47,40 @@ Borrowed evidence remains unchanged on rejection. Success removes the exact
 writer from the journal, making replay invalid even though the descriptive
 projection remains in its caller's possession. Slot reuse cannot revive it:
 the existing nonwrapping writer IDs and registration watermark still apply.
+
+## Model API
+
+Add `ContextWriterSuccessEvidenceV1` and `ContextWriterNoEffectEvidenceV1`, each
+an inert `Clone + Copy + Debug + Eq + PartialEq` projection with one public field:
+`writer: ContextWriterReferenceV1`. They carry different model premises, not
+different runtime authority. Do not introduce a constructor that claims to
+authenticate completion, quiescence or lack of effects.
+
+The following methods belong to the existing `ContextVersionJournalV1`:
+
+```rust
+pub fn settle_success(
+    &mut self,
+    writer: ContextWriterReferenceV1,
+    evidence: &ContextWriterSuccessEvidenceV1,
+) -> Result<(), ContextVersionJournalErrorV1>;
+
+pub fn settle_no_effect(
+    &mut self,
+    writer: ContextWriterReferenceV1,
+    evidence: &ContextWriterNoEffectEvidenceV1,
+) -> Result<(), ContextVersionJournalErrorV1>;
+
+pub fn mark_unknown(
+    &mut self,
+    writer: ContextWriterReferenceV1,
+) -> Result<(), ContextVersionJournalErrorV1>;
+```
+
+Add public `ContextWriterStateV1::Unknown { member_count }`, the matching private
+`WriterEntryV1::Unknown { key, head, count }`, and
+`ContextVersionJournalErrorV1::SettlementEvidenceMismatch`. Existing lookups
+must distinguish Unknown from Pending without releasing its allocation links.
 
 ## Transitions
 
@@ -49,7 +107,7 @@ allocation-free stack or Reserved-only count. They affect no disjoint writer.
 Before any scratch or persistent-state write, validate:
 
 1. Exact writer reference and eligible phase, otherwise `InvalidReference`.
-2. Success/NoEffect evidence equality, otherwise the proposed
+2. Success/NoEffect evidence equality, otherwise
    `SettlementEvidenceMismatch` error.
 3. Retained header and complete touched chain, otherwise `InvalidState`.
 4. For releasing settlements, checked return-stack headroom and sufficient
@@ -61,6 +119,8 @@ Every node must bind the exact writer and exact allocation reference, and its
 allocation must point back to that member. Full allocation keys must increase
 strictly; the final `next` must be None. This rejects repeated nodes, cycles,
 truncation and overlong chains in the touched roster without scanning all arenas.
+An invalid allocation reference found inside a retained member is corrupted
+journal state and returns `InvalidState`, not `InvalidAllocationReference`.
 
 Each member's admitted epoch must equal its allocation's attempt epoch, and its
 prior lineage must equal that allocation's current lineage. Require
@@ -88,7 +148,7 @@ borrow. There must be no remaining allocation, callback, native operation or
 fallible computation. Return members in canonical chain order for deterministic
 tests, then return the writer slot. No half-settlement may become observable.
 
-Each operation targets O(k) touched work, independent of unrelated A/W, with no
+Each operation targets O(k + 1) touched work, independent of unrelated A/W, with no
 commit-time vector growth. Keep complete arena scans in test auditors, not the
 transition. Fixed-k tests must pin the actual implementation's counted work;
 source guards and counters alone are not authenticated complexity proofs.
@@ -127,3 +187,22 @@ authenticated quiescence or disposal receipt.
 Formal, production/native and performance qualification remain separate. V4
 must authenticate named properties and their Rust/model correspondence; no test
 inventory or model fixture can supply that evidence.
+
+## Implementation Handoff
+
+Extend `crates/fe2o3-runtime-model/src/context_version_journal.rs`, not a second
+journal. A shared read-only retained-chain validator may feed releasing
+settlement and Unknown separately. Unknown must not inherit release headroom
+or scratch requirements. Keep planning and commit under one exclusive borrow.
+
+Preserve all 23 accepted journal tests, including V2 membership. Extend the full
+auditor for Unknown, strict retained-key ordering and the prior-lineage/attempt
+inequality. Add a lineage-aware independent reference model: V2's membership
+oracle assumes lineage zero and cannot validate settlement unchanged.
+
+Keep existing issuance access counts `4/1/3` and Begin's `12k + 2`. New cost tests
+must count the actual accepted, rejected and repeated-Unknown paths across
+larger unrelated populations. Preserve all seven storage pointers/capacities.
+Narrow the existing textual Begin/helper guard boundaries deliberately when
+adding settlement helpers; legal preflight-bounded member returns are not Begin
+growth. Add separate settlement guards and behavioral mutation tests.

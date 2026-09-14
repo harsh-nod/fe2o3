@@ -1,0 +1,91 @@
+{
+  "source_head": "0265025b96f25a7cb79c97b576bb25cb38b15df5",
+  "source_map_sha256": "0baf04dafa1967cc3e2e77e91fe5be126d1a6e3684b533f3f49184693d55a1b2",
+  "started_at": "2026-09-14T17:19:26.485Z",
+  "finished_at": "2026-09-14T17:20:10.928Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::returning_incomplete_callbacks_cannot_advance_extract_or_retry",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r115-qualified-mut-accept-incomplete-callback.log",
+  "source": "/home/harsh/.codex-tmp/r115-qualified-mut-accept-incomplete-callback-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r115-qualified-mut-accept-incomplete-callback-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r115-run-v4.js",
+    "sha256": "cb90e12397321b9208e276800df9b1440b6191cb0e06685f4744d0baced27cbb"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 281100,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789406410934,
+        "monotonic_ns": "6096390116258",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 44.442680657,
+  "verification_elapsed_seconds": 0.273490418,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r115-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r115-qualified-restoration-remove-active-custody.json",
+      "sha256": "8d4c67b0313c49c93958f094d91664886f7a78a2e03b3e44e6268fcd1b0946e8",
+      "observation": {
+        "utc_ms": 1789406365313,
+        "monotonic_ns": "6050769160208",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789406366485,
+      "monotonic_ns": "6051940760817",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789406410928,
+      "monotonic_ns": "6096383441474",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789406411201,
+      "monotonic_ns": "6096656931892",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

@@ -9,6 +9,14 @@ use crate::shared_memory::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourceOwnerV1) {
+    let mut memory = Memory::new(true);
+    let data = memory.roster();
+    let mut custody = FixedDispatchPreparationCustodyV1::new([packet(2)], data);
+    run(&mut custody, &mut memory).unwrap();
+    (memory, custody.take_completed().unwrap())
+}
+
 #[test]
 fn preparation_bind_callers_root_before_loan_and_transfer_after_settlement() {
     let source = include_str!("../queue_live/fixed_dispatch.rs");

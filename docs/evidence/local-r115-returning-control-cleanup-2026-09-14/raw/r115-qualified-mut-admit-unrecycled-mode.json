@@ -1,0 +1,91 @@
+{
+  "source_head": "0265025b96f25a7cb79c97b576bb25cb38b15df5",
+  "source_map_sha256": "e526a6e6f3aed4176a01ed421642bbd2d5f9a35980d6025d38704b7d17be4d2f",
+  "started_at": "2026-09-14T17:14:51.635Z",
+  "finished_at": "2026-09-14T17:15:37.236Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::returning_modes_preserve_cancelled_history_max_recycle_and_exhaustion",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r115-qualified-mut-admit-unrecycled-mode.log",
+  "source": "/home/harsh/.codex-tmp/r115-qualified-mut-admit-unrecycled-mode-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r115-qualified-mut-admit-unrecycled-mode-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r115-run-v4.js",
+    "sha256": "cb90e12397321b9208e276800df9b1440b6191cb0e06685f4744d0baced27cbb"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 265482,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789406137244,
+        "monotonic_ns": "5822699983759",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 45.601000266,
+  "verification_elapsed_seconds": 0.267957514,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r115-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r115-qualified-restoration-reverse-control-order.json",
+      "sha256": "f922a1089e0bcd1a4253c172ac89db9d7856f6271dcfd4fde29dd16ca61e604d",
+      "observation": {
+        "utc_ms": 1789406090644,
+        "monotonic_ns": "5776100339374",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789406091635,
+      "monotonic_ns": "5777090938778",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789406137236,
+      "monotonic_ns": "5822691939044",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789406137504,
+      "monotonic_ns": "5822959896558",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

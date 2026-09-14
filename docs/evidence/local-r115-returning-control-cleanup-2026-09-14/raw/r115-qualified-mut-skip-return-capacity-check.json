@@ -1,0 +1,91 @@
+{
+  "source_head": "0265025b96f25a7cb79c97b576bb25cb38b15df5",
+  "source_map_sha256": "0930cc6d54d5f83f4f0feab690908ef3dbf35bbf7fe24c0da5d9e11d8d8d82fc",
+  "started_at": "2026-09-14T17:17:08.959Z",
+  "finished_at": "2026-09-14T17:17:54.381Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::returning_cardinality_and_capacity_reject_before_native_entry",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r115-qualified-mut-skip-return-capacity-check.log",
+  "source": "/home/harsh/.codex-tmp/r115-qualified-mut-skip-return-capacity-check-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r115-qualified-mut-skip-return-capacity-check-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r115-run-v4.js",
+    "sha256": "cb90e12397321b9208e276800df9b1440b6191cb0e06685f4744d0baced27cbb"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 273582,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789406274388,
+        "monotonic_ns": "5959844363853",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 45.422062359,
+  "verification_elapsed_seconds": 0.288327571,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r115-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r115-qualified-restoration-skip-cardinality.json",
+      "sha256": "d11b7ebab5cedc0da43db2bb7778ae645bab2d7aaa22e9c4d68027aa3dda0156",
+      "observation": {
+        "utc_ms": 1789406227886,
+        "monotonic_ns": "5913341503958",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789406228959,
+      "monotonic_ns": "5914415259754",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789406274381,
+      "monotonic_ns": "5959837322113",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789406274670,
+      "monotonic_ns": "5960125649684",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

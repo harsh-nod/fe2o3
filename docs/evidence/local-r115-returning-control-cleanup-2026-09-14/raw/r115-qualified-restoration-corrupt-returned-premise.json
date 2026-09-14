@@ -1,0 +1,35 @@
+{
+  "source_head": "0265025b96f25a7cb79c97b576bb25cb38b15df5",
+  "manifest_sha256": "aac4d1ba3a3c1d77f4a1b467fe207b465a0d9d00b029be1d5fb6204405ac972b",
+  "source_map_sha256": "cb4cbb046fa2394f900723ce8bbf6a37a26624fd6114026c9f29fbe576a9eeab",
+  "mutated_source_sha256": "a2d0d17c108c601a55fb1a866d99e85e6de20f07cb74e6f719ecc4aab6aabcd0",
+  "source_unchanged": true,
+  "source_identities": 5685,
+  "clock": {
+    "contract": "r115-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "restoration",
+    "start": {
+      "utc_ms": 1789406546601,
+      "monotonic_ns": "6232056515623",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789406546899,
+      "monotonic_ns": "6232354817827",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r115-qualified-mut-corrupt-returned-premise.json",
+      "sha256": "a24e92d1d1a78297dbd78fcef7e3d4c2cffa6f434214073013f87152d63d895d",
+      "observation": {
+        "utc_ms": 1789406546545,
+        "monotonic_ns": "6232001370734",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "source_head": "0265025b96f25a7cb79c97b576bb25cb38b15df5",
+  "manifest_sha256": "aac4d1ba3a3c1d77f4a1b467fe207b465a0d9d00b029be1d5fb6204405ac972b",
+  "source_map_sha256": "cb4cbb046fa2394f900723ce8bbf6a37a26624fd6114026c9f29fbe576a9eeab",
+  "mutated_source_sha256": "188cb5ef729aae7eb0911c0a70d02d745b986630d33ea0838e14d5fbe70e6b6c",
+  "source_unchanged": true,
+  "source_identities": 5685,
+  "clock": {
+    "contract": "r115-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "restoration",
+    "start": {
+      "utc_ms": 1789406636458,
+      "monotonic_ns": "6321913761441",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789406636803,
+      "monotonic_ns": "6322259334045",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r115-qualified-mut-drop-panic-root.json",
+      "sha256": "a57bc6454e753a50a7a1ab250ed30c4eab4eb7e64c01ceab8fc652ed08ae90f1",
+      "observation": {
+        "utc_ms": 1789406636405,
+        "monotonic_ns": "6321860784237",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  }
+}
