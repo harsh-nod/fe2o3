@@ -13588,13 +13588,28 @@ impl<'a> SemanticAssertProofsV1<'a> {
                         })() else {
                             continue;
                         };
+                        let mut capture = site;
                         if !self.local_is_value_preserving_alias_of(
                             left_local,
                             state.local,
                             site.block,
                             site.statement,
-                        )? || self.block_defines_local(switch_block, state.local)
-                        {
+                            Some(&mut capture),
+                        )? {
+                            continue;
+                        };
+                        if capture.block != switch_block || capture.statement > statement_count {
+                            continue;
+                        }
+                        // Earlier definitions precede the compared value. Any write from
+                        // its exact alias capture through the guard still invalidates it.
+                        self.charge(statement_count - capture.statement)?;
+                        if self.block_defines_local_in_statement_range_v1(
+                            switch_block,
+                            state.local,
+                            capture.statement,
+                            statement_count,
+                        ) {
                             continue;
                         }
                         scheduled = Some((right, site, switch_block, true_target));
@@ -15977,6 +15992,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 numerator_local,
                 condition_site.block,
                 condition_site.statement,
+                None,
             )? || self.block_defines_local(switch_block, numerator_local)
             {
                 continue;
@@ -16184,6 +16200,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 local,
                 switch_block,
                 block.statements().len(),
+                None,
             )?;
             let discriminant_is_tested = discriminant_is_tested
                 && (discriminant_local == local || !self.block_defines_local(switch_block, local));
@@ -16448,6 +16465,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 tested_local,
                 site.block,
                 site.statement,
+                None,
             )?
         } else {
             false
@@ -16458,6 +16476,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 tested_local,
                 site.block,
                 site.statement,
+                None,
             )?
         } else {
             false
@@ -16521,6 +16540,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         source: usize,
         mut use_block: usize,
         mut use_statement: usize,
+        capture: Option<&mut ScalarAssignmentSiteV1>,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
         // Each followed definition must strictly precede its use in the same block, so
         // the statement index is both the cycle guard and the stack-independent bound.
@@ -16530,6 +16550,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 return Ok(false);
             }
             if candidate == source {
+                if let Some(capture) = capture {
+                    *capture = ScalarAssignmentSiteV1 {
+                        block: use_block,
+                        statement: use_statement,
+                    };
+                }
                 return Ok(true);
             }
             if self.definition_counts.get(candidate).copied() != Some(1) {
@@ -36204,6 +36230,217 @@ mod tests {
                 maximum: u128::from(u64::MAX),
             })
         );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum StatementOrderedUpperBoundCaseV1 {
+        Direct,
+        CopyChain,
+        CheckedResult,
+        WrittenAfterCopy,
+        WrittenAfterComparison,
+        WrittenAfterEdge,
+        AliasRedefined,
+        EscapedValue,
+        EscapedAlias,
+        WrongEdge,
+        BypassedGuard,
+    }
+
+    fn statement_ordered_upper_bound_function(
+        case: StatementOrderedUpperBoundCaseV1,
+    ) -> SemanticFunctionDeclV1 {
+        use StatementOrderedUpperBoundCaseV1 as Case;
+        let assign_value =
+            |operand| typed_assignment(2, U64_TYPE, SemanticRvalueKindV1::Use(operand));
+        let mut entry = Vec::new();
+        let entry_terminator = if matches!(case, Case::CheckedResult) {
+            entry.push(typed_assignment(
+                8,
+                CHECKED_U64_TYPE,
+                SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    SemanticCheckedBinaryOpV1::Add,
+                    typed_operand(1, U64_TYPE),
+                    typed_constant(U64_TYPE, 1, 8),
+                )),
+            ));
+            checked_overflow_terminator(
+                8,
+                SemanticBinaryOpV1::Add,
+                typed_operand(1, U64_TYPE),
+                typed_constant(U64_TYPE, 1, 8),
+                1,
+            )
+        } else if matches!(case, Case::BypassedGuard) {
+            entry.push(assign_value(typed_operand(1, U64_TYPE)));
+            zero_switch(9, BOOL_TYPE, 1, 2)
+        } else {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1))
+        };
+        let mut guard = vec![assign_value(if matches!(case, Case::CheckedResult) {
+            checked_field_operand(8, 0, U64_TYPE)
+        } else {
+            typed_operand(1, U64_TYPE)
+        })];
+        let uses_alias = matches!(
+            case,
+            Case::CopyChain | Case::WrittenAfterCopy | Case::AliasRedefined | Case::EscapedAlias
+        );
+        if uses_alias {
+            for (destination, source) in [(3, 2), (4, 3)] {
+                guard.push(typed_assignment(
+                    destination,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_operand(source, U64_TYPE)),
+                ));
+            }
+        }
+        if matches!(case, Case::WrittenAfterCopy) {
+            guard.push(assign_value(typed_constant(
+                U64_TYPE,
+                u128::from(u64::MAX),
+                8,
+            )));
+        }
+        if matches!(case, Case::AliasRedefined) {
+            guard.push(typed_assignment(
+                4,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+            ));
+        }
+        if matches!(case, Case::EscapedValue | Case::EscapedAlias) {
+            guard.push(typed_assignment(
+                7,
+                U64_POINTER_TYPE,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: typed_place(if uses_alias { 4 } else { 2 }, U64_TYPE),
+                },
+            ));
+        }
+        guard.push(typed_assignment(
+            5,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left: typed_operand(if uses_alias { 4 } else { 2 }, U64_TYPE),
+                right: typed_constant(U64_TYPE, 8_192, 8),
+            },
+        ));
+        if matches!(case, Case::WrittenAfterComparison) {
+            guard.push(assign_value(typed_constant(
+                U64_TYPE,
+                u128::from(u64::MAX),
+                8,
+            )));
+        }
+        let mut addition = Vec::new();
+        if matches!(case, Case::WrittenAfterEdge) {
+            addition.push(assign_value(typed_constant(
+                U64_TYPE,
+                u128::from(u64::MAX),
+                8,
+            )));
+        }
+        addition.push(typed_assignment(
+            6,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                SemanticCheckedBinaryOpV1::Add,
+                typed_operand(2, U64_TYPE),
+                typed_constant(U64_TYPE, 1, 8),
+            )),
+        ));
+        projection_function_with_locals(
+            vec![
+                block(210, entry, entry_terminator),
+                block(
+                    211,
+                    guard,
+                    if matches!(case, Case::WrongEdge) {
+                        zero_switch(5, BOOL_TYPE, 2, 4)
+                    } else {
+                        zero_switch(5, BOOL_TYPE, 4, 2)
+                    },
+                ),
+                block(
+                    212,
+                    addition,
+                    checked_overflow_terminator(
+                        6,
+                        SemanticBinaryOpV1::Add,
+                        typed_operand(2, U64_TYPE),
+                        typed_constant(U64_TYPE, 1, 8),
+                        3,
+                    ),
+                ),
+                block(213, vec![], SemanticTerminatorKindV1::Return),
+                block(214, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(210, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(211, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(212, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(213, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(214, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(215, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(216, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(217, U64_POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(218, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(219, BOOL_TYPE, SemanticLocalRoleV1::Argument(1)),
+            ],
+        )
+    }
+
+    #[test]
+    fn strict_upper_bound_accepts_definitions_before_the_compared_value() {
+        use StatementOrderedUpperBoundCaseV1 as Case;
+        let types = assertion_proof_types();
+        for case in [Case::Direct, Case::CopyChain, Case::CheckedResult] {
+            let function = statement_ordered_upper_bound_function(case);
+            let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+            assert_eq!(
+                proof
+                    .range_at_operand(&typed_operand(2, U64_TYPE), 2, 0)
+                    .unwrap(),
+                Some(UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: 8_191
+                }),
+                "{case:?}",
+            );
+            let assertions = SemanticAssertProofsV1::analyze(&types, &function).unwrap();
+            assert!(assertions[2], "{case:?}");
+            if matches!(case, Case::CheckedResult) {
+                assert!(
+                    !assertions[0],
+                    "the earlier unproved overflow check stays mandatory"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn strict_upper_bound_rejects_stale_captures_and_unauthenticated_edges() {
+        use StatementOrderedUpperBoundCaseV1 as Case;
+        let types = assertion_proof_types();
+        for case in [
+            Case::WrittenAfterCopy,
+            Case::WrittenAfterComparison,
+            Case::WrittenAfterEdge,
+            Case::AliasRedefined,
+            Case::EscapedValue,
+            Case::EscapedAlias,
+            Case::WrongEdge,
+            Case::BypassedGuard,
+        ] {
+            let function = statement_ordered_upper_bound_function(case);
+            assert!(
+                !SemanticAssertProofsV1::analyze(&types, &function).unwrap()[2],
+                "{case:?} must not discharge the checked addition",
+            );
+        }
     }
 
     #[test]
