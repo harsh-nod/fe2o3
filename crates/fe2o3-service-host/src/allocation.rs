@@ -594,6 +594,30 @@ impl fmt::Debug for ServiceHostDispatchRangeV1 {
 }
 
 impl ServiceHostDispatchRangeV1 {
+    // Synthetic addressless metadata only; it grants no allocation or queue authority.
+    #[cfg(test)]
+    pub(crate) const fn inert_test_fixture() -> Self {
+        Self {
+            binding: AllocationBindingV1 {
+                owner: OwnerBindingV1 {
+                    owner_generation: 11,
+                    device_owner_generation: 12,
+                    vm_owner_generation: 13,
+                },
+                id: 1,
+                generation: 1,
+                role_id: AllocationRoleV1::HostDownload as u8,
+                kind_id: AllocationKindV1::HostVisible as u8,
+                extent_bytes: 16_384,
+                alignment: 4_096,
+            },
+            data_index: 0,
+            offset_bytes: 0,
+            extent_bytes: 64,
+            sublease_index: None,
+        }
+    }
+
     /// Returns the checked byte offset without exposing a native address.
     pub const fn offset_bytes(self) -> u64 {
         self.offset_bytes

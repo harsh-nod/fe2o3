@@ -564,6 +564,13 @@ pub struct ServiceCompletedReadRequestV1 {
     range: ServiceHostDispatchRangeV1,
 }
 
+impl ServiceCompletedReadRequestV1 {
+    /// Returns the exact recycled dispatch generation bound to this inert request.
+    pub const fn dispatch_generation(&self) -> u64 {
+        self.dispatch_generation
+    }
+}
+
 /// Inert exact enclosing-snapshot request bound to one recycled generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceCompletedSnapshotRequestV1 {
@@ -2323,6 +2330,39 @@ mod tests {
     }
 
     #[test]
+    fn completed_read_request_reports_its_bound_generation() {
+        const REQUEST: ServiceCompletedReadRequestV1 = ServiceCompletedReadRequestV1 {
+            dispatch_generation: 17,
+            range: ServiceHostDispatchRangeV1::inert_test_fixture(),
+        };
+        const GENERATION: u64 = REQUEST.dispatch_generation();
+        assert_eq!(GENERATION, 17);
+        for dispatch_generation in [1, 17, u64::MAX] {
+            let request = ServiceCompletedReadRequestV1 {
+                dispatch_generation,
+                range: ServiceHostDispatchRangeV1::inert_test_fixture(),
+            };
+            assert_eq!(request.dispatch_generation(), dispatch_generation);
+        }
+    }
+
+    #[test]
+    fn copied_completed_read_request_retains_its_original_generation() {
+        let request = ServiceCompletedReadRequestV1 {
+            dispatch_generation: 17,
+            range: ServiceHostDispatchRangeV1::inert_test_fixture(),
+        };
+        let copied = request;
+        let later_request = ServiceCompletedReadRequestV1 {
+            dispatch_generation: 18,
+            range: request.range,
+        };
+        assert_eq!(request.dispatch_generation(), 17);
+        assert_eq!(copied.dispatch_generation(), 17);
+        assert_eq!(later_request.dispatch_generation(), 18);
+    }
+
+    #[test]
     fn caller_owned_completed_readback_is_exposed_through_kfd_and_service() {
         let lower: fn(
             &mut ComputeAqlQueueSessionV1,
@@ -2339,6 +2379,14 @@ mod tests {
         let _ = (lower, service);
 
         let source = include_str!("queue.rs");
+        let constructor = source
+            .split_once("    pub const fn completed_read_request(\n")
+            .expect("the recycled owner mints completed read requests")
+            .1
+            .split_once("\n    }\n")
+            .expect("request construction remains independently bounded")
+            .0;
+        assert!(constructor.contains("dispatch_generation: self.dispatch_generation"));
         let method = source
             .split_once("    pub fn read_completed_into(\n")
             .expect("caller-owned completed read remains present")
@@ -2359,6 +2407,7 @@ mod tests {
             .find(".read_recycled_fixed_dispatch_data_into(")
             .expect("copy must delegate to caller-owned KFD readback");
         assert!(attempt < generation && generation < range && range < lower);
+        assert!(method[generation..range].contains("StaleDispatchGeneration.into()"));
     }
 
     #[cfg(feature = "qualification-fault-injection")]
