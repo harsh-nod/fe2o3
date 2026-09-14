@@ -10,6 +10,7 @@ mod multi_root_target_lineage_v2;
 mod multi_root_target_lineage_v3;
 mod native_neutral_module_v1;
 mod native_neutral_subject_v1;
+mod native_output_transition_association_v1;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
@@ -64,6 +65,14 @@ pub use native_neutral_module_v1::{
 pub use native_neutral_subject_v1::{
     InertNativeNeutralSubjectV1, NATIVE_NEUTRAL_SUBJECT_BYTES_V1, NATIVE_NEUTRAL_SUBJECT_POLICY_V1,
     NATIVE_NEUTRAL_SUBJECT_VERSION_V1, NativeNeutralSubjectErrorV1, NativeNeutralSubjectIdentityV1,
+};
+pub use native_output_transition_association_v1::{
+    NATIVE_OUTPUT_TRANSITION_ASSOCIATION_HEADER_BYTES_V1,
+    NATIVE_OUTPUT_TRANSITION_ASSOCIATION_MAGIC_V1, NATIVE_OUTPUT_TRANSITION_ASSOCIATION_POLICY_V1,
+    NATIVE_OUTPUT_TRANSITION_ASSOCIATION_VERSION_V1, NativeOutputTransitionAssociationErrorV1,
+    NativeOutputTransitionAssociationInputsV1, NativeOutputTransitionAssociationRefV1,
+    NativeOutputTransitionRootV1, encode_native_output_transition_association_v1,
+    native_output_transition_association_length_v1,
 };
 pub use proof_binding::{
     INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V3, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V3,
