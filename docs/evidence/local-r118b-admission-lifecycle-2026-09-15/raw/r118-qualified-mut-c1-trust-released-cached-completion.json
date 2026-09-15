@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "54e2df4722d85c2d019f4763c6f133cde4574860b0c61a4b516a2a920b1cafe6",
+  "started_at": "2026-09-14T23:39:53.401Z",
+  "finished_at": "2026-09-14T23:40:22.528Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "context::tests::submission_identity_tests::released_cached_token_is_rejected_at_every_ingress",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118-qualified-mut-c1-trust-released-cached-completion.log",
+  "source": "/home/harsh/.codex-tmp/r118-qualified-mut-c1-trust-released-cached-completion-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118-qualified-mut-c1-trust-released-cached-completion-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118-run-v1.js",
+    "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1489606,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789429222534,
+        "monotonic_ns": "28588722504916",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 29.126682691,
+  "verification_elapsed_seconds": 0.249461737,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118-qualified-restoration-c1-trust-cached-completion.json",
+      "sha256": "721ce21ea000160c5d8cc381311d86680d6f5b21ff17e4841034993cb28f6a7c",
+      "observation": {
+        "utc_ms": 1789429190430,
+        "monotonic_ns": "28556619271939",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789429193401,
+      "monotonic_ns": "28559590144593",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789429222528,
+      "monotonic_ns": "28588716827284",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789429222777,
+      "monotonic_ns": "28588966289021",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

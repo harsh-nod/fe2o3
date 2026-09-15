@@ -196,7 +196,7 @@ fn park(
     ready(future).unwrap().unwrap()
 }
 
-fn reserved(h: &mut Harness, drops: Arc<AtomicUsize>) -> RuntimeAsyncReservedTicketV1 {
+pub(super) fn reserved(h: &mut Harness, drops: Arc<AtomicUsize>) -> RuntimeAsyncReservedTicketV1 {
     let calls = Arc::new(AtomicUsize::new(0));
     let ticket = park(h, calls.clone(), drops, 0, false);
     let future = h.handle.try_reserve_prepared_v1(ticket).unwrap();

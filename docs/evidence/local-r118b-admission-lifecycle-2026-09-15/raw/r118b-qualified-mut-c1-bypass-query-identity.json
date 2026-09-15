@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "e6172d76bbfb9a468abe9f83a2263259d0d4c8a36d2b904c204d755282b816da",
+  "started_at": "2026-09-15T02:50:17.507Z",
+  "finished_at": "2026-09-15T02:50:51.819Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "context::tests::submission_identity_tests::every_ingress_rejects_each_coordinate_for_pending_and_event_completed_records",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118b-qualified-mut-c1-bypass-query-identity.log",
+  "source": "/home/harsh/.codex-tmp/r118b-qualified-mut-c1-bypass-query-identity-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118b-qualified-mut-c1-bypass-query-identity-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118b-run-v1.js",
+    "sha256": "c284ed28baf87ea364fcbb12ab0a8228bbe180973e0d0974959998115d759c45"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1983558,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789440651827,
+        "monotonic_ns": "37360483552545",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 34.312435391,
+  "verification_elapsed_seconds": 0.260733777,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118b-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118b-qualified-restoration-c1-bypass-drain-identity.json",
+      "sha256": "3ce767ac4aa17a0dc1df41de295404d1f03a56c7d42fb49e683f39b29c5d4229",
+      "observation": {
+        "utc_ms": 1789440612658,
+        "monotonic_ns": "37321314949560",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789440617507,
+      "monotonic_ns": "37326163450491",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789440651819,
+      "monotonic_ns": "37360475885882",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789440652080,
+      "monotonic_ns": "37360736619659",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

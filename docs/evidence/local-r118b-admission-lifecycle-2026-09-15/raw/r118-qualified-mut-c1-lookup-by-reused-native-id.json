@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "5b0dadd700e0dd4937a78828b230ac2356683dcc54e6e760b7269e5837ebac51",
+  "started_at": "2026-09-14T23:37:02.887Z",
+  "finished_at": "2026-09-14T23:37:34.828Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "context::tests::submission_identity_tests::real_backend_id_reuse_does_not_revive_a_released_cached_token",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118-qualified-mut-c1-lookup-by-reused-native-id.log",
+  "source": "/home/harsh/.codex-tmp/r118-qualified-mut-c1-lookup-by-reused-native-id-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118-qualified-mut-c1-lookup-by-reused-native-id-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118-run-v1.js",
+    "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1480648,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789429054835,
+        "monotonic_ns": "28421023535804",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 31.940775111,
+  "verification_elapsed_seconds": 0.274662537,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118-qualified-restoration-c1-lookup-by-native-id.json",
+      "sha256": "dea5e4bd1c32eebca3b2e2bf86a98c94b35e8d142147e4a32ba71e7cfd444285",
+      "observation": {
+        "utc_ms": 1789429019868,
+        "monotonic_ns": "28386056936072",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789429022887,
+      "monotonic_ns": "28389075717096",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789429054828,
+      "monotonic_ns": "28421016492207",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789429055102,
+      "monotonic_ns": "28421291154744",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

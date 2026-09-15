@@ -1,0 +1,36 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+warning: field `retire` is never read
+  --> crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs:30:9
+   |
+24 | pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
+   |                                    --------------- field in this struct
+...
+30 |     pub retire: AdoptionRetireV1<B>,
+   |         ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.51s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor ... FAILED
+
+failures:
+
+---- async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor stdout ----
+
+thread 'async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor' (1590627) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:317:17:
+assertion `left == right` failed
+  left: []
+ right: [(RuntimeStreamIdV1 { context_generation: 1, local: 1 }, ThreadId(2)), (RuntimeStreamIdV1 { context_generation: 1, local: 2 }, ThreadId(2)), (RuntimeStreamIdV1 { context_generation: 1, local: 3 }, ThreadId(2))]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

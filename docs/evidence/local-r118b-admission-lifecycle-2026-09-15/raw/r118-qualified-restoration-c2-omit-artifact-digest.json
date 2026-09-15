@@ -1,0 +1,62 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "manifest_sha256": "62e084d3ca50068e1a350bb414edd882072dad37c6b48da4080668bd4ff4898a",
+  "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+  "source_unchanged": true,
+  "source_identities": 5692,
+  "mutated_sources": [
+    {
+      "path": "crates/fe2o3-runtime/src/generated_source.rs",
+      "sha256": "7c0dbfaae760bdf4ff952fcf6d26deb29ed18f71409c71b25433224f03b4ec04"
+    }
+  ],
+  "application_attempts": [
+    {
+      "path": "crates/fe2o3-runtime/src/generated_source.rs",
+      "verified": true
+    }
+  ],
+  "restoration": {
+    "restored": true,
+    "quiescent": true,
+    "all_mutant_before_restore": true,
+    "live_members": [],
+    "external_edit": false,
+    "error": null,
+    "files": [
+      {
+        "path": "crates/fe2o3-runtime/src/generated_source.rs",
+        "before_sha256": "7c0dbfaae760bdf4ff952fcf6d26deb29ed18f71409c71b25433224f03b4ec04",
+        "after_sha256": "99596acc3e56e685c018300b784595892b52ac0abd60011e9efc7221c4191034",
+        "write_attempted": true
+      }
+    ]
+  },
+  "clock": {
+    "contract": "r118-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "restoration",
+    "start": {
+      "utc_ms": 1789433182756,
+      "monotonic_ns": "29880217927083",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789433183335,
+      "monotonic_ns": "29880796783649",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r118-qualified-mut-c2-omit-artifact-digest.json",
+      "sha256": "4d8dd76e2d8eca554b9dfddc2f7a57ec4857e943ae4e2985814515fd913a55f2",
+      "observation": {
+        "utc_ms": 1789433182669,
+        "monotonic_ns": "29880131034739",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  }
+}

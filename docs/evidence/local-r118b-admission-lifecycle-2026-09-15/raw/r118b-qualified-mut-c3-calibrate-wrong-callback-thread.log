@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.31s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners ... FAILED
+
+failures:
+
+---- async_engine::tests::owned_tests::preparation_tests::completion_tests::owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners stdout ----
+
+thread 'async_engine::tests::owned_tests::preparation_tests::completion_tests::owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners' (2133869) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:458:9:
+assertion `left == right` failed
+  left: [(RuntimeStreamIdV1 { context_generation: 1, local: 1 }, ThreadId(4)), (RuntimeStreamIdV1 { context_generation: 1, local: 2 }, ThreadId(5)), (RuntimeStreamIdV1 { context_generation: 1, local: 3 }, ThreadId(6))]
+ right: [(RuntimeStreamIdV1 { context_generation: 1, local: 1 }, ThreadId(3)), (RuntimeStreamIdV1 { context_generation: 1, local: 2 }, ThreadId(3)), (RuntimeStreamIdV1 { context_generation: 1, local: 3 }, ThreadId(3))]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    async_engine::tests::owned_tests::preparation_tests::completion_tests::owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

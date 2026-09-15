@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "d710644e06256b92c959aea8d9edca7fcd5047723d8103d658957a437ffec040",
+  "started_at": "2026-09-15T00:51:05.644Z",
+  "finished_at": "2026-09-15T00:51:38.568Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "authorized_execution::tests::generated_identity::generated_transferred_source_rechecks_authority_and_currentness",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118-qualified-mut-c2-omit-currentness-revalidation.log",
+  "source": "/home/harsh/.codex-tmp/r118-qualified-mut-c2-omit-currentness-revalidation-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118-qualified-mut-c2-omit-currentness-revalidation-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118-run-v1.js",
+    "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1560414,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789433498574,
+        "monotonic_ns": "30202596459827",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 33.691573546,
+  "verification_elapsed_seconds": 0.241408941,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118-qualified-restoration-c2-omit-authority-device.json",
+      "sha256": "759d429f7d96f2de63b68476ebb76f0520c79bfc697003616ff26a9abf868497",
+      "observation": {
+        "utc_ms": 1789433461707,
+        "monotonic_ns": "30164962368911",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789433465644,
+      "monotonic_ns": "30168898779906",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789433498568,
+      "monotonic_ns": "30202590353452",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789433498809,
+      "monotonic_ns": "30202831762393",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

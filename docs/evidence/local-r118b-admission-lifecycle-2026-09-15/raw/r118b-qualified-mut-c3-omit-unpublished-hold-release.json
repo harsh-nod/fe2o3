@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "834c859129157fe90544fbdb0ea18bdebe931e32e78fb932965c7699832af83d",
+  "started_at": "2026-09-15T03:31:30.789Z",
+  "finished_at": "2026-09-15T03:31:58.832Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118b-qualified-mut-c3-omit-unpublished-hold-release.log",
+  "source": "/home/harsh/.codex-tmp/r118b-qualified-mut-c3-omit-unpublished-hold-release-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118b-qualified-mut-c3-omit-unpublished-hold-release-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118b-run-v1.js",
+    "sha256": "c284ed28baf87ea364fcbb12ab0a8228bbe180973e0d0974959998115d759c45"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 2118836,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789443118840,
+        "monotonic_ns": "39827497072428",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 28.042794863,
+  "verification_elapsed_seconds": 0.243574765,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118b-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118b-qualified-restoration-c3-release-reply-credit-before-consumption.json",
+      "sha256": "d4b771296a3759daffd1504748c4d6184526c945094767cfb1e977950ff86382",
+      "observation": {
+        "utc_ms": 1789443085707,
+        "monotonic_ns": "39794363490048",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789443090789,
+      "monotonic_ns": "39799445542172",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789443118832,
+      "monotonic_ns": "39827488337035",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789443119075,
+      "monotonic_ns": "39827731911800",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

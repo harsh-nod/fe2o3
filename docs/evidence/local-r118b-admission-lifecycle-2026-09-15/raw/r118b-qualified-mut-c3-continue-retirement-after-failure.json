@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "dbf658a7f5dd84737a0b378cda75d480a6197772494f2956cba86aa84328215f",
+  "started_at": "2026-09-15T03:33:18.870Z",
+  "finished_at": "2026-09-15T03:33:59.744Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118b-qualified-mut-c3-continue-retirement-after-failure.log",
+  "source": "/home/harsh/.codex-tmp/r118b-qualified-mut-c3-continue-retirement-after-failure-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118b-qualified-mut-c3-continue-retirement-after-failure-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118b-run-v1.js",
+    "sha256": "c284ed28baf87ea364fcbb12ab0a8228bbe180973e0d0974959998115d759c45"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 2123616,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789443239753,
+        "monotonic_ns": "39948409153634",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 40.874383144,
+  "verification_elapsed_seconds": 0.3857886,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118b-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118b-qualified-restoration-c3-omit-retirement-callback.json",
+      "sha256": "fb7db534c2d0ac08dc80c54fb47d8edbc9f5607a0c5654ba1751b0f51a210a86",
+      "observation": {
+        "utc_ms": 1789443193151,
+        "monotonic_ns": "39901807613083",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789443198870,
+      "monotonic_ns": "39907526568581",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789443239744,
+      "monotonic_ns": "39948400951725",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789443240130,
+      "monotonic_ns": "39948786740325",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

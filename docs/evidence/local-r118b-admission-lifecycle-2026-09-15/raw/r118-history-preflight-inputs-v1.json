@@ -1,0 +1,51 @@
+{
+  "scope": "Immutable preflight snapshots of the draft history validator and its dependencies; not campaign acceptance",
+  "parent": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+  "helpers": [
+    {
+      "name": "r118-history-preflight-v1.js",
+      "sha256": "ec87268ad8fa7376eab44ff596878e5b1ebd7a8c82bffecd10dbaa771c94321c"
+    },
+    {
+      "name": "r118-history-preflight-plan-v1.js",
+      "sha256": "4df3d913b00c0542e4ffb3f6417bd6aa3e31004a36a68f5e750cd6bd09dbc6dd"
+    },
+    {
+      "name": "r118-history-preflight-evidence-v1.js",
+      "sha256": "678539d9723f625e87398deb24962be97ab2b0d099ed1a6e81e22ee5fc8b5709"
+    },
+    {
+      "name": "r118-history-preflight-validator-v1.js",
+      "sha256": "ee65332ad1d711c1596dd273337932c94f6c7c75258289145984c5bc4d433f84"
+    },
+    {
+      "name": "r118-history-plan-v1.json",
+      "sha256": "7dd54922b6e49079d7d9112bd415cdb8e8b5b61cb1d02856249389fe46175a91"
+    },
+    {
+      "name": "r118-mutation-core-v1.js",
+      "sha256": "852b1214f57952182804be62592e1520f7f2e8bf79b1c0efde93a24f2d6ae2e8"
+    },
+    {
+      "name": "r118-mutation-plan-v1.js",
+      "sha256": "3fb4c5b0779886f830b9ecd3b2552a12d1f68f102d18b2e8685418d703ebe358"
+    },
+    {
+      "name": "r118-mutations-c1-v1.js",
+      "sha256": "6555f552b9b0ee580fd324b737817521bda98b6db544cd5a71e8a0df4733b89e"
+    },
+    {
+      "name": "r118-mutations-c2-v1.js",
+      "sha256": "981a188c7acf7b2c9206d6a2a485ab56c8b484d891948b1dea073c7e16c2fe7e"
+    },
+    {
+      "name": "r118-mutations-c3-v1.js",
+      "sha256": "1c99baf5342469591a03b117a015d4cf37918c92318f20fd0ad91e4cda9c945a"
+    },
+    {
+      "name": "r118-run-v1.js",
+      "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+    }
+  ]
+}

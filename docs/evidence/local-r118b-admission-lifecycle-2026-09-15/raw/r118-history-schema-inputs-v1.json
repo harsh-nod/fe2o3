@@ -1,0 +1,23 @@
+{
+  "scope": "Schema and artifact-membership regression tests only; not full historical-evidence qualification",
+  "parent": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+  "helpers": [
+    {
+      "name": "r118-history-v1.js",
+      "sha256": "236d5b03ffade7fee66429b3fa82fdf3647ac21e5af1c65784aadfd138451e48"
+    },
+    {
+      "name": "r118-history-plan-v1.json",
+      "sha256": "7dd54922b6e49079d7d9112bd415cdb8e8b5b61cb1d02856249389fe46175a91"
+    },
+    {
+      "name": "r118-history-schema-tests-v1.js",
+      "sha256": "942a45d30ea95f27021c1c9a0387c06c7deb55eb06ca145bc4b3d53809ede920"
+    },
+    {
+      "name": "r118-run-v1.js",
+      "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+    }
+  ]
+}

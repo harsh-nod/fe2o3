@@ -2,6 +2,7 @@ use super::*;
 use std::sync::atomic::AtomicUsize;
 
 mod adoption_tests;
+mod completion_tests;
 mod reservation_tests;
 
 fn ready<F: Future + Unpin>(mut future: F) -> F::Output {

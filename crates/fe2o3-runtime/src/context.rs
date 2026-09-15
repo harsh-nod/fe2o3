@@ -3281,6 +3281,7 @@ pub enum RuntimePollV1 {
 mod tests {
     use super::*;
     mod allocation_admission_tests;
+    mod submission_identity_tests;
 
     #[derive(Debug)]
     struct MockError(&'static str);
@@ -3387,6 +3388,11 @@ mod tests {
         submit_count: usize,
         poll_call_count: usize,
         wait_call_count: usize,
+        cancel_call_count: usize,
+        last_waited_submission: Option<u64>,
+        last_drained_submission: Option<u64>,
+        last_cancelled_submission: Option<u64>,
+        last_recorded_event: Option<(u64, u64)>,
         flush_call_count: usize,
         last_flushed_stream: Option<u64>,
         flush_failure: MockFlushFailure,
@@ -3754,10 +3760,11 @@ mod tests {
 
         fn wait_v1(
             &mut self,
-            _submission: u64,
+            submission: u64,
             deadline: Instant,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
             self.wait_call_count += 1;
+            self.last_waited_submission = Some(submission);
             self.wait_deadlines.push(deadline);
             if self.wait_call_count == 1 {
                 match self.first_wait_failure {
@@ -3794,9 +3801,10 @@ mod tests {
 
         fn record_event_v1(
             &mut self,
-            _stream: u64,
-            _submission: u64,
+            stream: u64,
+            submission: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.last_recorded_event = Some((stream, submission));
             Ok(self.handle(MockHandleKind::Event))
         }
 
@@ -3891,6 +3899,8 @@ mod tests {
             &mut self,
             submission: u64,
         ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.cancel_call_count += 1;
+            self.last_cancelled_submission = Some(submission);
             if !self.polls.contains_key(&submission) {
                 return Err(RuntimeBackendFailureV1::Rejected(MockError(
                     "unknown submission",
@@ -3908,6 +3918,7 @@ mod tests {
             submission: u64,
             deadline: Instant,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.last_drained_submission = Some(submission);
             self.wait_v1(submission, deadline)
         }
     }

@@ -1,0 +1,157 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.11s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers ... FAILED
+
+failures:
+
+---- async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers stdout ----
+
+thread 'async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers' (1578097) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:88:13:
+assertion `left == right` failed
+  left: [WakeObservation { owner: 0, thread: ThreadId(2), payload_drops: 0 }]
+ right: []
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers' (1578097) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:19:34:
+called `Result::unwrap()` on an `Err` value: PoisonError { .. }
+stack backtrace:
+   0:     0x60f4bbdece9a - std[ca0b0bcade21542d]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:     0x60f4bbdece9a - std[ca0b0bcade21542d]::backtrace_rs::backtrace::trace_unsynchronized::<std[ca0b0bcade21542d]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:     0x60f4bbdece9a - std[ca0b0bcade21542d]::sys::backtrace::_print_fmt
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/sys/backtrace.rs:74:9
+   3:     0x60f4bbdece9a - <<std[ca0b0bcade21542d]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[db70abf3441067d4]::fmt::Display>::fmt
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/sys/backtrace.rs:44:26
+   4:     0x60f4bbe0315a - <core[db70abf3441067d4]::fmt::rt::Argument>::fmt
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/fmt/rt.rs:152:76
+   5:     0x60f4bbe0315a - core[db70abf3441067d4]::fmt::write
+   6:     0x60f4bbdf1d72 - std[ca0b0bcade21542d]::io::default_write_fmt::<alloc[1873db2efb56cea0]::vec::Vec<u8>>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/io/mod.rs:639:11
+   7:     0x60f4bbdf1d72 - <alloc[1873db2efb56cea0]::vec::Vec<u8> as std[ca0b0bcade21542d]::io::Write>::write_fmt
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/io/mod.rs:1994:13
+   8:     0x60f4bbdca54f - <std[ca0b0bcade21542d]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/sys/backtrace.rs:47:9
+   9:     0x60f4bbdca54f - std[ca0b0bcade21542d]::panicking::default_hook::{closure#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:292:27
+  10:     0x60f4bbde45d9 - std[ca0b0bcade21542d]::panicking::default_hook
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:316:9
+  11:     0x60f4bb74fe4c - <alloc[1873db2efb56cea0]::boxed::Box<dyn for<'a, 'b> core[db70abf3441067d4]::ops::function::Fn<(&'a std[ca0b0bcade21542d]::panic::PanicHookInfo<'b>,), Output = ()> + core[db70abf3441067d4]::marker::Sync + core[db70abf3441067d4]::marker::Send> as core[db70abf3441067d4]::ops::function::Fn<(&std[ca0b0bcade21542d]::panic::PanicHookInfo,)>>::call
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/alloc/src/boxed.rs:2254:9
+  12:     0x60f4bb74fe4c - test[23d2bd75115b0674]::test_main_with_exit_callback::<test[23d2bd75115b0674]::test_main::{closure#0}>::{closure#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/test/src/lib.rs:145:21
+  13:     0x60f4bbde4852 - <alloc[1873db2efb56cea0]::boxed::Box<dyn for<'a, 'b> core[db70abf3441067d4]::ops::function::Fn<(&'a std[ca0b0bcade21542d]::panic::PanicHookInfo<'b>,), Output = ()> + core[db70abf3441067d4]::marker::Sync + core[db70abf3441067d4]::marker::Send> as core[db70abf3441067d4]::ops::function::Fn<(&std[ca0b0bcade21542d]::panic::PanicHookInfo,)>>::call
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/alloc/src/boxed.rs:2254:9
+  14:     0x60f4bbde4852 - std[ca0b0bcade21542d]::panicking::panic_with_hook
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:833:13
+  15:     0x60f4bbdca608 - std[ca0b0bcade21542d]::panicking::panic_handler::{closure#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:698:13
+  16:     0x60f4bbdbf609 - std[ca0b0bcade21542d]::sys::backtrace::__rust_end_short_backtrace::<std[ca0b0bcade21542d]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/sys/backtrace.rs:182:18
+  17:     0x60f4bbdcb1fd - __rustc[2170a97d85da7901]::rust_begin_unwind
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:689:5
+  18:     0x60f4bbe0391c - core[db70abf3441067d4]::panicking::panic_fmt
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/panicking.rs:80:14
+  19:     0x60f4bbe03692 - core[db70abf3441067d4]::result::unwrap_failed
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/result.rs:1867:5
+  20:     0x60f4bacda119 - <core[db70abf3441067d4]::result::Result<std[ca0b0bcade21542d]::sync::poison::mutex::MutexGuard<alloc[1873db2efb56cea0]::vec::Vec<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::WakeObservation>>, std[ca0b0bcade21542d]::sync::poison::PoisonError<std[ca0b0bcade21542d]::sync::poison::mutex::MutexGuard<alloc[1873db2efb56cea0]::vec::Vec<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::WakeObservation>>>>>::unwrap
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1233:23
+  21:     0x60f4bacda119 - <fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::CompletionWake as alloc[1873db2efb56cea0]::task::Wake>::wake
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:19:34
+  22:     0x60f4bac7d35f - alloc[1873db2efb56cea0]::task::raw_waker::wake::<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::CompletionWake>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/task.rs:198:9
+  23:     0x60f4bad5a406 - <core[db70abf3441067d4]::task::wake::Waker>::wake
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/task/wake.rs:448:18
+  24:     0x60f4bb3a1293 - <fe2o3_runtime[183b2d21a58b73e0]::async_engine::owned::Reply<()>>::complete::{closure#1}
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/owned.rs:60:74
+  25:     0x60f4bb736af3 - <core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<<fe2o3_runtime[183b2d21a58b73e0]::async_engine::owned::Reply<()>>::complete::{closure#1}> as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275:9
+  26:     0x60f4badbff56 - std[ca0b0bcade21542d]::panicking::catch_unwind::do_call::<core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<<fe2o3_runtime[183b2d21a58b73e0]::async_engine::owned::Reply<()>>::complete::{closure#1}>, ()>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:581:40
+  27:     0x60f4bb5500ab - __rust_try
+  28:     0x60f4bb4e985a - std[ca0b0bcade21542d]::panicking::catch_unwind::<(), core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<<fe2o3_runtime[183b2d21a58b73e0]::async_engine::owned::Reply<()>>::complete::{closure#1}>>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544:19
+  29:     0x60f4bb4e985a - std[ca0b0bcade21542d]::panic::catch_unwind::<core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<<fe2o3_runtime[183b2d21a58b73e0]::async_engine::owned::Reply<()>>::complete::{closure#1}>, ()>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+  30:     0x60f4bb3b2c98 - <fe2o3_runtime[183b2d21a58b73e0]::async_engine::owned::Reply<()>>::complete
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/owned.rs:60:35
+  31:     0x60f4bae9eff6 - fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::factory::stop_reply::<()>
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/operation/factory.rs:96:15
+  32:     0x60f4bb00db66 - <fe2o3_runtime[183b2d21a58b73e0]::async_engine::generated_operation::PreparationDriver<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend, fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::reservation_tests::ReservablePayload, ()> as core[db70abf3441067d4]::ops::drop::Drop>::drop
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/generated_operation.rs:273:9
+  33:     0x60f4bb58a493 - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[183b2d21a58b73e0]::async_engine::generated_operation::PreparationDriver<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend, fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::reservation_tests::ReservablePayload, ()>>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  34:     0x60f4bb5810a4 - core[db70abf3441067d4]::ptr::drop_in_place::<alloc[1873db2efb56cea0]::boxed::Box<dyn fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::EngineOperationV1<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend>>>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  35:     0x60f4bb58e70e - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::OperationEntryV1<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend>>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  36:     0x60f4bb5a730a - core[db70abf3441067d4]::ptr::drop_in_place::<[fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::OperationEntryV1<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend>]>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  37:     0x60f4bb541c93 - <alloc[1873db2efb56cea0]::collections::vec_deque::VecDeque<fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::OperationEntryV1<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend>> as core[db70abf3441067d4]::ops::drop::Drop>::drop
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:155:13
+  38:     0x60f4bb58f223 - core[db70abf3441067d4]::ptr::drop_in_place::<alloc[1873db2efb56cea0]::collections::vec_deque::VecDeque<fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::OperationEntryV1<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend>>>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  39:     0x60f4bb58e897 - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[183b2d21a58b73e0]::async_engine::operation::OperationRegistryV1<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::MockBackend>>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  40:     0x60f4bb5a5a3b - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::Harness>
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:810:1
+  41:     0x60f4bacd1f77 - fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:123:9
+  42:     0x60f4bac9fc17 - fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers::{closure#0}
+                               at /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs:45:72
+  43:     0x60f4bb5ffb56 - <fe2o3_runtime[183b2d21a58b73e0]::async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers::{closure#0} as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+                               at /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  44:     0x60f4bb743f2b - <fn() -> core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String> as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/ops/function.rs:250:5
+  45:     0x60f4bb743f2b - test[23d2bd75115b0674]::__rust_begin_short_backtrace::<core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>, fn() -> core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/test/src/lib.rs:663:18
+  46:     0x60f4bb75091b - test[23d2bd75115b0674]::run_test_in_process::{closure#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/test/src/lib.rs:686:74
+  47:     0x60f4bb75091b - <core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<test[23d2bd75115b0674]::run_test_in_process::{closure#0}> as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/panic/unwind_safe.rs:275:9
+  48:     0x60f4bb75091b - std[ca0b0bcade21542d]::panicking::catch_unwind::do_call::<core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<test[23d2bd75115b0674]::run_test_in_process::{closure#0}>, core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:581:40
+  49:     0x60f4bb75091b - std[ca0b0bcade21542d]::panicking::catch_unwind::<core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>, core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<test[23d2bd75115b0674]::run_test_in_process::{closure#0}>>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:544:19
+  50:     0x60f4bb75091b - std[ca0b0bcade21542d]::panic::catch_unwind::<core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<test[23d2bd75115b0674]::run_test_in_process::{closure#0}>, core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panic.rs:359:14
+  51:     0x60f4bb75091b - test[23d2bd75115b0674]::run_test_in_process
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/test/src/lib.rs:686:27
+  52:     0x60f4bb75091b - test[23d2bd75115b0674]::run_test::{closure#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/test/src/lib.rs:607:43
+  53:     0x60f4bb74ad74 - test[23d2bd75115b0674]::run_test::{closure#1}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/test/src/lib.rs:637:41
+  54:     0x60f4bb74ad74 - std[ca0b0bcade21542d]::sys::backtrace::__rust_begin_short_backtrace::<test[23d2bd75115b0674]::run_test::{closure#1}, ()>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/sys/backtrace.rs:166:18
+  55:     0x60f4bb753522 - std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked::<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/thread/lifecycle.rs:91:13
+  56:     0x60f4bb753522 - <core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/panic/unwind_safe.rs:275:9
+  57:     0x60f4bb753522 - std[ca0b0bcade21542d]::panicking::catch_unwind::do_call::<core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:581:40
+  58:     0x60f4bb753522 - std[ca0b0bcade21542d]::panicking::catch_unwind::<(), core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panicking.rs:544:19
+  59:     0x60f4bb753522 - std[ca0b0bcade21542d]::panic::catch_unwind::<core[db70abf3441067d4]::panic::unwind_safe::AssertUnwindSafe<std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/panic.rs:359:14
+  60:     0x60f4bb753522 - std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked::<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/thread/lifecycle.rs:89:26
+  61:     0x60f4bb753522 - <std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1} as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/ops/function.rs:250:5
+  62:     0x60f4bbdec11f - <alloc[1873db2efb56cea0]::boxed::Box<dyn core[db70abf3441067d4]::ops::function::FnOnce<(), Output = ()> + core[db70abf3441067d4]::marker::Send> as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/alloc/src/boxed.rs:2240:9
+  63:     0x60f4bbdec11f - <std[ca0b0bcade21542d]::sys::thread::unix::Thread>::new::thread_start
+                               at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/std/src/sys/thread/unix.rs:118:17
+  64:     0x78f5a349cb84 - <unknown>
+  65:     0x78f5a3529ecc - <unknown>
+  66:                0x0 - <unknown>
+
+
+failures:
+    async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

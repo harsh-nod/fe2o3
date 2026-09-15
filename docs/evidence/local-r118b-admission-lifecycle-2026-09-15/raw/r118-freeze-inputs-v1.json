@@ -1,0 +1,83 @@
+{
+  "scope": "R118 freeze contracts using mocked writes, processes and tool observations",
+  "parent": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+  "helpers": [
+    {
+      "name": "r118-run-v1.js",
+      "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+    },
+    {
+      "name": "r118-qualification-plan.js",
+      "sha256": "90eefaf5fef43637f47ece4bdd54a4e9b0fda5c7ef92ca3c0117d76dc7f3ee47"
+    },
+    {
+      "name": "r118-qualification-evidence.js",
+      "sha256": "4912d6775f3df8f631834e5ff1b1f51ae7bac18648e83e4388c3f3fbef28fbf9"
+    },
+    {
+      "name": "r118-history-plan-v1.json",
+      "sha256": "7dd54922b6e49079d7d9112bd415cdb8e8b5b61cb1d02856249389fe46175a91"
+    },
+    {
+      "name": "r118-history-v3.js",
+      "sha256": "0d89edcbd623ac9474b6937b118383948c2a193caa5a99ca356403ead53df385"
+    },
+    {
+      "name": "r118-history-support-v1.js",
+      "sha256": "f0f0334dcafa36ef90e6037b073dc19cfb069265891b1850171bace63ee78916"
+    },
+    {
+      "name": "r118-c1-index-corroboration-v1.json",
+      "sha256": "1396c8a1c77fa216d167c7427bf22d9637609aabf18987989bf77e049999c2ea"
+    },
+    {
+      "name": "r118-mutation-core-inputs-v1.json",
+      "sha256": "9afd082517e9ffd1669d78d61ab660fdf320554fb1b3b39377d53f0ab60af600"
+    },
+    {
+      "name": "r118-mutation-core-tests-v1.js",
+      "sha256": "ba05c9c92f543ac33c0e5969b4c448cf8b51aa5769a66ff773d75d3507106e69"
+    },
+    {
+      "name": "r118-mutation-core-v1.js",
+      "sha256": "852b1214f57952182804be62592e1520f7f2e8bf79b1c0efde93a24f2d6ae2e8"
+    },
+    {
+      "name": "r118-mutation-plan-v1.js",
+      "sha256": "3fb4c5b0779886f830b9ecd3b2552a12d1f68f102d18b2e8685418d703ebe358"
+    },
+    {
+      "name": "r118-mutations-c1-v1.js",
+      "sha256": "6555f552b9b0ee580fd324b737817521bda98b6db544cd5a71e8a0df4733b89e"
+    },
+    {
+      "name": "r118-mutations-c2-v1.js",
+      "sha256": "981a188c7acf7b2c9206d6a2a485ab56c8b484d891948b1dea073c7e16c2fe7e"
+    },
+    {
+      "name": "r118-mutations-c3-v1.js",
+      "sha256": "1c99baf5342469591a03b117a015d4cf37918c92318f20fd0ad91e4cda9c945a"
+    },
+    {
+      "name": "r118-source-gate.py",
+      "sha256": "a75dc7314347e34ecce4f0823df4aedbba0330a7bc9b4389e4450a4d4ae5e734"
+    },
+    {
+      "name": "r118-auxiliary-gates.py",
+      "sha256": "61814c78255ca557eec453646a35bdbf651185d1eb4adfe32028b2b0807660c5"
+    },
+    {
+      "name": "r118-freeze.js",
+      "sha256": "0b852bb28187b493abeb4aa3c46ae066b3ae4e8a4894238df7f13d763f0fa365"
+    },
+    {
+      "name": "r118-runner-tests.js",
+      "sha256": "7a390ecd90d5a141d9572a65cda3b14825bcd232b2be96cca02b1ca6d7c652b4"
+    },
+    {
+      "name": "r118-freeze-tests.js",
+      "sha256": "e77512bb3fef60b5981efb38ef1ce4a741e39b5fe0daceeb4701a2f24b9a42fa"
+    }
+  ]
+}

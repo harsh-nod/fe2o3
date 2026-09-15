@@ -17,6 +17,14 @@ impl ContextUnpublishedHoldV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    #[cfg(test)]
+    pub(crate) fn unpublished_identity_for_test_v1(
+        &self,
+        stream: RuntimeStreamIdV1,
+    ) -> Option<Option<u64>> {
+        self.streams.get(&stream).map(|record| record.unpublished)
+    }
+
     pub(super) fn validate_unpublished_hold_v1(
         &self,
         hold: &ContextUnpublishedHoldV1,

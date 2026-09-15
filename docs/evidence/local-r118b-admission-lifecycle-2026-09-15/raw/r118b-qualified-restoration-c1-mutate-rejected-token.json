@@ -1,0 +1,62 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "manifest_sha256": "09001546014f174774a90fe8fb2ab57de91a59c33abfc341ac6cccd07a23186d",
+  "source_map_sha256": "3aa1ab32e9e6e6ffd0474ec9055d3c29b02bf53e45129406617e50f0b3c15126",
+  "source_unchanged": true,
+  "source_identities": 5692,
+  "mutated_sources": [
+    {
+      "path": "crates/fe2o3-runtime/src/context.rs",
+      "sha256": "225bd18ee4eb9888e4a8cac67f1d5545d79c0f05dfd2ae54efd7d081894bd480"
+    }
+  ],
+  "application_attempts": [
+    {
+      "path": "crates/fe2o3-runtime/src/context.rs",
+      "verified": true
+    }
+  ],
+  "restoration": {
+    "restored": true,
+    "quiescent": true,
+    "all_mutant_before_restore": true,
+    "live_members": [],
+    "external_edit": false,
+    "error": null,
+    "files": [
+      {
+        "path": "crates/fe2o3-runtime/src/context.rs",
+        "before_sha256": "225bd18ee4eb9888e4a8cac67f1d5545d79c0f05dfd2ae54efd7d081894bd480",
+        "after_sha256": "ccd93828c2019d21c3927af4068a8dbc8e8bf37f6162c4f7f9643b2a50a2b622",
+        "write_attempted": true
+      }
+    ]
+  },
+  "clock": {
+    "contract": "r118b-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "restoration",
+    "start": {
+      "utc_ms": 1789441846207,
+      "monotonic_ns": "38554863655914",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789441846993,
+      "monotonic_ns": "38555649923431",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r118b-qualified-mut-c1-mutate-rejected-token.json",
+      "sha256": "ee8be027e050567ebbbd276bfdade2012ed18744e95ea8d6dc3eec51c209af84",
+      "observation": {
+        "utc_ms": 1789441846124,
+        "monotonic_ns": "38554780387078",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  }
+}

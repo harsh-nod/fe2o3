@@ -1,0 +1,26 @@
+{
+  "runs": 30,
+  "isolated_runs": 19,
+  "integrated_runs": 11,
+  "raw_run_artifacts": 120,
+  "preserved_artifacts": 138,
+  "distinct_source_maps": 12,
+  "source_changing_runs": 4,
+  "source_transitions": 8,
+  "sparse_descriptors": 381,
+  "helper_contracts": 48,
+  "full": {
+    "gnu": {
+      "harnesses": 48,
+      "passed": 2780,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl": {
+      "harnesses": 48,
+      "passed": 2780,
+      "failed": 0,
+      "ignored": 5
+    }
+  }
+}

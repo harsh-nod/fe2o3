@@ -1,0 +1,92 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "3df7792072daec6d24ff7aae4b3163feafd81725e118af5c608deeaec273a0e4",
+  "started_at": "2026-09-15T00:43:46.681Z",
+  "finished_at": "2026-09-15T00:44:19.285Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "authorized_execution::tests::generated_identity::generated_descriptor_matches_bind_every_coordinate_bidirectionally",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r118-qualified-mut-c2-ignore-missing-buffer.log",
+  "source": "/home/harsh/.codex-tmp/r118-qualified-mut-c2-ignore-missing-buffer-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r118-qualified-mut-c2-ignore-missing-buffer-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r118-run-v1.js",
+    "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1543028,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789433059291,
+        "monotonic_ns": "29754292843062",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 33.259032877,
+  "verification_elapsed_seconds": 0.241673018,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r118-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r118-qualified-restoration-c2-omit-buffer-access.json",
+      "sha256": "1daa97c8584ca3149be7c666b2cc1bc373d7d7c4e29d8331c0964d77f57023ef",
+      "observation": {
+        "utc_ms": 1789433022948,
+        "monotonic_ns": "29717293538635",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789433026681,
+      "monotonic_ns": "29721027356477",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789433059285,
+      "monotonic_ns": "29754286389354",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789433059526,
+      "monotonic_ns": "29754528062372",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

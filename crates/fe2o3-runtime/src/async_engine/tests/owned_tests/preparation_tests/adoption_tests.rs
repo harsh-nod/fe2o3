@@ -10,28 +10,42 @@ struct Payload {
     pointers: (usize, usize),
     state: Arc<Mutex<MockState>>,
     mode: u8,
+    stream: Option<RuntimeStreamIdV1>,
 }
 
 impl Drop for Payload {
     fn drop(&mut self) {
-        self.state
-            .lock()
-            .unwrap()
-            .adoption_order
-            .push("payload_drop");
+        let mut state = self.state.lock().unwrap();
+        state.adoption_order.push("payload_drop");
+        state
+            .adoption_payload_drops
+            .push((self.stream, thread::current().id()));
     }
 }
 
-trait RetireBackend: RuntimeBackendV1<Error = MockError> {
-    fn retire_adoption(&mut self) -> Result<(), RuntimeErrorV1<MockError>>;
+pub(super) trait RetireBackend: RuntimeBackendV1<Error = MockError> {
+    fn retire_adoption(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<MockError>>;
 }
 
-fn retire(state: &Mutex<MockState>) -> Result<(), RuntimeErrorV1<MockError>> {
+fn retire(
+    state: &Mutex<MockState>,
+    stream: RuntimeStreamIdV1,
+) -> Result<(), RuntimeErrorV1<MockError>> {
     let mode = {
         let mut state = state.lock().unwrap();
         state.adoption_retire_calls += 1;
         state.adoption_order.push("retire");
-        state.adoption_retire_mode
+        state
+            .adoption_retire_attempts
+            .push((stream, thread::current().id()));
+        state
+            .adoption_retire_modes
+            .get(&stream)
+            .copied()
+            .unwrap_or(state.adoption_retire_mode)
     };
     match mode {
         1 => Err(RuntimeValidationErrorV1::Unsupported.into()),
@@ -41,14 +55,20 @@ fn retire(state: &Mutex<MockState>) -> Result<(), RuntimeErrorV1<MockError>> {
 }
 
 impl RetireBackend for MockBackend {
-    fn retire_adoption(&mut self) -> Result<(), RuntimeErrorV1<MockError>> {
-        retire(&self.state)
+    fn retire_adoption(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<MockError>> {
+        retire(&self.state, stream)
     }
 }
 impl RetireBackend for ThreadBoundBackend {
-    fn retire_adoption(&mut self) -> Result<(), RuntimeErrorV1<MockError>> {
+    fn retire_adoption(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<MockError>> {
         self.record("adoption_retire");
-        retire(&self.inner.state)
+        retire(&self.inner.state, stream)
     }
 }
 
@@ -85,6 +105,7 @@ fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
             }
         },
         adopt: |context, payload, roster, hold| {
+            payload.stream = Some(hold.stream());
             payload.state.lock().unwrap().adoption_order.push("adopt");
             assert_eq!(roster.count, 1);
             assert_eq!(
@@ -109,15 +130,27 @@ fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
             match payload.mode {
                 3 => Err(RuntimeValidationErrorV1::Unsupported.into()),
                 4 => panic!("adoption panic after simulated acquisition"),
-                _ => Ok(()),
+                _ => {
+                    payload
+                        .state
+                        .lock()
+                        .unwrap()
+                        .adoption_completed
+                        .push((hold.stream(), thread::current().id()));
+                    Ok(())
+                }
             }
         },
         // Also valid for the empty prefix when Stop preceded first advancement.
-        retire: |context, _hold| context.backend_mut_for_test_v1().retire_adoption(),
+        retire: |context, hold| {
+            context
+                .backend_mut_for_test_v1()
+                .retire_adoption(hold.stream())
+        },
     }
 }
 
-fn preparation<B: RetireBackend + 'static>(
+pub(super) fn preparation<B: RetireBackend + 'static>(
     handle: &RuntimeAsyncProgressHandleV1<B>,
     state: Arc<Mutex<MockState>>,
     drops: Arc<AtomicUsize>,
@@ -139,6 +172,7 @@ fn preparation<B: RetireBackend + 'static>(
                     pointers: (0, 0),
                     state,
                     mode,
+                    stream: None,
                 })
             }),
             Some(reserve),
@@ -147,7 +181,7 @@ fn preparation<B: RetireBackend + 'static>(
         .unwrap()
 }
 
-fn reserved(
+pub(super) fn reserved(
     h: &mut Harness,
     drops: Arc<AtomicUsize>,
     mode: u8,
@@ -166,7 +200,11 @@ fn reserved(
     (ready(future).unwrap().unwrap(), stream)
 }
 
-fn activate(h: &mut Harness, ticket: RuntimeAsyncReservedTicketV1, stream: RuntimeStreamIdV1) {
+pub(super) fn activate(
+    h: &mut Harness,
+    ticket: RuntimeAsyncReservedTicketV1,
+    stream: RuntimeStreamIdV1,
+) {
     let future = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
     assert!(!h.command());
     ready(future).unwrap().unwrap();

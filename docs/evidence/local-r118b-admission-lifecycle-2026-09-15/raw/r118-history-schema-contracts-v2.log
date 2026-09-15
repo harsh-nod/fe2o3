@@ -1,0 +1,88 @@
+TAP version 13
+# Subtest: accept flat source hashes
+ok 1 - accept flat source hashes
+  ---
+  duration_ms: 3.412454
+  type: 'test'
+  ...
+# Subtest: accept the typed materialized and sparse roster
+ok 2 - accept the typed materialized and sparse roster
+  ---
+  duration_ms: 23.623751
+  type: 'test'
+  ...
+# Subtest: reject an unknown schema even for an empty map
+ok 3 - reject an unknown schema even for an empty map
+  ---
+  duration_ms: 2.199763
+  type: 'test'
+  ...
+# Subtest: reject a coercible array as a flat hash
+ok 4 - reject a coercible array as a flat hash
+  ---
+  duration_ms: 0.285642
+  type: 'test'
+  ...
+# Subtest: reject a coercible array as a typed source hash
+ok 5 - reject a coercible array as a typed source hash
+  ---
+  duration_ms: 12.59659
+  type: 'test'
+  ...
+# Subtest: reject a coercible array as an index descriptor
+ok 6 - reject a coercible array as an index descriptor
+  ---
+  duration_ms: 16.167003
+  type: 'test'
+  ...
+# Subtest: reject multiple identity representations in one entry
+ok 7 - reject multiple identity representations in one entry
+  ---
+  duration_ms: 13.684874
+  type: 'test'
+  ...
+# Subtest: reject a changed sparse roster despite an unchanged total count
+ok 8 - reject a changed sparse roster despite an unchanged total count
+  ---
+  duration_ms: 13.452223
+  type: 'test'
+  ...
+# Subtest: accept canonical artifact membership without executing evidence dependencies
+ok 9 - accept canonical artifact membership without executing evidence dependencies
+  ---
+  duration_ms: 1.85535
+  type: 'test'
+  ...
+# Subtest: reject replacement of each required auxiliary artifact
+ok 10 - reject replacement of each required auxiliary artifact
+  ---
+  duration_ms: 18.651817
+  type: 'test'
+  ...
+# Subtest: reject replacement of a raw historical run artifact
+ok 11 - reject replacement of a raw historical run artifact
+  ---
+  duration_ms: 0.95407
+  type: 'test'
+  ...
+# Subtest: reject duplicate artifact names
+ok 12 - reject duplicate artifact names
+  ---
+  duration_ms: 0.661004
+  type: 'test'
+  ...
+# Subtest: reject changed handoff declarations even when artifact membership is retained
+ok 13 - reject changed handoff declarations even when artifact membership is retained
+  ---
+  duration_ms: 0.577386
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 202.827792

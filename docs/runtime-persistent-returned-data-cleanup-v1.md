@@ -1,9 +1,63 @@
 # Persistent Returned-Data Cleanup V1
 
-Status: reviewed handoff, not implemented. This follows
+Status: implemented isolated R119 candidate, not accepted or integrated. This follows
 [detached persistent-control cleanup](runtime-detached-persistent-control-cleanup-v1.md).
-The read-only swarm review on 2026-09-14 adds no accepted test, proof or hardware
-result for these persistent returned-data bridges.
+The contract below was reviewed by the read-only swarm on 2026-09-14.
+Primary implemented the candidate separately above accepted R117
+`a07ec44309e214f2a8ef0e687e610c8e60a36224`; it is not part of the main R118B
+source cohort. No native, formal or performance acceptance is added.
+
+## Isolated Candidate
+
+The isolated worktree is `/home/harsh/.codex-tmp/fe2o3-r119-persistent-data`,
+branch `codex/r119-persistent-returned-data`. The candidate changes the existing
+owner's consuming wrappers and shared control-release driver and adds fifteen
+tests. It preserves the existing crate-private tuple signatures and uses explicit
+Unprepared/Prepared/Returnable/Taken states. Output capacity is reserved before
+disposal; normal cleanup errors return ordered data while retaining incomplete
+controls and metadata, whereas panics retain data before resuming the payload.
+The common driver performs one forward control pass and one ordered data
+conversion, with no output allocation after disposal or authority cloning.
+
+The isolated source map is
+`b12435bb1aff37927a5d9b79e4871679476555d76a7efd62ea33635d463f764d`,
+covering 5,690 non-document source identities. Formatting passes. The first
+focused command compiled but selected zero tests because its filter was wrong;
+`r119-persistent-focused.json` is retained as compile-only history. The corrected
+`queue::dispatch_binding::control_release::tests::persistent::` filter passes
+all fifteen tests with no failures or ignored tests, recorded in
+`r119-persistent-focused-v2.json`. Both runs preserve their source endpoints and
+closed process groups. Raw records remain under `/home/harsh/.codex-tmp`.
+
+The full KFD library suite passes all 1,149 tests with no failures or ignored
+tests in `r119-kfd-runtime.json`: the exact retained R117 roster of 1,134 tests
+plus fifteen new tests. The cleanup namespace contains 46 passing tests,
+31 retained plus fifteen new. Strict all-feature/all-target Clippy passes in
+`r119-clippy.json`. Both records preserve the same source endpoints, runner pin,
+predecessor chain and closed process groups. The library command took 963.768
+seconds and Clippy 45.863 seconds; these are validation durations, not runtime
+performance measurements.
+
+Full packet qualification, including fresh integrated GNU/musl and auxiliary
+gates, decisive mutations, restoration checks and independent archive review,
+remains pending. Integration and dual-remote publication remain separate steps.
+The fifteen tests comprise fourteen behavioral functions and one source-routing
+guard; scripted lower-adapter coverage is not live Linux/KFD execution evidence.
+
+The prospective mutation descriptors are reviewed and derive 37 executions
+against 30 distinct production source variants, including four repeated-source
+groups. Unique anchors match the unchanged isolated source. The current draft is
+`/home/harsh/.codex-tmp/r119-persistent-mutations-v2.js`, SHA-256
+`416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a`;
+it retains the v1 descriptor as an input. The only v2 change labels the combined
+projection/commit test's first decisive cell as projection failure, not actual
+commit exhaustion. No Rust mutation or compiled negative has run from this plan.
+
+Independent review found no assertion-under-lock or destructor-panic blocker.
+Replacement output storage is allocated while the original buffer remains live,
+taken active control stays mutable, and generation mutations change only the
+persistent modes. These are construction checks, not observed failure oracles;
+compiled failures, exact restoration and integrated qualification remain required.
 
 ## Boundary And Contract
 

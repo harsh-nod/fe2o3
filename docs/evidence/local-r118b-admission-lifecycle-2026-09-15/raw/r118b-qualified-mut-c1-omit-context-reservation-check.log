@@ -1,0 +1,22 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.05s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test context::tests::submission_identity_tests::genuine_graph_reservation_preserves_query_and_public_ingress_precedence ... FAILED
+
+failures:
+
+---- context::tests::submission_identity_tests::genuine_graph_reservation_preserves_query_and_public_ingress_precedence stdout ----
+
+thread 'context::tests::submission_identity_tests::genuine_graph_reservation_preserves_query_and_public_ingress_precedence' (2017424) panicked at crates/fe2o3-runtime/src/context/tests/submission_identity_tests.rs:505:5:
+Poll: Ok(Poll(Pending))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::tests::submission_identity_tests::genuine_graph_reservation_preserves_query_and_public_ingress_precedence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

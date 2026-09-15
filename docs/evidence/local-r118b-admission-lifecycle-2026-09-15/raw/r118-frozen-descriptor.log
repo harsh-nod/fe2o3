@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 4 tests
+test authorized_execution::tests::generated_identity::generated_transferred_source_rejects_later_artifact_substitution ... ok
+test authorized_execution::tests::generated_identity::generated_identity_survives_transfer_and_rejects_identical_replacement ... ok
+test authorized_execution::tests::generated_identity::generated_descriptor_matches_bind_every_coordinate_bidirectionally ... ok
+test authorized_execution::tests::generated_identity::generated_transferred_source_rechecks_authority_and_currentness ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 729 filtered out; finished in 0.06s
+

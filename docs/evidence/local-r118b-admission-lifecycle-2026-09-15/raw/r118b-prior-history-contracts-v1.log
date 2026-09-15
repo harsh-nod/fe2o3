@@ -1,0 +1,280 @@
+TAP version 13
+# Subtest: executed helpers match the separately frozen prior-history input manifest
+ok 1 - executed helpers match the separately frozen prior-history input manifest
+  ---
+  duration_ms: 1.794233
+  type: 'test'
+  ...
+# Subtest: real retained campaign validates only as stopped historical evidence
+ok 2 - real retained campaign validates only as stopped historical evidence
+  ---
+  duration_ms: 10862.759151
+  type: 'test'
+  ...
+# Subtest: exact membership includes all 83 non-prefixed originals and both Rust snapshots
+ok 3 - exact membership includes all 83 non-prefixed originals and both Rust snapshots
+  ---
+  duration_ms: 14.502198
+  type: 'test'
+  ...
+# Subtest: missing preserved input rejects: non-prefixed precursor
+ok 4 - missing preserved input rejects: non-prefixed precursor
+  ---
+  duration_ms: 48.314319
+  type: 'test'
+  ...
+# Subtest: missing preserved input rejects: qualified mutation
+ok 5 - missing preserved input rejects: qualified mutation
+  ---
+  duration_ms: 153.662019
+  type: 'test'
+  ...
+# Subtest: missing preserved input rejects: qualified restoration
+ok 6 - missing preserved input rejects: qualified restoration
+  ---
+  duration_ms: 316.24452
+  type: 'test'
+  ...
+# Subtest: missing preserved input rejects: rejected mutation
+ok 7 - missing preserved input rejects: rejected mutation
+  ---
+  duration_ms: 252.149544
+  type: 'test'
+  ...
+# Subtest: missing preserved input rejects: prior Rust snapshot
+ok 8 - missing preserved input rejects: prior Rust snapshot
+  ---
+  duration_ms: 364.924237
+  type: 'test'
+  ...
+# Subtest: missing preserved input rejects: corrected Rust snapshot
+ok 9 - missing preserved input rejects: corrected Rust snapshot
+  ---
+  duration_ms: 366.884797
+  type: 'test'
+  ...
+# Subtest: changed origin rejects: acceptance relabeling
+ok 10 - changed origin rejects: acceptance relabeling
+  ---
+  duration_ms: 7.529389
+  type: 'test'
+  ...
+# Subtest: changed origin rejects: omitted historical artifact
+ok 11 - changed origin rejects: omitted historical artifact
+  ---
+  duration_ms: 1.489823
+  type: 'test'
+  ...
+# Subtest: changed origin rejects: substituted historical pin
+ok 12 - changed origin rejects: substituted historical pin
+  ---
+  duration_ms: 1.101535
+  type: 'test'
+  ...
+# Subtest: semantically identical rewritten source-map bytes reject the original pin
+ok 13 - semantically identical rewritten source-map bytes reject the original pin
+  ---
+  duration_ms: 92.544414
+  type: 'test'
+  ...
+# Subtest: fabricated completion artifact rejects: r118-qualified-restoration-c3-continue-retirement-after-failure.json
+ok 14 - fabricated completion artifact rejects: r118-qualified-restoration-c3-continue-retirement-after-failure.json
+  ---
+  duration_ms: 362.634558
+  type: 'test'
+  ...
+# Subtest: fabricated completion artifact rejects: r118-qualified-restoration-c3-continue-retirement-after-failure-source.json
+ok 15 - fabricated completion artifact rejects: r118-qualified-restoration-c3-continue-retirement-after-failure-source.json
+  ---
+  duration_ms: 385.823415
+  type: 'test'
+  ...
+# Subtest: fabricated completion artifact rejects: r118-qualified-mut-c3-drop-failed-shutdown-owners.json
+ok 16 - fabricated completion artifact rejects: r118-qualified-mut-c3-drop-failed-shutdown-owners.json
+  ---
+  duration_ms: 401.287013
+  type: 'test'
+  ...
+# Subtest: fabricated completion artifact rejects: r118-qualified-collector-validation.json
+ok 17 - fabricated completion artifact rejects: r118-qualified-collector-validation.json
+  ---
+  duration_ms: 391.784557
+  type: 'test'
+  ...
+# Subtest: new source cohort cannot stand in for the original source map
+ok 18 - new source cohort cannot stand in for the original source map
+  ---
+  duration_ms: 9.157108
+  type: 'test'
+  ...
+# Subtest: first qualified negative must reach its original behavioral oracle
+ok 19 - first qualified negative must reach its original behavioral oracle
+  ---
+  duration_ms: 6179.350129
+  type: 'test'
+  ...
+# Subtest: last qualified restoration must retain exact physical recovery flags
+ok 20 - last qualified restoration must retain exact physical recovery flags
+  ---
+  duration_ms: 10577.262276
+  type: 'test'
+  ...
+# Subtest: last qualified restoration must restore the original complete source map
+ok 21 - last qualified restoration must restore the original complete source map
+  ---
+  duration_ms: 10679.177177
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: wrong source parent
+ok 22 - rejected execution terminal identity rejects: wrong source parent
+  ---
+  duration_ms: 10.028687
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: wrong source map
+ok 23 - rejected execution terminal identity rejects: wrong source map
+  ---
+  duration_ms: 37.804768
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: wrong predecessor
+ok 24 - rejected execution terminal identity rejects: wrong predecessor
+  ---
+  duration_ms: 34.589824
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: wrong cwd
+ok 25 - rejected execution terminal identity rejects: wrong cwd
+  ---
+  duration_ms: 8.144452
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: wrong namespace
+ok 26 - rejected execution terminal identity rejects: wrong namespace
+  ---
+  duration_ms: 42.600123
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: unclosed child
+ok 27 - rejected execution terminal identity rejects: unclosed child
+  ---
+  duration_ms: 19.646767
+  type: 'test'
+  ...
+# Subtest: rejected execution terminal identity rejects: recorded live process
+ok 28 - rejected execution terminal identity rejects: recorded live process
+  ---
+  duration_ms: 36.203236
+  type: 'test'
+  ...
+# Subtest: retained abort rejects as a normal named failure but validates as a rejected attempt
+ok 29 - retained abort rejects as a normal named failure but validates as a rejected attempt
+  ---
+  duration_ms: 1.572844
+  type: 'test'
+  ...
+# Subtest: rejected transcript cannot be relabeled: named failure fabricated
+ok 30 - rejected transcript cannot be relabeled: named failure fabricated
+  ---
+  duration_ms: 1.109568
+  type: 'test'
+  ...
+# Subtest: rejected transcript cannot be relabeled: summary fabricated
+ok 31 - rejected transcript cannot be relabeled: summary fabricated
+  ---
+  duration_ms: 15.921257
+  type: 'test'
+  ...
+# Subtest: rejected transcript cannot be relabeled: abort marker removed
+ok 32 - rejected transcript cannot be relabeled: abort marker removed
+  ---
+  duration_ms: 0.959146
+  type: 'test'
+  ...
+# Subtest: rejected transcript cannot be relabeled: poison diagnostic removed
+ok 33 - rejected transcript cannot be relabeled: poison diagnostic removed
+  ---
+  duration_ms: 0.776147
+  type: 'test'
+  ...
+# Subtest: recovery diagnostic rejects: accepted flag
+ok 34 - recovery diagnostic rejects: accepted flag
+  ---
+  duration_ms: 0.903119
+  type: 'test'
+  ...
+# Subtest: recovery diagnostic rejects: oracle passed flag
+ok 35 - recovery diagnostic rejects: oracle passed flag
+  ---
+  duration_ms: 0.796716
+  type: 'test'
+  ...
+# Subtest: recovery diagnostic rejects: lost physical recovery
+ok 36 - recovery diagnostic rejects: lost physical recovery
+  ---
+  duration_ms: 0.947243
+  type: 'test'
+  ...
+# Subtest: recovery diagnostic rejects: different retained source
+ok 37 - recovery diagnostic rejects: different retained source
+  ---
+  duration_ms: 0.964416
+  type: 'test'
+  ...
+# Subtest: recovery diagnostic rejects: missing recovery source
+ok 38 - recovery diagnostic rejects: missing recovery source
+  ---
+  duration_ms: 0.917947
+  type: 'test'
+  ...
+# Subtest: snapshot supplement retains its branch after main166 and before manifest
+ok 39 - snapshot supplement retains its branch after main166 and before manifest
+  ---
+  duration_ms: 28.524602
+  type: 'test'
+  ...
+# Subtest: snapshot supplement rejects: unqualified extra PASS
+ok 40 - snapshot supplement rejects: unqualified extra PASS
+  ---
+  duration_ms: 1.014842
+  type: 'test'
+  ...
+# Subtest: snapshot supplement rejects: wrong singular trailer
+ok 41 - snapshot supplement rejects: wrong singular trailer
+  ---
+  duration_ms: 1.844792
+  type: 'test'
+  ...
+# Subtest: snapshot supplement rejects: observation after manifest
+ok 42 - snapshot supplement rejects: observation after manifest
+  ---
+  duration_ms: 0.534388
+  type: 'test'
+  ...
+# Subtest: snapshot supplement cannot silently change its predecessor to the manifest
+ok 43 - snapshot supplement cannot silently change its predecessor to the manifest
+  ---
+  duration_ms: 32.690636
+  type: 'test'
+  ...
+# Subtest: late captured-byte substitution rejects even when JSON meaning is unchanged
+ok 44 - late captured-byte substitution rejects even when JSON meaning is unchanged
+  ---
+  duration_ms: 11427.823349
+  type: 'test'
+  ...
+# Subtest: late historical membership change rejects
+ok 45 - late historical membership change rejects
+  ---
+  duration_ms: 11098.980589
+  type: 'test'
+  ...
+1..45
+# tests 45
+# suites 0
+# pass 45
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 64861.880222

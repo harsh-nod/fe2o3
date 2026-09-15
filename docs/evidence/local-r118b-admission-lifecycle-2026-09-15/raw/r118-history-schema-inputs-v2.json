@@ -1,0 +1,25 @@
+{
+  "scope": "Schema and artifact-membership regression tests only; not full historical-evidence qualification",
+  "parent": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+  "helpers": [
+    {
+      "name": "r118-history-v2.js",
+      "sha256": "20d887eb098ad1f72cada36b81a67c7b3a27fa2d503d4f99f0ddf536f603d02b"
+    },
+    {
+      "name": "r118-history-plan-v1.json",
+      "sha256": "7dd54922b6e49079d7d9112bd415cdb8e8b5b61cb1d02856249389fe46175a91"
+    },
+    {
+      "name": "r118-history-schema-tests-v2.js",
+      "sha256": "84a26110d18bedf5c8f81dac666575b847c81fc03e7a7e5aa86f2c08d2a2b430"
+    },
+    {
+      "name": "r118-run-v1.js",
+      "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+    }
+  ],
+  "supersedes": "r118-history-schema-inputs-v1.json",
+  "retained_failure": "r118-history-schema-contracts-v1.json"
+}

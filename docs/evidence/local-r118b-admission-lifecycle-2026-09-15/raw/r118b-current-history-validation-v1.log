@@ -1,0 +1,78 @@
+{
+  "source_map_sha256": "3aa1ab32e9e6e6ffd0474ec9055d3c29b02bf53e45129406617e50f0b3c15126",
+  "source_identities": 5692,
+  "full": {
+    "gnu": {
+      "harnesses": 48,
+      "passed": 2780,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl": {
+      "harnesses": 48,
+      "passed": 2780,
+      "failed": 0,
+      "ignored": 5
+    }
+  },
+  "stopped_prior": {
+    "accepted": false,
+    "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+    "source_identities": 5692,
+    "preserved_artifacts": 735,
+    "original_history_artifacts": 297,
+    "planned_entries": 163,
+    "planned_executions": 78,
+    "qualified_negatives": 72,
+    "rejected_execution": 73,
+    "unexecuted": [
+      74,
+      75,
+      76,
+      77,
+      78
+    ],
+    "rejected_execution_physical_recovery": true,
+    "rejected_execution_qualified_restoration": false,
+    "full": {
+      "gnu": {
+        "harnesses": 48,
+        "passed": 2780,
+        "failed": 0,
+        "ignored": 5
+      },
+      "musl": {
+        "harnesses": 48,
+        "passed": 2780,
+        "failed": 0,
+        "ignored": 5
+      }
+    }
+  },
+  "corrected_runtime_tests": 733,
+  "focused_completion_tests": 5,
+  "core_contracts": 48,
+  "prior_history_contracts": 45,
+  "preliminary_regression": {
+    "preliminary": true,
+    "normal_named_failure": true,
+    "exact_restoration": true,
+    "mutation": "c3-continue-retirement-after-failure",
+    "counts_toward_full_campaign": false
+  },
+  "runs": [
+    "r118b-format",
+    "r118b-focused",
+    "r118b-runtime",
+    "r118b-clippy",
+    "r118b-retirement-regression",
+    "r118b-restored-completion",
+    "r118b-mutation-core-contracts-v1",
+    "r118b-reviewed-gnu-all",
+    "r118b-prior-history-contracts-v1",
+    "r118b-prior-history-validation-v1",
+    "r118b-reviewed-musl-all"
+  ],
+  "previous": "r118b-reviewed-musl-all.json",
+  "full_campaign_accepted": false
+}

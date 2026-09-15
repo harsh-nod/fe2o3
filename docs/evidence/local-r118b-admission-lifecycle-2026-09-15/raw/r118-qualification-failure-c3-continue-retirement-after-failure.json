@@ -1,0 +1,57 @@
+{
+  "accepted": false,
+  "mutation": "c3-continue-retirement-after-failure",
+  "manifest": {
+    "name": "r118-qualification-manifest.json",
+    "sha256": "62e084d3ca50068e1a350bb414edd882072dad37c6b48da4080668bd4ff4898a"
+  },
+  "expected_mutation_map_sha256": "e8e740d2dbf62153b063d28a2f499aa0b038c48732e753eb77e25f367feff9e3",
+  "runner_attempted": true,
+  "application_attempts": [
+    {
+      "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+      "verified": true
+    }
+  ],
+  "terminal_record": {
+    "name": "r118-qualified-mut-c3-continue-retirement-after-failure.json",
+    "sha256": "1d0df4e943002665f1c2c6e30f72b54e1318303cfc751380341017037c2b6d69"
+  },
+  "authenticated_terminal": true,
+  "oracle_passed": false,
+  "restoration": {
+    "restored": true,
+    "quiescent": true,
+    "all_mutant_before_restore": true,
+    "live_members": [],
+    "external_edit": false,
+    "error": null,
+    "files": [
+      {
+        "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+        "before_sha256": "979569ae9ddd06d95a602334a99f6604f96c7703fec6b60a77abe113a67e2a19",
+        "after_sha256": "e19780e73148d579147d9ecfccabfe6016710023adac2083d1f5dda35aa949eb",
+        "write_attempted": true
+      }
+    ]
+  },
+  "recovery_record": {
+    "manifest": {
+      "name": "r118-qualification-manifest.json",
+      "sha256": "62e084d3ca50068e1a350bb414edd882072dad37c6b48da4080668bd4ff4898a"
+    },
+    "sources": [
+      {
+        "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+        "original_sha256": "e19780e73148d579147d9ecfccabfe6016710023adac2083d1f5dda35aa949eb",
+        "mutated_sha256": "979569ae9ddd06d95a602334a99f6604f96c7703fec6b60a77abe113a67e2a19"
+      }
+    ]
+  },
+  "errors": [
+    {
+      "phase": "execution-or-oracle",
+      "error": "AssertionError [ERR_ASSERTION]: one named failure\n+ actual - expected\n\n+ []\n- [\n-   'async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor'\n- ]\n"
+    }
+  ]
+}

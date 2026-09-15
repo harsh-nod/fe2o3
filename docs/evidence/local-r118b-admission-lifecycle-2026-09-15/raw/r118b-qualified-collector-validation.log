@@ -1,0 +1,408 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "accepted_parent": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "3aa1ab32e9e6e6ffd0474ec9055d3c29b02bf53e45129406617e50f0b3c15126",
+  "scope": "Host submission identity, generated descriptor identity and scripted retained-owner lifecycle qualification",
+  "source_identities": 5692,
+  "changed_source": [
+    "crates/fe2o3-runtime/src/async_engine.rs",
+    "crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs",
+    "crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests.rs",
+    "crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs",
+    "crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs",
+    "crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/reservation_tests.rs",
+    "crates/fe2o3-runtime/src/authorized_execution.rs",
+    "crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs",
+    "crates/fe2o3-runtime/src/context.rs",
+    "crates/fe2o3-runtime/src/context/tests/submission_identity_tests.rs",
+    "crates/fe2o3-runtime/src/context/unpublished.rs"
+  ],
+  "full": {
+    "gnu": {
+      "harnesses": 48,
+      "passed": 2780,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl": {
+      "harnesses": 48,
+      "passed": 2780,
+      "failed": 0,
+      "ignored": 5
+    }
+  },
+  "corrected_history": {
+    "source_map_sha256": "3aa1ab32e9e6e6ffd0474ec9055d3c29b02bf53e45129406617e50f0b3c15126",
+    "source_identities": 5692,
+    "full": {
+      "gnu": {
+        "harnesses": 48,
+        "passed": 2780,
+        "failed": 0,
+        "ignored": 5
+      },
+      "musl": {
+        "harnesses": 48,
+        "passed": 2780,
+        "failed": 0,
+        "ignored": 5
+      }
+    },
+    "stopped_prior": {
+      "accepted": false,
+      "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+      "source_identities": 5692,
+      "preserved_artifacts": 735,
+      "original_history_artifacts": 297,
+      "planned_entries": 163,
+      "planned_executions": 78,
+      "qualified_negatives": 72,
+      "rejected_execution": 73,
+      "unexecuted": [
+        74,
+        75,
+        76,
+        77,
+        78
+      ],
+      "rejected_execution_physical_recovery": true,
+      "rejected_execution_qualified_restoration": false,
+      "full": {
+        "gnu": {
+          "harnesses": 48,
+          "passed": 2780,
+          "failed": 0,
+          "ignored": 5
+        },
+        "musl": {
+          "harnesses": 48,
+          "passed": 2780,
+          "failed": 0,
+          "ignored": 5
+        }
+      }
+    },
+    "corrected_runtime_tests": 733,
+    "focused_completion_tests": 5,
+    "core_contracts": 48,
+    "prior_history_contracts": 45,
+    "preliminary_regression": {
+      "preliminary": true,
+      "normal_named_failure": true,
+      "exact_restoration": true,
+      "mutation": "c3-continue-retirement-after-failure",
+      "counts_toward_full_campaign": false
+    },
+    "runs": [
+      "r118b-format",
+      "r118b-focused",
+      "r118b-runtime",
+      "r118b-clippy",
+      "r118b-retirement-regression",
+      "r118b-restored-completion",
+      "r118b-mutation-core-contracts-v1",
+      "r118b-reviewed-gnu-all",
+      "r118b-prior-history-contracts-v1",
+      "r118b-prior-history-validation-v1",
+      "r118b-reviewed-musl-all"
+    ],
+    "previous": "r118b-reviewed-musl-all.json",
+    "full_campaign_accepted": false
+  },
+  "stopped_prior": {
+    "accepted": false,
+    "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+    "source_identities": 5692,
+    "preserved_artifacts": 735,
+    "original_history_artifacts": 297,
+    "planned_entries": 163,
+    "planned_executions": 78,
+    "qualified_negatives": 72,
+    "rejected_execution": 73,
+    "unexecuted": [
+      74,
+      75,
+      76,
+      77,
+      78
+    ],
+    "rejected_execution_physical_recovery": true,
+    "rejected_execution_qualified_restoration": false,
+    "full": {
+      "gnu": {
+        "harnesses": 48,
+        "passed": 2780,
+        "failed": 0,
+        "ignored": 5
+      },
+      "musl": {
+        "harnesses": 48,
+        "passed": 2780,
+        "failed": 0,
+        "ignored": 5
+      }
+    }
+  },
+  "source_gates": 17,
+  "subsequent_source_gates": 15,
+  "auxiliary_gates": 10,
+  "focused": {
+    "identity": 9,
+    "descriptor": 4,
+    "completion": 5,
+    "reply": 1,
+    "adoption": 15,
+    "reservation": 14
+  },
+  "compiled_negatives": 78,
+  "distinct_mutations": 74,
+  "mutation_categories": {
+    "executions": 78,
+    "distinctSources": 74,
+    "production": 75,
+    "combinedDefense": 1,
+    "helperCalibration": 2
+  },
+  "mutation_source_groups": [
+    [
+      "c1-bypass-callback-identity"
+    ],
+    [
+      "c1-bypass-cancel-identity"
+    ],
+    [
+      "c1-bypass-drain-identity"
+    ],
+    [
+      "c1-bypass-event-identity"
+    ],
+    [
+      "c1-bypass-poll-identity"
+    ],
+    [
+      "c1-bypass-query-identity"
+    ],
+    [
+      "c1-bypass-release-identity"
+    ],
+    [
+      "c1-bypass-wait-identity"
+    ],
+    [
+      "c1-canonicalize-foreign-generation"
+    ],
+    [
+      "c1-drain-expiry-before-reserved-context",
+      "c1-drain-expiry-before-terminal-context"
+    ],
+    [
+      "c1-drain-identity-before-expiry"
+    ],
+    [
+      "c1-drop-completed-callback"
+    ],
+    [
+      "c1-lookup-by-native-id",
+      "c1-lookup-by-reused-native-id"
+    ],
+    [
+      "c1-mutate-rejected-token"
+    ],
+    [
+      "c1-omit-backend-coordinate"
+    ],
+    [
+      "c1-omit-context-reservation-check"
+    ],
+    [
+      "c1-omit-device-coordinate"
+    ],
+    [
+      "c1-omit-live-stream-validation"
+    ],
+    [
+      "c1-omit-stream-coordinate"
+    ],
+    [
+      "c1-omit-terminal-context-check"
+    ],
+    [
+      "c1-poll-before-identity-validation"
+    ],
+    [
+      "c1-release-pending-submission"
+    ],
+    [
+      "c1-require-live-for-pure-query"
+    ],
+    [
+      "c1-reservation-before-terminal"
+    ],
+    [
+      "c1-retain-released-logical-record"
+    ],
+    [
+      "c1-retain-released-native-id"
+    ],
+    [
+      "c1-route-cancel-to-neighbor"
+    ],
+    [
+      "c1-route-drain-through-wait"
+    ],
+    [
+      "c1-route-drain-to-neighbor"
+    ],
+    [
+      "c1-route-event-to-neighbor-stream"
+    ],
+    [
+      "c1-route-event-to-neighbor-submission"
+    ],
+    [
+      "c1-route-poll-to-neighbor"
+    ],
+    [
+      "c1-route-wait-to-neighbor"
+    ],
+    [
+      "c1-trust-cached-completion",
+      "c1-trust-released-cached-completion"
+    ],
+    [
+      "c1-wait-deadline-before-identity"
+    ],
+    [
+      "c1-wait-deadline-before-reserved-context",
+      "c1-wait-deadline-before-terminal-context"
+    ],
+    [
+      "c2-asymmetric-count"
+    ],
+    [
+      "c2-ignore-missing-buffer"
+    ],
+    [
+      "c2-ignore-trailing-buffer"
+    ],
+    [
+      "c2-omit-artifact-digest"
+    ],
+    [
+      "c2-omit-authority-device"
+    ],
+    [
+      "c2-omit-authority-digest"
+    ],
+    [
+      "c2-omit-authority-dispatch"
+    ],
+    [
+      "c2-omit-authority-kernel"
+    ],
+    [
+      "c2-omit-authority-length"
+    ],
+    [
+      "c2-omit-buffer-access"
+    ],
+    [
+      "c2-omit-buffer-bytes"
+    ],
+    [
+      "c2-omit-buffer-ordinal"
+    ],
+    [
+      "c2-omit-currentness-revalidation"
+    ],
+    [
+      "c2-omit-dispatch"
+    ],
+    [
+      "c2-omit-fixups"
+    ],
+    [
+      "c2-omit-readback"
+    ],
+    [
+      "c2-omit-source-roster-match"
+    ],
+    [
+      "c2-paired-artifact-length"
+    ],
+    [
+      "c2-replace-source-identity"
+    ],
+    [
+      "c3-calibrate-lost-disposal-identity"
+    ],
+    [
+      "c3-calibrate-wrong-callback-thread"
+    ],
+    [
+      "c3-continue-retirement-after-failure"
+    ],
+    [
+      "c3-discard-wrong-owner"
+    ],
+    [
+      "c3-dispose-before-stop-observations-close"
+    ],
+    [
+      "c3-drop-failed-shutdown-owners"
+    ],
+    [
+      "c3-forget-retired-owner"
+    ],
+    [
+      "c3-omit-drop-completion-stop"
+    ],
+    [
+      "c3-omit-producer-transfer"
+    ],
+    [
+      "c3-omit-reject-completion-stop"
+    ],
+    [
+      "c3-omit-retirement-callback"
+    ],
+    [
+      "c3-omit-shutdown-retirement"
+    ],
+    [
+      "c3-omit-unpublished-hold-release"
+    ],
+    [
+      "c3-omit-wake-panic-containment"
+    ],
+    [
+      "c3-release-reply-credit-before-consumption"
+    ],
+    [
+      "c3-remove-both-retirement-retry-guards"
+    ],
+    [
+      "c3-retain-abandoned-waker"
+    ],
+    [
+      "c3-retain-old-waker"
+    ],
+    [
+      "c3-stop-neighbor-on-discard"
+    ]
+  ],
+  "new_behavioral_tests": 18,
+  "new_source_guards": 0,
+  "core_contract_tests": 48,
+  "runner_contract_tests": 9,
+  "prior_history_contract_tests": 45,
+  "current_history_contract_tests": 27,
+  "freeze_contract_tests": 57,
+  "lifecycle_contract_tests": 22,
+  "qualification_contract_tests": 167,
+  "formal_qualification": false,
+  "native_qualification": false,
+  "performance_qualification": false,
+  "production_semantics_changed": false,
+  "total_memory_qualification": false
+}

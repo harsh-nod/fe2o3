@@ -1,0 +1,142 @@
+TAP version 13
+# Subtest: single-file mutation is applied, checked and restored
+ok 1 - single-file mutation is applied, checked and restored
+  ---
+  duration_ms: 186.750852
+  type: 'test'
+  ...
+# Subtest: combined defense preserves declared two-file application and restoration order
+ok 2 - combined defense preserves declared two-file application and restoration order
+  ---
+  duration_ms: 162.660284
+  type: 'test'
+  ...
+# Subtest: complete first application write followed by I/O failure is restored without execution
+ok 3 - complete first application write followed by I/O failure is restored without execution
+  ---
+  duration_ms: 73.927389
+  type: 'test'
+  ...
+# Subtest: second application failure restores an owned first-file prefix
+ok 4 - second application failure restores an owned first-file prefix
+  ---
+  duration_ms: 95.458373
+  type: 'test'
+  ...
+# Subtest: partial second-file bytes are retained for explicit recovery
+ok 5 - partial second-file bytes are retained for explicit recovery
+  ---
+  duration_ms: 113.666423
+  type: 'test'
+  ...
+# Subtest: failure before the spawn callback permits non-spawned source recovery
+ok 6 - failure before the spawn callback permits non-spawned source recovery
+  ---
+  duration_ms: 101.073626
+  type: 'test'
+  ...
+# Subtest: missing terminal record after spawn withholds restoration
+ok 7 - missing terminal record after spawn withholds restoration
+  ---
+  duration_ms: 100.5888
+  type: 'test'
+  ...
+# Subtest: malformed terminal record after spawn withholds restoration
+ok 8 - malformed terminal record after spawn withholds restoration
+  ---
+  duration_ms: 320.3967
+  type: 'test'
+  ...
+# Subtest: closed raw record allows physical recovery after wrapper rejection
+ok 9 - closed raw record allows physical recovery after wrapper rejection
+  ---
+  duration_ms: 282.921651
+  type: 'test'
+  ...
+# Subtest: wrong behavioral oracle does not qualify a physically restored mutation
+ok 10 - wrong behavioral oracle does not qualify a physically restored mutation
+  ---
+  duration_ms: 193.107625
+  type: 'test'
+  ...
+# Subtest: unclosed child withholds restoration
+ok 11 - unclosed child withholds restoration
+  ---
+  duration_ms: 380.186314
+  type: 'test'
+  ...
+# Subtest: fresh live process observation withholds restoration
+ok 12 - fresh live process observation withholds restoration
+  ---
+  duration_ms: 143.974082
+  type: 'test'
+  ...
+# Subtest: foreign terminal command cannot authorize restoration
+ok 13 - foreign terminal command cannot authorize restoration
+  ---
+  duration_ms: 111.920674
+  type: 'test'
+  ...
+# Subtest: foreign terminal source identity cannot authorize restoration
+ok 14 - foreign terminal source identity cannot authorize restoration
+  ---
+  duration_ms: 91.710816
+  type: 'test'
+  ...
+# Subtest: foreign terminal predecessor cannot authorize restoration
+ok 15 - foreign terminal predecessor cannot authorize restoration
+  ---
+  duration_ms: 88.456682
+  type: 'test'
+  ...
+# Subtest: changed live runner bytes cannot authenticate a pinned terminal
+ok 16 - changed live runner bytes cannot authenticate a pinned terminal
+  ---
+  duration_ms: 93.418094
+  type: 'test'
+  ...
+# Subtest: matching substituted runner bytes and record still fail the manifest pin
+ok 17 - matching substituted runner bytes and record still fail the manifest pin
+  ---
+  duration_ms: 101.330914
+  type: 'test'
+  ...
+# Subtest: clock sample failure 1 still restores owned sources
+ok 18 - clock sample failure 1 still restores owned sources
+  ---
+  duration_ms: 215.558004
+  type: 'test'
+  ...
+# Subtest: clock sample failure 2 still restores owned sources
+ok 19 - clock sample failure 2 still restores owned sources
+  ---
+  duration_ms: 144.383415
+  type: 'test'
+  ...
+# Subtest: post-write restoration error prevents acceptance despite complete physical recovery
+ok 20 - post-write restoration error prevents acceptance despite complete physical recovery
+  ---
+  duration_ms: 290.564728
+  type: 'test'
+  ...
+# Subtest: failure-artifact write failure retains full recovery diagnostics in the surfaced error
+ok 21 - failure-artifact write failure retains full recovery diagnostics in the surfaced error
+  ---
+  duration_ms: 173.478941
+  type: 'test'
+  ...
+# Subtest: external source changes during child execution are not overwritten
+ok 22 - external source changes during child execution are not overwritten
+  ---
+  duration_ms: 141.081942
+  type: 'test'
+  ...
+1..22
+# tests 22
+# suites 0
+# pass 22
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4132.728838

@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.48s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test context::tests::submission_identity_tests::every_ingress_rejects_each_coordinate_for_pending_and_event_completed_records ... FAILED
+
+failures:
+
+---- context::tests::submission_identity_tests::every_ingress_rejects_each_coordinate_for_pending_and_event_completed_records stdout ----
+
+thread 'context::tests::submission_identity_tests::every_ingress_rejects_each_coordinate_for_pending_and_event_completed_records' (2045299) panicked at crates/fe2o3-runtime/src/context/tests/submission_identity_tests.rs:509:5:
+assertion `left == right` failed: supplied token changed
+  left: TokenSnapshot { id: RuntimeSubmissionIdV1 { context_generation: 2, local: 4 }, backend: 5, stream: RuntimeStreamIdV1 { context_generation: 1, local: 1 }, device: RuntimeDeviceIdV1 { context_generation: 1, local: 1 }, completion: Some(Succeeded), peer: None }
+ right: TokenSnapshot { id: RuntimeSubmissionIdV1 { context_generation: 2, local: 4 }, backend: 5, stream: RuntimeStreamIdV1 { context_generation: 1, local: 1 }, device: RuntimeDeviceIdV1 { context_generation: 1, local: 1 }, completion: None, peer: None }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::tests::submission_identity_tests::every_ingress_rejects_each_coordinate_for_pending_and_event_completed_records
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

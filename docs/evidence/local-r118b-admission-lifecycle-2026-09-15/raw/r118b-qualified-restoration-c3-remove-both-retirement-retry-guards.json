@@ -1,0 +1,76 @@
+{
+  "source_head": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "manifest_sha256": "09001546014f174774a90fe8fb2ab57de91a59c33abfc341ac6cccd07a23186d",
+  "source_map_sha256": "3aa1ab32e9e6e6ffd0474ec9055d3c29b02bf53e45129406617e50f0b3c15126",
+  "source_unchanged": true,
+  "source_identities": 5692,
+  "mutated_sources": [
+    {
+      "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+      "sha256": "6cbe84f0607b020ba05ccab736ce9e72e8335bf647d6725728883369d41a1407"
+    },
+    {
+      "path": "crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs",
+      "sha256": "82640d2c5b2c22ec0c67ed18a882f1b8e2a494034a15c2a96eb1c8d07ea50e6b"
+    }
+  ],
+  "application_attempts": [
+    {
+      "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+      "verified": true
+    },
+    {
+      "path": "crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs",
+      "verified": true
+    }
+  ],
+  "restoration": {
+    "restored": true,
+    "quiescent": true,
+    "all_mutant_before_restore": true,
+    "live_members": [],
+    "external_edit": false,
+    "error": null,
+    "files": [
+      {
+        "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+        "before_sha256": "6cbe84f0607b020ba05ccab736ce9e72e8335bf647d6725728883369d41a1407",
+        "after_sha256": "e19780e73148d579147d9ecfccabfe6016710023adac2083d1f5dda35aa949eb",
+        "write_attempted": true
+      },
+      {
+        "path": "crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs",
+        "before_sha256": "82640d2c5b2c22ec0c67ed18a882f1b8e2a494034a15c2a96eb1c8d07ea50e6b",
+        "after_sha256": "303f8c39a0f0e622e1bc471f2457d18906266b0155482ad7ad59507fb7ed0e18",
+        "write_attempted": true
+      }
+    ]
+  },
+  "clock": {
+    "contract": "r118b-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "restoration",
+    "start": {
+      "utc_ms": 1789443364424,
+      "monotonic_ns": "40073080783984",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789443365248,
+      "monotonic_ns": "40073905122444",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r118b-qualified-mut-c3-remove-both-retirement-retry-guards.json",
+      "sha256": "2a159267339a8fb0012cbcf8facb1f7f1acecbfdf6224ec44569c499c65284fb",
+      "observation": {
+        "utc_ms": 1789443364342,
+        "monotonic_ns": "40072999004748",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  }
+}

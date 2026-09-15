@@ -899,6 +899,7 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod generated_identity;
     mod generated_storage;
 
     use super::*;

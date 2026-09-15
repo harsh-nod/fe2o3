@@ -1,0 +1,16 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const root = '/home/harsh/.codex-tmp/';
+const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+const inputs = JSON.parse(fs.readFileSync(root + 'r118-history-preflight-inputs-v1.json'));
+for (const input of inputs.helpers) assert.strictEqual(hash(fs.readFileSync(root + input.name)), input.sha256, input.name);
+const e = require('./r118-history-preflight-evidence-v1.js');
+const h = require('./r118-history-preflight-validator-v1.js');
+assert.strictEqual(inputs.parent, e.git(['rev-parse', 'HEAD']).trim());
+const map = e.identities();
+assert.strictEqual(hash(JSON.stringify(map)), inputs.source_map_sha256);
+const result = h.checkHistory(map);
+assert.deepStrictEqual(e.identities(), map);
+for (const input of inputs.helpers) assert.strictEqual(hash(fs.readFileSync(root + input.name)), input.sha256, input.name);
+console.log(JSON.stringify(result, null, 2));

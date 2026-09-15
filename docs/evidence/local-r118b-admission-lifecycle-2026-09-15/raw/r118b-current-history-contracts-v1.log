@@ -1,0 +1,172 @@
+TAP version 13
+# Subtest: current-history helper and tests match separately frozen input pins
+ok 1 - current-history helper and tests match separately frozen input pins
+  ---
+  duration_ms: 11.198212
+  type: 'test'
+  ...
+# Subtest: real current history requires fresh full runs and retains stopped history separately
+ok 2 - real current history requires fresh full runs and retains stopped history separately
+  ---
+  duration_ms: 13892.243789
+  type: 'test'
+  ...
+# Subtest: exact input roster preserves old735 and corrected66 including Rust snapshots
+ok 3 - exact input roster preserves old735 and corrected66 including Rust snapshots
+  ---
+  duration_ms: 1.786305
+  type: 'test'
+  ...
+# Subtest: original source cannot qualify the corrected current-history boundary
+ok 4 - original source cannot qualify the corrected current-history boundary
+  ---
+  duration_ms: 10.145331
+  type: 'test'
+  ...
+# Subtest: stopped history cannot be relabeled accepted
+ok 5 - stopped history cannot be relabeled accepted
+  ---
+  duration_ms: 13.443127
+  type: 'test'
+  ...
+# Subtest: fresh musl record rejects: old namespace
+ok 6 - fresh musl record rejects: old namespace
+  ---
+  duration_ms: 29.025082
+  type: 'test'
+  ...
+# Subtest: fresh musl record rejects: wrong parent
+ok 7 - fresh musl record rejects: wrong parent
+  ---
+  duration_ms: 0.708099
+  type: 'test'
+  ...
+# Subtest: fresh musl record rejects: old source map
+ok 8 - fresh musl record rejects: old source map
+  ---
+  duration_ms: 27.013338
+  type: 'test'
+  ...
+# Subtest: fresh musl record rejects: wrong predecessor
+ok 9 - fresh musl record rejects: wrong predecessor
+  ---
+  duration_ms: 32.634606
+  type: 'test'
+  ...
+# Subtest: fresh musl record rejects: unclosed child
+ok 10 - fresh musl record rejects: unclosed child
+  ---
+  duration_ms: 7.969964
+  type: 'test'
+  ...
+# Subtest: fresh musl record rejects: live process group
+ok 11 - fresh musl record rejects: live process group
+  ---
+  duration_ms: 29.168352
+  type: 'test'
+  ...
+# Subtest: missing fresh musl output rejects instead of falling back to old full results
+ok 12 - missing fresh musl output rejects instead of falling back to old full results
+  ---
+  duration_ms: 190.791197
+  type: 'test'
+  ...
+# Subtest: fresh GNU endpoint drift rejects even when the run result is zero
+ok 13 - fresh GNU endpoint drift rejects even when the run result is zero
+  ---
+  duration_ms: 56.873727
+  type: 'test'
+  ...
+# Subtest: equal aggregate counts cannot hide tests swapped between executable rosters
+ok 14 - equal aggregate counts cannot hide tests swapped between executable rosters
+  ---
+  duration_ms: 178.00969
+  type: 'test'
+  ...
+# Subtest: old abort with remapped assertion line is not a corrected normal failure
+ok 15 - old abort with remapped assertion line is not a corrected normal failure
+  ---
+  duration_ms: 349.193924
+  type: 'test'
+  ...
+# Subtest: otherwise valid corrected failure cannot include an abort diagnostic
+ok 16 - otherwise valid corrected failure cannot include an abort diagnostic
+  ---
+  duration_ms: 327.688167
+  type: 'test'
+  ...
+# Subtest: corrected regression restoration rejects: missing preflight custody
+ok 17 - corrected regression restoration rejects: missing preflight custody
+  ---
+  duration_ms: 321.861129
+  type: 'test'
+  ...
+# Subtest: corrected regression restoration rejects: external edits
+ok 18 - corrected regression restoration rejects: external edits
+  ---
+  duration_ms: 324.735642
+  type: 'test'
+  ...
+# Subtest: corrected regression restoration rejects: wrong terminal digest
+ok 19 - corrected regression restoration rejects: wrong terminal digest
+  ---
+  duration_ms: 322.887217
+  type: 'test'
+  ...
+# Subtest: corrected regression restoration rejects: wrong runner pin
+ok 20 - corrected regression restoration rejects: wrong runner pin
+  ---
+  duration_ms: 342.187181
+  type: 'test'
+  ...
+# Subtest: corrected regression restoration rejects: lost authentication
+ok 21 - corrected regression restoration rejects: lost authentication
+  ---
+  duration_ms: 319.013474
+  type: 'test'
+  ...
+# Subtest: corrected regression restoration rejects: non-preliminary claim
+ok 22 - corrected regression restoration rejects: non-preliminary claim
+  ---
+  duration_ms: 323.628926
+  type: 'test'
+  ...
+# Subtest: corrected regression must restore every source identity
+ok 23 - corrected regression must restore every source identity
+  ---
+  duration_ms: 338.622164
+  type: 'test'
+  ...
+# Subtest: replaced TAP case cannot hide behind an unchanged passing total
+ok 24 - replaced TAP case cannot hide behind an unchanged passing total
+  ---
+  duration_ms: 1.03376
+  type: 'test'
+  ...
+# Subtest: closed stopped-history transcript cannot relabel its rejected execution
+ok 25 - closed stopped-history transcript cannot relabel its rejected execution
+  ---
+  duration_ms: 781.404113
+  type: 'test'
+  ...
+# Subtest: late whitespace-only source-after substitution rejects captured-byte equality
+ok 26 - late whitespace-only source-after substitution rejects captured-byte equality
+  ---
+  duration_ms: 12798.994862
+  type: 'test'
+  ...
+# Subtest: late manifest-derived input membership substitution rejects
+ok 27 - late manifest-derived input membership substitution rejects
+  ---
+  duration_ms: 12256.438864
+  type: 'test'
+  ...
+1..27
+# tests 27
+# suites 0
+# pass 27
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 43875.38173

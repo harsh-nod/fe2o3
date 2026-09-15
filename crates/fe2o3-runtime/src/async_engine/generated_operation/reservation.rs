@@ -23,6 +23,15 @@ pub struct RuntimeAsyncReservedTicketV1 {
     completion: RuntimeAsyncCommandFutureV1<()>,
 }
 
+#[cfg(test)]
+impl RuntimeAsyncReservedTicketV1 {
+    pub(in crate::async_engine) fn completion_for_test_v1(
+        &mut self,
+    ) -> &mut RuntimeAsyncCommandFutureV1<()> {
+        &mut self.completion
+    }
+}
+
 impl fmt::Debug for RuntimeAsyncReservedTicketV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeAsyncReservedTicketV1")

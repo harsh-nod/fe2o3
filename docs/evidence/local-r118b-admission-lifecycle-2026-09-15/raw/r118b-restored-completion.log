@@ -1,0 +1,13 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.85s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 5 tests
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_discard_wakes_before_payload_drop_even_when_wake_panics ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_stop_notifies_latest_wakers_before_disposal_and_contains_wake_panic ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 728 filtered out; finished in 0.15s
+

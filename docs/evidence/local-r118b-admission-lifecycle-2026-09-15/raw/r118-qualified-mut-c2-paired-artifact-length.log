@@ -1,0 +1,22 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.45s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test authorized_execution::tests::generated_identity::generated_transferred_source_rejects_later_artifact_substitution ... FAILED
+
+failures:
+
+---- authorized_execution::tests::generated_identity::generated_transferred_source_rejects_later_artifact_substitution stdout ----
+
+thread 'authorized_execution::tests::generated_identity::generated_transferred_source_rejects_later_artifact_substitution' (1548374) panicked at crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs:354:9:
+post-transfer artifact substitution: length=true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    authorized_execution::tests::generated_identity::generated_transferred_source_rejects_later_artifact_substitution
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

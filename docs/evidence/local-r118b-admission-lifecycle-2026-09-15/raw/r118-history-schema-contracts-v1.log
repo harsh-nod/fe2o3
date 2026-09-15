@@ -1,0 +1,37 @@
+TAP version 13
+# /home/harsh/.codex-tmp/r118-history-v1.js:59
+#   for (const marker of ['1..' + count, '\# tests ' + count, '\# pass ' + count, '\# fail 0', '\# cancelled 0', '\# skipped 0', '\# todo 0]) {
+#                                                                                                                           ^^^^^^^^^^^^^
+# SyntaxError: Invalid or unexpected token
+#     at new Script (node:vm:117:7)
+#     at createScript (node:vm:269:10)
+#     at Object.runInThisContext (node:vm:317:10)
+#     at Object.<anonymous> (/home/harsh/.codex-tmp/r118-history-schema-tests-v1.js:10:17)
+#     at Module._compile (node:internal/modules/cjs/loader:1705:14)
+#     at Object..js (node:internal/modules/cjs/loader:1838:10)
+#     at Module.load (node:internal/modules/cjs/loader:1441:32)
+#     at Function._load (node:internal/modules/cjs/loader:1263:12)
+#     at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+# Node.js v22.22.1
+# Subtest: /home/harsh/.codex-tmp/r118-history-schema-tests-v1.js
+not ok 1 - /home/harsh/.codex-tmp/r118-history-schema-tests-v1.js
+  ---
+  duration_ms: 59.642259
+  type: 'test'
+  location: '/home/harsh/.codex-tmp/r118-history-schema-tests-v1.js:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 73.158384

@@ -1,0 +1,23 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.62s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test context::tests::submission_identity_tests::wait_validates_identity_before_deadline_but_drain_checks_expiration_first ... FAILED
+
+failures:
+
+---- context::tests::submission_identity_tests::wait_validates_identity_before_deadline_but_drain_checks_expiration_first stdout ----
+
+thread 'context::tests::submission_identity_tests::wait_validates_identity_before_deadline_but_drain_checks_expiration_first' (2003619) panicked at crates/fe2o3-runtime/src/context/tests/submission_identity_tests.rs:1004:13:
+assertion failed: matches!(fixture.context.wait(&mut token, Duration::MAX),
+    Err(RuntimeErrorV1::Validation(RuntimeValidationErrorV1::UnknownSubmission)))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    context::tests::submission_identity_tests::wait_validates_identity_before_deadline_but_drain_checks_expiration_first
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

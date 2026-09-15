@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 14 tests
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_generic_ticket_rejects_without_discarding_payload ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_adapter_panic_terminalizes_context_without_returning_retry_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_ordinary_adapter_error_preserves_original_owner_and_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_queue_cutoff_disconnect_and_reentrancy_recover_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_queued_stop_returns_exact_ticket_without_calling_hook ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_and_reserved_discard_notify_latest_waker ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_observer_loss_keeps_completion_producer_and_payload_until_stop ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_terminal_context_returns_original_ticket_without_hook ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_two_cell_exhaustion_returns_unchanged_ticket_before_hook ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_is_finite_parked_and_disposable_without_native_effects ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_rejects_foreign_unknown_and_replayed_ticket_identity ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reserved_discard_admission_returns_foreign_and_capacity_limited_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reserved_discard_panic_does_not_dispose_later_parked_owner ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reserved_owned_engine_drain_and_shutdown_dispose_on_owner ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 719 filtered out; finished in 0.02s
+

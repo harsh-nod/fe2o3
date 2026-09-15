@@ -1,0 +1,51 @@
+{
+  "scope": "Mutation runner integration with in-memory source writes and scripted child outcomes; no compiled Rust mutations",
+  "parent": "a07ec44309e214f2a8ef0e687e610c8e60a36224",
+  "source_map_sha256": "df2e27085ee920fdd07d2a6955503b1ecdcadc2d7c10c6fd4cec6768cecdadbb",
+  "helpers": [
+    {
+      "name": "r118-qualification-plan.js",
+      "sha256": "90eefaf5fef43637f47ece4bdd54a4e9b0fda5c7ef92ca3c0117d76dc7f3ee47"
+    },
+    {
+      "name": "r118-qualification-evidence.js",
+      "sha256": "4912d6775f3df8f631834e5ff1b1f51ae7bac18648e83e4388c3f3fbef28fbf9"
+    },
+    {
+      "name": "r118-history-plan-v1.json",
+      "sha256": "7dd54922b6e49079d7d9112bd415cdb8e8b5b61cb1d02856249389fe46175a91"
+    },
+    {
+      "name": "r118-mutation-plan-v1.js",
+      "sha256": "3fb4c5b0779886f830b9ecd3b2552a12d1f68f102d18b2e8685418d703ebe358"
+    },
+    {
+      "name": "r118-mutation-core-v1.js",
+      "sha256": "852b1214f57952182804be62592e1520f7f2e8bf79b1c0efde93a24f2d6ae2e8"
+    },
+    {
+      "name": "r118-mutations-c1-v1.js",
+      "sha256": "6555f552b9b0ee580fd324b737817521bda98b6db544cd5a71e8a0df4733b89e"
+    },
+    {
+      "name": "r118-mutations-c2-v1.js",
+      "sha256": "981a188c7acf7b2c9206d6a2a485ab56c8b484d891948b1dea073c7e16c2fe7e"
+    },
+    {
+      "name": "r118-mutations-c3-v1.js",
+      "sha256": "1c99baf5342469591a03b117a015d4cf37918c92318f20fd0ad91e4cda9c945a"
+    },
+    {
+      "name": "r118-run-v1.js",
+      "sha256": "c2af8cce7c2f79fe53b16a8219fa01e4b87b9fb3e0a910f108e47612798a5c53"
+    },
+    {
+      "name": "r118-qualification-run.js",
+      "sha256": "6afc0d0148aadf6c7c7ccc7b9c55764a3ab01fb7b934261a117359de71cd7138"
+    },
+    {
+      "name": "r118-qualification-lifecycle-tests-v1.js",
+      "sha256": "cc3f975fe0eda92c4eac2568f4ca3d18d26212f5e72b549097667d9f42ef7d1e"
+    }
+  ]
+}
