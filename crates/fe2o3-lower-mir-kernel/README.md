@@ -61,8 +61,8 @@ the originating contracts and bind the aggregate semantic identity, not treat
 a copied row as authentication of another module.
 
 This factoring removes launch-layout computation from ranked construction.
-It does not yet move executable KIR materialization before ranked verification
-or replace ranked analyses with views of the optimized graph; those remain
+The backend does not yet move executable KIR materialization before ranked
+verification or replace ranked analyses with views of the optimized graph; those remain
 part of [issue #271](https://github.com/harsh-nod/fe2o3/issues/271).
 
 The `production_semantic_kir_v1` integration target covers source launch
@@ -76,3 +76,37 @@ SSA owner before entering its private structural checker. The private split
 preserves all checks and error ordering, including for an owner with captured
 occurrences. It adds no public skip-replay API, native-source activation, proof
 authority, resource-accounting claim or reduction in replay work on this path.
+
+## Library PreRanked Materialization
+
+`ProductionPreRankedKirOwnerV1::try_materialize_with_budget` consumes the
+admitted source SSA owner and complete source launch roster, performs the
+existing legacy lowering and correspondence checks, then retains one immutable
+connected V12 executable. Borrowed assertion-origin queries describe the actual
+emitted condition use/definition and ordered success/failure edges, including
+the existing assertion-elision rule. They do not prove the condition true.
+
+`ProductionMaterializedRankedModuleReceiptV1` validates the complete ranked
+root/layout roster using the existing replaying candidate checks. Consuming
+`ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks` checks
+the same retained graph against the ranked inputs without lowering it again.
+The graph and canonical-byte buffers move into the existing owner. Its explicit
+`verify_equivalence` reconstruction audit and both older Legacy constructors
+remain unchanged in meaning; the older constructors expose no PreRanked views.
+
+The phase-local ledger transfers the connected graph receipt G and retained
+origin receipt A, restoring the incoming floor on ordinary Result return.
+Reserve both before another allocation and retain those reservations while the
+materialized owner or attached successor lives. Source MIR/SSA, launch rows,
+legacy bytes/correspondence, translation checks and other lowering allocations
+are excluded. An optional preexisting SSA occurrence-capture receipt C stays
+separately caller-reserved through receipt validation and attachment; release it
+only after the consumed source owner is dropped, including on failure. This
+legacy path performs no new capture and promises neither full-memory accounting
+nor unwind cleanup. Existing origin capacity-growth/top-up rules are retained.
+
+This is a closed library materialize/query/attach component, not activation of
+the rustc backend's pre-ranked route. It adds no NativeSource/native contract
+emission, native scalar bindings, retained-array lowering, optimizer, target or
+host route. Origin custody and connected structural admission do not grant
+source equivalence, formal Complete, artifact or launch authority.

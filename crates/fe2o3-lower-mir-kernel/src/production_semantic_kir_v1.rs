@@ -72,6 +72,9 @@ use fe2o3_pliron::{
 };
 use sha2::{Digest as _, Sha256};
 
+include!("production_pre_ranked_v1.rs");
+include!("production_assert_origins_v1.rs");
+
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
 const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
@@ -758,6 +761,8 @@ pub enum ProductionSemanticKirErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
     /// The mandatory semantic SSA plan failed construction or replay.
     SemanticSsa(ProductionSemanticSsaErrorV1),
+    /// Assertion-origin emission, sealing, query, or resource rejection.
+    AssertOrigin(SemanticKirAssertOriginErrorV1),
     /// A bounded lowering resource exceeded its limit.
     ResourceLimit {
         /// Resource that exceeded its limit.
@@ -881,6 +886,7 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
         match self {
             Self::SemanticOwner(error) => write!(formatter, "exact semantic owner failed: {error}"),
             Self::SemanticSsa(error) => write!(formatter, "semantic SSA custody failed: {error}"),
+            Self::AssertOrigin(error) => error.fmt(formatter),
             Self::ResourceLimit {
                 resource,
                 actual,
@@ -999,6 +1005,7 @@ impl Error for ProductionSemanticKirErrorV1 {
         match self {
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
+            Self::AssertOrigin(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
             Self::CanonicalKernelIrV8(error) => Some(error),
             Self::CanonicalKernelIrV9(error) => Some(error),
@@ -1599,7 +1606,7 @@ impl ProductionMirPlironTranslationValidationV1 {
 #[must_use = "dropping the owner abandons the verified target-neutral lowering"]
 pub struct ProductionSemanticKirOwnerV1 {
     semantic_ssa: ProductionSemanticSsaOwnerV1,
-    module: Module,
+    module: RetainedProductionKirModuleV1,
     canonical_kernel_ir: ProductionCanonicalKernelIrV1,
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
@@ -1842,7 +1849,7 @@ impl ProductionSemanticKirOwnerV1 {
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
             semantic_ssa,
-            module,
+            module: RetainedProductionKirModuleV1::Legacy(module),
             canonical_kernel_ir,
             correspondence,
             limits,
@@ -1946,7 +1953,7 @@ impl ProductionSemanticKirOwnerV1 {
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
             semantic_ssa,
-            module,
+            module: RetainedProductionKirModuleV1::Legacy(module),
             canonical_kernel_ir,
             correspondence,
             limits,
@@ -1971,7 +1978,7 @@ impl ProductionSemanticKirOwnerV1 {
         )?;
         let rederived_canonical_kernel_ir =
             ProductionCanonicalKernelIrV1::from_module(rederived_module.clone())?;
-        if self.module != rederived_module
+        if self.module() != &rederived_module
             || self.correspondence != rederived_correspondence
             || self.canonical_kernel_ir != rederived_canonical_kernel_ir
             || self.canonical_kernel_ir.canonical_bytes()
@@ -2049,7 +2056,7 @@ impl ProductionSemanticKirOwnerV1 {
 
     /// Borrows the structurally verified Kernel IR module.
     pub const fn module(&self) -> &Module {
-        &self.module
+        self.module.module()
     }
 
     /// Borrows the authoritative exact, semantically verified Kernel IR V8 owner, when retained.
@@ -10075,6 +10082,7 @@ fn lower_one_semantic_function_v1(
     launch_rank: u8,
     authenticated_ranked_control: bool,
     max_operations: usize,
+    mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -10245,6 +10253,27 @@ fn lower_one_semantic_function_v1(
             first_operation_ordinal,
             operation_count,
         });
+        if let Some(origins) = assert_origins.as_deref_mut() {
+            origins.record(
+                SemanticKirTerminatorOperationSpanV1 {
+                    correspondence_owner: plan.correspondence_owner,
+                    semantic_function: plan.semantic_function,
+                    semantic_block,
+                    kernel_ir_block: target.id,
+                    first_operation_ordinal,
+                    operation_count,
+                },
+                &plan.kernel_ir_function,
+                source.terminator().kind(),
+                target
+                    .terminator
+                    .as_ref()
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                lowering
+                    .infallible_asserts
+                    .contains(&semantic_block.index()),
+            )?;
+        }
         target_blocks.push(target);
         blocks.push(SemanticKirBlockCorrespondenceV1 {
             correspondence_owner: plan.correspondence_owner,
@@ -10396,6 +10425,15 @@ fn lower_module(
     limits: ProductionSemanticKirLimitsV1,
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    lower_module_with_assert_origins_v1(owner, limits, authenticated_launch_roots, None)
+}
+
+fn lower_module_with_assert_origins_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
         let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
@@ -10414,6 +10452,7 @@ fn lower_module(
             None,
             &mut closure_budget,
             true,
+            assert_origins,
         );
     };
     if authenticated_launch_roots.is_empty()
@@ -10467,6 +10506,7 @@ fn lower_module(
             Some(launch),
             &mut closure_budget,
             false,
+            assert_origins.as_deref_mut(),
         )?;
         let [kernel] = root_module.kernels.as_slice() else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -10797,6 +10837,7 @@ fn lower_single_root_module(
     authenticated_launch: Option<RetainedRankedLaunchRootV1>,
     closure_budget: &mut ReachableClosureBlockBudgetV1,
     validate_correspondence: bool,
+    mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     let launch_rank = authenticated_launch.map_or(1, |launch| launch.launch_rank);
@@ -11156,6 +11197,7 @@ fn lower_single_root_module(
             launch_rank,
             authenticated_launch.is_some() && index == 0,
             remaining_operations,
+            assert_origins.as_deref_mut(),
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
