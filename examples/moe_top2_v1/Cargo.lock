@@ -608,6 +608,7 @@ name = "fe2o3-kernel-opt"
 version = "0.1.0"
 dependencies = [
  "dialect-gpu",
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-pliron",
 ]
