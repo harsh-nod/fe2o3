@@ -134,7 +134,9 @@ fn ranked_bounds_fixture_line(containing: &str) -> usize {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn bf16_storage_fixtures_retain_exact_production_wire_versions() {
-    use fe2o3_kernel_ir::{AccessMode, AddressSpace, SemanticKirComponentRepresentationV2, Type};
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, ScalarType, SemanticKirComponentRepresentationV2, Type,
+    };
     use fe2o3_mir_model::semantic_mir_v1::{
         AdmittedInertSemanticMirV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
         SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1,
@@ -208,8 +210,16 @@ fn bf16_storage_fixtures_retain_exact_production_wire_versions() {
         assert_eq!(
             function.signature.parameters,
             vec![
-                Type::slice(Type::U16, AddressSpace::Global, AccessMode::ReadOnly),
-                Type::slice(Type::U16, AddressSpace::Global, AccessMode::ReadOnly),
+                Type::slice(
+                    Type::Scalar(ScalarType::U16),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly
+                ),
+                Type::slice(
+                    Type::Scalar(ScalarType::U16),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly
+                ),
                 Type::slice(Type::F32, AddressSpace::Global, AccessMode::WriteOnly),
             ]
         );
