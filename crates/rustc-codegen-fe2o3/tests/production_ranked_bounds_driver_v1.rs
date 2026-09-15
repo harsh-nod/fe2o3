@@ -133,6 +133,138 @@ fn ranked_bounds_fixture_line(containing: &str) -> usize {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn bf16_storage_fixtures_retain_exact_production_wire_versions() {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        AdmittedInertSemanticMirV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
+        SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1,
+        SemanticMirLimitsV1, SemanticMirWireVersionV1,
+    };
+    use sha2::Digest as _;
+
+    for (feature, column_major) in [
+        ("bf16_mfma_row_major_b", false),
+        ("bf16_mfma_column_major_b", true),
+    ] {
+        let target = ScratchTarget::new();
+        let bundle_path = target.path().join("bf16-storage-v5.fe2sim");
+        let result = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &bundle_path,
+                &target.path().join("export-target"),
+                Some(5),
+                feature,
+            ),
+            "export the actual BF16 storage fixture as Bundle V5",
+        );
+        assert!(
+            result.status.success() && result.stderr.contains("authority false"),
+            "{feature} production export failed or overclaimed authority:\n{}",
+            result.stderr
+        );
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV5::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bundle.target(), "gfx942:xnack-");
+        assert!(!bundle.authenticates_compiler_execution());
+        assert!(!bundle.grants_compiler_authority());
+        assert!(!bundle.grants_hardware_authority());
+        assert!(!bundle.grants_load_authority());
+        assert!(!bundle.grants_launch_authority());
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
+                bundle.canonical_kir_v10().to_vec(),
+            )
+            .unwrap();
+        assert_eq!(module.kernels.len(), 1);
+        assert_eq!(module.kernels[0].id.as_str(), "bf16_matrix_storage_fixture");
+        let limits = SemanticMirLimitsV1::default();
+        let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            limits,
+        )
+        .unwrap();
+        let mut column_constructor = false;
+        let mut column_load = false;
+        let mut multiply = false;
+        for callable in semantic.callables() {
+            let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+                continue;
+            };
+            match operation {
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor { .. } => {
+                    column_constructor = true;
+                }
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                    storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+                    contract,
+                    ..
+                } => {
+                    assert_eq!(contract.role, SemanticMfmaOperandRoleV1::B);
+                    assert_eq!(contract.profile, SemanticMfmaProfileV1::Bf16F32M16N16K16);
+                    column_load = true;
+                }
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    lhs,
+                    rhs,
+                    accumulator,
+                    ..
+                } => {
+                    assert_eq!(lhs.role, SemanticMfmaOperandRoleV1::A);
+                    assert_eq!(rhs.role, SemanticMfmaOperandRoleV1::B);
+                    assert_eq!(accumulator.profile, SemanticMfmaProfileV1::Bf16F32M16N16K16);
+                    multiply = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(multiply);
+        if column_major {
+            assert_eq!(semantic.wire_version(), SemanticMirWireVersionV1::V15);
+            assert!(column_constructor && column_load);
+            let exact = AdmittedInertSemanticMirV1::decode_exact_v15_canonical(
+                bundle.semantic_mir(),
+                limits,
+            )
+            .unwrap();
+            assert_eq!(exact.canonical_encoding(), bundle.semantic_mir());
+            assert!(
+                AdmittedInertSemanticMirV1::decode_exact_v14_canonical(
+                    bundle.semantic_mir(),
+                    limits,
+                )
+                .is_err()
+            );
+        } else {
+            assert!(semantic.wire_version() < SemanticMirWireVersionV1::V15);
+            assert!(!column_constructor && !column_load);
+        }
+        // Keep the actual request bytes in the explicit test's raw output.
+        eprintln!(
+            "{}",
+            json!({
+                "schema": "Bf16StorageProductionWireEvidenceV1",
+                "feature": feature,
+                "workspace": workspace(),
+                "fixture_source_sha256": hex(&sha2::Sha256::digest(include_bytes!(
+                    "fixtures/production-ranked-bounds-device/src/bf16_matrix_storage.rs"
+                ))),
+                "target": bundle.target(),
+                "production_kir_version": bundle.production_kir_identity().version(),
+                "semantic_wire_version": semantic.wire_version().as_u16(),
+                "semantic_sha256": hex(semantic.semantic_sha256().as_bytes()),
+                "semantic_mir_hex": hex(bundle.semantic_mir()),
+                "column_constructor": column_constructor,
+                "column_load": column_load,
+                "hardware_authority": false,
+            })
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
     let safe = run_extraction(&ScratchTarget::new(), false);
     assert!(
