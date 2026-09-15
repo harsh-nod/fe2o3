@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.75s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 15 tests
+test queue::dispatch_binding::control_release::tests::persistent::persistent_cancelled_history_and_exhausted_next_generation_preserve_admission ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_cardinality_and_capacity_reject_before_disposal ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_consuming_methods_route_full_owner_before_validation ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_currentness_failures_preserve_all_eighteen_control_boundaries ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_incomplete_callbacks_return_data_but_never_claim_control_completion ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_output_capacity_survives_success_and_error_extraction ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_panic_root_rejects_extraction_without_mutating_retained_custody ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_partial_unmap_returns_data_without_losing_original_control ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1134 filtered out; finished in 0.45s
+

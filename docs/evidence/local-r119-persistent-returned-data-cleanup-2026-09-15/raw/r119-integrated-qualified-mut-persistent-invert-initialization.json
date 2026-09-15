@@ -1,0 +1,92 @@
+{
+  "source_head": "8e2c8532cb60918de523c6cab1b861bcd61fc319",
+  "source_map_sha256": "623bb306e0bb0327ff02747f73c28684a77ff32a4067fc8db21fedcd3631fa37",
+  "started_at": "2026-09-15T06:06:38.674Z",
+  "finished_at": "2026-09-15T06:07:20.174Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r119-integrated-qualified-mut-persistent-invert-initialization.log",
+  "source": "/home/harsh/.codex-tmp/r119-integrated-qualified-mut-persistent-invert-initialization-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r119-integrated-qualified-mut-persistent-invert-initialization-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r119-integrated-run-v1.js",
+    "sha256": "0da05bbcbcd6ead667a63ccfbd4e2479e7231c3fa25bc4d81f1fe81a56adb694"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 2611360,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789452440182,
+        "monotonic_ns": "49148839095100",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 41.500507874,
+  "verification_elapsed_seconds": 0.30276005,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r119-integrated-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r119-integrated-qualified-restoration-persistent-truncate-output.json",
+      "sha256": "2c7573cb8525e7e4dff05876dbbcb001762e2ac4c0ff62c907ee3564db9f520b",
+      "observation": {
+        "utc_ms": 1789452395804,
+        "monotonic_ns": "49104460284974",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789452398674,
+      "monotonic_ns": "49107330437990",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789452440174,
+      "monotonic_ns": "49148830945864",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789452440477,
+      "monotonic_ns": "49149133705914",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

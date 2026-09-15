@@ -1,0 +1,92 @@
+{
+  "source_head": "8e2c8532cb60918de523c6cab1b861bcd61fc319",
+  "source_map_sha256": "ba003c21947095bd35a8937aab3f25e635c90e2f25f3764e6b7b9de30baaca7c",
+  "started_at": "2026-09-15T06:22:32.780Z",
+  "finished_at": "2026-09-15T06:23:19.290Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r119-integrated-qualified-mut-persistent-unroot-active-control-projection-commit.log",
+  "source": "/home/harsh/.codex-tmp/r119-integrated-qualified-mut-persistent-unroot-active-control-projection-commit-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r119-integrated-qualified-mut-persistent-unroot-active-control-projection-commit-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r119-integrated-run-v1.js",
+    "sha256": "0da05bbcbcd6ead667a63ccfbd4e2479e7231c3fa25bc4d81f1fe81a56adb694"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 2657007,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789453399298,
+        "monotonic_ns": "50107954554478",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 46.509806124,
+  "verification_elapsed_seconds": 0.321220553,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r119-integrated-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r119-integrated-qualified-restoration-persistent-unroot-active-control-partial-unmap.json",
+      "sha256": "73fb0f532eb0e63fcde9924d307c224a477f4d9a96f2676f57d8b22301d47653",
+      "observation": {
+        "utc_ms": 1789453348970,
+        "monotonic_ns": "50057626896086",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789453352780,
+      "monotonic_ns": "50061436434049",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789453399290,
+      "monotonic_ns": "50107946240173",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789453399611,
+      "monotonic_ns": "50108267460726",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

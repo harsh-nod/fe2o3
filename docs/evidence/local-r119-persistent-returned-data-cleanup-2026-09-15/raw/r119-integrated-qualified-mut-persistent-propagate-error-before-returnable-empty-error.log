@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.15s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer' (2650640) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:121:9:
+assertion `left == right` failed
+  left: Prepared(0)
+ right: Taken
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1148 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

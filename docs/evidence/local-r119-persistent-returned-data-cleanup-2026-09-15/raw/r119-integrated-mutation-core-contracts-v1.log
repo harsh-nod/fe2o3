@@ -1,0 +1,300 @@
+TAP version 13
+# R119_CAMPAIGN_INPUTS_START 8a480cf2017c6702a4b3dfb18258acd774381e73c815818638f40a313fc5159f
+# Subtest: executed helper bytes match the separately frozen input manifest
+ok 1 - executed helper bytes match the separately frozen input manifest
+  ---
+  duration_ms: 5.013876
+  type: 'test'
+  ...
+# Subtest: whole-file and scoped patches preserve all unselected text
+ok 2 - whole-file and scoped patches preserve all unselected text
+  ---
+  duration_ms: 1.985618
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: null
+ok 3 - present malformed scope rejects: null
+  ---
+  duration_ms: 0.643596
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: false
+ok 4 - present malformed scope rejects: false
+  ---
+  duration_ms: 0.288746
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: 0
+ok 5 - present malformed scope rejects: 0
+  ---
+  duration_ms: 0.201771
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: ""
+ok 6 - present malformed scope rejects: ""
+  ---
+  duration_ms: 0.263869
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: {}
+ok 7 - present malformed scope rejects: {}
+  ---
+  duration_ms: 1.938193
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: {"start":"fn a {"}
+ok 8 - present malformed scope rejects: {"start":"fn a {"}
+  ---
+  duration_ms: 3.754082
+  type: 'test'
+  ...
+# Subtest: present malformed scope rejects: {"start":"fn a {","end":"fn b {","extra":true}
+ok 9 - present malformed scope rejects: {"start":"fn a {","end":"fn b {","extra":true}
+  ---
+  duration_ms: 2.070774
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: empty patches
+ok 10 - derivation rejects before writes: empty patches
+  ---
+  duration_ms: 4.138992
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: duplicate paths
+ok 11 - derivation rejects before writes: duplicate paths
+  ---
+  duration_ms: 1.122211
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: undeclared path
+ok 12 - derivation rejects before writes: undeclared path
+  ---
+  duration_ms: 1.444009
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: legacy path
+ok 13 - derivation rejects before writes: legacy path
+  ---
+  duration_ms: 0.479225
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: empty edits
+ok 14 - derivation rejects before writes: empty edits
+  ---
+  duration_ms: 0.812536
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: empty anchor
+ok 15 - derivation rejects before writes: empty anchor
+  ---
+  duration_ms: 0.391841
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: missing second anchor
+ok 16 - derivation rejects before writes: missing second anchor
+  ---
+  duration_ms: 0.294637
+  type: 'test'
+  ...
+# Subtest: derivation rejects before writes: unchanged patch
+ok 17 - derivation rejects before writes: unchanged patch
+  ---
+  duration_ms: 0.626244
+  type: 'test'
+  ...
+# Subtest: two-file overlay changes exactly both files and preserves unrelated identities
+ok 18 - two-file overlay changes exactly both files and preserves unrelated identities
+  ---
+  duration_ms: 1.636573
+  type: 'test'
+  ...
+# Subtest: complete application and closed-child restoration preserve the full map
+ok 19 - complete application and closed-child restoration preserve the full map
+  ---
+  duration_ms: 2.28041
+  type: 'test'
+  ...
+# Subtest: application failure is recoverable without overwriting unknown bytes: before-first
+ok 20 - application failure is recoverable without overwriting unknown bytes: before-first
+  ---
+  duration_ms: 1.203805
+  type: 'test'
+  ...
+# Subtest: application failure is recoverable without overwriting unknown bytes: between-files
+ok 21 - application failure is recoverable without overwriting unknown bytes: between-files
+  ---
+  duration_ms: 0.450672
+  type: 'test'
+  ...
+# Subtest: application failure is recoverable without overwriting unknown bytes: complete-write-then-throw
+ok 22 - application failure is recoverable without overwriting unknown bytes: complete-write-then-throw
+  ---
+  duration_ms: 0.86812
+  type: 'test'
+  ...
+# Subtest: application failure is recoverable without overwriting unknown bytes: partial-write
+ok 23 - application failure is recoverable without overwriting unknown bytes: partial-write
+  ---
+  duration_ms: 2.162517
+  type: 'test'
+  ...
+# Subtest: application failure is recoverable without overwriting unknown bytes: partial-second-write
+ok 24 - application failure is recoverable without overwriting unknown bytes: partial-second-write
+  ---
+  duration_ms: 1.683812
+  type: 'test'
+  ...
+# Subtest: unattempted planned-mutant external edit is not owned by the campaign
+ok 25 - unattempted planned-mutant external edit is not owned by the campaign
+  ---
+  duration_ms: 1.96994
+  type: 'test'
+  ...
+# Subtest: unvisited second-file mutant after first write is not restored
+ok 26 - unvisited second-file mutant after first write is not restored
+  ---
+  duration_ms: 2.294045
+  type: 'test'
+  ...
+# Subtest: detected external edits are preserved: before-restoration
+ok 27 - detected external edits are preserved: before-restoration
+  ---
+  duration_ms: 1.646462
+  type: 'test'
+  ...
+# Subtest: detected external edits are preserved: during-group-scan
+ok 28 - detected external edits are preserved: during-group-scan
+  ---
+  duration_ms: 1.259761
+  type: 'test'
+  ...
+# Subtest: detected external edits are preserved: between-restoration-writes
+ok 29 - detected external edits are preserved: between-restoration-writes
+  ---
+  duration_ms: 1.295118
+  type: 'test'
+  ...
+# Subtest: restoration I/O failure reports exact mixed state and retains recovery information
+ok 30 - restoration I/O failure reports exact mixed state and retains recovery information
+  ---
+  duration_ms: 2.664516
+  type: 'test'
+  ...
+# Subtest: complete restoration followed by I/O error is physical recovery, not acceptance
+ok 31 - complete restoration followed by I/O error is physical recovery, not acceptance
+  ---
+  duration_ms: 0.906253
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: unclosed child
+ok 32 - unknown or live process state withholds all restoration: unclosed child
+  ---
+  duration_ms: 0.852471
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: cleanup failure
+ok 33 - unknown or live process state withholds all restoration: cleanup failure
+  ---
+  duration_ms: 0.947551
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: recorded live child
+ok 34 - unknown or live process state withholds all restoration: recorded live child
+  ---
+  duration_ms: 3.784386
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: fresh live child
+ok 35 - unknown or live process state withholds all restoration: fresh live child
+  ---
+  duration_ms: 1.347897
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: throwing scan
+ok 36 - unknown or live process state withholds all restoration: throwing scan
+  ---
+  duration_ms: 0.779553
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: malformed scan
+ok 37 - unknown or live process state withholds all restoration: malformed scan
+  ---
+  duration_ms: 1.494382
+  type: 'test'
+  ...
+# Subtest: unknown or live process state withholds all restoration: missing terminal record
+ok 38 - unknown or live process state withholds all restoration: missing terminal record
+  ---
+  duration_ms: 0.695394
+  type: 'test'
+  ...
+# Subtest: genuine failed spawn permits physical restoration but coercible status does not
+ok 39 - genuine failed spawn permits physical restoration but coercible status does not
+  ---
+  duration_ms: 0.89917
+  type: 'test'
+  ...
+# Subtest: a new unrelated source change prevents full-map restoration acceptance
+ok 40 - a new unrelated source change prevents full-map restoration acceptance
+  ---
+  duration_ms: 1.081283
+  type: 'test'
+  ...
+# Subtest: already-original files require explicit authenticated recovery after a child attempt
+ok 41 - already-original files require explicit authenticated recovery after a child attempt
+  ---
+  duration_ms: 1.532717
+  type: 'test'
+  ...
+# Subtest: recovery rejects substituted evidence: manifest substitution
+ok 42 - recovery rejects substituted evidence: manifest substitution
+  ---
+  duration_ms: 1.233532
+  type: 'test'
+  ...
+# Subtest: recovery rejects substituted evidence: missing path
+ok 43 - recovery rejects substituted evidence: missing path
+  ---
+  duration_ms: 0.904399
+  type: 'test'
+  ...
+# Subtest: recovery rejects substituted evidence: duplicate path
+ok 44 - recovery rejects substituted evidence: duplicate path
+  ---
+  duration_ms: 1.012885
+  type: 'test'
+  ...
+# Subtest: recovery rejects substituted evidence: wrong original hash
+ok 45 - recovery rejects substituted evidence: wrong original hash
+  ---
+  duration_ms: 1.103916
+  type: 'test'
+  ...
+# Subtest: recovery rejects substituted evidence: missing second mutant hash
+ok 46 - recovery rejects substituted evidence: missing second mutant hash
+  ---
+  duration_ms: 1.344906
+  type: 'test'
+  ...
+# Subtest: invalid application-attempt history is rejected before restoration
+ok 47 - invalid application-attempt history is rejected before restoration
+  ---
+  duration_ms: 1.455501
+  type: 'test'
+  ...
+# Subtest: real prospective plan derives 37 executions and 30 exact maps without writes
+ok 48 - real prospective plan derives 37 executions and 30 exact maps without writes
+  ---
+  duration_ms: 821.177622
+  type: 'test'
+  ...
+# R119_CAMPAIGN_INPUTS_END 8a480cf2017c6702a4b3dfb18258acd774381e73c815818638f40a313fc5159f
+1..48
+# tests 48
+# suites 0
+# pass 48
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1171.959584

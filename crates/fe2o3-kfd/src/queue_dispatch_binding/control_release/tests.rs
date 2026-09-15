@@ -11,6 +11,9 @@ type Mode = ReturningControlModeV1;
 #[path = "detached_tests.rs"]
 mod detached;
 
+#[path = "persistent_tests.rs"]
+mod persistent;
+
 #[derive(Debug, Eq, PartialEq)]
 struct HostFacts {
     gpu_va: u64,
@@ -49,6 +52,25 @@ enum DataFacts {
 struct Data {
     identity: Gfx942SdmaBufferStorageIdentityV1,
     facts: DataFacts,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PersistentData {
+    identity: Gfx942SdmaBufferStorageIdentityV1,
+    layout: Gfx942FixedDispatchDataLayoutV1,
+    initialized: bool,
+    content: Option<Gfx942DeviceContentDescriptorV1>,
+}
+
+fn persistent_data(data: &[Gfx942FixedDispatchDataV1]) -> Vec<PersistentData> {
+    data.iter()
+        .map(|data| PersistentData {
+            identity: data.sdma_storage_identity(),
+            layout: data.layout(),
+            initialized: data.is_fully_initialized(),
+            content: data.initialized_content(),
+        })
+        .collect()
 }
 
 fn data(a: &DispatchDataAuthorityV1) -> Data {
@@ -109,7 +131,9 @@ struct Snapshot {
     active: Option<ControlCleanupObservationV1>,
     returned: Vec<(Data, Premise)>,
     returned_generation: Option<u64>,
-    storage: [(usize, usize); 5],
+    persistent_returned: Vec<PersistentData>,
+    persistent_output: PersistentOutputStateV1,
+    storage: [(usize, usize); 6],
     started: bool,
     complete: bool,
 }
@@ -150,12 +174,15 @@ fn snapshot(r: &Root) -> Snapshot {
             .map(|d| (data(&d.authority), premise(&d.premise)))
             .collect(),
         returned_generation: r.returned_generation,
+        persistent_returned: persistent_data(&r.persistent_returned),
+        persistent_output: r.persistent_output,
         storage: [
             storage(&r.code_identity),
             storage(&r.packets),
             storage(&r.data),
             storage(&r.data_premises),
             storage(&r.returned),
+            storage(&r.persistent_returned),
         ],
         started: r.started,
         complete: r.complete,
@@ -211,12 +238,15 @@ fn new_root(owner: DispatchResourceOwnerV1, mode: Mode) -> Root {
         active: None,
         returned: Vec::new(),
         returned_generation: None,
+        persistent_returned: Vec::new(),
+        persistent_output: PersistentOutputStateV1::Unprepared,
         storage: [
             storage(&owner.code_identity),
             storage(&owner.packets),
             storage(&owner.data),
             storage(&owner.data_premises),
             storage(&Vec::<ReturnedDispatchDataLeaseV1>::new()),
+            storage(&Vec::<Gfx942FixedDispatchDataV1>::new()),
         ],
         started: false,
         complete: false,
@@ -276,7 +306,7 @@ fn recycle(g: &mut DispatchGenerationOwnerV1) -> u64 {
 
 fn fixture(mode: Mode) -> (crate::shared_memory::PristineAbortMemoryFixtureV1, Root) {
     let (memory, mut owner) = pristine_abort::pristine_dispatch_fixture_v1(8);
-    if mode == Mode::AfterRecycle {
+    if matches!(mode, Mode::AfterRecycle | Mode::PersistentAfterRecycle) {
         assert_eq!(recycle(&mut owner.generation), 8);
     }
     (memory, new_root(owner, mode))
@@ -504,7 +534,9 @@ fn assert_interrupted(r: &mut Root, before: &Snapshot, index: usize, owner: &str
             Some(match before.mode {
                 Mode::AfterRecycle => before.generation.returned_generation().unwrap(),
                 Mode::ReturningDestroy => before.generation.returning_destroy_generation().unwrap(),
-                Mode::DetachedPersistent { .. } => unreachable!(),
+                Mode::DetachedPersistent { .. }
+                | Mode::PersistentBeforePublication
+                | Mode::PersistentAfterRecycle => unreachable!(),
             })
         );
     }

@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 16 tests
+test queue::dispatch_binding::control_release::tests::detached::detached_consuming_method_roots_owner_before_generation_validation ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_cleanup_allows_cancelled_later_reservation_and_exhausted_next_generation ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_and_returning_wrappers_reject_wrong_modes_without_losing_outputs ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_actual_commit_rejection_keeps_native_settlement_without_model_commit ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_generation_errors_precede_malformed_state_without_cleanup_entry ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_generation_rejects_with_otherwise_valid_detached_state ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_incomplete_callback_retains_active_owner_and_cannot_retry_or_extract ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_projection_failures_keep_native_receipts_and_uncommitted_model ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_partial_unmap_never_advances_or_reconstructs_authority ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_real_preparation_preserves_populated_metadata_and_separate_native_data ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_native_errors_and_panics_preserve_each_control_and_destructive_prefix ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_success_preserves_separate_data_metadata_order_and_zero_return_storage ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_state_cardinality_and_generation_mismatch_retain_exact_owner ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_wrapper_retains_root_before_error_and_original_panic_and_drops_only_complete ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_currentness_boundaries_keep_exact_mapped_unmapped_and_disposed_custody ... ok
+test queue::dispatch_binding::control_release::tests::detached::detached_real_preparation_error_and_panic_keep_metadata_controls_and_data ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 1133 filtered out; finished in 0.13s
+

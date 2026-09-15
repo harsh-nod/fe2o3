@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.05s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup' (2605403) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:87:5:
+assertion failed: matches!(root.take_persistent_data(),
+    Err(Gfx942DispatchBindingErrorV1::ResourcePhase))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1148 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

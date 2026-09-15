@@ -1,0 +1,2926 @@
+{
+  "source_head": "8e2c8532cb60918de523c6cab1b861bcd61fc319",
+  "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+  "helpers": [
+    {
+      "name": "r119-integrated-auxiliary-gates-v1.py",
+      "sha256": "ea190b338282c01fdd0fbc43c5c93af6a61455c6760a28619282001ee175da7c"
+    },
+    {
+      "name": "r119-integrated-campaign-plan-v1.js",
+      "sha256": "70f05e7b10437b375a37cc184f1b4430c945ae4d1bcff7e4bbbc17d0a5a8226d"
+    },
+    {
+      "name": "r119-integrated-campaign-validation-v1.js",
+      "sha256": "084fbbe3b185a7e9c8f25d318b3062eeb591c1b4c628a8551fc8efa73d2667d0"
+    },
+    {
+      "name": "r119-integrated-freeze-tests-v1.js",
+      "sha256": "a2a3b120930a3f6d01f6a3953cb08ba89d9ad0ecfa19447830fed779f61564a9"
+    },
+    {
+      "name": "r119-integrated-freeze-tests-v2.js",
+      "sha256": "93bfa8d91210d2ef067eab6b24c667e9cf7cd0cef4447623800da55133c6fb22"
+    },
+    {
+      "name": "r119-integrated-freeze-v1.js",
+      "sha256": "bcbc7b3984f11c0792f90e5d60f28df1df8fd050b2007b444bcc808382cb6323"
+    },
+    {
+      "name": "r119-integrated-freeze-v2.js",
+      "sha256": "196d6e9571d90cc265f78aa480d379010dab8d23332863bb3fa88e36cba5f3a0"
+    },
+    {
+      "name": "r119-integrated-history-tests-v1.js",
+      "sha256": "7501a4729d59a201ce3e6bcf5f9bac6fc8c0546351af0b722b6fc724fc990b33"
+    },
+    {
+      "name": "r119-integrated-history-tests-v2.js",
+      "sha256": "7755c7dfe7e539a3be37ded80133e0153ad692d76f74916de4096f172eeaf726"
+    },
+    {
+      "name": "r119-integrated-history-v1.js",
+      "sha256": "178a1e9a0badfcbb29995b14139c3c62549072bf59f6777c5ca312e8f2522009"
+    },
+    {
+      "name": "r119-integrated-history-v2.js",
+      "sha256": "3a9a8bbf1eccd5a88ee26d4cf90efc4d37b54e18c82b335a5ceb78aa1b603388"
+    },
+    {
+      "name": "r119-integrated-mutation-core-tests-v1.js",
+      "sha256": "745968a4d049706f4c4454f6ee14c27ad61795a3917b2eb5e51d0446cf8f20dc"
+    },
+    {
+      "name": "r119-integrated-mutation-core-v1.js",
+      "sha256": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583"
+    },
+    {
+      "name": "r119-integrated-origin-v1.json",
+      "sha256": "9d400e58f95e4a4f8aa8c8112f7ce787fa90e5bcbe07a2bd9c6d66994a24f885"
+    },
+    {
+      "name": "r119-integrated-qualification-collect-v1.js",
+      "sha256": "3a0086952ad909758caef42331e8c019568503a1fc901a79dc42851350a180e1"
+    },
+    {
+      "name": "r119-integrated-qualification-evidence-v1.js",
+      "sha256": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2"
+    },
+    {
+      "name": "r119-integrated-qualification-lifecycle-tests-v1.js",
+      "sha256": "d5c78b652a99c9e54d432b5e8710b0a884fe2f8f18eb717cea9caba2c7de2b91"
+    },
+    {
+      "name": "r119-integrated-qualification-plan-v1.js",
+      "sha256": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7"
+    },
+    {
+      "name": "r119-integrated-qualification-plan-v2.js",
+      "sha256": "5262f9f89eb355b96c191108569f9255b5264d714e23e70683190d25c4b4ae71"
+    },
+    {
+      "name": "r119-integrated-qualification-prepare-v1.js",
+      "sha256": "0ec91cde93025f429a97928aad4746d586f1546638420587455e9c69c692a113"
+    },
+    {
+      "name": "r119-integrated-qualification-run-v1.js",
+      "sha256": "7b4e02cbca3c730fd3d1274346ee8ba4238511f3fc0b95472378fc4b3fa96e67"
+    },
+    {
+      "name": "r119-integrated-qualification-tests-v1.js",
+      "sha256": "8daa81fc11e95af28f57c325e433f648abf7e0fd9f50325a7bdbb768882fcb96"
+    },
+    {
+      "name": "r119-integrated-run-v1.js",
+      "sha256": "0da05bbcbcd6ead667a63ccfbd4e2479e7231c3fa25bc4d81f1fe81a56adb694"
+    },
+    {
+      "name": "r119-integrated-runner-evidence-v1.js",
+      "sha256": "bc9be3d4c81aca619629855d4497cfb31d60e8b3e1e82e33c13b653f9e256922"
+    },
+    {
+      "name": "r119-integrated-runner-inputs-v1.json",
+      "sha256": "bd381c321aedbdacc98bbb2ac84c7d03e0f639252ea03397c897ea2d07613315"
+    },
+    {
+      "name": "r119-integrated-runner-inputs-v2.json",
+      "sha256": "73b54b1900b63b333e7b23de860b1239e456fdf033bb9ab219b30b9afedcac36"
+    },
+    {
+      "name": "r119-integrated-runner-tests-v1.js",
+      "sha256": "98e9848354d837f59be936a314568fc76382d381eed95b97f147ff8ff0174722"
+    },
+    {
+      "name": "r119-integrated-runner-tests-v2.js",
+      "sha256": "8ead4ac9ea5332d120cefcab2a7cf53fd3403d6fbddea06e6b3dc0733a8b5ea4"
+    },
+    {
+      "name": "r119-integrated-source-gate-v1.py",
+      "sha256": "25db1a0cfe3b57736be1a153242e248795c7c67169ebeaddf79d32ec5c4ae32c"
+    },
+    {
+      "name": "r119-integrated-timeout-history-v2.js",
+      "sha256": "1379573022a9beda025815789420112fabbc43be5db387f6dadcdfa199cc530a"
+    },
+    {
+      "name": "r119-integrated-validation-inputs-v1.json",
+      "sha256": "5998a625873e4bc4aa7e4b320c77e3eeb9f6165aaa8c31a9ecba6d611101c0bc"
+    },
+    {
+      "name": "r119-integrated-validation-inputs-v2.json",
+      "sha256": "f4155cd4e807a1fb95c259dc909b27ada2657d9904f0a895047cfd16a0dea7cb"
+    },
+    {
+      "name": "r119-integrated-validation-v1.js",
+      "sha256": "48cef896ad03c7f3be23feb3cb6ce646b24b3e2623343bf7aec0527e90d017c8"
+    },
+    {
+      "name": "r119-integrated-validation-v2.js",
+      "sha256": "b1fcbb4a53e0c6ddd980ecfb62c1ccca416efe359ba52d262b7a3b11471c7cf7"
+    },
+    {
+      "name": "r119-persistent-mutations-v1.js",
+      "sha256": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad"
+    },
+    {
+      "name": "r119-persistent-mutations-v2.js",
+      "sha256": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a"
+    }
+  ],
+  "launcher": {
+    "name": "r119-integrated-qualification-launch-v1.js",
+    "sha256": "4aa5370cbef402be99cfbb0ad44b740db43dcd5bd0ea4d323dd8bf12698a7e96"
+  },
+  "original_sources": [
+    {
+      "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+      "text": "//! Returning and detached dispatch controls retain their complete owner through cleanup.\n\nuse super::*;\nuse crate::shared_memory::ControlCleanupCustodyV1;\nuse pristine_abort::PristineControlReleaseV1;\nuse std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};\n\n#[cfg(test)]\n#[path = \"control_release/tests.rs\"]\nmod tests;\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub(in crate::queue) enum ReturningControlModeV1 {\n    AfterRecycle,\n    ReturningDestroy,\n    DetachedPersistent { expected_generation: u64 },\n    PersistentBeforePublication,\n    PersistentAfterRecycle,\n}\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum PersistentOutputStateV1 {\n    Unprepared,\n    Prepared(u64),\n    Returnable(u64),\n    Taken,\n}\n\n/// Completion stays in this root until the caller explicitly transfers it.\n/// Live callers must separately retain the root across their model loan.\npub(in crate::queue) struct ReturningControlCleanupCustodyV1 {\n    mode: ReturningControlModeV1,\n    kernarg: Option<KernargAuthority>,\n    code: std::vec::IntoIter<CodeAuthority>,\n    code_identity: Vec<ResolvedCodeIdentityV1>,\n    packets: Vec<PreparedDispatchPacketV1>,\n    data: Vec<DispatchDataAuthorityV1>,\n    data_premises: Vec<RetainedDataPremiseV1>,\n    generation: DispatchGenerationOwnerV1,\n    persistent_control: PersistentFixedDispatchControlStateV1,\n    active_control: Option<ControlCleanupCustodyV1>,\n    returned: Vec<ReturnedDispatchDataLeaseV1>,\n    returned_generation: Option<u64>,\n    persistent_returned: Vec<Gfx942FixedDispatchDataV1>,\n    persistent_output: PersistentOutputStateV1,\n    started: bool,\n    complete: bool,\n    #[cfg(test)]\n    return_capacity_override: Option<usize>,\n}\n\nimpl ReturningControlCleanupCustodyV1 {\n    pub(in crate::queue) fn new(\n        owner: DispatchResourceOwnerV1,\n        mode: ReturningControlModeV1,\n    ) -> Self {\n        Self {\n            mode,\n            kernarg: Some(owner.kernarg),\n            code: owner.code.into_iter(),\n            code_identity: owner.code_identity,\n            packets: owner.packets,\n            data: owner.data,\n            data_premises: owner.data_premises,\n            generation: owner.generation,\n            persistent_control: owner.persistent_control,\n            active_control: None,\n            returned: Vec::new(),\n            returned_generation: None,\n            persistent_returned: Vec::new(),\n            persistent_output: PersistentOutputStateV1::Unprepared,\n            started: false,\n            complete: false,\n            #[cfg(test)]\n            return_capacity_override: None,\n        }\n    }\n\n    pub(in crate::queue) fn release_in_place(\n        &mut self,\n        memory: &mut impl PristineControlReleaseV1,\n    ) -> Result<(), Gfx942DispatchBindingErrorV1> {\n        if self.started {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        self.started = true;\n        let generation = match self.mode {\n            ReturningControlModeV1::AfterRecycle\n            | ReturningControlModeV1::PersistentAfterRecycle => {\n                Some(self.generation.returned_generation()?)\n            }\n            ReturningControlModeV1::ReturningDestroy\n            | ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.returning_destroy_generation()?)\n            }\n            ReturningControlModeV1::DetachedPersistent {\n                expected_generation,\n            } => {\n                validate_detached_persistent_control_release_state_v1(\n                    self.persistent_control,\n                    self.data.len(),\n                    self.data_premises.len(),\n                    self.generation.returned_generation()?,\n                    expected_generation,\n                )?;\n                None\n            }\n        };\n        if let Some(generation) = generation {\n            if self.data.len() != self.data_premises.len() {\n                return Err(Gfx942DispatchBindingErrorV1::InvalidData {\n                    index: self.data.len().min(self.data_premises.len()),\n                    detail: \"retained data/premise cardinality\",\n                });\n            }\n            let capacity = self.data.len();\n            #[cfg(test)]\n            let capacity = self.return_capacity_override.unwrap_or(capacity);\n            if matches!(\n                self.mode,\n                ReturningControlModeV1::PersistentBeforePublication\n                    | ReturningControlModeV1::PersistentAfterRecycle\n            ) {\n                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n                self.persistent_output = PersistentOutputStateV1::Prepared(generation);\n            } else {\n                self.returned.try_reserve_exact(capacity).map_err(|_| {\n                    Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"returning dispatch data\",\n                    }\n                })?;\n                if self.returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"returning dispatch data\",\n                    });\n                }\n                self.returned_generation = Some(generation);\n            }\n        }\n\n        let release = self.release_controls(memory);\n        // Only a normal return, including Err, permits persistent data extraction.\n        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n        release?;\n        if matches!(\n            self.mode,\n            ReturningControlModeV1::AfterRecycle | ReturningControlModeV1::ReturningDestroy\n        ) {\n            // Capacity and cardinality were checked before any disposal callback.\n            for (authority, premise) in self.data.drain(..).zip(self.data_premises.drain(..)) {\n                self.returned\n                    .push(ReturnedDispatchDataLeaseV1 { authority, premise });\n            }\n        }\n        self.complete = true;\n        Ok(())\n    }\n\n    fn release_controls(\n        &mut self,\n        memory: &mut impl PristineControlReleaseV1,\n    ) -> Result<(), Gfx942DispatchBindingErrorV1> {\n        self.active_control = Some(ControlCleanupCustodyV1::kernarg(\n            self.kernarg\n                .take()\n                .expect(\"unstarted returning cleanup retains kernarg\")\n                .into_token(),\n        ));\n        self.release_active_control(memory)?;\n        while let Some(code) = self.code.next() {\n            self.active_control = Some(ControlCleanupCustodyV1::code(code.into_token()));\n            self.release_active_control(memory)?;\n        }\n\n        Ok(())\n    }\n\n    fn release_active_control(\n        &mut self,\n        memory: &mut impl PristineControlReleaseV1,\n    ) -> Result<(), Gfx942DispatchBindingErrorV1> {\n        let active = self.active_control.as_mut().expect(\"rooted active control\");\n        memory.release_control(active)?;\n        if !active.is_complete() {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        self.active_control = None;\n        Ok(())\n    }\n\n    pub(in crate::queue) fn take_completed(\n        &mut self,\n    ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {\n        if !self.complete\n            || !matches!(\n                self.mode,\n                ReturningControlModeV1::AfterRecycle | ReturningControlModeV1::ReturningDestroy\n            )\n        {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        let generation = self\n            .returned_generation\n            .take()\n            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;\n        Ok(ReturnedDispatchDataV1 {\n            generation,\n            data: core::mem::take(&mut self.returned),\n        })\n    }\n\n    pub(in crate::queue) fn take_persistent_data(\n        &mut self,\n    ) -> Result<(u64, Vec<Gfx942FixedDispatchDataV1>), Gfx942DispatchBindingErrorV1> {\n        if !matches!(\n            self.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        let PersistentOutputStateV1::Returnable(generation) = self.persistent_output else {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        };\n        self.persistent_output = PersistentOutputStateV1::Taken;\n        for (authority, premise) in self.data.drain(..).zip(self.data_premises.iter()) {\n            self.persistent_returned\n                .push(dispatch_data_from_authority_v1(\n                    authority,\n                    premise.fully_initialized,\n                ));\n        }\n        Ok((generation, core::mem::take(&mut self.persistent_returned)))\n    }\n}\n\npub(super) fn release_returning_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::AfterRecycle | ReturningControlModeV1::ReturningDestroy\n        ) {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        root.release_in_place(memory)?;\n        root.take_completed()\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n\npub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n\npub(super) fn release_detached_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<(), Gfx942DispatchBindingErrorV1> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(root.mode, ReturningControlModeV1::DetachedPersistent { .. }) {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        root.release_in_place(memory)\n    }));\n    match result {\n        Ok(Ok(())) => Ok(()),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n"
+    }
+  ],
+  "historical_artifacts": [
+    {
+      "name": "r119-clippy-source-after.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-clippy-source.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-clippy.json",
+      "sha256": "20b53357bbb007d5c76de24f3ad9c69054775ee5bc46bd4e5ee7f524cbd8ba38"
+    },
+    {
+      "name": "r119-clippy.log",
+      "sha256": "c28ee9a2d4c8d9ef796c76d3928da872cc4ac9372602313f5e3d57916e315c26"
+    },
+    {
+      "name": "r119-format-source-after.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-format-source.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-format.json",
+      "sha256": "7ff027f095463a570bbc917ca566feb83523af3e4b6a34a301ffb92e42e3e708"
+    },
+    {
+      "name": "r119-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r119-integrated-auxiliary-campaign-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-auxiliary-campaign-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-auxiliary-campaign.json",
+      "sha256": "260e76026df416a553c4f4d4992b49ef91bf5542fc29b3c3970a79e247a39d93"
+    },
+    {
+      "name": "r119-integrated-auxiliary-campaign.log",
+      "sha256": "02308e72d40572c172ce301534b7d7db89c5fcfa0d45719feee36855099fe9cd"
+    },
+    {
+      "name": "r119-integrated-auxiliary-complete.json",
+      "sha256": "60dda84c3cf468734684b4256a7dc388bce0837a7eaaf3b7da94818fe562a53e"
+    },
+    {
+      "name": "r119-integrated-auxiliary-gates-v1.py",
+      "sha256": "ea190b338282c01fdd0fbc43c5c93af6a61455c6760a28619282001ee175da7c"
+    },
+    {
+      "name": "r119-integrated-auxiliary-results.json",
+      "sha256": "c11cbda21b71cc0daec22e15ace9b1d44668092114af2aace834f4130a2c7e13"
+    },
+    {
+      "name": "r119-integrated-auxiliary-source-after.json",
+      "sha256": "1c887d9818aebce5c0e24c271e45e8e51f1b13e0f8814204e39973ee983565cf"
+    },
+    {
+      "name": "r119-integrated-auxiliary-source-inputs.json",
+      "sha256": "1c887d9818aebce5c0e24c271e45e8e51f1b13e0f8814204e39973ee983565cf"
+    },
+    {
+      "name": "r119-integrated-bind.log",
+      "sha256": "f393d81c2e23714a5a4c5a8a1fb7cf800e915251eae3f5178dd20c6bf2b33307"
+    },
+    {
+      "name": "r119-integrated-campaign-inputs-v1.json",
+      "sha256": "8a480cf2017c6702a4b3dfb18258acd774381e73c815818638f40a313fc5159f"
+    },
+    {
+      "name": "r119-integrated-campaign-plan-v1.js",
+      "sha256": "70f05e7b10437b375a37cc184f1b4430c945ae4d1bcff7e4bbbc17d0a5a8226d"
+    },
+    {
+      "name": "r119-integrated-campaign-validation-v1.js",
+      "sha256": "084fbbe3b185a7e9c8f25d318b3062eeb591c1b4c628a8551fc8efa73d2667d0"
+    },
+    {
+      "name": "r119-integrated-clippy-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-clippy-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-clippy.json",
+      "sha256": "8747662f894d68a59d65841d2481e409f3391f53bba0c2432113734c6d94a7b8"
+    },
+    {
+      "name": "r119-integrated-clippy.log",
+      "sha256": "4842859e2a2e4cfb17c172f3c78101d1aeba1aa0bc06cf9f04c166bb52d4cbcf"
+    },
+    {
+      "name": "r119-integrated-continuation-status-v1.md",
+      "sha256": "358b396afb352185d0c568f034eed123d4301929168afb8f34537c6778241776"
+    },
+    {
+      "name": "r119-integrated-control-focused-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-control-focused-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-control-focused.json",
+      "sha256": "823687eeef14e292d4703a4c846ecd70543c0dd4ba6173ab81eaa1c1652a0278"
+    },
+    {
+      "name": "r119-integrated-control-focused.log",
+      "sha256": "265a8e60ad67f1da57bb4a3b56c16559e2e1d8c6141a3722ebee3611e540618b"
+    },
+    {
+      "name": "r119-integrated-environment.json",
+      "sha256": "4a74a5a41e1ef8eaeb42116bbc022f8a906046a2ac7e922dd7cbffd00af28643"
+    },
+    {
+      "name": "r119-integrated-format-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-format-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-format.json",
+      "sha256": "6a33739dff109897c68647a1d7de65c5a41b9729539b387e62dd67cddbaad270"
+    },
+    {
+      "name": "r119-integrated-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r119-integrated-freeze-contracts-v2-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-freeze-contracts-v2-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-freeze-contracts-v2.json",
+      "sha256": "d7bdccca19649c5785ee300649b202616af1f11d7b5f2bb0c2425c5b6c17bbf1"
+    },
+    {
+      "name": "r119-integrated-freeze-contracts-v2.log",
+      "sha256": "85a81ca24d793c183ca920329ac1cfde30677387385294d2e5be3badf4d5dc41"
+    },
+    {
+      "name": "r119-integrated-freeze-tests-v1.js",
+      "sha256": "a2a3b120930a3f6d01f6a3953cb08ba89d9ad0ecfa19447830fed779f61564a9"
+    },
+    {
+      "name": "r119-integrated-freeze-tests-v2.js",
+      "sha256": "93bfa8d91210d2ef067eab6b24c667e9cf7cd0cef4447623800da55133c6fb22"
+    },
+    {
+      "name": "r119-integrated-freeze-v1.js",
+      "sha256": "bcbc7b3984f11c0792f90e5d60f28df1df8fd050b2007b444bcc808382cb6323"
+    },
+    {
+      "name": "r119-integrated-freeze-v2.js",
+      "sha256": "196d6e9571d90cc265f78aa480d379010dab8d23332863bb3fa88e36cba5f3a0"
+    },
+    {
+      "name": "r119-integrated-frozen-cleanup-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-cleanup-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-cleanup.json",
+      "sha256": "13c96fb549afd1646c6481484a8f5e72768fceb0532ddd9ea2329bad96a38c37"
+    },
+    {
+      "name": "r119-integrated-frozen-cleanup.log",
+      "sha256": "5a3a673a813b86adeb020355a37ecbc1b9d0170a368e7e3846ac7625fbb7a677"
+    },
+    {
+      "name": "r119-integrated-frozen-detached-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-detached-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-detached.json",
+      "sha256": "a1db21682ea076fb89a9534666e14efc1e997786a897f388e8cfdc05f57c8fb7"
+    },
+    {
+      "name": "r119-integrated-frozen-detached.log",
+      "sha256": "461598803964f018a34b6eb44acabd392dfac60726416f97c2a0549692bfcf80"
+    },
+    {
+      "name": "r119-integrated-frozen-persistent-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-persistent-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-persistent.json",
+      "sha256": "13cbf7092dd654c1a3749b566c2f2d9eaf0adeaaf51961aa3ddec1297126d7ef"
+    },
+    {
+      "name": "r119-integrated-frozen-persistent.log",
+      "sha256": "8a0ffaf84129d4a23705ac5174bdabd0bc08282c89fda6d6670089047f0d132c"
+    },
+    {
+      "name": "r119-integrated-frozen-pristine-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-pristine-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-pristine.json",
+      "sha256": "7fe02733a867c382363b017ac004b6d6c711c572bf3e56f90bf097675f021f0b"
+    },
+    {
+      "name": "r119-integrated-frozen-pristine.log",
+      "sha256": "362b08b51225b23cd3ccc3175d35c4ee781016bb29c2604de7c06d3cf125892a"
+    },
+    {
+      "name": "r119-integrated-frozen-returning-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-returning-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-returning.json",
+      "sha256": "175d67ae1b25223f3c04f2969d443626dd6315ecaf4ffeb060e84dfc223559aa"
+    },
+    {
+      "name": "r119-integrated-frozen-returning.log",
+      "sha256": "caf7665839cdf50d695545c2e65210fc4e8330f7e46961856675ff6f0247d6b7"
+    },
+    {
+      "name": "r119-integrated-frozen-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-transport-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-transport-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-frozen-transport.json",
+      "sha256": "06c09c2b497a85f2edfdb3d425777a90d74a29c7ead8c37f564bb7fd198e6b43"
+    },
+    {
+      "name": "r119-integrated-frozen-transport.log",
+      "sha256": "15727cfc89b154d422e94e8a58eb3ee7aa8fe9f232153b5b8eb769a3666b5065"
+    },
+    {
+      "name": "r119-integrated-gnu-all-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-gnu-all-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-gnu-all.json",
+      "sha256": "ebdaefb857430876d57e470cd467e33ae931b0bf795a7c40a0ea35d59730da3c"
+    },
+    {
+      "name": "r119-integrated-gnu-all.log",
+      "sha256": "90444dd9e0491f7d1d169241baad778d1ee3c75ab34cd2caeec35b304b1f0368"
+    },
+    {
+      "name": "r119-integrated-history-contracts-v2-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-history-contracts-v2-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-history-contracts-v2.json",
+      "sha256": "32a830cfe64308a7bb6af01604f6bc2592bfc9c81543e427d2d689648daccac3"
+    },
+    {
+      "name": "r119-integrated-history-contracts-v2.log",
+      "sha256": "aeb63328a36a0b981510bf5bd894ea878f765de3c47b28a190f37e9a44efb027"
+    },
+    {
+      "name": "r119-integrated-history-reject-timeout-v1-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-history-reject-timeout-v1-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-history-reject-timeout-v1.json",
+      "sha256": "f049423dd589130442fbb1ed2d1379f6e96400a84466fab76320380b70342712"
+    },
+    {
+      "name": "r119-integrated-history-reject-timeout-v1.log",
+      "sha256": "9075a66e872c1564fbc2dfa888ca83831e342cb58f4e9f1b3c92654680b20593"
+    },
+    {
+      "name": "r119-integrated-history-tests-v1.js",
+      "sha256": "7501a4729d59a201ce3e6bcf5f9bac6fc8c0546351af0b722b6fc724fc990b33"
+    },
+    {
+      "name": "r119-integrated-history-tests-v2.js",
+      "sha256": "7755c7dfe7e539a3be37ded80133e0153ad692d76f74916de4096f172eeaf726"
+    },
+    {
+      "name": "r119-integrated-history-v1.js",
+      "sha256": "178a1e9a0badfcbb29995b14139c3c62549072bf59f6777c5ca312e8f2522009"
+    },
+    {
+      "name": "r119-integrated-history-v2.js",
+      "sha256": "3a9a8bbf1eccd5a88ee26d4cf90efc4d37b54e18c82b335a5ceb78aa1b603388"
+    },
+    {
+      "name": "r119-integrated-history-validation-v2-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-history-validation-v2-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-history-validation-v2.json",
+      "sha256": "cd2dae39ac2bd9599218bd8dc45d9db06704ca0c7afdbc2f6cd9afc5d4959b51"
+    },
+    {
+      "name": "r119-integrated-history-validation-v2.log",
+      "sha256": "c241e13f5960e3216b072cfed58f860accfc15fedb52cbe5fadf092e35433bb3"
+    },
+    {
+      "name": "r119-integrated-initialization.log",
+      "sha256": "3a5045868afd5c27d2716fdb11b740c3a1c0c5c1a984116413ff1e05c9d5a94b"
+    },
+    {
+      "name": "r119-integrated-linux-helpers.log",
+      "sha256": "b78cb48f28f17aaad884d876e8fce4b4cae038155be715c5b678d77113956815"
+    },
+    {
+      "name": "r119-integrated-musl-all-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-musl-all-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-musl-all.json",
+      "sha256": "45cc664330884b635e762122cd606e0d660e7596a9967eabce7a991d3d928052"
+    },
+    {
+      "name": "r119-integrated-musl-all.log",
+      "sha256": "54a51986daa7488c7f36dd0ae3ef6bcc5677b533df0c66a5c89a7d7df92d4160"
+    },
+    {
+      "name": "r119-integrated-musl-retry1-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-musl-retry1-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-musl-retry1.json",
+      "sha256": "ed6e6824dbc1ad3b3af6a7210302198e3e37688f1207281846c046142b064ebf"
+    },
+    {
+      "name": "r119-integrated-musl-retry1.log",
+      "sha256": "14ab2a1c5b49c091a46e01b6b53551622ec8fa2c85d59d3b6931e41d87cc03e7"
+    },
+    {
+      "name": "r119-integrated-mutation-core-contracts-v1-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-mutation-core-contracts-v1-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-mutation-core-contracts-v1.json",
+      "sha256": "3c3f8021715503aa73b44a877cfcae0c3d3c5785ed0cb9f97b0aa98243df2839"
+    },
+    {
+      "name": "r119-integrated-mutation-core-contracts-v1.log",
+      "sha256": "2b7b408ce3251308bd85a3707a732342b72b4969630b0dd37a8af1970d6afbd4"
+    },
+    {
+      "name": "r119-integrated-mutation-core-tests-v1.js",
+      "sha256": "745968a4d049706f4c4454f6ee14c27ad61795a3917b2eb5e51d0446cf8f20dc"
+    },
+    {
+      "name": "r119-integrated-mutation-core-v1.js",
+      "sha256": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583"
+    },
+    {
+      "name": "r119-integrated-ordinary.log",
+      "sha256": "8476ce0092b2744286b6a9497004b5d8a139cbc79e09527925d2c97b0c4f0268"
+    },
+    {
+      "name": "r119-integrated-origin-v1.json",
+      "sha256": "9d400e58f95e4a4f8aa8c8112f7ce787fa90e5bcbe07a2bd9c6d66994a24f885"
+    },
+    {
+      "name": "r119-integrated-persistent-focused-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-persistent-focused-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-persistent-focused.json",
+      "sha256": "685b70befe3c65c7aa6cfeacf29f79230f897b0b22a81236ca1e550f089ff53c"
+    },
+    {
+      "name": "r119-integrated-persistent-focused.log",
+      "sha256": "acd07e4d70f29ddc0a01d774ca13099857bb787b64307b3a18274d53306228dd"
+    },
+    {
+      "name": "r119-integrated-preliminary-freeze-contracts-v1-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-preliminary-freeze-contracts-v1-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-preliminary-freeze-contracts-v1.json",
+      "sha256": "72f1cc9d1e453322689e5f6f78048778636e68d64f9e36eb517de9b7c0903c03"
+    },
+    {
+      "name": "r119-integrated-preliminary-freeze-contracts-v1.log",
+      "sha256": "5e7f80df1b2b64a15a680a11002830222e03f8d1c81bfc7ae35b878d2aabc8e0"
+    },
+    {
+      "name": "r119-integrated-preparation.log",
+      "sha256": "71cb9d9619506180662bf92e333b9642e4b279eb777f41f90bfed0f2f47fffed"
+    },
+    {
+      "name": "r119-integrated-production-audit.log",
+      "sha256": "400860e866d558eb288fcb5fa535c2f1df7461ba462f0c21f77e3b96009a228c"
+    },
+    {
+      "name": "r119-integrated-production-metadata.log",
+      "sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+    },
+    {
+      "name": "r119-integrated-production-metadata.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r119-integrated-proof-inventory.log",
+      "sha256": "71666f9ef118d670089a13bab3ca328ec739b8b3870abc98706f4b572884f2e5"
+    },
+    {
+      "name": "r119-integrated-qualification-collect-v1.js",
+      "sha256": "3a0086952ad909758caef42331e8c019568503a1fc901a79dc42851350a180e1"
+    },
+    {
+      "name": "r119-integrated-qualification-contract-tests-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-qualification-contract-tests-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-qualification-contract-tests.json",
+      "sha256": "8a36b92be5cfc3d7de3df50db77fd1a80954ffca02d6851afb6223717d49f2c1"
+    },
+    {
+      "name": "r119-integrated-qualification-contract-tests.log",
+      "sha256": "5e9d79d4e4aaa438d4e3615fe325080782d475bb7a69c8d4995c8564a991892f"
+    },
+    {
+      "name": "r119-integrated-qualification-evidence-v1.js",
+      "sha256": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2"
+    },
+    {
+      "name": "r119-integrated-qualification-launch-v1.js",
+      "sha256": "4aa5370cbef402be99cfbb0ad44b740db43dcd5bd0ea4d323dd8bf12698a7e96"
+    },
+    {
+      "name": "r119-integrated-qualification-lifecycle-contracts-v1-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-qualification-lifecycle-contracts-v1-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-qualification-lifecycle-contracts-v1.json",
+      "sha256": "131311e914e89ca379621621db686318a823f9afac441bc19a3b6897ca2a7c54"
+    },
+    {
+      "name": "r119-integrated-qualification-lifecycle-contracts-v1.log",
+      "sha256": "e1caa528056230263a3d78336328668f93efc3c3bd1a76e01788445386782db0"
+    },
+    {
+      "name": "r119-integrated-qualification-lifecycle-tests-v1.js",
+      "sha256": "d5c78b652a99c9e54d432b5e8710b0a884fe2f8f18eb717cea9caba2c7de2b91"
+    },
+    {
+      "name": "r119-integrated-qualification-plan-v1.js",
+      "sha256": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7"
+    },
+    {
+      "name": "r119-integrated-qualification-plan-v2.js",
+      "sha256": "5262f9f89eb355b96c191108569f9255b5264d714e23e70683190d25c4b4ae71"
+    },
+    {
+      "name": "r119-integrated-qualification-prepare-v1.js",
+      "sha256": "0ec91cde93025f429a97928aad4746d586f1546638420587455e9c69c692a113"
+    },
+    {
+      "name": "r119-integrated-qualification-run-v1.js",
+      "sha256": "7b4e02cbca3c730fd3d1274346ee8ba4238511f3fc0b95472378fc4b3fa96e67"
+    },
+    {
+      "name": "r119-integrated-qualification-tests-v1.js",
+      "sha256": "8daa81fc11e95af28f57c325e433f648abf7e0fd9f50325a7bdbb768882fcb96"
+    },
+    {
+      "name": "r119-integrated-registration.log",
+      "sha256": "b6c6bd8a453a75c644d46151a30d5c875d5561f86276aaa019886f12ca6e4b18"
+    },
+    {
+      "name": "r119-integrated-reviewed-ci-test-gate.log",
+      "sha256": "7614173c0974c8aa8202f60f5fc9a9ed8691211147a0004dab9299a3555f5b9b"
+    },
+    {
+      "name": "r119-integrated-reviewed-clippy-all.log",
+      "sha256": "5b921476129d2b2c6d90becb47d799d2d5a75c9fc5c298c5ce63c11158f49686"
+    },
+    {
+      "name": "r119-integrated-reviewed-clippy-production.log",
+      "sha256": "f406dc0cc58b93df1005ecc040716d1ae584a29bb95968afdfeb369d9e600df2"
+    },
+    {
+      "name": "r119-integrated-reviewed-complete.json",
+      "sha256": "bfb857a49c85eabf67d2f52bf5c2c25aa8adcab44dbfd7e96bc5f040132ebc29"
+    },
+    {
+      "name": "r119-integrated-reviewed-dependency-policy.log",
+      "sha256": "e4909791d89201a88e23213fca74159a2d5b8e869b5227635acbe74c893d6e25"
+    },
+    {
+      "name": "r119-integrated-reviewed-dependency-tests.log",
+      "sha256": "75ff54e727b57e4bd7b88956ed0c92c4b9a416e6f0976707e8fb54aa385ac0bd"
+    },
+    {
+      "name": "r119-integrated-reviewed-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r119-integrated-reviewed-gnu-docs.log",
+      "sha256": "8ecf2f6295d0948c857678e102a4dacedb66591d116cdc4bdc6242c46c7369cc"
+    },
+    {
+      "name": "r119-integrated-reviewed-gnu-host.log",
+      "sha256": "270cb5d33dff524b677cd11706516ae5e9679c4a9f54c5a9655d5c842becf5dc"
+    },
+    {
+      "name": "r119-integrated-reviewed-macro-fixtures.log",
+      "sha256": "662e4bd728312b3466727dab86c64fb8ee013eb1fe7484256044f990ad5e21fc"
+    },
+    {
+      "name": "r119-integrated-reviewed-musl-docs.log",
+      "sha256": "b29b2119512ec9c0aa1a5d181e62abb8875636387e1c2350a4763ca8b5ce3f9a"
+    },
+    {
+      "name": "r119-integrated-reviewed-musl-host-docs.log",
+      "sha256": "622bb6638e725e81dd6f5af88c722152fe8c7797ba64baab8411673a968cf80f"
+    },
+    {
+      "name": "r119-integrated-reviewed-musl-host.log",
+      "sha256": "9f0e182157b3d8d3670115782f9838665b878b14183578c3919043d9003072fc"
+    },
+    {
+      "name": "r119-integrated-reviewed-python.log",
+      "sha256": "89441730f0256575fc553dba2ea7687b9e6013540b22c15f36e85ad8cad48619"
+    },
+    {
+      "name": "r119-integrated-reviewed-source-after.json",
+      "sha256": "1c887d9818aebce5c0e24c271e45e8e51f1b13e0f8814204e39973ee983565cf"
+    },
+    {
+      "name": "r119-integrated-reviewed-source-gate.json",
+      "sha256": "dacda7104ecc07fa806e40c1806215ce1813ac7e8bcbcfb2b5bae164a2cbde0c"
+    },
+    {
+      "name": "r119-integrated-reviewed-source-inputs.json",
+      "sha256": "1c887d9818aebce5c0e24c271e45e8e51f1b13e0f8814204e39973ee983565cf"
+    },
+    {
+      "name": "r119-integrated-reviewed-standalone-lockfiles.log",
+      "sha256": "192a90ed1f437f0cc1b070e66c2061a491c34346df88f5da05cf21234c4bf430"
+    },
+    {
+      "name": "r119-integrated-reviewed-whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r119-integrated-run-v1.js",
+      "sha256": "0da05bbcbcd6ead667a63ccfbd4e2479e7231c3fa25bc4d81f1fe81a56adb694"
+    },
+    {
+      "name": "r119-integrated-runner-contracts-v2-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-contracts-v2-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-contracts-v2.json",
+      "sha256": "0f88c6fddad46606727ca7ba346bb0a83eadffaf2a5a1efeed112d7f489cce1c"
+    },
+    {
+      "name": "r119-integrated-runner-contracts-v2.log",
+      "sha256": "79ec437474d338312e3af10813cb214bb65e5ce039e37f1038f86d5adfcb24a9"
+    },
+    {
+      "name": "r119-integrated-runner-evidence-v1.js",
+      "sha256": "bc9be3d4c81aca619629855d4497cfb31d60e8b3e1e82e33c13b653f9e256922"
+    },
+    {
+      "name": "r119-integrated-runner-inputs-v1.json",
+      "sha256": "bd381c321aedbdacc98bbb2ac84c7d03e0f639252ea03397c897ea2d07613315"
+    },
+    {
+      "name": "r119-integrated-runner-inputs-v2.json",
+      "sha256": "73b54b1900b63b333e7b23de860b1239e456fdf033bb9ab219b30b9afedcac36"
+    },
+    {
+      "name": "r119-integrated-runner-tests-v1.js",
+      "sha256": "98e9848354d837f59be936a314568fc76382d381eed95b97f147ff8ff0174722"
+    },
+    {
+      "name": "r119-integrated-runner-tests-v2.js",
+      "sha256": "8ead4ac9ea5332d120cefcab2a7cf53fd3403d6fbddea06e6b3dc0733a8b5ea4"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-clean-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-clean-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-clean.json",
+      "sha256": "8054d3ad251f352f1aeadde2092459fe9f8472b18284da99dc2e7fab2a59be4a"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-clean.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-failure-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-failure-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-failure.json",
+      "sha256": "46b497fb9edef36c80eecf4000d7fdcb1299e887b661bc5d47b6ad4687480139"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-failure.log",
+      "sha256": "4fd3a50c32fab9d67dbd1167e88156a4982274be3ab32edd6c3ccb748a5e1655"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-inner-timeout-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-inner-timeout-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-inner-timeout.json",
+      "sha256": "2b545c477025725fe8f44210f9acf8b7a93070611f1b50aaa712b31ae6dda1e4"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-inner-timeout.log",
+      "sha256": "d8e23089041ae571b16386683c0bd5b765ab7356497217fee36d13e29faa17c8"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-spawn-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-spawn-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-spawn.json",
+      "sha256": "0b320caa7b7c48d7313fa76304d9d9cc6adda7cdec67b8ac7759a13007c52217"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-spawn.log",
+      "sha256": "5994005b6387dd925d42d8bc1bd4840ea4da2b55bcf89c8b8ed9eb73d12f9cdb"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-success-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-success-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-success.json",
+      "sha256": "8bb618bcb48cae2542b5b8ced6e44f1bda181ec6d4bf01e8acf83853b5e1155a"
+    },
+    {
+      "name": "r119-integrated-runner-v1-fixture-success.log",
+      "sha256": "cc09c9a495dc1962608e4012f8027966d60eb166f31120c62c9f3001f97bd0a9"
+    },
+    {
+      "name": "r119-integrated-source-campaign-source-after.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-source-campaign-source.json",
+      "sha256": "7ced0c7fb15d6c349be847aa9208c80d52d2e855708c7c373e10be7adbe37315"
+    },
+    {
+      "name": "r119-integrated-source-campaign.json",
+      "sha256": "4d04ceef1064e538adf39d1fc1d8851f42c67ff7aaec88f49c64d3be1ac8f416"
+    },
+    {
+      "name": "r119-integrated-source-campaign.log",
+      "sha256": "742f0a1b0ad6b8374d3d618008628e5b08d5d5937635361dc699282ae426e875"
+    },
+    {
+      "name": "r119-integrated-source-gate-v1.py",
+      "sha256": "25db1a0cfe3b57736be1a153242e248795c7c67169ebeaddf79d32ec5c4ae32c"
+    },
+    {
+      "name": "r119-integrated-timeout-history-v2.js",
+      "sha256": "1379573022a9beda025815789420112fabbc43be5db387f6dadcdfa199cc530a"
+    },
+    {
+      "name": "r119-integrated-transitions.log",
+      "sha256": "4ea09f4fbcac637c98efd6a811d7da2cc73fa8cebb2284f62176e4c4142f13bb"
+    },
+    {
+      "name": "r119-integrated-validation-inputs-v1.json",
+      "sha256": "5998a625873e4bc4aa7e4b320c77e3eeb9f6165aaa8c31a9ecba6d611101c0bc"
+    },
+    {
+      "name": "r119-integrated-validation-inputs-v2.json",
+      "sha256": "f4155cd4e807a1fb95c259dc909b27ada2657d9904f0a895047cfd16a0dea7cb"
+    },
+    {
+      "name": "r119-integrated-validation-v1.js",
+      "sha256": "48cef896ad03c7f3be23feb3cb6ce646b24b3e2623343bf7aec0527e90d017c8"
+    },
+    {
+      "name": "r119-integrated-validation-v2.js",
+      "sha256": "b1fcbb4a53e0c6ddd980ecfb62c1ccca416efe359ba52d262b7a3b11471c7cf7"
+    },
+    {
+      "name": "r119-kfd-runtime-source-after.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-kfd-runtime-source.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-kfd-runtime.json",
+      "sha256": "cca0d05be2c0c11acbe1d11d4671a0edc4ed0c9ad2a58e539d256ce02b84eae3"
+    },
+    {
+      "name": "r119-kfd-runtime.log",
+      "sha256": "5d3c93b3a75699e7fc8e275478c43045ae287b9914d8d64c033e6a5d1a10036b"
+    },
+    {
+      "name": "r119-mutation-handoff-v1.md",
+      "sha256": "b39a63bed62643d4ca9020f575fab6608e6eadec3b7693cd40bbaf22de8e7976"
+    },
+    {
+      "name": "r119-persistent-focused-source-after.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-persistent-focused-source.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-persistent-focused-v2-source-after.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-persistent-focused-v2-source.json",
+      "sha256": "d5efd8cfe2933a6cd0f4c9cc6d8994156feb0b6624d660269b0760c281d5c5e6"
+    },
+    {
+      "name": "r119-persistent-focused-v2.json",
+      "sha256": "69a9c34c4a22acdecc54eceb691431d12e6b398af2d89c1ede83348b5ce8b7bd"
+    },
+    {
+      "name": "r119-persistent-focused-v2.log",
+      "sha256": "57bb0a58c053a692bd1fd8993133612682e387b92e4d71ff5c2c2b04a4f5fe86"
+    },
+    {
+      "name": "r119-persistent-focused.json",
+      "sha256": "cd52837eef433b802fd9033fd4653a7ef5870b20958c54ad7738d7caa94e4753"
+    },
+    {
+      "name": "r119-persistent-focused.log",
+      "sha256": "999ffc4381bff4d835b53206b2a19c3783b2c51a49c5332c946fefa202103475"
+    },
+    {
+      "name": "r119-persistent-mutations-v1.js",
+      "sha256": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad"
+    },
+    {
+      "name": "r119-persistent-mutations-v2.js",
+      "sha256": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a"
+    },
+    {
+      "name": "r119-run-v1.js",
+      "sha256": "be9916d0c4f2d967a28c2edd3350b82aa6ef9ea274574ebb54895b5775d478ef"
+    }
+  ],
+  "mutations": [
+    {
+      "name": "persistent-drop-constructor-data",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/tests.rs",
+      "oracle_line": 255,
+      "expected": [
+        "constructor changed original owner"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            data: owner.data,\n            data_premises: owner.data_premises,\n",
+              "            data: Vec::new(),\n            data_premises: owner.data_premises,\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-drop-constructor-premises",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/tests.rs",
+      "oracle_line": 255,
+      "expected": [
+        "constructor changed original owner"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            data: owner.data,\n            data_premises: owner.data_premises,\n",
+              "            data: owner.data,\n            data_premises: Vec::new(),\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-before-uses-returned-generation",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 205,
+      "expected": [
+        "called `Result::unwrap()` on an `Err` value: ResourcePhase"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            ReturningControlModeV1::ReturningDestroy\n            | ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.returning_destroy_generation()?)\n            }\n",
+              "            ReturningControlModeV1::ReturningDestroy => {\n                Some(self.generation.returning_destroy_generation()?)\n            }\n            ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.returned_generation()?)\n            }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-after-uses-destroy-generation",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 265,
+      "expected": [
+        "assertion failed: matches!"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            ReturningControlModeV1::AfterRecycle\n            | ReturningControlModeV1::PersistentAfterRecycle => {\n                Some(self.generation.returned_generation()?)\n            }\n",
+              "            ReturningControlModeV1::AfterRecycle => {\n                Some(self.generation.returned_generation()?)\n            }\n            ReturningControlModeV1::PersistentAfterRecycle => {\n                Some(self.generation.returning_destroy_generation()?)\n            }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-swallow-before-generation-error",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 265,
+      "expected": [
+        "assertion failed: matches!"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            ReturningControlModeV1::ReturningDestroy\n            | ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.returning_destroy_generation()?)\n            }\n",
+              "            ReturningControlModeV1::ReturningDestroy => {\n                Some(self.generation.returning_destroy_generation()?)\n            }\n            ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.returning_destroy_generation().unwrap_or(0))\n            }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-cardinality-before-generation",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 265,
+      "expected": [
+        "assertion failed: matches!"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        self.started = true;\n        let generation = match self.mode {\n",
+              "        self.started = true;\n            if self.data.len() != self.data_premises.len() {\n                return Err(Gfx942DispatchBindingErrorV1::InvalidData {\n                    index: self.data.len().min(self.data_premises.len()),\n                    detail: \"retained data/premise cardinality\",\n                });\n            }\n        let generation = match self.mode {\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-omit-cardinality",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_cardinality_and_capacity_reject_before_disposal",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 295,
+      "expected": [
+        "assertion failed: matches!"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            if self.data.len() != self.data_premises.len() {\n                return Err(Gfx942DispatchBindingErrorV1::InvalidData {\n                    index: self.data.len().min(self.data_premises.len()),\n                    detail: \"retained data/premise cardinality\",\n                });\n            }\n",
+              ""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-late-reservation",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_cardinality_and_capacity_reject_before_disposal",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 312,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n",
+              ""
+            ],
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        let release = self.release_controls(memory);\n        if let PersistentOutputStateV1::Prepared(_) = self.persistent_output {\n            let capacity = self.data.len();\n            #[cfg(test)]\n            let capacity = self.return_capacity_override.unwrap_or(capacity);\n                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n        }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-reserve-ordinary-output",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 78,
+      "expected": [
+        "persistent cleanup allocated ordinary output"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n",
+              "                self.returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-replace-preallocated-output",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_output_capacity_survives_success_and_error_extraction",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 907,
+      "expected": [
+        "persistent extraction changed preallocated output storage"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        self.persistent_output = PersistentOutputStateV1::Taken;\n",
+              "        self.persistent_output = PersistentOutputStateV1::Taken;\n        let replacement = Vec::with_capacity(self.persistent_returned.capacity());\n        self.persistent_returned = replacement;\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-returnable-before-callback",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_panic_root_rejects_extraction_without_mutating_retained_custody",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 935,
+      "expected": [
+        "panic root must not authorize persistent extraction"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n",
+              ""
+            ],
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n        let release = self.release_controls(memory);\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-propagate-error-before-returnable",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 59,
+      "expected": [
+        "persistent output lost identity, order or initialization"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        let release = self.release_controls(memory);\n        release?;\n"
+            ],
+            [
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n        release?;\n",
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-omit-taken",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 87,
+      "expected": [
+        "assertion failed: matches!"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        self.persistent_output = PersistentOutputStateV1::Taken;\n",
+              ""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-reject-empty-data",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 336,
+      "expected": [
+        "called `Result::unwrap()` on an `Err` value: ResourcePhase"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let PersistentOutputStateV1::Returnable(generation) = self.persistent_output else {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        };\n",
+              "        if self.data.is_empty() {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n        let PersistentOutputStateV1::Returnable(generation) = self.persistent_output else {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        };\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-reverse-output",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 59,
+      "expected": [
+        "persistent output lost identity, order or initialization"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        for (authority, premise) in self.data.drain(..).zip(self.data_premises.iter()) {\n",
+              "        for (authority, premise) in self.data.drain(..).zip(self.data_premises.iter()).rev() {\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-truncate-output",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 59,
+      "expected": [
+        "persistent output lost identity, order or initialization"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        for (authority, premise) in self.data.drain(..).zip(self.data_premises.iter()) {\n",
+              "        for (authority, premise) in self.data.drain(..).zip(self.data_premises.iter()).take(1) {\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-invert-initialization",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 59,
+      "expected": [
+        "persistent output lost identity, order or initialization"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            self.persistent_returned\n                .push(dispatch_data_from_authority_v1(\n                    authority,\n                    premise.fully_initialized,\n                ));\n",
+              "            self.persistent_returned\n                .push(dispatch_data_from_authority_v1(\n                    authority,\n                    !premise.fully_initialized,\n                ));\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-revive-content-descriptor",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 59,
+      "expected": [
+        "persistent output lost identity, order or initialization"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "            self.persistent_returned\n                .push(dispatch_data_from_authority_v1(\n                    authority,\n                    premise.fully_initialized,\n                ));\n",
+              "            let data = match (authority, premise.initialized_content) {\n                (DispatchDataAuthorityV1::Device(authority), Some(content)) => {\n                    let initialized =\n                        Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(\n                            authority.into_lease(),\n                            content,\n                        )\n                        .expect(\"retained fixture content has the exact extent\");\n                    Gfx942FixedDispatchDataV1::initialized(initialized)\n                }\n                (authority, None) => {\n                    dispatch_data_from_authority_v1(authority, premise.fully_initialized)\n                }\n                (_, Some(_)) => unreachable!(\"fixture has no host content descriptor\"),\n            };\n            self.persistent_returned.push(data);\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-drain-retained-premises",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 71,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        for (authority, premise) in self.data.drain(..).zip(self.data_premises.iter()) {\n",
+              "        for (authority, premise) in self.data.drain(..).zip(self.data_premises.drain(..)) {\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-discard-error-output",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 59,
+      "expected": [
+        "persistent output lost identity, order or initialization"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "                Err((error, data))\n",
+              "                drop(data);\n                Err((error, Vec::new()))\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-drop-error-root",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 35,
+      "expected": [
+        "persistent cleanup lost its retained root"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "pub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n",
+              "pub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            drop(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-drop-panic-root",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 35,
+      "expected": [
+        "persistent cleanup lost its retained root"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "pub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n",
+              "pub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            drop(root);\n            resume_unwind(payload)\n        }\n    }\n}\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-replace-panic-payload",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 178,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "pub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }\n    }\n}\n",
+              "pub(super) fn release_persistent_with_v1(\n    mut root: ReturningControlCleanupCustodyV1,\n    memory: &mut impl PristineControlReleaseV1,\n    retain: impl FnOnce(ReturningControlCleanupCustodyV1),\n) -> Result<\n    (u64, Vec<Gfx942FixedDispatchDataV1>),\n    (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),\n> {\n    let result = catch_unwind(AssertUnwindSafe(|| {\n        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n        match root.release_in_place(memory) {\n            Ok(()) => root\n                .take_persistent_data()\n                .map_err(|error| (error, Vec::new())),\n            Err(error) => {\n                let data = match root.take_persistent_data() {\n                    Ok((_, data)) => data,\n                    Err(_) => Vec::new(),\n                };\n                Err((error, data))\n            }\n        }\n    }));\n    match result {\n        Ok(Ok(returned)) => Ok(returned),\n        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }\n        Err(payload) => {\n            retain(root);\n            resume_unwind(Box::new(\"substituted persistent panic\"))\n        }\n    }\n}\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-omit-started",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 272,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        self.started = true;\n        let generation = match self.mode {\n",
+              "        let generation = match self.mode {\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-reverse-code-cleanup",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 874,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        while let Some(code) = self.code.next() {\n",
+              "        while let Some(code) = self.code.next_back() {\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-unroot-active-control",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 135,
+      "expected": [
+        "persistent failure lost active control"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let active = self.active_control.as_mut().expect(\"rooted active control\");\n        memory.release_control(active)?;\n",
+              "        let mut active = self.active_control.take().expect(\"rooted active control\");\n        memory.release_control(&mut active)?;\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-accept-incomplete-control",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_incomplete_callbacks_return_data_but_never_claim_control_completion",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 30,
+      "expected": [
+        "persistent cleanup unexpectedly succeeded"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        if !active.is_complete() {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n",
+              ""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-omit-persistent-wrapper-mode",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 746,
+      "expected": [
+        "assertion failed: matches!"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        if !matches!(\n            root.mode,\n            ReturningControlModeV1::PersistentBeforePublication\n                | ReturningControlModeV1::PersistentAfterRecycle\n        ) {\n            return Err((Gfx942DispatchBindingErrorV1::ResourcePhase, Vec::new()));\n        }\n",
+              ""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-omit-returning-wrapper-mode",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/tests.rs",
+      "oracle_line": 269,
+      "expected": [
+        "returning retry entered cleanup callback"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        if !matches!(\n            root.mode,\n            ReturningControlModeV1::AfterRecycle | ReturningControlModeV1::ReturningDestroy\n        ) {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n",
+              ""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-omit-detached-wrapper-mode",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/tests.rs",
+      "oracle_line": 269,
+      "expected": [
+        "returning retry entered cleanup callback"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        if !matches!(root.mode, ReturningControlModeV1::DetachedPersistent { .. }) {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n",
+              ""
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-late-reservation-native-panic",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 113,
+      "expected": [
+        "failed.root.persistent_returned.capacity() >= before.data.len()"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n",
+              ""
+            ],
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        let release = self.release_controls(memory);\n        if let PersistentOutputStateV1::Prepared(_) = self.persistent_output {\n            let capacity = self.data.len();\n            #[cfg(test)]\n            let capacity = self.return_capacity_override.unwrap_or(capacity);\n                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n        }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-late-reservation-commit-panic",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 113,
+      "expected": [
+        "failed.root.persistent_returned.capacity() >= before.data.len()"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n",
+              ""
+            ],
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        let release = self.release_controls(memory);\n        if let PersistentOutputStateV1::Prepared(_) = self.persistent_output {\n            let capacity = self.data.len();\n            #[cfg(test)]\n            let capacity = self.return_capacity_override.unwrap_or(capacity);\n                self.persistent_returned\n                    .try_reserve_exact(capacity)\n                    .map_err(|_| Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    })?;\n                if self.persistent_returned.capacity() < self.data.len() {\n                    return Err(Gfx942DispatchBindingErrorV1::HostAllocationCapacity {\n                        operation: \"persistent dispatch data\",\n                    });\n                }\n        }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-returnable-before-callback-empty-panic",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 109,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n",
+              ""
+            ],
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n        let release = self.release_controls(memory);\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-propagate-error-before-returnable-empty-error",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 121,
+      "expected": [
+        "assertion `left == right` failed"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let release = self.release_controls(memory);\n",
+              "        let release = self.release_controls(memory);\n        release?;\n"
+            ],
+            [
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n        release?;\n",
+              "        if let PersistentOutputStateV1::Prepared(generation) = self.persistent_output {\n            self.persistent_output = PersistentOutputStateV1::Returnable(generation);\n        }\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-unroot-active-control-currentness",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_currentness_failures_preserve_all_eighteen_control_boundaries",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 135,
+      "expected": [
+        "persistent failure lost active control"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let active = self.active_control.as_mut().expect(\"rooted active control\");\n        memory.release_control(active)?;\n",
+              "        let mut active = self.active_control.take().expect(\"rooted active control\");\n        memory.release_control(&mut active)?;\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-unroot-active-control-partial-unmap",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_partial_unmap_returns_data_without_losing_original_control",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 135,
+      "expected": [
+        "persistent failure lost active control"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let active = self.active_control.as_mut().expect(\"rooted active control\");\n        memory.release_control(active)?;\n",
+              "        let mut active = self.active_control.take().expect(\"rooted active control\");\n        memory.release_control(&mut active)?;\n"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "persistent-unroot-active-control-projection-commit",
+      "kind": "production",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split",
+      "oracle_path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs",
+      "oracle_line": 135,
+      "expected": [
+        "persistent failure lost active control"
+      ],
+      "patches": [
+        {
+          "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+          "edits": [
+            [
+              "        let active = self.active_control.as_mut().expect(\"rooted active control\");\n        memory.release_control(active)?;\n",
+              "        let mut active = self.active_control.take().expect(\"rooted active control\");\n        memory.release_control(&mut active)?;\n"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "entries": {
+    "r119-integrated-qualified-mut-persistent-drop-constructor-data.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualification-manifest.json",
+      "source_map_sha256": "e8d7d7fb3f9ca527e9c229378f9d074abe2ff7a6ca4b5aa17452821d9aee8b0b",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-drop-constructor-data.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-drop-constructor-data.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-drop-constructor-premises.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-drop-constructor-data.json",
+      "source_map_sha256": "365410d097fac9147cabc7ff05f97d2f6d8ef7c0cddb9e0ad6d4035b697558e4",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-drop-constructor-premises.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-drop-constructor-premises.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-before-uses-returned-generation.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-drop-constructor-premises.json",
+      "source_map_sha256": "392a6caa7dd79e72c8bf9bd5815beb3a44eacde4d116e0c71eb8aa02b33d7f90",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-before-uses-returned-generation.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-before-uses-returned-generation.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-after-uses-destroy-generation.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-before-uses-returned-generation.json",
+      "source_map_sha256": "5e5dd7f9f692971b7ff195cc0c04285d50d7894878f6d0d438acc5af20dfc565",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-after-uses-destroy-generation.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-after-uses-destroy-generation.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-swallow-before-generation-error.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-after-uses-destroy-generation.json",
+      "source_map_sha256": "2a6091db413fde6c8869b4b4b0da3b2d648b670d9a1cac65a3bd339a98f187fc",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-swallow-before-generation-error.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-swallow-before-generation-error.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-cardinality-before-generation.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-swallow-before-generation-error.json",
+      "source_map_sha256": "7421b0049becc93bdb63807eef11cfee03ccb6dbb89afa484fd317e59b271ee9",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-cardinality-before-generation.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-cardinality-before-generation.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-omit-cardinality.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-cardinality-before-generation.json",
+      "source_map_sha256": "d018b0c764930ec7bcbb4542a6f673ee3a799050d287e1efe6ecfcabcfd9b80e",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_cardinality_and_capacity_reject_before_disposal",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-omit-cardinality.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-omit-cardinality.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-late-reservation.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-omit-cardinality.json",
+      "source_map_sha256": "90ba44cc21cf1cef86e76b3f964e9ea6513e6444f22149b8acc03f3f184caec2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_cardinality_and_capacity_reject_before_disposal",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-late-reservation.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-late-reservation.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-reserve-ordinary-output.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-late-reservation.json",
+      "source_map_sha256": "9d4c9e03e6ef7efa1f83c09347f2896776c10cc69306ed4b8e5358e33e830945",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-reserve-ordinary-output.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-reserve-ordinary-output.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-replace-preallocated-output.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-reserve-ordinary-output.json",
+      "source_map_sha256": "c743268a5b0c527d0e4083117b9181cf645daa01c1cdbf03793c401daf4b7054",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_output_capacity_survives_success_and_error_extraction",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-replace-preallocated-output.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-replace-preallocated-output.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-returnable-before-callback.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-replace-preallocated-output.json",
+      "source_map_sha256": "7f1a006a8a21010e40613ff175ee8548da2b4123b17ea8587302dcc0e68df647",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_panic_root_rejects_extraction_without_mutating_retained_custody",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-returnable-before-callback.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-returnable-before-callback.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-propagate-error-before-returnable.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-returnable-before-callback.json",
+      "source_map_sha256": "90680ef0d09d8ac37bae2ddc92e43c11bb51f181e433383064b35ba6d9d05895",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-propagate-error-before-returnable.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-propagate-error-before-returnable.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-omit-taken.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-propagate-error-before-returnable.json",
+      "source_map_sha256": "7494a4996d8a9d440eb01639b5d66a9d678776ceb169c0fb2645994e39d2deb5",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-omit-taken.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-omit-taken.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-reject-empty-data.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-omit-taken.json",
+      "source_map_sha256": "7a09328fbc728d1ee628da542b6bed922637c5c67cacfdbf08263bde3d2c4046",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-reject-empty-data.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-reject-empty-data.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-reverse-output.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-reject-empty-data.json",
+      "source_map_sha256": "45e8ddc906fc0c4b25872f574503bca6bfc5f33ef0acc4b60dfc60d8a483704e",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-reverse-output.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-reverse-output.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-truncate-output.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-reverse-output.json",
+      "source_map_sha256": "b02e6a3881dbb5d95e4fccf96ac75babd0d0bb3167a6485bc14ab3be9df78f61",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-truncate-output.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-truncate-output.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-invert-initialization.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-truncate-output.json",
+      "source_map_sha256": "623bb306e0bb0327ff02747f73c28684a77ff32a4067fc8db21fedcd3631fa37",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-invert-initialization.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-invert-initialization.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-revive-content-descriptor.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-invert-initialization.json",
+      "source_map_sha256": "51df085e45a6a458540b613fb8eddd735e3f3d4a4e809dee2c38c9f46c755d2f",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-revive-content-descriptor.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-revive-content-descriptor.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-drain-retained-premises.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-revive-content-descriptor.json",
+      "source_map_sha256": "244b55131d93390231a749fe9831fb0a4a39cf051594bd4799a7775c9d13c9c4",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-drain-retained-premises.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-drain-retained-premises.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-discard-error-output.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-drain-retained-premises.json",
+      "source_map_sha256": "349ac286894de1957cf3eec6a86158bc1d1faa1617799e997c2615efde7ae78c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-discard-error-output.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-discard-error-output.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-drop-error-root.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-discard-error-output.json",
+      "source_map_sha256": "f2e321007b2f128b6a8e9553c127cc222ef9c0dfc60a396ddb06b2cb29bdb4c0",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-drop-error-root.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-drop-error-root.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-drop-panic-root.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-drop-error-root.json",
+      "source_map_sha256": "da30b0ef7c66dcc9222bc17e18961f0eb18c808f96656646774c4f7bda745afa",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-drop-panic-root.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-drop-panic-root.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-replace-panic-payload.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-drop-panic-root.json",
+      "source_map_sha256": "2102e1560e72ff4897d983659b9dbaa6e56c1d6263dd37fa47d0c2148cab85c5",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-replace-panic-payload.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-replace-panic-payload.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-omit-started.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-replace-panic-payload.json",
+      "source_map_sha256": "db0823c2ea992b3ac8b55c7000cae26230ba455014419600350738d9e9e83ea3",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-omit-started.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-omit-started.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-reverse-code-cleanup.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-omit-started.json",
+      "source_map_sha256": "9e5c6c7ec182aefbbb0a280a16f25a370341788003fa9d6629d6d1c3dd2fd9df",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-reverse-code-cleanup.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-reverse-code-cleanup.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-unroot-active-control.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-reverse-code-cleanup.json",
+      "source_map_sha256": "ba003c21947095bd35a8937aab3f25e635c90e2f25f3764e6b7b9de30baaca7c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-unroot-active-control.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-unroot-active-control.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-accept-incomplete-control.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-unroot-active-control.json",
+      "source_map_sha256": "bdef9bed8cc85a06fdc7b92a76d844d99e6b046875cf46d725db21b40e3db508",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_incomplete_callbacks_return_data_but_never_claim_control_completion",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-accept-incomplete-control.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-accept-incomplete-control.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-omit-persistent-wrapper-mode.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-accept-incomplete-control.json",
+      "source_map_sha256": "fe736e441dc9baa42b9f9f9cc6fd8991cf15f2bfff6fc2a126ac5da06974b764",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-omit-persistent-wrapper-mode.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-omit-persistent-wrapper-mode.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-omit-returning-wrapper-mode.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-omit-persistent-wrapper-mode.json",
+      "source_map_sha256": "727c9cb291f7361f80ed021090fbc55f02810d9e732e634209f6a6dff7c81a61",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-omit-returning-wrapper-mode.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-omit-returning-wrapper-mode.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-omit-detached-wrapper-mode.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-omit-returning-wrapper-mode.json",
+      "source_map_sha256": "27b8f5fadfccf19ad7b29b4616cb609b8cf12364783e66a4485e53be6c6dfa7b",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-omit-detached-wrapper-mode.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-omit-detached-wrapper-mode.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-late-reservation-native-panic.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-omit-detached-wrapper-mode.json",
+      "source_map_sha256": "90ba44cc21cf1cef86e76b3f964e9ea6513e6444f22149b8acc03f3f184caec2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-late-reservation-native-panic.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-late-reservation-native-panic.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-late-reservation-commit-panic.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-late-reservation-native-panic.json",
+      "source_map_sha256": "90ba44cc21cf1cef86e76b3f964e9ea6513e6444f22149b8acc03f3f184caec2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-late-reservation-commit-panic.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-late-reservation-commit-panic.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-returnable-before-callback-empty-panic.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-late-reservation-commit-panic.json",
+      "source_map_sha256": "7f1a006a8a21010e40613ff175ee8548da2b4123b17ea8587302dcc0e68df647",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-returnable-before-callback-empty-panic.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-returnable-before-callback-empty-panic.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-propagate-error-before-returnable-empty-error.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-returnable-before-callback-empty-panic.json",
+      "source_map_sha256": "90680ef0d09d8ac37bae2ddc92e43c11bb51f181e433383064b35ba6d9d05895",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-propagate-error-before-returnable-empty-error.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-propagate-error-before-returnable-empty-error.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-unroot-active-control-currentness.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-propagate-error-before-returnable-empty-error.json",
+      "source_map_sha256": "ba003c21947095bd35a8937aab3f25e635c90e2f25f3764e6b7b9de30baaca7c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_currentness_failures_preserve_all_eighteen_control_boundaries",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-unroot-active-control-currentness.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-unroot-active-control-currentness.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-unroot-active-control-partial-unmap.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-unroot-active-control-currentness.json",
+      "source_map_sha256": "ba003c21947095bd35a8937aab3f25e635c90e2f25f3764e6b7b9de30baaca7c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_partial_unmap_returns_data_without_losing_original_control",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-unroot-active-control-partial-unmap.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-unroot-active-control-partial-unmap.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-mut-persistent-unroot-active-control-projection-commit.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-unroot-active-control-partial-unmap.json",
+      "source_map_sha256": "ba003c21947095bd35a8937aab3f25e635c90e2f25f3764e6b7b9de30baaca7c",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "returncode": 101
+    },
+    "r119-integrated-qualified-restoration-persistent-unroot-active-control-projection-commit.json": {
+      "kind": "restoration",
+      "predecessor": "r119-integrated-qualified-mut-persistent-unroot-active-control-projection-commit.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2"
+    },
+    "r119-integrated-qualified-restored-persistent.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restoration-persistent-unroot-active-control-projection-commit.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::persistent::"
+      ],
+      "returncode": 0
+    },
+    "r119-integrated-qualified-restored-detached.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restored-persistent.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::detached::"
+      ],
+      "returncode": 0
+    },
+    "r119-integrated-qualified-restored-returning.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restored-detached.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::dispatch_binding::control_release::tests::returning_"
+      ],
+      "returncode": 0
+    },
+    "r119-integrated-qualified-restored-pristine.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restored-returning.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "pristine_abort"
+      ],
+      "returncode": 0
+    },
+    "r119-integrated-qualified-restored-cleanup.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restored-pristine.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::pristine_abort::cleanup_tests::"
+      ],
+      "returncode": 0
+    },
+    "r119-integrated-qualified-restored-transport.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restored-cleanup.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::live::pristine_abort::tests::transport_tests::"
+      ],
+      "returncode": 0
+    },
+    "r119-integrated-qualified-collector-validation.json": {
+      "kind": "run",
+      "predecessor": "r119-integrated-qualified-restored-transport.json",
+      "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r119-integrated-qualification-collect-v1.js",
+        "--check"
+      ],
+      "returncode": 0
+    }
+  },
+  "clock": {
+    "contract": "r119-integrated-raw-utc-boot-monotonic-v1",
+    "error": null,
+    "kind": "manifest",
+    "source_verified": {
+      "utc_ms": 1789451629103,
+      "monotonic_ns": "48337759848720",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "predecessor": {
+      "name": "r119-integrated-qualification-contract-tests.json",
+      "sha256": "8a36b92be5cfc3d7de3df50db77fd1a80954ffca02d6851afb6223717d49f2c1",
+      "observation": {
+        "utc_ms": 1789451566447,
+        "monotonic_ns": "48275103986505",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "recorded_at": "2026-09-15T05:53:49.103Z"
+}

@@ -1,0 +1,29 @@
+R119_VALIDATION_INPUTS_START 5998a625873e4bc4aa7e4b320c77e3eeb9f6165aaa8c31a9ecba6d611101c0bc
+R119_VALIDATION_INPUTS_END 5998a625873e4bc4aa7e4b320c77e3eeb9f6165aaa8c31a9ecba6d611101c0bc
+node:assert:150
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+124 !== 0
+
+    at Object.checkRecord (/home/harsh/.codex-tmp/r119-integrated-qualification-evidence-v1.js:44:10)
+    at run (/home/harsh/.codex-tmp/r119-integrated-history-v1.js:60:7)
+    at current (/home/harsh/.codex-tmp/r119-integrated-history-v1.js:63:48)
+    at checkRecords (/home/harsh/.codex-tmp/r119-integrated-history-v1.js:66:16)
+    at checkHistory (/home/harsh/.codex-tmp/r119-integrated-history-v1.js:111:18)
+    at Object.<anonymous> (/home/harsh/.codex-tmp/r119-integrated-history-v1.js:116:57)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 124,
+  expected: 0,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

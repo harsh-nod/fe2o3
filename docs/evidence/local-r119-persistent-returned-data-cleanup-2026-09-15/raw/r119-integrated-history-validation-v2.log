@@ -1,0 +1,39 @@
+R119_VALIDATION_INPUTS_START f4155cd4e807a1fb95c259dc909b27ada2657d9904f0a895047cfd16a0dea7cb
+{
+  "accepted": false,
+  "source_map_sha256": "542110b3429161394392f24a398929aba37aa1d74950d0a86204adda2d0959d2",
+  "source_identities": 5693,
+  "isolated_artifacts": 24,
+  "isolated_zero_test_run": "compile-only",
+  "rejected_timeout": {
+    "accepted": false,
+    "kind": "closed-timeout",
+    "record": "r119-integrated-musl-all.json",
+    "record_sha256": "45cc664330884b635e762122cd606e0d660e7596a9967eabce7a991d3d928052",
+    "log_sha256": "54a51986daa7488c7f36dd0ae3ef6bcc5677b533df0c66a5c89a7d7df92d4160",
+    "completed_harnesses": 3,
+    "completed_tests": 62,
+    "partial_kfd_passing_rows": 415,
+    "full_suite_complete": false
+  },
+  "full": {
+    "gnu": {
+      "harnesses": 48,
+      "passed": 2795,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl": {
+      "harnesses": 48,
+      "passed": 2795,
+      "failed": 0,
+      "ignored": 5
+    }
+  },
+  "persistent_tests": 15,
+  "control_tests": 46,
+  "kfd_tests": 1149,
+  "integrated_clippy": true,
+  "previous": "r119-integrated-musl-retry1.json"
+}
+R119_VALIDATION_INPUTS_END f4155cd4e807a1fb95c259dc909b27ada2657d9904f0a895047cfd16a0dea7cb

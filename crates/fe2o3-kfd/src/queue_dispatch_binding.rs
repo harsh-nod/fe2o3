@@ -2701,11 +2701,10 @@ impl DispatchResourceOwnerV1 {
         (u64, Vec<Gfx942FixedDispatchDataV1>),
         (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),
     > {
-        let generation = match self.generation.returning_destroy_generation() {
-            Ok(generation) => generation,
-            Err(error) => return Err((error, Vec::new())),
-        };
-        self.release_persistent_data(memory, generation)
+        self.release_persistent_data(
+            memory,
+            control_release::ReturningControlModeV1::PersistentBeforePublication,
+        )
     }
 
     /// Releases code and kernarg after exact recycle while retaining the
@@ -2717,51 +2716,25 @@ impl DispatchResourceOwnerV1 {
         (u64, Vec<Gfx942FixedDispatchDataV1>),
         (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),
     > {
-        let generation = match self.generation.returned_generation() {
-            Ok(generation) => generation,
-            Err(error) => return Err((error, Vec::new())),
-        };
-        self.release_persistent_data(memory, generation)
+        self.release_persistent_data(
+            memory,
+            control_release::ReturningControlModeV1::PersistentAfterRecycle,
+        )
     }
 
     fn release_persistent_data(
         self,
         memory: &mut SharedGttMemorySessionV1,
-        generation: u64,
+        mode: control_release::ReturningControlModeV1,
     ) -> Result<
         (u64, Vec<Gfx942FixedDispatchDataV1>),
         (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),
     > {
-        if self.data.len() != self.data_premises.len() {
-            return Err((
-                Gfx942DispatchBindingErrorV1::InvalidData {
-                    index: self.data.len().min(self.data_premises.len()),
-                    detail: "retained data/premise cardinality",
-                },
-                Vec::new(),
-            ));
-        }
-        let data: Vec<_> = self
-            .data
-            .into_iter()
-            .zip(self.data_premises)
-            .map(|(authority, premise)| {
-                ReturnedDispatchDataLeaseV1 { authority, premise }.into_data()
-            })
-            .collect();
-        let release = (|| {
-            let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
-            memory.release(kernarg)?;
-            for code in self.code {
-                let code = memory.unmap_executable_from_gpu(code.into_token())?;
-                memory.release_executable(code)?;
-            }
-            Ok(())
-        })();
-        match release {
-            Ok(()) => Ok((generation, data)),
-            Err(error) => Err((error, data)),
-        }
+        control_release::release_persistent_with_v1(
+            control_release::ReturningControlCleanupCustodyV1::new(self, mode),
+            memory,
+            core::mem::forget,
+        )
     }
 
     fn release_non_data(

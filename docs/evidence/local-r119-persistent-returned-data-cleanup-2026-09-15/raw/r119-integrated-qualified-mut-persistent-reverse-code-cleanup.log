@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.82s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data' (2629941) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:874:21:
+assertion `left == right` failed
+  left: [SharedGttAllocationIdentityV1 { session_id: 1, id: 4, generation: 1 }, SharedGttAllocationIdentityV1 { session_id: 1, id: 3, generation: 1 }, SharedGttAllocationIdentityV1 { session_id: 1, id: 2, generation: 1 }, SharedGttAllocationIdentityV1 { session_id: 1, id: 1, generation: 1 }]
+ right: [SharedGttAllocationIdentityV1 { session_id: 1, id: 4, generation: 1 }, SharedGttAllocationIdentityV1 { session_id: 1, id: 1, generation: 1 }, SharedGttAllocationIdentityV1 { session_id: 1, id: 2, generation: 1 }, SharedGttAllocationIdentityV1 { session_id: 1, id: 3, generation: 1 }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1148 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

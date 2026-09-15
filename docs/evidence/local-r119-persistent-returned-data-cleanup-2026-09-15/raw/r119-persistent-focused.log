@@ -1,0 +1,32 @@
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-target-spec)
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.4
+   Compiling rustix v1.1.4
+   Compiling libc v0.2.189
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-amd-target)
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-runtime-model)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-hsaco)
+   Compiling bitflags v2.13.1
+   Compiling hybrid-array v0.4.14
+   Compiling linux-raw-sys v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-aql)
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-amdhsa-loader)
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.14s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1149 filtered out; finished in 0.00s
+

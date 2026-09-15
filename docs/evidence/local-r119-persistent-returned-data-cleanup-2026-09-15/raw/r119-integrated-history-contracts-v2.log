@@ -1,0 +1,288 @@
+TAP version 13
+# R119_VALIDATION_INPUTS_START f4155cd4e807a1fb95c259dc909b27ada2657d9904f0a895047cfd16a0dea7cb
+# Subtest: accepts exact isolated and integrated cohorts without packet acceptance
+ok 1 - accepts exact isolated and integrated cohorts without packet acceptance
+  ---
+  duration_ms: 690.850586
+  type: 'test'
+  ...
+# Subtest: rejects missing origin input
+ok 2 - rejects missing origin input
+  ---
+  duration_ms: 7.423695
+  type: 'test'
+  ...
+# Subtest: rejects rewritten origin acceptance
+ok 3 - rejects rewritten origin acceptance
+  ---
+  duration_ms: 22.399453
+  type: 'test'
+  ...
+# Subtest: rejects missing isolated log
+ok 4 - rejects missing isolated log
+  ---
+  duration_ms: 29.162914
+  type: 'test'
+  ...
+# Subtest: rejects relabelled zero-test isolated history
+ok 5 - rejects relabelled zero-test isolated history
+  ---
+  duration_ms: 40.828744
+  type: 'test'
+  ...
+# Subtest: rejects changed integrated runner
+ok 6 - rejects changed integrated runner
+  ---
+  duration_ms: 46.533794
+  type: 'test'
+  ...
+# Subtest: rejects wrong current source
+ok 7 - rejects wrong current source
+  ---
+  duration_ms: 31.906669
+  type: 'test'
+  ...
+# Subtest: rejects missing current source
+ok 8 - rejects missing current source
+  ---
+  duration_ms: 20.958327
+  type: 'test'
+  ...
+# Subtest: rejects wrong integrated parent
+ok 9 - rejects wrong integrated parent
+  ---
+  duration_ms: 113.038288
+  type: 'test'
+  ...
+# Subtest: rejects wrong integrated cwd
+ok 10 - rejects wrong integrated cwd
+  ---
+  duration_ms: 120.569126
+  type: 'test'
+  ...
+# Subtest: rejects wrong musl command
+ok 11 - rejects wrong musl command
+  ---
+  duration_ms: 124.118775
+  type: 'test'
+  ...
+# Subtest: rejects forged predecessor hash
+ok 12 - rejects forged predecessor hash
+  ---
+  duration_ms: 135.716133
+  type: 'test'
+  ...
+# Subtest: rejects wrong execution boot
+ok 13 - rejects wrong execution boot
+  ---
+  duration_ms: 171.406447
+  type: 'test'
+  ...
+# Subtest: rejects unclosed child
+ok 14 - rejects unclosed child
+  ---
+  duration_ms: 132.943158
+  type: 'test'
+  ...
+# Subtest: rejects surviving owned process
+ok 15 - rejects surviving owned process
+  ---
+  duration_ms: 147.177797
+  type: 'test'
+  ...
+# Subtest: rejects timed out execution
+ok 16 - rejects timed out execution
+  ---
+  duration_ms: 102.948811
+  type: 'test'
+  ...
+# Subtest: rejects changed source after execution
+ok 17 - rejects changed source after execution
+  ---
+  duration_ms: 188.258606
+  type: 'test'
+  ...
+# Subtest: rejects false successful command status
+ok 18 - rejects false successful command status
+  ---
+  duration_ms: 112.929032
+  type: 'test'
+  ...
+# Subtest: rejects lost test with unchanged summary
+ok 19 - rejects lost test with unchanged summary
+  ---
+  duration_ms: 216.85051
+  type: 'test'
+  ...
+# Subtest: rejects changed ignored roster
+ok 20 - rejects changed ignored roster
+  ---
+  duration_ms: 171.098988
+  type: 'test'
+  ...
+# Subtest: rejects contradictory failed result
+ok 21 - rejects contradictory failed result
+  ---
+  duration_ms: 166.551685
+  type: 'test'
+  ...
+# Subtest: rejects missing preliminary Clippy record
+ok 22 - rejects missing preliminary Clippy record
+  ---
+  duration_ms: 9.003671
+  type: 'test'
+  ...
+# Subtest: rejects an input changed after capture
+ok 23 - rejects an input changed after capture
+  ---
+  duration_ms: 586.220772
+  type: 'test'
+  ...
+# Subtest: rejects a coherent Clippy branch after the advertised musl tail
+ok 24 - rejects a coherent Clippy branch after the advertised musl tail
+  ---
+  duration_ms: 359.624742
+  type: 'test'
+  ...
+# Subtest: classifies the original timeout only as rejected closed history
+ok 25 - classifies the original timeout only as rejected closed history
+  ---
+  duration_ms: 26.083422
+  type: 'test'
+  ...
+# Subtest: rejects timeout relabelled success before artifact-pin checks
+ok 26 - rejects timeout relabelled success before artifact-pin checks
+  ---
+  duration_ms: 25.490114
+  type: 'test'
+  ...
+# Subtest: rejects timeout wrong raw child result before artifact-pin checks
+ok 27 - rejects timeout wrong raw child result before artifact-pin checks
+  ---
+  duration_ms: 26.573383
+  type: 'test'
+  ...
+# Subtest: rejects timeout wrong signal before artifact-pin checks
+ok 28 - rejects timeout wrong signal before artifact-pin checks
+  ---
+  duration_ms: 24.168457
+  type: 'test'
+  ...
+# Subtest: rejects timeout unclosed child before artifact-pin checks
+ok 29 - rejects timeout unclosed child before artifact-pin checks
+  ---
+  duration_ms: 24.47886
+  type: 'test'
+  ...
+# Subtest: rejects timeout spawn failure before artifact-pin checks
+ok 30 - rejects timeout spawn failure before artifact-pin checks
+  ---
+  duration_ms: 31.360202
+  type: 'test'
+  ...
+# Subtest: rejects timeout missing cleanup before artifact-pin checks
+ok 31 - rejects timeout missing cleanup before artifact-pin checks
+  ---
+  duration_ms: 21.370094
+  type: 'test'
+  ...
+# Subtest: rejects timeout failed timeout cleanup before artifact-pin checks
+ok 32 - rejects timeout failed timeout cleanup before artifact-pin checks
+  ---
+  duration_ms: 23.264015
+  type: 'test'
+  ...
+# Subtest: rejects timeout failed closing cleanup before artifact-pin checks
+ok 33 - rejects timeout failed closing cleanup before artifact-pin checks
+  ---
+  duration_ms: 36.736171
+  type: 'test'
+  ...
+# Subtest: rejects timeout mismatched process groups before artifact-pin checks
+ok 34 - rejects timeout mismatched process groups before artifact-pin checks
+  ---
+  duration_ms: 25.518728
+  type: 'test'
+  ...
+# Subtest: rejects timeout surviving members before artifact-pin checks
+ok 35 - rejects timeout surviving members before artifact-pin checks
+  ---
+  duration_ms: 24.115869
+  type: 'test'
+  ...
+# Subtest: rejects timeout shortened deadline before artifact-pin checks
+ok 36 - rejects timeout shortened deadline before artifact-pin checks
+  ---
+  duration_ms: 24.888901
+  type: 'test'
+  ...
+# Subtest: rejects timeout coherent early timeout before artifact-pin checks
+ok 37 - rejects timeout coherent early timeout before artifact-pin checks
+  ---
+  duration_ms: 31.756386
+  type: 'test'
+  ...
+# Subtest: rejects timeout timeout after finish before artifact-pin checks
+ok 38 - rejects timeout timeout after finish before artifact-pin checks
+  ---
+  duration_ms: 26.644889
+  type: 'test'
+  ...
+# Subtest: rejects timeout changed command before artifact-pin checks
+ok 39 - rejects timeout changed command before artifact-pin checks
+  ---
+  duration_ms: 6.316088
+  type: 'test'
+  ...
+# Subtest: rejects timeout changed predecessor before artifact-pin checks
+ok 40 - rejects timeout changed predecessor before artifact-pin checks
+  ---
+  duration_ms: 24.000041
+  type: 'test'
+  ...
+# Subtest: rejects timeout changed source before artifact-pin checks
+ok 41 - rejects timeout changed source before artifact-pin checks
+  ---
+  duration_ms: 59.789352
+  type: 'test'
+  ...
+# Subtest: rejects missing original timeout record
+ok 42 - rejects missing original timeout record
+  ---
+  duration_ms: 10.007362
+  type: 'test'
+  ...
+# Subtest: rejects retry bypassing the timeout predecessor
+ok 43 - rejects retry bypassing the timeout predecessor
+  ---
+  duration_ms: 134.125088
+  type: 'test'
+  ...
+# Subtest: rejects a coherent retry before timeout closure
+ok 44 - rejects a coherent retry before timeout closure
+  ---
+  duration_ms: 140.08973
+  type: 'test'
+  ...
+# Subtest: rejects changed historical timeout bytes
+ok 45 - rejects changed historical timeout bytes
+  ---
+  duration_ms: 144.435251
+  type: 'test'
+  ...
+# Subtest: rejects changed historical helper bytes
+ok 46 - rejects changed historical helper bytes
+  ---
+  duration_ms: 316.628434
+  type: 'test'
+  ...
+# R119_VALIDATION_INPUTS_END f4155cd4e807a1fb95c259dc909b27ada2657d9904f0a895047cfd16a0dea7cb
+1..46
+# tests 46
+# suites 0
+# pass 46
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5183.853276

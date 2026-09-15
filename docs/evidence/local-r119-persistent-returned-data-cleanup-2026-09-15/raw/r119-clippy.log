@@ -1,0 +1,26 @@
+    Checking typenum v1.20.1
+    Checking fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-target-spec)
+    Checking cpufeatures v0.3.1
+    Checking spin v0.12.3
+    Checking cfg-if v1.0.4
+    Checking bitflags v2.13.1
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-runtime-model)
+    Checking fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-amd-target)
+    Checking linux-raw-sys v0.12.1
+    Checking fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-hsaco)
+    Checking hybrid-array v0.4.14
+    Checking libc v0.2.189
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking rustix v1.1.4
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-drm-uapi)
+    Checking fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-aql)
+    Checking zeroize v1.9.0
+    Checking fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-amdhsa-loader)
+    Checking arrayvec v0.7.8
+    Checking fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-kfd-uapi)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r119-persistent-data/crates/fe2o3-kfd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.76s

@@ -1,0 +1,25 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.36s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split' (2644825) panicked at crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs:264:21:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split' (2644825) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:113:9:
+assertion failed: failed.root.persistent_returned.capacity() >= before.data.len()
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1148 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

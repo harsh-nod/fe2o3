@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.16s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control' (2603259) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:59:5:
+assertion `left == right` failed: persistent output lost identity, order or initialization
+  left: []
+ right: [PersistentData { identity: Device(Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, initialized: false, content: None }, PersistentData { identity: Device(Gfx942DeviceMemoryIdentityV1 { id: 2, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, initialized: true, content: None }, PersistentData { identity: Device(Gfx942DeviceMemoryIdentityV1 { id: 3, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, initialized: true, content: None }, PersistentData { identity: Host(SharedGttAllocationIdentityV1 { session_id: 1, id: 4, generation: 1 }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: HostVisibleCoherent, requested_bytes: 17, alignment: 4096 }, initialized: false, content: None }, PersistentData { identity: Host(SharedGttAllocationIdentityV1 { session_id: 1, id: 5, generation: 1 }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: HostVisibleCoherent, requested_bytes: 17, alignment: 4096 }, initialized: true, content: None }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1148 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

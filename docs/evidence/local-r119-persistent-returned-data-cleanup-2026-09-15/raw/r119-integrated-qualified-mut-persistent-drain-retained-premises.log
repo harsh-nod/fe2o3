@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.91s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup' (2618158) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:71:5:
+assertion `left == right` failed
+  left: []
+ right: [Premise { value: RetainedDataPremiseV1 { layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, role_identity: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], valid_bytes: 17, effect: None, initialized_content: None, fully_initialized: false, writable_ranges: [], completed_snapshots: [] }, storage: [(8, 0), (8, 0)] }, Premise { value: RetainedDataPremiseV1 { layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, role_identity: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], valid_bytes: 17, effect: None, initialized_content: None, fully_initialized: true, writable_ranges: [], completed_snapshots: [] }, storage: [(8, 0), (8, 0)] }, Premise { value: RetainedDataPremiseV1 { layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, role_identity: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], valid_bytes: 17, effect: None, initialized_content: Some(Gfx942DeviceContentDescriptorV1 { role: Gfx942DeviceContentRoleV1 { identity: [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], ordinal: 2 }, byte_len: 17, sha256: [16, 39, 151, 114, 152, 43, 116, 40, 145, 122, 230, 178, 162, 183, 103, 150, 78, 104, 255, 190, 240, 143, 87, 192, 207, 173, 163, 175, 131, 94, 206, 148], identity: [233, 98, 14, 211, 58, 147, 10, 36, 134, 218, 240, 178, 49, 172, 178, 30, 83, 83, 254, 250, 229, 253, 150, 215, 53, 7, 174, 206, 219, 16, 158, 247] }), fully_initialized: true, writable_ranges: [], completed_snapshots: [] }, storage: [(8, 0), (8, 0)] }, Premise { value: RetainedDataPremiseV1 { layout: Gfx942FixedDispatchDataLayoutV1 { kind: HostVisibleCoherent, requested_bytes: 17, alignment: 4096 }, role_identity: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], valid_bytes: 17, effect: None, initialized_content: None, fully_initialized: false, writable_ranges: [], completed_snapshots: [] }, storage: [(8, 0), (8, 0)] }, Premise { value: RetainedDataPremiseV1 { layout: Gfx942FixedDispatchDataLayoutV1 { kind: HostVisibleCoherent, requested_bytes: 17, alignment: 4096 }, role_identity: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], valid_bytes: 17, effect: None, initialized_content: None, fully_initialized: true, writable_ranges: [], completed_snapshots: [] }, storage: [(8, 0), (8, 0)] }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1148 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`
