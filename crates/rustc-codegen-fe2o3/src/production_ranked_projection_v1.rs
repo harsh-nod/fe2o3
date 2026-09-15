@@ -361,7 +361,10 @@ struct ProjectedUniformInductionV1 {
     step: ProductionRankedValueV1,
     source_progress: ProjectedSourceInductionCandidateV1,
     bound_cast: Option<ProjectedUnsignedCastCandidateV1>,
+    body_predicates: Vec<ProjectedInductionBodyPredicateV1>,
 }
+
+include!("production_ranked_projection_v1/induction_body_predicate_v1.rs");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProjectedInductionPreheaderControlV1 {
@@ -8794,6 +8797,18 @@ fn project_intrinsic_contracts(
         operations,
         next_value,
     )?;
+    project_induction_body_predicates_v1(
+        types,
+        function,
+        constants,
+        &stable_argument_origins,
+        &local_definitions,
+        &mut uniform_inductions,
+        &mut runtime_index_arguments,
+        &mut next_runtime_argument,
+        operations,
+        next_value,
+    )?;
     let projected_switch_predicates =
         switch_predicates(function, &option_predicates, &direct_switch_predicates)?;
     let deterministic_switches = project_deterministic_scalar_switches_v1(
@@ -11738,6 +11753,7 @@ fn project_uniform_inductions_v1(
             step,
             source_progress,
             bound_cast,
+            body_predicates: Vec::new(),
         });
     }
     inductions.sort_by(|left, right| {
@@ -19475,6 +19491,7 @@ fn build_ranked_cfg(
     }
     let constants = constant_locals(function)?;
     let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
+    let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
     for induction in uniform_inductions {
         let Some(block) = induction
             .source_progress
@@ -19963,6 +19980,29 @@ fn build_ranked_cfg(
             let block = ranked_block_id(current)?;
             let arguments_for =
                 |target: usize| forward_live_inductions(block, live, &live_inductions[target]);
+            if let Some(predicate) = body_predicates[semantic_index] {
+                let projected = materialize_induction_body_predicate_v1(
+                    function,
+                    predicate,
+                    &terminator,
+                    block,
+                    live,
+                    &base_blocks,
+                    &live_inductions,
+                )?;
+                push_block_at_with_index_arguments(
+                    &mut blocks,
+                    current,
+                    u32::try_from(live.len()).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "live induction argument count does not fit u32",
+                        )
+                    })?,
+                    operations,
+                    projected,
+                )?;
+                continue;
+            }
             let terminator = match terminator {
                 ProjectedCfgTerminatorV1::Branch(target) => {
                     ProductionRankedTerminatorV1::BranchArgs {
@@ -23661,6 +23701,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
+    include!("production_ranked_projection_v1/induction_body_predicate_v1_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
@@ -34984,6 +35025,18 @@ mod tests {
             &definitions,
             &arguments,
             &mut inductions,
+            &mut operations,
+            &mut next_value,
+        )?;
+        project_induction_body_predicates_v1(
+            types,
+            function,
+            &constants,
+            &origins,
+            &definitions,
+            &mut inductions,
+            &mut arguments,
+            &mut next_argument,
             &mut operations,
             &mut next_value,
         )?;
