@@ -129,6 +129,20 @@ slice operation; it is not implemented by relabeling a carrier. This support
 does not add capability elision, general Rust place coverage, or native scalar
 proofs, and does not discharge pipeline, formal, or host correspondence gates.
 
+## Internal Slice Helper LLVM ABI
+
+Materialized internal helpers with bodies can pass immutable Global slices of
+supported scalar elements as a data pointer and an i64 length. Definitions,
+calls and block arguments use the same pair, including duplicate-edge joins
+and loop backedges, on gfx942 and gfx950. Existing scalar and thin-pointer ABIs
+are unchanged. Mutable or non-Global slices, foreign/declaration-only slice
+parameters, and slice results remain outside this helper ABI.
+
+This does not widen source helper effect admission. Helpers that read or write
+element data still need independently admitted call summaries; aggregate and
+capability-bearing results require separate transport support. LLVM assembly
+checks establish IR validity, not source refinement or hardware execution.
+
 ## Issued Wave Lane Reborrows
 
 An already issued wave-lane binding can pass through an exact reference

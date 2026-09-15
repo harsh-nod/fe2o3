@@ -4,6 +4,7 @@ use fe2o3_kernel_ir::{AddressSpace, ValueId};
 #[derive(Clone, Copy)]
 enum Shape {
     Length,
+    RootRead,
     BranchAndTwoCalls,
     Read,
     Mutable,
@@ -204,9 +205,32 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
         ]
     } else {
         root_locals.push(local(173, ty(4), SemanticLocalRoleV1::Temporary));
+        let mut statements = Vec::new();
+        if matches!(shape, Shape::RootRead) {
+            root_locals.push(local(174, ty(1), SemanticLocalRoleV1::Temporary));
+            statements.push(assign(
+                local_place(4, ty(1)),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                    SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(1),
+                        vec![
+                            SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, ty(2))
+                                .unwrap(),
+                            SemanticProjectionV1::new(
+                                SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(2)),
+                                ty(1),
+                            )
+                            .unwrap(),
+                        ],
+                        ty(1),
+                    )
+                    .unwrap(),
+                )),
+            ));
+        }
         vec![
             block(180, vec![], call(1, 3, 1)),
-            block(181, vec![], SemanticTerminatorKindV1::Return),
+            block(181, statements, SemanticTerminatorKindV1::Return),
         ]
     };
     let entry = SemanticFunctionDeclV1::new(
@@ -482,3 +506,6 @@ fn shared_slice_helper_subset_does_not_admit_mutable_or_unowned_pairs() {
         ));
     }
 }
+
+#[path = "shared_slice_helper_llvm_v1.rs"]
+mod llvm_abi;

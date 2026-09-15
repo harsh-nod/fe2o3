@@ -899,8 +899,9 @@ fn validate_semantic_anchor_identity_v1(
 /// order. All functions are preflighted before any output is returned.
 ///
 /// The current bounded feature slice supports void or single-result scalar/pointer helper ABIs.
-/// Slice ABIs remain kernel-entry-only. Calls to kernel entry functions and context-dependent
-/// operations in helpers are rejected. Helper wave modes are resolved through a bounded SCC call
+/// Internal definitions also accept immutable Global scalar slices as data/length pairs.
+/// Slice results and external slice ABIs remain unsupported. Calls to kernel entry functions and
+/// context-dependent operations in helpers are rejected. Helper wave modes use a bounded SCC call
 /// graph before lowering, and textual output is capacity-limited and returned atomically.
 ///
 /// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
@@ -1404,6 +1405,9 @@ fn validate_device_signature(
 ) -> Result<(), LoweringErrors> {
     let location = LoweringLocation::device_function(module, function);
     for (index, ty) in function.signature.parameters.iter().enumerate() {
+        if immutable_slice_helper_parameter_v1(function, ty, target) {
+            continue;
+        }
         validate_device_abi_type(ty, &location, target).map_err(|error| {
             LoweringErrors::one(
                 location.clone(),
@@ -1429,6 +1433,19 @@ fn validate_device_signature(
         })?;
     }
     Ok(())
+}
+
+fn immutable_slice_helper_parameter_v1(
+    function: &Function,
+    ty: &Type,
+    target: LoweringTarget,
+) -> bool {
+    function.role == FunctionRole::InternalHelper
+        && function.body.is_some()
+        && matches!(ty, Type::Slice(slice)
+            if slice.address_space == KernelAddressSpace::Global
+                && slice.access == AccessMode::ReadOnly
+                && supported_memory_type(&slice.element, target))
 }
 
 fn validate_device_abi_type(
@@ -4262,9 +4279,10 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
                 Type::Slice(slice)
-                    if self.kernel.is_some()
+                    if (self.kernel.is_some()
                         && slice.address_space == KernelAddressSpace::Global
-                        && supported_memory_type(&slice.element, self.target) =>
+                        && supported_memory_type(&slice.element, self.target))
+                        || immutable_slice_helper_parameter_v1(self.function, ty, self.target) =>
                 {
                     self.bindings.insert(
                         value,
@@ -4321,9 +4339,14 @@ impl<'a> FunctionLowerer<'a> {
                         );
                     }
                     Type::Slice(slice)
-                        if self.kernel.is_some()
+                        if (self.kernel.is_some()
                             && slice.address_space == KernelAddressSpace::Global
-                            && supported_memory_type(&slice.element, self.target) =>
+                            && supported_memory_type(&slice.element, self.target))
+                            || immutable_slice_helper_parameter_v1(
+                                self.function,
+                                &parameter.ty,
+                                self.target,
+                            ) =>
                     {
                         self.bindings.insert(
                             parameter.id,
@@ -6689,8 +6712,22 @@ impl<'a> FunctionLowerer<'a> {
                 let arguments = arguments
                     .iter()
                     .map(|argument| {
-                        let (name, ty) = self.value(*argument);
-                        format!("{} {name}", llvm_type(ty))
+                        match self
+                            .bindings
+                            .get(argument)
+                            .expect("validated call argument")
+                        {
+                            ValueBinding::Value { llvm_name, ty } => {
+                                format!("{} {llvm_name}", llvm_type(ty))
+                            }
+                            ValueBinding::Slice {
+                                data_name,
+                                length_name,
+                                ..
+                            } => {
+                                format!("ptr addrspace(1) {data_name}, i64 {length_name}")
+                            }
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(", ");

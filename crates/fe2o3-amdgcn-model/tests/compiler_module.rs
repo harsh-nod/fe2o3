@@ -927,3 +927,6 @@ fn gfx1151_object_symbols_and_effective_wave_helpers_are_physical() {
         let _ = std::fs::remove_file(path);
     }
 }
+
+#[path = "compiler_module/shared_slice_helpers_v1.rs"]
+mod shared_slice_helpers_v1;
