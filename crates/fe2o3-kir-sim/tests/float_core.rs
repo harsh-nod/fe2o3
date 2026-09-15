@@ -450,9 +450,133 @@ fn fabs_f32_clears_only_the_sign_bit_for_ieee_values() {
 }
 
 #[test]
-fn fabs_f32_rejects_wrong_operand_arity_and_type_before_execution() {
-    const FABS_F32: &str = "__fe2o3_ir_float_v1_fabs_f32";
-    let module = admitted(call_module(FABS_F32));
+fn sqrt_f32_preserves_ieee_edges_and_rounds_once() {
+    for (input, expected) in [
+        (0x0000_0000, 0x0000_0000),
+        (0x8000_0000, 0x8000_0000),
+        (0x0000_0001, 0x1a35_04f3),
+        (0x0000_0002, 0x1a80_0000),
+        (0x007f_ffff, 0x1fff_ffff),
+        (0x0080_0000, 0x2000_0000),
+        (0x3f7f_ffff, 0x3f7f_ffff),
+        (0x3f80_0000, 0x3f80_0000),
+        (0x3f80_0001, 0x3f80_0000),
+        (0x3f80_0002, 0x3f80_0001),
+        (0x4000_0000, 0x3fb5_04f3),
+        (0x4080_0000, 0x4000_0000),
+        (0x7f7f_ffff, 0x5f7f_ffff),
+        (0x7f80_0000, 0x7f80_0000),
+        (0x8000_0001, 0x7fc0_0000),
+        (0xbf80_0000, 0x7fc0_0000),
+        (0xff7f_ffff, 0x7fc0_0000),
+        (0xff80_0000, 0x7fc0_0000),
+        (0x7fc0_0042, 0x7fc0_0042),
+        (0xffc0_0042, 0xffc0_0042),
+        (0x7f80_0042, 0x7fc0_0042),
+        (0xff80_0042, 0xffc0_0042),
+    ] {
+        assert_eq!(
+            run_call(
+                "__fe2o3_ir_float_v1_sqrt_f32",
+                &[value(ScalarType::F32, input)]
+            ),
+            expected,
+            "input bits {input:#010x}"
+        );
+    }
+}
+
+#[test]
+fn sqrt_f32_debug_values_and_seeded_replay_use_the_same_semantics() {
+    let module = admitted(call_module("__fe2o3_ir_float_v1_sqrt_f32"));
+    let request = SimulationRequestV1::new(
+        "float_call",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(buffer(
+                AccessMode::ReadWrite,
+                &[value(ScalarType::F32, 0)],
+            )),
+            SimulationArgumentV1::Scalar(value(ScalarType::F32, 0x4000_0000)),
+        ],
+    );
+    let mut debug = DebugRecords::default();
+    let first = module
+        .simulate_debugged_scheduled_with_sink(
+            &request,
+            TARGET,
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 0x5eed,
+                max_decisions: 16,
+            },
+            SimulationDebugCaptureLimitsV1::new(16, 256, 16, 1_024).unwrap(),
+            &mut debug,
+        )
+        .unwrap();
+    assert_eq!(buffer_bits(first.buffer(0).unwrap()), vec![0x3fb5_04f3]);
+    assert!(debug.0.iter().any(|record| matches!(
+        &record.kind,
+        SimulationDebugRecordKindV1::Checkpoint {
+            stack: SimulationDebugCollectionV1::Captured(frames),
+            ..
+        } if frames.iter().any(|frame| matches!(
+            &frame.values,
+            SimulationDebugCollectionV1::Captured(values)
+                if values.iter().any(|binding| matches!(
+                    binding.observed,
+                    SimulationDebugValueV1::Scalar(scalar)
+                        if scalar.ty() == ScalarType::F32
+                            && scalar.bits() == 0x3fb5_04f3
+                ))
+        ))
+    )));
+    assert_eq!(
+        debug
+            .0
+            .iter()
+            .filter(|record| matches!(
+                record.kind,
+                SimulationDebugRecordKindV1::Memory {
+                    access: SimulationDebugMemoryAccessV1::WriteCommitted,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    let replay = module
+        .simulate_scheduled(
+            &request,
+            TARGET,
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::Replay(first.schedule_record().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(replay.arguments(), first.arguments());
+    assert_eq!(
+        replay.schedule_transcript_identity(),
+        first.schedule_transcript_identity()
+    );
+    let canonical = module
+        .simulate(&request, TARGET, SimulationLimitsV1::default())
+        .unwrap();
+    assert_eq!(canonical.arguments(), first.arguments());
+}
+
+#[test]
+fn unary_f32_math_rejects_wrong_operand_arity_and_type_before_execution() {
+    for name in [
+        "__fe2o3_ir_float_v1_fabs_f32",
+        "__fe2o3_ir_float_v1_sqrt_f32",
+    ] {
+        check_invalid_unary_f32_arguments(name);
+    }
+}
+
+fn check_invalid_unary_f32_arguments(name: &str) {
+    let module = admitted(call_module(name));
     let output =
         SimulationArgumentV1::Buffer(buffer(AccessMode::ReadWrite, &[value(ScalarType::F32, 0)]));
 
@@ -465,6 +589,26 @@ fn fabs_f32_rejects_wrong_operand_arity_and_type_before_execution() {
         SimulationPreflightErrorV1::ArgumentCount {
             expected: 2,
             actual: 1,
+        }
+    );
+
+    let extra = SimulationRequestV1::new(
+        "float_call",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            output.clone(),
+            SimulationArgumentV1::Scalar(value(ScalarType::F32, 0)),
+            SimulationArgumentV1::Scalar(value(ScalarType::F32, 0)),
+        ],
+    );
+    assert_eq!(
+        module
+            .preflight(&extra, TARGET, SimulationLimitsV1::default())
+            .unwrap_err(),
+        SimulationPreflightErrorV1::ArgumentCount {
+            expected: 2,
+            actual: 3,
         }
     );
 
@@ -585,7 +729,6 @@ fn every_supported_canonical_float_operation_executes_as_one_scalar_operation() 
 #[test]
 fn unavailable_float_functions_are_typed_per_function_before_execution() {
     for (name, expected) in [
-        ("__fe2o3_ir_float_v1_sqrt_f32", F32MathFunction::Sqrt),
         ("__fe2o3_ir_float_v1_sin_f32", F32MathFunction::Sin),
         ("__fe2o3_ir_float_v1_cos_f32", F32MathFunction::Cos),
         ("__fe2o3_ir_float_v1_exp_f32", F32MathFunction::Exp),

@@ -34,7 +34,7 @@ transcendentals, concurrency families, and physical-GPU parity. Unsupported
 semantics are not approximated.
 
 The additive V3 binary32 matrix qualifies the shared simulator-preflight
-roster's explicitly enumerated 18 core scalar `f32` operations without
+roster's explicitly enumerated 19 core scalar `f32` operations without
 changing V2:
 
 ```text
@@ -43,15 +43,15 @@ fe2o3-sim-differential f32-run-v3
 fe2o3-sim-differential f32-replay-v3 --case CASE --kir-sha256 SHA256 --oracle-corpus-sha256 SHA256
 ```
 
-Its 18 operation cases and 159 exact rows cover negate; add, subtract,
+Its 19 operation cases and 169 exact rows cover negate; add, subtract,
 multiply, divide, and remainder; all six comparisons; explicit fused
 multiply-add; floor, ceil, truncate, and round-to-nearest-ties-to-even; and
-absolute value.
+absolute value; and IEEE square root.
 Compile-time oracle tables enumerate exact binary32 input and result bits for
-the pinned `rustc_apfloat 0.2.3+llvm-462a31f5a5ab` software contract:
+IEEE square root and the pinned `rustc_apfloat 0.2.3+llvm-462a31f5a5ab` software contract:
 round-to-nearest-even, its exact NaN sign/payload/canonicalization choices,
 integral rounding, comparisons, and C-style `fmod` remainder. Rows include
-signed zero, subnormals, infinities, quiet NaNs, rounding ties, overflow,
+signed zero, subnormals, infinities, quiet/signaling NaNs, rounding ties, overflow,
 unordered comparisons, and a fused single-rounding witness. The oracle never
 uses host floating-point evaluation. Each case binds its canonical KIR V7,
 ordered row IDs, arity, exact inputs and expected bits, oracle corpus identity,

@@ -269,8 +269,9 @@ pub fn f32_differential_capabilities_v3() -> F32DifferentialCapabilitiesV3 {
             "exact_integral_rounding",
             "division_by_zero",
             "invalid_operation",
+            "signaling_nan",
         ],
-        oracle_contract: "compile-time exact binary32 bit tables for pinned rustc_apfloat 0.2.3+llvm-462a31f5a5ab round-to-nearest-even, NaN sign/payload/canonicalization, integral rounding, comparisons, and C-style fmod semantics; no host floating-point evaluation",
+        oracle_contract: "compile-time exact binary32 bit tables for IEEE square root and pinned rustc_apfloat 0.2.3+llvm-462a31f5a5ab round-to-nearest-even, NaN sign/payload/canonicalization, integral rounding, comparisons, and C-style fmod semantics; no host floating-point evaluation",
         roster_contract: "the ordered V3 corpus must exactly equal the shared f32 simulator-preflight roster",
         case_limit: CASE_LIMIT,
         maximum_rows_per_case: MAX_ROWS_PER_CASE,
@@ -842,7 +843,7 @@ fn exclusions() -> Vec<F32DifferentialExclusionV3> {
             reason: "this bounded V3 matrix qualifies only binary32 core scalar operations",
         },
         F32DifferentialExclusionV3 {
-            code: "sqrt_and_transcendentals",
+            code: "transcendentals",
             disposition: "typed_unsupported",
             reason: "simulator preflight rejects F32 functions without an admitted executable numerical contract",
         },
@@ -1053,6 +1054,21 @@ const FLOOR_ROWS: [OracleRow; 10] = integral_rows(FLOOR_RESULTS);
 const CEIL_ROWS: [OracleRow; 10] = integral_rows(CEIL_RESULTS);
 const TRUNCATE_ROWS: [OracleRow; 10] = integral_rows(TRUNCATE_RESULTS);
 const ROUND_EVEN_ROWS: [OracleRow; 10] = integral_rows(ROUND_EVEN_RESULTS);
+
+// Fixed IEEE binary32 oracle bits, independent of the simulator evaluator.
+// sqrt(2^-149) = 2^-75 * sqrt(2); sqrt(MAX_FINITE) rounds below 2^64.
+const SQRT_ROWS: [OracleRow; 10] = [
+    row1("positive-zero", PZERO, PZERO),
+    row1("negative-zero", NZERO, NZERO),
+    row1("minimum-subnormal", MIN_SUB, 0x1a35_04f3),
+    row1("irrational-rounded", TWO, 0x3fb5_04f3),
+    row1("maximum-finite", MAX_FINITE, 0x5f7f_ffff),
+    row1("positive-infinity", PINF, PINF),
+    row1("negative-finite", NEG_ONE, CANONICAL_QNAN),
+    row1("negative-infinity", NINF, CANONICAL_QNAN),
+    row1("quiet-nan-payload", QNAN, QNAN),
+    row1("signaling-nan-payload", 0xff80_0042, NEG_QNAN),
+];
 
 const fn row1(id: &'static str, input: u32, expected: u32) -> OracleRow {
     OracleRow {
@@ -1333,6 +1349,22 @@ fn case_specs() -> [CaseSpec; CASE_LIMIT] {
             edge_classes: &["signed_zero", "subnormal", "infinity", "quiet_nan"],
             rows: &ABS_ROWS,
         },
+        CaseSpec {
+            id: "f32-sqrt",
+            operation_name: "sqrt",
+            family: "f32_math",
+            operation: CaseOperation::Math(F32MathFunction::Sqrt),
+            edge_classes: &[
+                "signed_zero",
+                "subnormal",
+                "infinity",
+                "quiet_nan",
+                "signaling_nan",
+                "round_ties_even",
+                "invalid_operation",
+            ],
+            rows: &SQRT_ROWS,
+        },
     ]
 }
 
@@ -1346,7 +1378,7 @@ mod tests {
         let second = run_f32_differential_v3().unwrap().unwrap();
         assert_eq!(first, second);
         assert_eq!(first.operation_cases, CASE_LIMIT);
-        assert_eq!(first.rows_compared, 159);
+        assert_eq!(first.rows_compared, 169);
         assert_eq!(
             case_specs()
                 .iter()
@@ -1356,11 +1388,11 @@ mod tests {
         );
         assert_eq!(
             first.capability_sha256,
-            "c19537f38504267a123696a731be2d8b41231cb293540141331e913036f126e8"
+            "023c1cb5ded12f27f2fdd05f63266f8c6bdb83ea9014d1b9007031bc9424eac1"
         );
         assert_eq!(
             first.suite_sha256,
-            "0x69bf9ade6b55116cce2f2d829e96a778b61b18f8df19e30692ff933261f2cd77"
+            "0x4fcbe325697ec11f891aa6fb6dc7cf2fa402941a515dc49392851c161d6b367b"
         );
         assert_eq!(
             first
@@ -1486,6 +1518,37 @@ mod tests {
     }
 
     #[test]
+    fn sqrt_replay_and_mismatch_witness_retain_exact_oracle_bits() {
+        let spec = *case_specs().last().unwrap();
+        assert_eq!(spec.id, "f32-sqrt");
+        let mut observation = observe(spec).unwrap();
+        let evidence = evidence_for(&observation);
+        assert_eq!(
+            replay_f32_differential_case_v3(
+                spec.id,
+                &evidence.kir_sha256,
+                &evidence.oracle_corpus_sha256,
+            )
+            .unwrap()
+            .case,
+            evidence
+        );
+        observation.observed[2 * 4] ^= 1;
+        observation.observed[3 * 4] ^= 1;
+        let failure = mismatch(&observation).unwrap();
+        assert_eq!(failure.reduction.retained_row, Some(2));
+        assert_eq!(failure.reduction.retained_row_id, Some("minimum-subnormal"));
+        assert_eq!(failure.reduction.retained_input_bits, ["0x00000001"]);
+        assert_eq!(
+            failure.reduction.retained_expected_bits.as_deref(),
+            Some("0x1a3504f3")
+        );
+        assert_eq!(failure.reduction.predicate_evaluations, 3);
+        assert!(failure.replay.contains(&failure.kir_sha256));
+        assert!(failure.replay.contains(&failure.oracle_corpus_sha256));
+    }
+
+    #[test]
     fn mismatch_reduction_retains_the_first_exact_oracle_row() {
         let mut observation = observe(case_specs()[1]).unwrap();
         observation.observed[5] ^= 1;
@@ -1524,7 +1587,7 @@ mod tests {
         for exclusion in [
             "float_conversions_and_casts",
             "f16_bf16_f64_edge_matrices",
-            "sqrt_and_transcendentals",
+            "transcendentals",
             "physical_gpu_parity",
             "performance_prediction",
         ] {

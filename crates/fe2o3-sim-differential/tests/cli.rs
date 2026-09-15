@@ -181,7 +181,7 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
         "fe2o3-sim-f32-differential-capabilities-v3"
     );
     assert_eq!(capabilities["authority"], "none");
-    assert_eq!(capabilities["case_limit"], 18);
+    assert_eq!(capabilities["case_limit"], 19);
     assert_eq!(capabilities["maximum_rows_per_case"], 10);
     assert_eq!(capabilities["hardware_observed"], false);
     assert_eq!(capabilities["performance_prediction"], false);
@@ -198,9 +198,9 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
         "independent_exact_bit_table_agreement"
     );
     assert_eq!(report["authority"], "none");
-    assert_eq!(report["operation_cases"], 18);
-    assert_eq!(report["rows_compared"], 159);
-    assert_eq!(report["cases"].as_array().unwrap().len(), 18);
+    assert_eq!(report["operation_cases"], 19);
+    assert_eq!(report["rows_compared"], 169);
+    assert_eq!(report["cases"].as_array().unwrap().len(), 19);
     assert_eq!(report["hardware_observed"], false);
     assert_eq!(report["performance_prediction"], false);
 
@@ -212,25 +212,28 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
             case["row_ids"].as_array().unwrap().len() as u64
         );
     }
-    let case = &report["cases"][12];
-    let replay = command()
-        .args([
-            "f32-replay-v3",
-            "--case",
-            case["case_id"].as_str().unwrap(),
-            "--kir-sha256",
-            case["kir_sha256"].as_str().unwrap(),
-            "--oracle-corpus-sha256",
-            case["oracle_corpus_sha256"].as_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(replay.status.success());
-    assert!(replay.stderr.is_empty());
-    let replay: Value = serde_json::from_slice(&replay.stdout).unwrap();
-    assert_eq!(replay["schema"], "fe2o3-sim-f32-differential-replay-v3");
-    assert_eq!(replay["status"], "reproduced");
-    assert_eq!(replay["case"], *case);
+    for (index, id) in [(12, "f32-fused-multiply-add"), (18, "f32-sqrt")] {
+        let case = &report["cases"][index];
+        assert_eq!(case["case_id"], id);
+        let replay = command()
+            .args([
+                "f32-replay-v3",
+                "--case",
+                id,
+                "--kir-sha256",
+                case["kir_sha256"].as_str().unwrap(),
+                "--oracle-corpus-sha256",
+                case["oracle_corpus_sha256"].as_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(replay.status.success());
+        assert!(replay.stderr.is_empty());
+        let replay: Value = serde_json::from_slice(&replay.stdout).unwrap();
+        assert_eq!(replay["schema"], "fe2o3-sim-f32-differential-replay-v3");
+        assert_eq!(replay["status"], "reproduced");
+        assert_eq!(replay["case"], *case);
+    }
 }
 
 #[test]

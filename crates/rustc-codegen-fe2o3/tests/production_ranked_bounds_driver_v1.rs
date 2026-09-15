@@ -648,6 +648,118 @@ fn ordinary_source_float_casts_saturate_in_simulation() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_source_sqrt_executes_exact_binary32_in_simulation() {
+    use fe2o3_kir_sim::SimulationScheduleRequestV1;
+
+    const CANARY: u32 = 0xa5c3_7e19;
+    let target = ScratchTarget::new();
+    for architecture in ["gfx942", "gfx950"] {
+        let bundle_path = target.path().join(format!("sqrt-{architecture}.fe2sim"));
+        let exported = output(
+            simulation_export_command_for_feature(
+                architecture,
+                &bundle_path,
+                &target.path().join(architecture),
+                None,
+                "device_math_sqrt",
+            ),
+            "export ordinary DeviceMath::sqrt_f32 source",
+        );
+        assert!(exported.status.success(), "{}", exported.stderr);
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bundle.target(), format!("{architecture}:xnack-"));
+        assert!(
+            bundle
+                .require_canonical_compiler_execution_association()
+                .is_err()
+        );
+        assert!(bundle.debug_map().is_some());
+        for (bits, expected_bits) in [
+            (0x0000_0000_u32, 0x0000_0000_u32),
+            (0x8000_0000, 0x8000_0000),
+            (0x3f80_0000, 0x3f80_0000),
+            (0x4080_0000, 0x4000_0000),
+            (0x4000_0000, 0x3fb5_04f3),
+            (0x0000_0001, 0x1a35_04f3),
+            (0x0080_0000, 0x2000_0000),
+            (0x007f_ffff, 0x1fff_ffff),
+            (0x7f7f_ffff, 0x5f7f_ffff),
+            (0x3f7f_ffff, 0x3f7f_ffff),
+            (0x3f80_0001, 0x3f80_0000),
+            (0x3f80_0002, 0x3f80_0001),
+            (0xbf80_0000, 0x7fc0_0000),
+            (0x7f80_0000, 0x7f80_0000),
+            (0xff80_0000, 0x7fc0_0000),
+            (0x7fc0_0042, 0x7fc0_0042),
+            (0xff80_0042, 0xffc0_0042),
+        ] {
+            for (grid, elements) in [(64_usize, 68_usize), (128, 65)] {
+                let request_path = target.path().join("sqrt-request.json");
+                std::fs::write(&request_path, serde_json::to_vec(&json!({
+                    "schema": "fe2o3-simulation-request-v1", "kernel": "device_math_sqrt",
+                    "grid": [grid, 1, 1], "workgroup": [64, 1, 1],
+                    "arguments": [
+                        {"kind": "scalar", "type": "f32", "bits": format!("0x{bits:08x}")},
+                        {"kind": "buffer", "element": "f32", "access": "read_write",
+                         "alignment": 4, "bytes": format!("0x{}", hex(&CANARY.to_le_bytes().repeat(elements)))},
+                    ],
+                })).unwrap()).unwrap();
+                let admitted =
+                    fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
+                        .unwrap();
+                let input = admitted.input();
+                let mut expected = expected_bits.to_le_bytes().repeat(grid.min(elements));
+                expected
+                    .extend_from_slice(&CANARY.to_le_bytes().repeat(elements.saturating_sub(grid)));
+                for schedule in [
+                    SimulationScheduleRequestV1::RecordCanonical {
+                        max_decisions: 100_000,
+                    },
+                    SimulationScheduleRequestV1::RecordSeeded {
+                        seed: 0x275_5a17,
+                        max_decisions: 100_000,
+                    },
+                ] {
+                    let execution = input
+                        .module
+                        .simulate_scheduled(
+                            &input.request,
+                            input.simulation_target(),
+                            input.simulation_limits,
+                            schedule,
+                        )
+                        .unwrap_or_else(|error| panic!("{architecture}: 0x{bits:08x}: {error:?}"));
+                    assert_eq!(execution.invocations_executed(), grid as u64);
+                    assert_eq!(execution.workgroups_visited(), (grid / 64) as u64);
+                    assert_eq!(&execution.arguments()[0], &input.request.arguments[0]);
+                    assert_eq!(execution.buffer(1).unwrap().bytes(), expected);
+                    let replay = input
+                        .module
+                        .simulate_scheduled(
+                            &input.request,
+                            input.simulation_target(),
+                            input.simulation_limits,
+                            SimulationScheduleRequestV1::Replay(
+                                execution.schedule_record().unwrap(),
+                            ),
+                        )
+                        .unwrap();
+                    assert_eq!(replay.buffer(1).unwrap().bytes(), expected);
+                    assert_eq!(
+                        replay.schedule_transcript_identity(),
+                        execution.schedule_transcript_identity()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle() {
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("copy-static.fe2sim");

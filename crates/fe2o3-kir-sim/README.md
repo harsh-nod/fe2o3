@@ -252,6 +252,12 @@ and packed BF16x2 fused multiply-add use the same software evaluator. Operations
 are never implemented with host `f32`/`f64` arithmetic and are never implicitly
 contracted.
 
+F32 square root implements the existing IEEE round-to-nearest, ties-to-even
+contract with bounded integer normalization and `u64::isqrt`, without host
+floating-point arithmetic. It preserves signed zero and positive infinity;
+NaNs retain sign/payload with the quiet bit set, while negative nonzero inputs
+produce the model's canonical quiet NaN. No GPU NaN-payload parity is implied.
+
 The exact canonical terminating AMDGPU `Trap` call is admitted as a dynamic
 failure equivalent to reaching its required `Unreachable` terminator. It is
 never ignored when executed; this only permits compiler-generated failure
@@ -263,8 +269,8 @@ operations, V7 memory intrinsics,
 V10/V11 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
 volatile access, target-layout mismatches, and inline assembly remain typed
 unsupported states. Pointer distance additionally rejects distinct logical
-allocations because the CPU model has no physical-address equality claim. F32 square root
-and the canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a
+allocations because the CPU model has no physical-address equality claim. The
+canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a
 distinct typed unsupported state because the pinned software evaluator does not
 provide their declared exact semantics. The sequential
 CPU mutation and fence order model does not simulate physical waves, caches,

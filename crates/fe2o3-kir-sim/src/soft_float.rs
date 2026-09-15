@@ -321,6 +321,10 @@ fn execute_f32_math(
         ));
     }
     let result = match function {
+        F32MathFunction::Sqrt => {
+            require_arity(operands, 1)?;
+            Single::from_bits(u128::from(sqrt_f32_bits(operands[0].bits() as u32)))
+        }
         F32MathFunction::FusedMultiplyAdd => {
             require_arity(operands, 3)?;
             Single::from_bits(operands[0].bits())
@@ -351,8 +355,7 @@ fn execute_f32_math(
                 .round_to_integral(round)
                 .value
         }
-        F32MathFunction::Sqrt
-        | F32MathFunction::Sin
+        F32MathFunction::Sin
         | F32MathFunction::Cos
         | F32MathFunction::Exp
         | F32MathFunction::Exp2
@@ -365,6 +368,42 @@ fn execute_f32_math(
         }
     };
     scalar(ScalarType::F32, result.to_bits(), target)
+}
+
+fn sqrt_f32_bits(bits: u32) -> u32 {
+    let magnitude = bits & 0x7fff_ffff;
+    if magnitude > 0x7f80_0000 {
+        return bits | 0x0040_0000;
+    }
+    if magnitude == 0 {
+        return bits;
+    }
+    if bits & 0x8000_0000 != 0 {
+        return 0x7fc0_0000;
+    }
+    if magnitude == 0x7f80_0000 {
+        return bits;
+    }
+
+    let fraction = bits & 0x007f_ffff;
+    let encoded_exponent = (bits >> 23) as i32;
+    let (significand, exponent) = if encoded_exponent == 0 {
+        let shift = fraction.leading_zeros() - 8;
+        (fraction << shift, -126 - shift as i32)
+    } else {
+        (fraction | 0x0080_0000, encoded_exponent - 127)
+    };
+    // Normalize to 24 bits, making the exponent even. The integer radicand
+    // is below 2^48; its square root is the result's unrounded significand.
+    let radicand = u64::from(significand) << (23 + exponent.rem_euclid(2));
+    let root = radicand.isqrt();
+    // The midpoint square is root^2 + root + 1/4, so an integer radicand
+    // cannot tie. Its remainder exceeds root exactly when rounding upward.
+    let rounded = root + u64::from(radicand - root * root > root);
+    // Even sqrt(min-subnormal) is normal. The biased exponent is 52..=190;
+    // the largest radicand is below the midpoint that would round to 2^24.
+    let result_exponent = (exponent.div_euclid(2) + 127) as u32;
+    (result_exponent << 23) | (rounded as u32 - 0x0080_0000)
 }
 
 fn binary_bits<F: Float>(op: BinaryOp, lhs: u128, rhs: u128) -> Result<u128, SoftFloatErrorV1> {
@@ -575,6 +614,85 @@ mod tests {
 
     fn operation(name: &str) -> FloatOperation {
         FloatOperation::from_intrinsic_id(&FunctionId::new(name)).unwrap()
+    }
+
+    #[test]
+    fn sqrt_rounding_matches_independent_squared_midpoint_intervals() {
+        fn dyadic(bits: u32) -> (u128, i32) {
+            let exponent = (bits >> 23) & 0xff;
+            let fraction = u128::from(bits & 0x007f_ffff);
+            if exponent == 0 {
+                (fraction, -149)
+            } else {
+                (fraction | 0x0080_0000, exponent as i32 - 150)
+            }
+        }
+
+        fn midpoint_squared(left: u32, right: u32) -> (u128, i32) {
+            let (left, left_exponent) = dyadic(left);
+            let (right, right_exponent) = dyadic(right);
+            let exponent = left_exponent.min(right_exponent);
+            let sum = (left << (left_exponent - exponent)) + (right << (right_exponent - exponent));
+            (sum * sum, 2 * (exponent - 1))
+        }
+
+        fn compare(left: (u128, i32), right: (u128, i32)) -> Ordering {
+            let exponent = left.1.min(right.1);
+            let left = left
+                .0
+                .checked_mul(1_u128.checked_shl((left.1 - exponent) as u32).unwrap())
+                .unwrap();
+            let right = right
+                .0
+                .checked_mul(1_u128.checked_shl((right.1 - exponent) as u32).unwrap())
+                .unwrap();
+            left.cmp(&right)
+        }
+
+        let check = |bits| {
+            if bits == 0 || bits >= 0x7f80_0000 {
+                return;
+            }
+            let result = sqrt_f32_bits(bits);
+            assert!((0x0080_0000..0x7f7f_ffff).contains(&result));
+            let lower = compare(dyadic(bits), midpoint_squared(result - 1, result));
+            let upper = compare(dyadic(bits), midpoint_squared(result, result + 1));
+            assert!(
+                lower == Ordering::Greater || (lower == Ordering::Equal && result & 1 == 0),
+                "{bits:#010x}: {result:#010x} rounds above its interval"
+            );
+            assert!(
+                upper == Ordering::Less || (upper == Ordering::Equal && result & 1 == 0),
+                "{bits:#010x}: {result:#010x} rounds below its interval"
+            );
+        };
+        for exponent in 0..255 {
+            for fraction in [
+                0,
+                1,
+                2,
+                3,
+                0x003f_fffe,
+                0x003f_ffff,
+                0x0040_0000,
+                0x0040_0001,
+                0x007f_fffd,
+                0x007f_fffe,
+                0x007f_ffff,
+            ] {
+                check((exponent << 23) | fraction);
+            }
+        }
+        for bit in 0..23 {
+            for bits in [(1 << bit) - 1, 1 << bit, (1 << bit) + 1] {
+                check(bits);
+            }
+        }
+        let mut bits = 0x5eed_1234_u32;
+        for _ in 0..65_536 {
+            bits = bits.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            check(bits & 0x7fff_ffff);
+        }
     }
 
     #[test]
