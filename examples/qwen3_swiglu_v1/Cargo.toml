@@ -1,0 +1,20 @@
+[package]
+name = "fe2o3-qwen3-swiglu-v1"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+rust-version = "1.94"
+publish = false
+
+# This is a standalone, host-only operator contract. It has no production
+# compiler, artifact, runtime, or launch dependencies.
+[workspace]
+resolver = "3"
+
+[dependencies]
+sha2 = "0.10"
+
+[lib]
+name = "fe2o3_qwen3_swiglu_v1"
+path = "src/lib.rs"
