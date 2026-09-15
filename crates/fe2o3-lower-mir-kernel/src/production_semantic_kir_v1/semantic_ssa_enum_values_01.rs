@@ -985,6 +985,30 @@ fn index_and_u64_are_transport_equivalent(actual: &Type, expected: &Type) -> boo
     )
 }
 
+fn issued_reference_binding_v1(
+    types: &[SemanticTypeDeclV1],
+    compiler_issued: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    reference_type: SemanticTypeIdV1,
+    projection: &SemanticProjectionV1,
+) -> Option<SemanticPromotedBindingV1> {
+    let SemanticTypeShapeV1::Pointer(reference) = types
+        .get(reference_type.index() as usize)
+        .map(SemanticTypeDeclV1::shape)?
+    else {
+        return None;
+    };
+    if projection.kind() != SemanticProjectionKindV1::Dereference
+        || reference.kind() != SemanticPointerKindV1::Reference
+        || reference.address_space() != 0
+        || reference.pointer_width_bits() != 64
+        || reference.metadata() != SemanticPointerMetadataV1::None
+        || reference.pointee() != projection.result_type()
+    {
+        return None;
+    }
+    compiler_issued.get(&reference.pointee()).copied()
+}
+
 fn wave_lane_reference_dereference_matches_v1(
     types: &[SemanticTypeDeclV1],
     compiler_issued: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
@@ -995,24 +1019,35 @@ fn wave_lane_reference_dereference_matches_v1(
     let SemanticValueBindingV1::WaveLane { wave, .. } = binding else {
         return false;
     };
-    let Some(SemanticTypeShapeV1::Pointer(reference)) = types
-        .get(reference_type.index() as usize)
-        .map(SemanticTypeDeclV1::shape)
-    else {
-        return false;
-    };
-    projection.kind() == SemanticProjectionKindV1::Dereference
-        && reference.kind() == SemanticPointerKindV1::Reference
-        && reference.address_space() == 0
-        && reference.pointer_width_bits() == 64
-        && reference.metadata() == SemanticPointerMetadataV1::None
-        && reference.pointee() == projection.result_type()
-        && wave.width == 64
+    wave.width == 64
         && matches!(
-            compiler_issued.get(&reference.pointee()),
+            issued_reference_binding_v1(types, compiler_issued, reference_type, projection),
             Some(SemanticPromotedBindingV1::WaveLane { wave_width })
-                if *wave_width == wave.width
+                if wave_width == wave.width
         )
+}
+
+fn issued_capability_reference_dereference_matches_v1(
+    types: &[SemanticTypeDeclV1],
+    compiler_issued: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    reference_type: SemanticTypeIdV1,
+    projection: &SemanticProjectionV1,
+    binding: &SemanticValueBindingV1,
+) -> bool {
+    match binding {
+        SemanticValueBindingV1::WaveLane { .. } => wave_lane_reference_dereference_matches_v1(
+            types,
+            compiler_issued,
+            reference_type,
+            projection,
+            binding,
+        ),
+        SemanticValueBindingV1::WorkgroupLdsScope => matches!(
+            issued_reference_binding_v1(types, compiler_issued, reference_type, projection),
+            Some(SemanticPromotedBindingV1::WorkgroupLdsScope)
+        ),
+        _ => false,
+    }
 }
 
 fn require_current_wave_lane(

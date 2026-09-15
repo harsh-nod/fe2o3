@@ -12701,6 +12701,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             "wave lane capability cannot form a raw address",
                         ));
                     }
+                    if matches!(value, SemanticRvalueKindV1::AddressOf { .. })
+                        && matches!(binding, SemanticValueBindingV1::WorkgroupLdsScope)
+                    {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            statement,
+                            "workgroup LDS scope capability cannot form a raw address",
+                        ));
+                    }
                     Ok(binding)
                 }
             }
@@ -20749,9 +20759,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticProjectionKindV1::Subtype,
                 ) => SemanticValueBindingV1::CollectiveContext,
                 (
-                    binding @ SemanticValueBindingV1::WaveLane { .. },
+                    binding @ (SemanticValueBindingV1::WaveLane { .. }
+                    | SemanticValueBindingV1::WorkgroupLdsScope),
                     SemanticProjectionKindV1::Dereference,
-                ) if wave_lane_reference_dereference_matches_v1(
+                ) if issued_capability_reference_dereference_matches_v1(
                     self.types,
                     &self.control_flow_ssa.compiler_issued_bindings,
                     place.projections()[..projection_index]
@@ -27458,6 +27469,10 @@ mod resource_tests {
 
     mod wave_lane_reference_v1_tests {
         include!("production_semantic_kir_v1/wave_lane_reference_v1_tests.rs");
+    }
+
+    mod issued_scope_reference_v1_tests {
+        include!("production_semantic_kir_v1/issued_scope_reference_v1_tests.rs");
     }
 
     #[test]

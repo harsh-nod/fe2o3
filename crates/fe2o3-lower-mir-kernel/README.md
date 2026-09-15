@@ -146,6 +146,22 @@ later correspondence gates remain in force. The new predicate and projection
 branch add no emitted operations or retained owner rows, and make no whole-work
 or whole-memory accounting claim.
 
+## Issued LDS Scope Reborrows
+
+An already authenticated workgroup LDS scope binding also survives an exact
+thin Reference Dereference in address space zero with 64-bit pointer width and
+the same nominal pointee registered as WorkgroupLdsScope. Shared and mutable
+references preserve the original scope binding without issuing another scope,
+loading memory, or changing its SSA transport. Raw input pointers, raw-address
+results, different pointees and other capability classes are not admitted by
+this rule. The existing wave-lane checks and diagnostics are preserved.
+
+The admitted-source regression uses the published PreRanked materializer and
+an actual PipelineCreate consumer, with same-block and successor-block
+reborrows. It does not require NativeSource or backend activation and does not
+relax source admission, capability consumption, allocation geometry, resource
+limits, or later ranked/formal/launch checks.
+
 ## Fixed Retained Arrays
 
 Existing storage-observable locals may use counted private storage for nonempty

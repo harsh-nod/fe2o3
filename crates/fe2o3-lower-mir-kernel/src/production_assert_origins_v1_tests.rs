@@ -6,6 +6,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticSsaLimitsV1};
 
+#[path = "production_issued_scope_legacy_source_v1_tests.rs"]
+mod issued_scope_legacy_source_v1_tests;
+
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 const FLOOR: usize = 17;
