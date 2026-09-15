@@ -2,7 +2,9 @@ use fe2o3_pliron_owner_core::{
     DialectRegistration, DialectRegistrationService, NameError, RegistrationHookError,
 };
 
-use crate::{DIALECT_NAME, DistributedTileType, DistributionAttr, MaterializeOp};
+use crate::{
+    DIALECT_NAME, DistributedTileType, DistributionAttr, DistributionOrderAttr, MaterializeOp,
+};
 
 fn registration_hook(
     service: &mut DialectRegistrationService<'_>,
@@ -10,6 +12,7 @@ fn registration_hook(
     service.require_dialect(DIALECT_NAME)?;
     service.register_type::<DistributedTileType>()?;
     service.register_attribute::<DistributionAttr>()?;
+    service.register_attribute::<DistributionOrderAttr>()?;
     service.register_operation::<MaterializeOp>()?;
     Ok(())
 }

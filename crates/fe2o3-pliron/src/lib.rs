@@ -1387,11 +1387,14 @@ mod owner_handle_tests {
         ProofOverlayOpInterface, PropertyAttr,
     };
     use dialect_schedule::{NonExecutableScheduleOp, PlanOp};
-    use dialect_tile::MaterializeOp;
+    use dialect_tile::{DistributionOrderAttr, MaterializeOp};
     use pliron::{
+        attribute::Attribute,
         builtin::op_interfaces::SingleBlockRegionInterface,
         op::{Op, op_cast},
         operation::verify_operation,
+        parsable::Parsable,
+        printable::Printable,
     };
 
     fn session() -> PlironSession {
@@ -1507,6 +1510,25 @@ mod owner_handle_tests {
         );
         assert_eq!(proof.status(context), Some(EvidenceStatusAttr::Checked));
         assert_eq!(autotune.budget(context).unwrap().candidates(), 4);
+        assert_eq!(tile.distribution_order(context).unwrap(), None);
+        for (order, expected_index) in [
+            (DistributionOrderAttr::Blocked, 7),
+            (DistributionOrderAttr::Striped, 10),
+        ] {
+            let attribute: Box<dyn Attribute> = Box::new(order);
+            let text = attribute.disp(context).to_string();
+            let parsed = parse_from_str(<Box<dyn Attribute>>::parser(()), context, &text)
+                .expect("owner-core adapter registers the explicit distribution order");
+            assert_eq!(parsed.downcast_ref::<DistributionOrderAttr>(), Some(&order));
+            let mapped = MaterializeOp::new_rank_one(context, 3, 4, order).unwrap();
+            verify_operation(mapped.get_operation(), context).unwrap();
+            assert_eq!(mapped.distribution_order(context).unwrap(), Some(order));
+            assert_eq!(mapped.logical_index(context, 1, 3).unwrap(), expected_index);
+            assert_eq!(
+                mapped.fragment_coordinate(context, expected_index).unwrap(),
+                (1, 3)
+            );
+        }
     }
 
     fn context_identity_marker_key() -> Identifier {

@@ -293,6 +293,38 @@ without premature scalarization. `gpu.*` is the target-neutral executable
 boundary and has a lossless, versioned bridge to `fe2o3-kernel-ir`.
 AMD-specific operations first appear in `amdgcn.*`.
 
+### Initial Rank-One Distribution Contract (#275)
+
+The initial bounded D4 mapping uses `L` logical invocations and `E` local
+fragment components, with positive dimensions and checked capacity `L * E`.
+The existing `tile.distribution` retains those dimensions. The optional typed
+`tile.distribution_order` attribute on `tile.materialize` selects:
+
+- `Blocked`: `i = lane * E + component`, inverse `(i / E, i % E)`.
+- `Striped`: `i = component * L + lane`, inverse `(i % L, i / L)`.
+
+Both are bijections onto `[0, L * E)` with bounded, constant-size arithmetic.
+Coordinate queries reject out-of-domain inputs before arithmetic. An explicit
+order requires rank one and agreement between distribution and result type.
+The legacy count-only form remains unspecified, never an implicit mapping.
+Its coordinate queries reject; its existing representation remains valid.
+
+This contract describes only distribution, not storage strides, byte offsets,
+runtime data masks, memory provenance, initialized values or collective arrival.
+Those remain separate checked obligations. There is no per-element authority
+allocation, physical subgroup-width assumption, new numerical policy, public
+device API, or new KIR wire version. The intended first mixed kernel retains
+one wrapping-u32 algorithm contract across both orders; no reduction or
+schedule-equivalence evidence is granted by the coordinate mapping itself.
+
+Implementation status: operation construction, verification and coordinate
+queries in the existing dialect shell. The live source path still checks a
+ranked source projection before KIR materialization; the newer pre-ranked KIR
+owner is a separate library foundation, not an activated rustc path. The
+consuming typed executable scheduling transition and its source/output lineage
+remain integration work under #271/#272. A projection-only mapping change must
+not be presented as changing execution. This contract does not close M0 or M1.
+
 The dependency closure contains reviewed, dialect-only `pliron-llvm` uses with
 `default-features = false`. The optional `llvm-sys` converter is absent from
 the producer and worker. That layer may build, transform, and verify transient
