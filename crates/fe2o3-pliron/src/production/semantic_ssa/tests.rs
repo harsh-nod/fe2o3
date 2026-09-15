@@ -1,6 +1,9 @@
 use super::adapter::semantic_edge_role_v1;
 use super::*;
 
+#[path = "adapter_emission_v1_tests.rs"]
+mod adapter_emission_v1_tests;
+
 #[path = "partial_move_dynamic_destination_tests.rs"]
 mod partial_move_dynamic_destination_tests;
 
