@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(test)]
+mod exhausted_boundaries {
+    include!("concrete_coordinate_exhaustion_v1_tests.rs");
+}
+
 fn literal_coordinate_source() -> String {
     let read = COMPUTED
         .lines()

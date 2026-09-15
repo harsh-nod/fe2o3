@@ -1025,6 +1025,34 @@ fn verify_concrete_schedule(
     )
 }
 
+fn concrete_coordinate_initialized_v1(
+    context: &Context,
+    writes: &[&[Value]],
+    coordinate: &[Value],
+    equivalence_resources: &mut EquivalenceResourceMeterV1,
+) -> bool {
+    if equivalence_resources.exhausted() {
+        return false;
+    }
+    for written in writes {
+        if equivalence_resources.exhausted() {
+            return false;
+        }
+        if written.len() == coordinate.len()
+            && written
+                .iter()
+                .copied()
+                .zip(coordinate.iter().copied())
+                .all(|(left, right)| {
+                    index_values_equivalent(context, left, right, equivalence_resources)
+                })
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn verify_ordered_concrete_schedule(
     context: &Context,
     pipeline: PlironOperationSiteV1,
@@ -1077,21 +1105,12 @@ fn verify_ordered_concrete_schedule(
                         unreachable!("the guarded state is consuming")
                     };
                     if !initialized.get(&epoch).is_some_and(|writes| {
-                        writes.iter().any(|written| {
-                            written.len() == access.indices.len() - 1
-                                && written
-                                    .iter()
-                                    .copied()
-                                    .zip(access.indices[1..].iter().copied())
-                                    .all(|(left, right)| {
-                                        index_values_equivalent(
-                                            context,
-                                            left,
-                                            right,
-                                            equivalence_resources,
-                                        )
-                                    })
-                        })
+                        concrete_coordinate_initialized_v1(
+                            context,
+                            writes,
+                            &access.indices[1..],
+                            equivalence_resources,
+                        )
                     }) {
                         return Err(invalid(
                             pipeline,
