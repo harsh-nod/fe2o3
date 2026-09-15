@@ -38,7 +38,7 @@ use fe2o3_lower_mir_kernel::{
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
     SemanticAbiPointeeKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
-    SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicScopeV1,
+    SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticAxisV1,
     SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1,
     SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1,
     SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1,
@@ -59,16 +59,17 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAxisV1, SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1,
-    SemanticFunctionSafetyV1, SemanticRustTypeKindV1, SemanticRustcVariantsV1,
-    SemanticTargetArchitectureV1, SemanticTypeLayoutDetailsV1,
+    SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1, SemanticFunctionSafetyV1,
+    SemanticRustTypeKindV1, SemanticRustcVariantsV1, SemanticTargetArchitectureV1,
+    SemanticTypeLayoutDetailsV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
 };
 use fe2o3_pliron::{
-    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
+    HARD_MAX_PRODUCTION_RANKED_ARGUMENTS, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
+    MAX_RANKED_BOUNDS_OPERATIONS,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -10013,6 +10014,7 @@ fn deterministic_control_successors_v1(
 }
 
 struct DeterministicScalarProjectorV1<'a> {
+    types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
     callable_effects: &'a DefinedCallableEmptyEffectSummariesV1,
     function: &'a SemanticFunctionDeclV1,
@@ -10029,12 +10031,14 @@ struct DeterministicScalarProjectorV1<'a> {
     states: Vec<u8>,
     summaries: Vec<Option<DeterministicScalarSummaryV1>>,
     ranked_constants: HashMap<u64, ProductionRankedValueV1>,
+    launch_context_arguments: [Option<u32>; 6],
     reachability: DeterministicControlReachabilityV1,
 }
 
 impl<'a> DeterministicScalarProjectorV1<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        types: &'a [SemanticTypeDeclV1],
         callables: &'a [SemanticCallableDeclV1],
         callable_effects: &'a DefinedCallableEmptyEffectSummariesV1,
         function: &'a SemanticFunctionDeclV1,
@@ -10104,6 +10108,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             }
         }
         Ok(Self {
+            types,
             callables,
             callable_effects,
             function,
@@ -10120,6 +10125,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             states: vec![0; local_count],
             summaries: vec![None; local_count],
             ranked_constants: HashMap::new(),
+            launch_context_arguments: [None; 6],
             reachability: DeterministicControlReachabilityV1::new(function.blocks().len())?,
         })
     }
@@ -10503,9 +10509,61 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             }
             return self.resolve_explicit_call_dependencies_v1(call);
         }
-        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+        let SemanticCallableDeclV1::CompilerIntrinsic {
+            binding, operation, ..
+        } = callable
+        else {
             return Ok(None);
         };
+        let geometry_slot = match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(axis) => Some((0, axis)),
+            SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => Some((3, axis)),
+            _ => None,
+        };
+        if let Some((kind, axis)) = geometry_slot {
+            let Some(destination) = call.destination() else {
+                return Ok(None);
+            };
+            let abi = binding.abi();
+            let result = abi.return_value();
+            let ty = result.source_ty();
+            if !call.arguments().is_empty()
+                || abi.c_variadic()
+                || !abi.arguments().is_empty()
+                || !abi.hidden_arguments().is_empty()
+                || !abi.source_input_types().is_empty()
+                || !abi.source_argument_ownership().is_empty()
+                || abi.source_output_type() != ty
+                || result.adjusted().is_some()
+                || result.pointee_override().is_some()
+                || !matches!(result.mode(), SemanticAbiPassModeV1::Direct(_))
+                || destination.place().ty() != ty
+                || !destination.place().projections().is_empty()
+                || self
+                    .function
+                    .locals()
+                    .get(destination.place().local().index() as usize)
+                    .is_none_or(|local| local.ty() != ty)
+                || !matches!(
+                    self.types
+                        .get(ty.index() as usize)
+                        .map(SemanticTypeDeclV1::shape),
+                    Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32,
+                    }))
+                )
+            {
+                return Ok(None);
+            }
+            let axis = match axis {
+                SemanticAxisV1::X => 0,
+                SemanticAxisV1::Y => 1,
+                SemanticAxisV1::Z => 2,
+            };
+            let value = self.launch_context_argument(kind + axis)?;
+            return Ok(Some(DeterministicScalarSummaryV1::Exact(value)));
+        }
         if matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
@@ -10702,6 +10760,47 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         Ok(ranked)
     }
 
+    fn launch_context_argument(
+        &mut self,
+        slot: usize,
+    ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+        if let Some(argument) = self.launch_context_arguments[slot] {
+            return Ok(ProductionRankedValueV1::Argument(argument));
+        }
+        if *self.next_argument >= HARD_MAX_PRODUCTION_RANKED_ARGUMENTS {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "launch-context ranked argument count exceeds the ranked kernel limit",
+            ));
+        }
+        let argument = u32::try_from(*self.next_argument).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "too many launch-context ranked arguments",
+            )
+        })?;
+        // At most six cache misses scan this already admitted local table.
+        if self
+            .argument_slots
+            .iter()
+            .chain(self.launch_context_arguments.iter())
+            .flatten()
+            .any(|existing| *existing >= argument)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "launch-context ranked argument collides with an existing argument",
+            ));
+        }
+        let next = self.next_argument.checked_add(1).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "launch-context ranked argument count overflow",
+            ),
+        )?;
+        // These unconstrained analysis parameters describe implicit launch context,
+        // not new kernel ABI inputs or pure functions of explicit call arguments.
+        self.launch_context_arguments[slot] = Some(argument);
+        *self.next_argument = next;
+        Ok(ProductionRankedValueV1::Argument(argument))
+    }
+
     fn ranked_argument(
         &mut self,
         origin: usize,
@@ -10885,6 +10984,7 @@ fn project_deterministic_scalar_switches_v1(
         ));
     }
     let mut projector = DeterministicScalarProjectorV1::new(
+        types,
         callables,
         callable_effects,
         function,
@@ -32293,6 +32393,392 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn launch_geometry_callable(
+        operation: SemanticCompilerIntrinsicOperationV1,
+        output: SemanticTypeIdV1,
+        arguments: Vec<SemanticAbiValueV1>,
+        mode: SemanticAbiPassModeV1,
+    ) -> SemanticCallableDeclV1 {
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(172)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(173)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            arguments,
+            SemanticAbiValueV1::new(output, mode),
+        )
+        .unwrap();
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(174)),
+                SemanticItemDefinitionIdentityV1::from_sha256(bytes(175)),
+                SemanticMonomorphizationIdentityV1::from_sha256(bytes(176)),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(177)),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(178)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(179)),
+        }
+    }
+
+    fn launch_geometry_call(
+        callee: u32,
+        arguments: Vec<SemanticOperandV1>,
+        destination_type: SemanticTypeIdV1,
+        unwind: SemanticUnwindActionV1,
+    ) -> SemanticDirectCallV1 {
+        SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            arguments,
+            Some(SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], destination_type)
+                    .unwrap(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            unwind,
+        )
+        .unwrap()
+    }
+
+    fn launch_geometry_switch_function(call: SemanticDirectCallV1) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(174, vec![], SemanticTerminatorKindV1::Call(call)),
+                block(
+                    175,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(1),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                2,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(176, vec![], SemanticTerminatorKindV1::Return),
+                block(177, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(174, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(175, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    fn with_launch_geometry_projector<T>(
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+        argument_slots: &mut [Option<u32>],
+        next_argument: &mut usize,
+        run: impl FnOnce(&mut DeterministicScalarProjectorV1<'_>) -> T,
+    ) -> T {
+        let types = projection_types();
+        let effects = DefinedCallableEmptyEffectSummariesV1 {
+            decisions: Box::new([]),
+        };
+        let constants = constant_locals(function).unwrap();
+        let definitions = local_definition_counts(function);
+        let indexes = vec![None; function.locals().len()];
+        let allocations = vec![None; function.locals().len()];
+        let predicates = vec![None; function.locals().len()];
+        let mut operations = vec![];
+        let mut next_value = 0;
+        let mut projector = DeterministicScalarProjectorV1::new(
+            &types,
+            callables,
+            &effects,
+            function,
+            &constants,
+            &definitions,
+            &indexes,
+            &allocations,
+            &predicates,
+            argument_slots,
+            next_argument,
+            &mut operations,
+            &mut next_value,
+        )
+        .unwrap();
+        run(&mut projector)
+    }
+
+    #[test]
+    fn direct_launch_geometry_is_dynamic_uniform_context_on_every_axis() {
+        for axis in [SemanticAxisV1::X, SemanticAxisV1::Y, SemanticAxisV1::Z] {
+            for operation in [
+                SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(axis),
+                SemanticCompilerIntrinsicOperationV1::GridDimension(axis),
+            ] {
+                let callables = vec![launch_geometry_callable(
+                    operation,
+                    SCALAR_TYPE,
+                    vec![],
+                    SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+                )];
+                let function = launch_geometry_switch_function(launch_geometry_call(
+                    0,
+                    vec![],
+                    SCALAR_TYPE,
+                    SemanticUnwindActionV1::Unreachable,
+                ));
+                let source_abi = function.abi().clone();
+                let (switches, operations, next_argument) = deterministic_scalar_switch_projection(
+                    &callables,
+                    &function,
+                    &vec![None; function.locals().len()],
+                    vec![],
+                    0,
+                )
+                .unwrap();
+                let switch = switches[1].as_ref().unwrap();
+                assert_eq!(switch.discriminant, ProductionRankedValueV1::Argument(1));
+                assert_eq!(next_argument, 2);
+                assert_eq!(function.abi(), &source_abi);
+                assert_eq!(switch.targets.len(), 1);
+                assert_eq!(switch.otherwise, 3);
+                assert!(operations.iter().all(|operation| matches!(
+                    operation,
+                    ProductionRankedOperationV1::IndexConstant { value: 2, .. }
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn launch_geometry_symbols_are_reused_and_distinct_from_scalar_arguments() {
+        let callables = [SemanticAxisV1::X, SemanticAxisV1::Y, SemanticAxisV1::Z]
+            .into_iter()
+            .flat_map(|axis| {
+                [
+                    SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(axis),
+                    SemanticCompilerIntrinsicOperationV1::GridDimension(axis),
+                ]
+            })
+            .map(|operation| {
+                launch_geometry_callable(
+                    operation,
+                    SCALAR_TYPE,
+                    vec![],
+                    SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let function = launch_geometry_switch_function(launch_geometry_call(
+            0,
+            vec![],
+            SCALAR_TYPE,
+            SemanticUnwindActionV1::Unreachable,
+        ));
+        let mut next_argument = 8;
+        let mut slots = [Some(5), None];
+        with_launch_geometry_projector(
+            &callables,
+            &function,
+            &mut slots,
+            &mut next_argument,
+            |projector| {
+                for _ in 0..2 {
+                    for callee in 0..6 {
+                        assert_eq!(
+                            projector
+                                .resolve_call(&launch_geometry_call(
+                                    callee,
+                                    vec![],
+                                    SCALAR_TYPE,
+                                    SemanticUnwindActionV1::Unreachable,
+                                ))
+                                .unwrap(),
+                            Some(DeterministicScalarSummaryV1::Exact(
+                                ProductionRankedValueV1::Argument(8 + callee),
+                            )),
+                        );
+                    }
+                }
+                assert_eq!(
+                    projector.ranked_argument(1).unwrap(),
+                    ProductionRankedValueV1::Argument(14)
+                );
+                assert_eq!(
+                    projector.ranked_argument(0).unwrap(),
+                    ProductionRankedValueV1::Argument(5)
+                );
+                assert!(projector.operations.is_empty());
+            },
+        );
+        assert_eq!(next_argument, 15);
+        assert_eq!(slots, [Some(5), Some(14)]);
+    }
+
+    #[test]
+    fn launch_geometry_rejects_inexact_calls_without_allocating_symbols() {
+        let mode = SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain());
+        let operation = SemanticCompilerIntrinsicOperationV1::GridDimension(SemanticAxisV1::Y);
+        let wrong_type = SemanticTypeIdV1::from_index(1);
+        let callables = vec![
+            launch_geometry_callable(operation, SCALAR_TYPE, vec![], mode.clone()),
+            launch_geometry_callable(operation, wrong_type, vec![], mode.clone()),
+            launch_geometry_callable(
+                operation,
+                SCALAR_TYPE,
+                vec![SemanticAbiValueV1::new(SCALAR_TYPE, mode)],
+                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+            ),
+            launch_geometry_callable(
+                operation,
+                SCALAR_TYPE,
+                vec![],
+                SemanticAbiPassModeV1::Ignore,
+            ),
+            compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::ThreadIndex(
+                SemanticAxisV1::Y,
+            )),
+        ];
+        let function = launch_geometry_switch_function(launch_geometry_call(
+            0,
+            vec![],
+            SCALAR_TYPE,
+            SemanticUnwindActionV1::Unreachable,
+        ));
+        let mut next_argument = 1;
+        with_launch_geometry_projector(
+            &callables,
+            &function,
+            &mut [None; 2],
+            &mut next_argument,
+            |projector| {
+                for call in [
+                    launch_geometry_call(
+                        0,
+                        vec![tensor_operand(1)],
+                        SCALAR_TYPE,
+                        SemanticUnwindActionV1::Unreachable,
+                    ),
+                    launch_geometry_call(
+                        0,
+                        vec![],
+                        wrong_type,
+                        SemanticUnwindActionV1::Unreachable,
+                    ),
+                    launch_geometry_call(
+                        0,
+                        vec![],
+                        SCALAR_TYPE,
+                        SemanticUnwindActionV1::Cleanup(cfg_edge(
+                            SemanticEdgeRoleV1::CallUnwind,
+                            3,
+                        )),
+                    ),
+                    launch_geometry_call(
+                        1,
+                        vec![],
+                        wrong_type,
+                        SemanticUnwindActionV1::Unreachable,
+                    ),
+                    launch_geometry_call(
+                        2,
+                        vec![],
+                        SCALAR_TYPE,
+                        SemanticUnwindActionV1::Unreachable,
+                    ),
+                    launch_geometry_call(
+                        3,
+                        vec![],
+                        SCALAR_TYPE,
+                        SemanticUnwindActionV1::Unreachable,
+                    ),
+                    launch_geometry_call(
+                        4,
+                        vec![],
+                        SCALAR_TYPE,
+                        SemanticUnwindActionV1::Unreachable,
+                    ),
+                ] {
+                    assert_eq!(projector.resolve_call(&call).unwrap(), None);
+                }
+                assert!(projector.operations.is_empty());
+                assert_eq!(projector.launch_context_arguments, [None; 6]);
+            },
+        );
+        assert_eq!(next_argument, 1);
+    }
+
+    #[test]
+    fn launch_geometry_argument_collision_and_exhaustion_fail_closed() {
+        let callables = vec![launch_geometry_callable(
+            SemanticCompilerIntrinsicOperationV1::GridDimension(SemanticAxisV1::Z),
+            SCALAR_TYPE,
+            vec![],
+            SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+        )];
+        let call =
+            launch_geometry_call(0, vec![], SCALAR_TYPE, SemanticUnwindActionV1::Unreachable);
+        let function = launch_geometry_switch_function(call.clone());
+        for (mut next_argument, mut slots, expected) in [
+            (
+                1,
+                [Some(1), None],
+                "launch-context ranked argument collides with an existing argument",
+            ),
+            (
+                HARD_MAX_PRODUCTION_RANKED_ARGUMENTS,
+                [None; 2],
+                "launch-context ranked argument count exceeds the ranked kernel limit",
+            ),
+            (
+                usize::MAX,
+                [None; 2],
+                "launch-context ranked argument count exceeds the ranked kernel limit",
+            ),
+        ] {
+            let initial = next_argument;
+            with_launch_geometry_projector(
+                &callables,
+                &function,
+                &mut slots,
+                &mut next_argument,
+                |projector| {
+                    assert!(
+                        matches!(projector.resolve_call(&call), Err(ProductionRankedProjectionErrorV1::Unsupported(message)) if message == expected)
+                    );
+                    assert_eq!(projector.launch_context_arguments, [None; 6]);
+                    assert!(projector.operations.is_empty());
+                },
+            );
+            assert_eq!(next_argument, initial);
+        }
+        let mut next_argument = HARD_MAX_PRODUCTION_RANKED_ARGUMENTS - 1;
+        with_launch_geometry_projector(
+            &callables,
+            &function,
+            &mut [None; 2],
+            &mut next_argument,
+            |projector| {
+                let expected = Some(DeterministicScalarSummaryV1::Exact(
+                    ProductionRankedValueV1::Argument(
+                        (HARD_MAX_PRODUCTION_RANKED_ARGUMENTS - 1) as u32,
+                    ),
+                ));
+                assert_eq!(projector.resolve_call(&call).unwrap(), expected);
+                assert_eq!(projector.resolve_call(&call).unwrap(), expected);
+                let cached = projector.launch_context_arguments;
+                assert!(projector.launch_context_argument(0).is_err());
+                assert_eq!(projector.launch_context_arguments, cached);
+                assert_eq!(
+                    *projector.next_argument,
+                    HARD_MAX_PRODUCTION_RANKED_ARGUMENTS
+                );
+            },
+        );
+        assert_eq!(next_argument, HARD_MAX_PRODUCTION_RANKED_ARGUMENTS);
     }
 
     #[test]

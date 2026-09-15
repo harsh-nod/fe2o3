@@ -134,6 +134,7 @@ fn ranked_bounds_fixture_line(containing: &str) -> usize {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn bf16_storage_fixtures_retain_exact_production_wire_versions() {
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, SemanticKirComponentRepresentationV2, Type};
     use fe2o3_mir_model::semantic_mir_v1::{
         AdmittedInertSemanticMirV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
         SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1,
@@ -185,6 +186,50 @@ fn bf16_storage_fixtures_retain_exact_production_wire_versions() {
             limits,
         )
         .unwrap();
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV5::from_canonical_json_bytes(
+            bundle.aggregate_storage_map(),
+        )
+        .unwrap();
+        assert_eq!(
+            aggregate.bundle_subject_identity(),
+            bundle.subject_identity()
+        );
+        let [kernel_map] = aggregate.kernels() else {
+            panic!("BF16 fixture must retain exactly one kernel argument map")
+        };
+        let root = &semantic.functions()[kernel_map.semantic_root() as usize];
+        assert_eq!(root.abi().source_input_types().len(), 3);
+        assert_eq!(root.abi().arguments().len(), 3);
+        assert!(root.abi().hidden_arguments().is_empty());
+        assert_eq!(kernel_map.arguments().len(), 3);
+        assert_eq!(kernel_map.explicit_kernarg_bytes(), 48);
+        assert_eq!(kernel_map.explicit_kernarg_alignment(), 8);
+        let function = &module.functions[kernel_map.kir_function_ordinal() as usize];
+        assert_eq!(
+            function.signature.parameters,
+            vec![
+                Type::slice(Type::U16, AddressSpace::Global, AccessMode::ReadOnly),
+                Type::slice(Type::U16, AddressSpace::Global, AccessMode::ReadOnly),
+                Type::slice(Type::F32, AddressSpace::Global, AccessMode::WriteOnly),
+            ]
+        );
+        assert_eq!(function.body.as_ref().unwrap().parameters.len(), 3);
+        for (ordinal, argument) in kernel_map.arguments().iter().enumerate() {
+            let [component] = argument.storage().components().unwrap() else {
+                panic!("each BF16 fixture argument must retain one region component")
+            };
+            assert_eq!(
+                component.representation(),
+                SemanticKirComponentRepresentationV2::RegionSlice
+            );
+            assert_eq!(component.value_slot().byte_offset(), ordinal as u32 * 16);
+            assert_eq!(component.value_slot().byte_width(), 8);
+            assert_eq!(
+                component.metadata_slot().unwrap().byte_offset(),
+                ordinal as u32 * 16 + 8
+            );
+            assert_eq!(component.metadata_slot().unwrap().byte_width(), 8);
+        }
         let mut column_constructor = false;
         let mut column_load = false;
         let mut multiply = false;
@@ -255,6 +300,10 @@ fn bf16_storage_fixtures_retain_exact_production_wire_versions() {
                 "semantic_wire_version": semantic.wire_version().as_u16(),
                 "semantic_sha256": hex(semantic.semantic_sha256().as_bytes()),
                 "semantic_mir_hex": hex(bundle.semantic_mir()),
+                "aggregate_storage_map_hex": hex(bundle.aggregate_storage_map()),
+                "source_argument_count": root.abi().source_input_types().len(),
+                "kir_argument_count": function.signature.parameters.len(),
+                "explicit_kernarg_bytes": kernel_map.explicit_kernarg_bytes(),
                 "column_constructor": column_constructor,
                 "column_load": column_load,
                 "hardware_authority": false,
