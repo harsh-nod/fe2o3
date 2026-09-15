@@ -3,6 +3,9 @@ use super::*;
 #[path = "adapter_emission_v1.rs"]
 pub(super) mod emission_v1;
 
+#[path = "adapter_prepared_v1.rs"]
+pub(super) mod prepared_v1;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SemanticTransparentBorrowSiteV1 {
     block: u32,
@@ -652,123 +655,15 @@ pub(super) fn semantic_function_ssa_input_with_observer_v1<
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
     observer: &mut O,
 ) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), O::Error> {
-    use emission_v1::{SemanticSsaEmissionSiteV1 as Site, SemanticSsaVisitV1 as Visit};
-    observer.visit(Visit::Function, Site::Function)?;
-    let mut promotable = vec![true; function.locals().len()];
-    classify_storage_observable_locals_v1(function, transparent_borrows, &mut promotable);
-    let (elided_grid_leader_borrows, adapter_analysis_work) =
-        authenticated_elided_grid_leader_borrow_sites_v1(
-            function,
-            types,
-            callables,
-            transparent_borrows,
-        );
-    let return_local = (!matches!(
-        function.abi().return_value().mode(),
-        SemanticAbiPassModeV1::Ignore,
-    ))
-    .then(|| {
-        function
-            .locals()
-            .iter()
-            .position(|declaration| matches!(declaration.role(), SemanticLocalRoleV1::Return))
-    })
-    .flatten();
-    let mut blocks = Vec::with_capacity(function.blocks().len());
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        observer.visit(Visit::Block, Site::Block(block_index))?;
-        let mut events = Vec::new();
-        for (statement_index, statement) in block.statements().iter().enumerate() {
-            let site = SemanticTransparentBorrowSiteV1 {
-                block: block_index as u32,
-                statement: statement_index as u32,
-            };
-            let emission_site = Site::Statement {
-                block: block_index,
-                statement: statement_index,
-            };
-            observer.statement_elision_lookup(emission_site, elided_grid_leader_borrows.len())?;
-            emission_v1::emit_statement_events_v1(
-                statement.kind(),
-                elided_grid_leader_borrows.contains(&site),
-                emission_site,
-                &mut events,
-                observer,
-            )?;
-        }
-        emission_v1::emit_terminator_events_v1(
-            block.terminator().kind(),
-            return_local,
-            Site::Terminator { block: block_index },
-            &mut events,
-            observer,
-        )?;
-        let mut edges = Vec::with_capacity(block.terminator().kind().edge_count());
-        block
-            .terminator()
-            .kind()
-            .try_for_each_edge::<O::Error>(|edge| {
-                let ordinal = edges.len();
-                observer.successor(block_index, ordinal, edge)?;
-                let definitions = call_edge_definitions_with_observer_v1(
-                    block.terminator().kind(),
-                    block_index,
-                    ordinal,
-                    edge,
-                    observer,
-                )?;
-                edges.push(SsaEdgeInputV1::new(
-                    SsaEdgeRoleV1::new(semantic_edge_role_v1(edge.role())),
-                    SsaBlockIdV1::new(edge.target().index()),
-                    definitions,
-                ));
-                Ok(())
-            })?;
-        observer.block_complete(block_index, events.len(), edges.len())?;
-        blocks.push(SsaBlockInputV1::new(events, edges));
-    }
-    let implicit_entry_variables = authenticated_implicit_entry_variables_v1(
+    prepared_v1::prepare_semantic_ssa_adapter_with_observer_v1(
         function,
         types,
         callables,
         transparent_borrows,
-        &promotable,
-        &blocks,
-    );
-    let implicit = implicit_entry_variables
-        .iter()
-        .map(|variable| variable.get())
-        .collect::<BTreeSet<_>>();
-    let mut entry_definitions = Vec::new();
-    for (local, declaration) in function.locals().iter().enumerate() {
-        observer.visit(Visit::EntryCandidate, Site::Local(local))?;
-        let origin = match declaration.role() {
-            SemanticLocalRoleV1::Argument(argument) => {
-                Some(emission_v1::SemanticSsaEntryOriginV1::Argument(argument))
-            }
-            _ if implicit.contains(&(local as u32)) => {
-                Some(emission_v1::SemanticSsaEntryOriginV1::ImplicitCapability)
-            }
-            _ => None,
-        };
-        if let Some(origin) = origin {
-            let variable = SsaVariableIdV1::new(local as u32);
-            observer.entry_definition(entry_definitions.len(), variable, origin)?;
-            entry_definitions.push(variable);
-        }
-    }
-    observer.input_complete(blocks.len(), entry_definitions.len())?;
-    Ok((
-        SsaConstructionInputV1::new(
-            SsaBlockIdV1::new(function.entry().index()),
-            function.locals().len() as u32,
-            promotable,
-            entry_definitions,
-            blocks,
-        ),
-        implicit_entry_variables,
-        adapter_analysis_work,
-    ))
+        observer,
+    )?
+    .into_entries(observer)?
+    .finish(observer)
 }
 
 fn authenticated_elided_grid_leader_borrow_sites_v1(
@@ -1141,26 +1036,16 @@ fn append_terminator_events_v1(
     ));
 }
 
-fn call_edge_definitions_with_observer_v1<O: emission_v1::SemanticSsaEmissionObserverV1>(
+fn call_edge_definition_v1(
     terminator: &SemanticTerminatorKindV1,
-    block: usize,
-    edge_ordinal: usize,
     edge: SemanticControlFlowEdgeV1,
-    observer: &mut O,
-) -> Result<Vec<SsaVariableIdV1>, O::Error> {
+) -> Option<SsaVariableIdV1> {
     let SemanticTerminatorKindV1::Call(call) = terminator else {
-        return Ok(vec![]);
+        return None;
     };
-    let Some(destination) = call.destination() else {
-        return Ok(vec![]);
-    };
-    if destination.edge() == edge && destination.place().projections().is_empty() {
-        let variable = SsaVariableIdV1::new(destination.place().local().index());
-        observer.edge_definition(block, edge_ordinal, edge, 0, variable)?;
-        Ok(vec![variable])
-    } else {
-        Ok(vec![])
-    }
+    let destination = call.destination()?;
+    (destination.edge() == edge && destination.place().projections().is_empty())
+        .then(|| SsaVariableIdV1::new(destination.place().local().index()))
 }
 
 pub(super) fn semantic_edge_role_v1(role: SemanticEdgeRoleV1) -> u16 {

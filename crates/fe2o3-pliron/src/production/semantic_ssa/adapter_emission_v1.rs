@@ -213,19 +213,41 @@ pub(super) fn infallible_v1<T>(result: Result<T, Infallible>) -> T {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(in crate::production::semantic_ssa) enum SemanticSsaEmissionErrorV1<O, E> {
+    Observer(O),
+    Output(E),
+}
+
+pub(in crate::production::semantic_ssa) fn observer_error_v1<O>(
+    error: SemanticSsaEmissionErrorV1<O, Infallible>,
+) -> O {
+    match error {
+        SemanticSsaEmissionErrorV1::Observer(error) => error,
+        SemanticSsaEmissionErrorV1::Output(error) => match error {},
+    }
+}
+
+type EmissionResultV1<O, E> = Result<(), SemanticSsaEmissionErrorV1<O, E>>;
+
 // The grammar does not require a second planner input for a future count-only
 // output. Real emission uses the original event Vec and its actual length.
 pub(in crate::production::semantic_ssa) trait SemanticSsaEventBufferV1 {
+    type Error;
+
     fn event_count(&self) -> usize;
-    fn push_event(&mut self, event: SsaEventV1);
+    fn push_event(&mut self, event: SsaEventV1) -> Result<(), Self::Error>;
 }
 
 impl SemanticSsaEventBufferV1 for Vec<SsaEventV1> {
+    type Error = Infallible;
+
     fn event_count(&self) -> usize {
         self.len()
     }
-    fn push_event(&mut self, event: SsaEventV1) {
+    fn push_event(&mut self, event: SsaEventV1) -> Result<(), Infallible> {
         self.push(event);
+        Ok(())
     }
 }
 
@@ -236,7 +258,7 @@ struct EmitterV1<'a, B, O> {
 }
 
 pub(in crate::production::semantic_ssa) fn emit_statement_events_v1<
-    B: SemanticSsaEventBufferV1,
+    B: SemanticSsaEventBufferV1<Error = Infallible>,
     O: SemanticSsaEmissionObserverV1,
 >(
     statement: &SemanticStatementKindV1,
@@ -245,6 +267,34 @@ pub(in crate::production::semantic_ssa) fn emit_statement_events_v1<
     events: &mut B,
     observer: &mut O,
 ) -> Result<(), O::Error> {
+    emit_statement_events_with_buffer_v1(statement, elided_borrow, site, events, observer)
+        .map_err(observer_error_v1)
+}
+
+pub(in crate::production::semantic_ssa) fn emit_terminator_events_v1<
+    B: SemanticSsaEventBufferV1<Error = Infallible>,
+    O: SemanticSsaEmissionObserverV1,
+>(
+    terminator: &SemanticTerminatorKindV1,
+    return_local: Option<usize>,
+    site: SemanticSsaEmissionSiteV1,
+    events: &mut B,
+    observer: &mut O,
+) -> Result<(), O::Error> {
+    emit_terminator_events_with_buffer_v1(terminator, return_local, site, events, observer)
+        .map_err(observer_error_v1)
+}
+
+pub(in crate::production::semantic_ssa) fn emit_statement_events_with_buffer_v1<
+    B: SemanticSsaEventBufferV1,
+    O: SemanticSsaEmissionObserverV1,
+>(
+    statement: &SemanticStatementKindV1,
+    elided_borrow: bool,
+    site: SemanticSsaEmissionSiteV1,
+    events: &mut B,
+    observer: &mut O,
+) -> EmissionResultV1<O::Error, B::Error> {
     let mut emitter = EmitterV1 {
         events,
         observer,
@@ -255,7 +305,10 @@ pub(in crate::production::semantic_ssa) fn emit_statement_events_v1<
         let SemanticStatementKindV1::Assign(assignment) = statement else {
             unreachable!("authenticated borrow site must be an assignment");
         };
-        emitter.observer.elided_borrow(site)?;
+        emitter
+            .observer
+            .elided_borrow(site)
+            .map_err(SemanticSsaEmissionErrorV1::Observer)?;
         emitter.definition(
             assignment.destination(),
             SemanticSsaOperandRoleV1::ElidedBorrowDestination,
@@ -265,7 +318,7 @@ pub(in crate::production::semantic_ssa) fn emit_statement_events_v1<
     }
 }
 
-pub(in crate::production::semantic_ssa) fn emit_terminator_events_v1<
+pub(in crate::production::semantic_ssa) fn emit_terminator_events_with_buffer_v1<
     B: SemanticSsaEventBufferV1,
     O: SemanticSsaEmissionObserverV1,
 >(
@@ -274,7 +327,7 @@ pub(in crate::production::semantic_ssa) fn emit_terminator_events_v1<
     site: SemanticSsaEmissionSiteV1,
     events: &mut B,
     observer: &mut O,
-) -> Result<(), O::Error> {
+) -> EmissionResultV1<O::Error, B::Error> {
     let mut emitter = EmitterV1 {
         events,
         observer,
@@ -285,21 +338,28 @@ pub(in crate::production::semantic_ssa) fn emit_terminator_events_v1<
 }
 
 impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_, B, O> {
-    fn visit(&mut self, kind: SemanticSsaVisitV1) -> Result<(), O::Error> {
-        self.observer.visit(kind, self.site)
+    fn visit(&mut self, kind: SemanticSsaVisitV1) -> EmissionResultV1<O::Error, B::Error> {
+        self.observer
+            .visit(kind, self.site)
+            .map_err(SemanticSsaEmissionErrorV1::Observer)
     }
     fn event(
         &mut self,
         operand: SemanticSsaOperandRoleV1,
         role: SemanticSsaEventRoleV1,
         event: SsaEventV1,
-    ) -> Result<(), O::Error> {
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.observer
-            .event(self.site, operand, role, self.events.event_count(), event)?;
-        self.events.push_event(event);
-        Ok(())
+            .event(self.site, operand, role, self.events.event_count(), event)
+            .map_err(SemanticSsaEmissionErrorV1::Observer)?;
+        self.events
+            .push_event(event)
+            .map_err(SemanticSsaEmissionErrorV1::Output)
     }
-    fn statement(&mut self, statement: &SemanticStatementKindV1) -> Result<(), O::Error> {
+    fn statement(
+        &mut self,
+        statement: &SemanticStatementKindV1,
+    ) -> EmissionResultV1<O::Error, B::Error> {
         use SemanticSsaOperandRoleV1 as R;
         match statement {
             SemanticStatementKindV1::Assign(assignment) => {
@@ -337,7 +397,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
             SemanticStatementKindV1::Nop => Ok(()),
         }
     }
-    fn rvalue(&mut self, value: &SemanticRvalueKindV1) -> Result<(), O::Error> {
+    fn rvalue(&mut self, value: &SemanticRvalueKindV1) -> EmissionResultV1<O::Error, B::Error> {
         use SemanticSsaOperandRoleV1 as R;
         self.visit(SemanticSsaVisitV1::Rvalue)?;
         match value {
@@ -375,7 +435,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         &mut self,
         operand: &SemanticOperandV1,
         role: SemanticSsaOperandRoleV1,
-    ) -> Result<(), O::Error> {
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.visit(SemanticSsaVisitV1::Operand)?;
         match operand {
             SemanticOperandV1::Copy(place) => self.place(place, role),
@@ -390,17 +450,17 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
                 }
                 Ok(())
             }
-            SemanticOperandV1::Constant(constant) => {
-                self.observer
-                    .constant(self.site, role, self.events.event_count(), constant)
-            }
+            SemanticOperandV1::Constant(constant) => self
+                .observer
+                .constant(self.site, role, self.events.event_count(), constant)
+                .map_err(SemanticSsaEmissionErrorV1::Observer),
         }
     }
     fn place(
         &mut self,
         place: &SemanticPlaceV1,
         role: SemanticSsaOperandRoleV1,
-    ) -> Result<(), O::Error> {
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.visit(SemanticSsaVisitV1::Place)?;
         self.place_contents(place, role)
     }
@@ -408,7 +468,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         &mut self,
         place: &SemanticPlaceV1,
         role: SemanticSsaOperandRoleV1,
-    ) -> Result<(), O::Error> {
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.event(
             role,
             SemanticSsaEventRoleV1::BaseUse,
@@ -430,7 +490,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         &mut self,
         place: &SemanticPlaceV1,
         role: SemanticSsaOperandRoleV1,
-    ) -> Result<(), O::Error> {
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.visit(SemanticSsaVisitV1::Place)?;
         if place.projections().is_empty() {
             self.event(
@@ -446,7 +506,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         &mut self,
         terminator: &SemanticTerminatorKindV1,
         return_local: Option<usize>,
-    ) -> Result<(), O::Error> {
+    ) -> EmissionResultV1<O::Error, B::Error> {
         use SemanticSsaOperandRoleV1 as R;
         match terminator {
             SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
@@ -489,7 +549,10 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
             | SemanticTerminatorKindV1::Unreachable => Ok(()),
         }
     }
-    fn assert_message(&mut self, message: &SemanticAssertMessageV1) -> Result<(), O::Error> {
+    fn assert_message(
+        &mut self,
+        message: &SemanticAssertMessageV1,
+    ) -> EmissionResultV1<O::Error, B::Error> {
         use SemanticSsaOperandRoleV1::AssertMessage;
         self.visit(SemanticSsaVisitV1::AssertMessage)?;
         match message {

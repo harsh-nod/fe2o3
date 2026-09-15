@@ -14,6 +14,10 @@ use fe2o3_mir_model::{
     SsaArgumentV1, SsaDefinitionIdV1, SsaEdgeIdV1, SsaResolvedEventV1, SsaValueV1,
 };
 
+mod prepared_driver_v1_tests {
+    include!("prepared_driver_v1_tests.rs");
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct Event {
     site: Site,
