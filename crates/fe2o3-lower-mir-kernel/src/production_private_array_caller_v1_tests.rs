@@ -718,7 +718,10 @@ fn private_array_second_consumer_checks_an_explicitly_inert_unsupported_index_di
         allocation: inert_reason_allocation(),
     };
     attached
-        .retained_generic_checks_discharge_unsupported_indices(kernel.as_str(), &[reason.clone()])
+        .retained_generic_checks_discharge_unsupported_indices(
+            kernel.as_str(),
+            std::slice::from_ref(&reason),
+        )
         .unwrap();
     attached.correspondence.private_arrays.slots[0].length = 9;
     assert_eq!(
