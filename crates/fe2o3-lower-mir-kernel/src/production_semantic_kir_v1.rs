@@ -212,7 +212,7 @@ pub struct SemanticKirIgnoredParameterBindingV1 {
 pub enum SemanticKirFunctionRoleV1 {
     /// The selected semantic body backing the sole kernel entry.
     KernelEntry,
-    /// A reachable, deterministic scalar helper with an ordinary device ABI.
+    /// A reachable, deterministic pure helper with an admitted scalar/shared-slice ABI.
     InternalHelper,
 }
 
@@ -9970,6 +9970,59 @@ fn semantic_function_parameters_v1(
     Ok(parameters)
 }
 
+fn shared_slice_helper_parameter_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    argument: u32,
+    ty: SemanticTypeIdV1,
+) -> bool {
+    let abi = function.abi();
+    let argument = argument as usize;
+    let Some(value) = abi.adjusted_arguments().get(argument) else {
+        return false;
+    };
+    if abi.canon_abi() != SemanticCanonAbiV1::Rust
+        || abi.extern_abi() != fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::Rust
+        || abi.source_input_types().get(argument) != Some(&ty)
+        || abi.source_argument_ownership().get(argument)
+            != Some(&SemanticSourceArgumentOwnershipV1::SharedBorrow)
+        || value.role() != SemanticAbiArgumentRoleV1::Source
+        || value.ty() != ty
+        || value.value().adjusted().is_some()
+        || value.value().pointee_override().is_some()
+        || !matches!(value.mode(), SemanticAbiPassModeV1::Pair { .. })
+    {
+        return false;
+    }
+    let Some(declaration) = types.get(ty.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape() else {
+        return false;
+    };
+    if pointer.kind() != SemanticPointerKindV1::Reference
+        || pointer.mutability() != SemanticMutabilityV1::Immutable
+        || pointer.address_space() != 0
+        || pointer.pointer_width_bits() != 64
+        || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+    {
+        return false;
+    }
+    let Some(SemanticTypeShapeV1::Slice { element }) = types
+        .get(pointer.pointee().index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return false;
+    };
+    // Full source/type/ABI admission precedes this representation selection.
+    matches!(
+        types
+            .get(element.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+    )
+}
+
 fn direct_scalar_helper_plan_v1(
     types: &[SemanticTypeDeclV1],
     correspondence_owner: SemanticFunctionIdV1,
@@ -10020,10 +10073,12 @@ fn direct_scalar_helper_plan_v1(
         .zip(abi.adjusted_arguments())
         .zip(abi.source_input_types())
     {
+        let shared_slice =
+            shared_slice_helper_parameter_v1(types, function, *source_argument, *source_ty);
         if local_ty != source_ty
             || argument.ty() != *source_ty
             || argument.value().adjusted().is_some()
-            || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+            || (!shared_slice && !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_)))
         {
             return Err(unsupported(
                 function_id.index(),
@@ -10040,7 +10095,12 @@ fn direct_scalar_helper_plan_v1(
                 "helper local identity exceeds Kernel IR",
             )
         })?;
-        let (parameter_ty, local_binding) = match lower_scalar_type(types, *source_ty) {
+        let direct_type = if shared_slice {
+            lower_parameter_type(types, &[], *source_ty)
+        } else {
+            lower_scalar_type(types, *source_ty)
+        };
+        let (parameter_ty, local_binding) = match direct_type {
             Ok(parameter_ty) => (
                 parameter_ty.clone(),
                 PlannedParameterLocalBindingV1::Direct {
@@ -14617,7 +14677,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     arguments: vec![],
                 })
             }
-            SemanticTerminatorKindV1::Return => self.lower_return(block),
+            SemanticTerminatorKindV1::Return => self.lower_return(block, operations),
             SemanticTerminatorKindV1::Unreachable => Ok(Terminator::Unreachable),
             _ => Err(unsupported(
                 0,
@@ -14629,8 +14689,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn lower_return(
-        &self,
+        &mut self,
         block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
     ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
         let return_local = self
             .function
@@ -14648,6 +14709,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         match self.result_types.as_slice() {
             [] => Ok(Terminator::Return { values: Vec::new() }),
             [expected] => {
+                let expected = expected.clone();
                 let binding = self
                     .locals
                     .get(return_local)
@@ -14666,14 +14728,36 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         detail,
                     )
                 })?;
-                if &actual != expected {
+                let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
+                    self.emit(
+                        operations,
+                        expected.clone(),
+                        OperationKind::Cast {
+                            kind: CastKind::Bitcast,
+                            value,
+                            to: expected,
+                        },
+                    )?
+                    .value()
+                    .map_err(|detail| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            detail,
+                        )
+                    })?
+                    .0
+                } else if actual == expected {
+                    value
+                } else {
                     return Err(unsupported(
                         self.semantic_function.index(),
                         Some(block.index()),
                         None,
                         "helper return local type changed",
                     ));
-                }
+                };
                 Ok(Terminator::Return {
                     values: vec![value],
                 })
@@ -25402,6 +25486,11 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
         output.push(HEX[usize::from(byte & 0x0f)] as char);
     }
     output
+}
+
+#[cfg(test)]
+mod shared_slice_helper_parameter_tests {
+    include!("production_semantic_kir_v1/shared_slice_helper_parameter_tests.rs");
 }
 
 #[cfg(test)]
