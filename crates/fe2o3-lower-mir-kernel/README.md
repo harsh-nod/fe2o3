@@ -107,6 +107,24 @@ nor unwind cleanup. Existing origin capacity-growth/top-up rules are retained.
 
 This is a closed library materialize/query/attach component, not activation of
 the rustc backend's pre-ranked route. It adds no NativeSource/native contract
-emission, native scalar bindings, retained-array lowering, optimizer, target or
-host route. Origin custody and connected structural admission do not grant
-source equivalence, formal Complete, artifact or launch authority.
+emission, native scalar bindings, optimizer, target or host route. Origin custody
+and connected structural admission do not grant source equivalence, formal
+Complete, artifact or launch authority.
+
+## Fixed Retained Arrays
+
+Existing storage-observable locals may use counted private storage for nonempty
+fixed arrays with exact rustc size, stride and alignment and modeled scalar or
+thin-pointer elements. Partial writes do not establish whole-array initialization;
+whole-value reads gather the current storage, and projected moves or deinitialization
+conservatively invalidate it. Call destinations capture their element address before
+argument evaluation. Array arguments, escaping array addresses, nested aggregates
+and whole-array volatile accesses remain outside this storage rule.
+
+Counted arrays are not covered by the scalar-slot effect exemption. Source bounds
+control and later memory/correspondence checks retain their existing duties. This
+does not add read-driven array storage selection, ranked array-transport evidence
+or symbolic guard inference. Element admission uses the existing analysis extent
+limit; each whole-array gather or scatter separately checks its three-operations-
+per-element expansion against the existing total and per-block operation limits
+before reserving a gather buffer. No limits are raised or whole-memory bound added.

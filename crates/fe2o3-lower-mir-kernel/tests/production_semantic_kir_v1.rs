@@ -32,6 +32,8 @@ mod pre_ranked_budget_v1;
 mod pre_ranked_materialization_v1;
 #[path = "production_semantic_kir_v1/pre_ranked_multiroot_v1.rs"]
 mod pre_ranked_multiroot_v1;
+#[path = "production_semantic_kir_v1/retained_array_v1.rs"]
+mod retained_array_v1;
 #[path = "production_semantic_kir_v1/source_launch_roster_v1.rs"]
 mod source_launch_roster_v1;
 

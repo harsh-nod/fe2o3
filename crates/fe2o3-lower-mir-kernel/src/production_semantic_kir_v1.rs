@@ -73,6 +73,7 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
@@ -435,7 +436,7 @@ impl SemanticKirTerminatorOperationSpanV1 {
 /// Closed lowering rule responsible for operations without a semantic MIR source construct.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticKirSyntheticOperationRuleV1 {
-    /// Private per-invocation slots for scalar and thin-pointer Rust locals.
+    /// Private per-invocation slots for scalar, thin-pointer, and fixed-array Rust locals.
     RetainedLocalStorage,
     /// Private per-invocation slots that preserve enum payloads across discriminant SSA joins.
     EnumPayloadStorage,
@@ -6578,6 +6579,7 @@ fn compiler_owned_retained_local_storage_pointer_v1(
         definition.kind,
         OperationKind::Alloca {
             address_space: AddressSpace::Private,
+            count: None,
             ..
         }
     ) && correspondence
@@ -8050,37 +8052,59 @@ fn validate_operation_correspondence_layout(
             ) else {
                 return false;
             };
-            let valid_operations = target.operations[next_operation..end]
-                .iter()
-                .all(|operation| match span.rule {
-                    SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => matches!(
-                        operation.kind,
-                        OperationKind::Alloca {
-                            address_space: AddressSpace::Private,
-                            ..
-                        } | OperationKind::Store {
-                            access: MemoryAccess {
+            let prologue = &target.operations[next_operation..end];
+            let valid_operations =
+                prologue
+                    .iter()
+                    .enumerate()
+                    .all(|(ordinal, operation)| match span.rule {
+                        SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => {
+                            match &operation.kind {
+                                OperationKind::Constant(Constant::Index(count)) => {
+                                    *count != 0
+                                        && operation.results.len() == 1
+                                        && operation.results[0].ty == Type::INDEX
+                                        && prologue.get(ordinal + 1).is_some_and(|next| {
+                                            matches!(
+                                                next.kind,
+                                                OperationKind::Alloca {
+                                                    count: Some(value),
+                                                    address_space: AddressSpace::Private,
+                                                    ..
+                                                } if value == operation.results[0].id
+                                            )
+                                        })
+                                }
+                                OperationKind::Alloca {
+                                    address_space: AddressSpace::Private,
+                                    ..
+                                }
+                                | OperationKind::Store {
+                                    access:
+                                        MemoryAccess {
+                                            address_space: AddressSpace::Private,
+                                            ..
+                                        },
+                                    ..
+                                } => true,
+                                _ => false,
+                            }
+                        }
+                        SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => matches!(
+                            operation.kind,
+                            OperationKind::Alloca {
                                 address_space: AddressSpace::Private,
                                 ..
-                            },
-                            ..
-                        }
-                    ),
-                    SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => matches!(
-                        operation.kind,
-                        OperationKind::Alloca {
-                            address_space: AddressSpace::Private,
-                            ..
-                        } | OperationKind::Load {
-                            access: MemoryAccess {
-                                address_space: AddressSpace::Private,
+                            } | OperationKind::Load {
+                                access: MemoryAccess {
+                                    address_space: AddressSpace::Private,
+                                    ..
+                                },
                                 ..
-                            },
-                            ..
-                        }
-                    ),
-                    SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => false,
-                });
+                            }
+                        ),
+                        SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => false,
+                    });
             if !valid_operations {
                 return false;
             }
@@ -11614,6 +11638,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     semantic_type: plan.semantic_type,
                     kernel_type: plan.kernel_type.clone(),
                     alignment: plan.alignment,
+                    array: plan.array,
                 },
             );
         }
@@ -11864,6 +11889,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         let slots = self.retained_local_slots.clone();
         for (local, slot) in slots {
+            let count = slot
+                .array
+                .map(|array| self.emit_index_constant(&mut target.operations, array.length))
+                .transpose()?;
             let pointer_type = Type::pointer(
                 slot.kernel_type.clone(),
                 AddressSpace::Private,
@@ -11874,7 +11903,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ValueDef::new(slot.pointer, pointer_type),
                     OperationKind::Alloca {
                         element: slot.kernel_type.clone(),
-                        count: None,
+                        count,
                         address_space: AddressSpace::Private,
                         alignment: slot.alignment,
                     },
@@ -12320,6 +12349,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Ok(())
             }
             SemanticStatementKindV1::Deinitialize(place)
+                if self.retained_array_slot_v1(place.local()).is_some() =>
+            {
+                if !place.projections().is_empty() {
+                    // Validate the same projected place without reading its contents.
+                    self.retained_array_element_pointer_v1(block, statement, place, operations)?;
+                }
+                let local = self.require_local(block, statement, place.local().index())?;
+                self.locals[local] = None;
+                self.retained_local_initialized.remove(&(local as u32));
+                Ok(())
+            }
+            SemanticStatementKindV1::Deinitialize(place)
                 if place.projections().is_empty()
                     && self
                         .retained_local_slots
@@ -12466,6 +12507,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                if self.retained_array_slot_v1(place.local()).is_some() {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        statement,
+                        "retained array borrow or address-of requires tracked alias initialization",
+                    ));
+                }
                 if place.projections().is_empty()
                     && self
                         .retained_local_slots
@@ -12629,6 +12678,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
             }
             SemanticRvalueKindV1::Length(place) => {
+                if place.projections().is_empty()
+                    && let Some(array) = self
+                        .retained_array_slot_v1(place.local())
+                        .and_then(|slot| slot.array)
+                {
+                    let ty = lower_scalar_type(self.types, result_type)?;
+                    let width = ty
+                        .as_scalar()
+                        .and_then(ScalarType::bit_width)
+                        .and_then(|bits| u8::try_from(bits / 8).ok())
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                    let value = SemanticScalarValueV1::new(u128::from(array.length), width)
+                        .map_err(|_| {
+                            unsupported(
+                                self.semantic_function.index(),
+                                Some(block.index()),
+                                statement,
+                                "retained array length does not fit its semantic result type",
+                            )
+                        })?;
+                    let constant = lower_constant(ty.clone(), value)?;
+                    return self.emit(operations, ty, OperationKind::Constant(constant));
+                }
                 let (slice, ty) = self
                     .resolve_place(block, statement, place, operations)?
                     .value()
@@ -13013,6 +13085,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Ok(result)
             }
             SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
+                if self.retained_array_slot_v1(load.source().local()).is_some() {
+                    return self.load_retained_array_place_v1(
+                        block,
+                        statement,
+                        load.source(),
+                        load.volatility(),
+                        operations,
+                    );
+                }
                 let source = if load.source().projections().is_empty()
                     && self
                         .retained_local_slots
@@ -13132,6 +13213,24 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operand: &SemanticOperandV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if let SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) = operand
+            && self.retained_array_slot_v1(place.local()).is_some()
+        {
+            let binding = self.load_retained_array_place_v1(
+                block,
+                statement,
+                place,
+                SemanticVolatilityV1::NonVolatile,
+                operations,
+            )?;
+            if matches!(operand, SemanticOperandV1::Move(_)) {
+                // A projected move invalidates the whole-slot must-initialize fact.
+                self.retained_local_initialized
+                    .remove(&place.local().index());
+                self.locals[place.local().index() as usize] = None;
+            }
+            return Ok(binding);
+        }
         if let SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) = operand
             && place.projections().is_empty()
         {
@@ -13431,7 +13530,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             return Ok(None);
         }
         if let Some(slot) = self.retained_local_slots.get(&place.local().index()) {
-            return Ok(Some(slot.kernel_type.clone()));
+            return Ok(slot.array.is_none().then(|| slot.kernel_type.clone()));
         }
         let local = self.require_local(block, statement, place.local().index())?;
         Ok(self.locals[local]
@@ -19812,6 +19911,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         access: AccessMode,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if self.retained_array_slot_v1(local).is_some() {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                None,
+                None,
+                "retained array address is not a scalar-slot pointer",
+            ));
+        }
         let slot = self
             .retained_local_slots
             .get(&local.index())
@@ -19851,6 +19958,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         local: SemanticLocalIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if let Some(slot) = self.retained_array_slot_v1(local) {
+            let place = SemanticPlaceV1::new(local, Vec::new(), slot.semantic_type)
+                .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            return self.load_retained_array_place_v1(
+                block,
+                statement,
+                &place,
+                SemanticVolatilityV1::NonVolatile,
+                operations,
+            );
+        }
         if !self.retained_local_initialized.contains(&local.index()) {
             return Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
                 function: self.semantic_function.index(),
@@ -19948,6 +20066,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.retained_array_slot_v1(destination.local()).is_some() {
+            self.store_retained_array_place_v1(
+                block,
+                statement,
+                destination,
+                &value,
+                volatility,
+                operations,
+            )?;
+            return if destination.projections().is_empty() {
+                self.bind_destination(block, statement, destination, value)
+            } else {
+                Ok(())
+            };
+        }
         if destination.projections().is_empty() {
             if self
                 .retained_local_slots
@@ -29195,6 +29328,101 @@ mod resource_tests {
         assert_eq!(report.semantic_sha256(), &[8; 32]);
         assert_eq!(report.memory_effects(), 0);
         assert_eq!(report.conservative_ranked_effects(), 0);
+    }
+
+    #[test]
+    fn counted_retained_allocations_do_not_gain_the_scalar_effect_exemption() {
+        // This is the existing private correlation fixture, not an admitted source owner.
+        let scalar = retained_local_storage_translation_fixture();
+        let lowering = ranked_correlation_input_for_effects(vec![], 1);
+        let scalar_report = validate_translation_fixture(&scalar, &lowering, &[], 16)
+            .expect("the unchanged uncounted scalar fixture keeps its exemption");
+        assert_eq!(scalar_report.memory_effects(), 0);
+        assert!(!scalar_report.grants_artifact_or_launch_authority());
+
+        let mut counted = retained_local_storage_translation_fixture();
+        let operations =
+            &mut counted.module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+        let OperationKind::Alloca { count, .. } = &mut operations[0].kind else {
+            panic!("the fixture starts with its retained private allocation");
+        };
+        assert_eq!(*count, None);
+        *count = Some(ValueId(4));
+        operations.insert(
+            0,
+            Operation::effect_free(
+                ValueDef::new(ValueId(4), Type::INDEX),
+                OperationKind::Constant(Constant::Index(8)),
+            ),
+        );
+        assert_eq!(operations.len(), 5);
+        assert!(matches!(
+            operations[2].kind,
+            OperationKind::Store {
+                pointer: ValueId(1),
+                value: ValueId(0),
+                ..
+            }
+        ));
+        assert!(matches!(
+            operations[3].kind,
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: ValueId(1),
+                ..
+            }
+        ));
+
+        // Keep the same private correspondence axes and partition after the new count.
+        let synthetic = &mut counted.correspondence.synthetic_operation_spans[0];
+        assert_eq!(synthetic.first_operation_ordinal, 0);
+        assert_eq!(synthetic.operation_count, 2);
+        synthetic.operation_count = 3;
+        let statement = &mut counted.correspondence.statement_operation_spans[0];
+        assert_eq!(statement.first_operation_ordinal, 2);
+        assert_eq!(statement.operation_count, 2);
+        statement.first_operation_ordinal = 3;
+        let terminator = &mut counted.correspondence.terminator_operation_spans[0];
+        assert_eq!(terminator.first_operation_ordinal, 4);
+        assert_eq!(terminator.operation_count, 0);
+        terminator.first_operation_ordinal = 5;
+
+        for (fixture, expected, operation_count) in [(&scalar, true, 4), (&counted, false, 5)] {
+            verify_module(&fixture.module).expect("both private component graphs are valid KIR");
+            let body = fixture.module.functions[0].body.as_ref().unwrap();
+            let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 256 };
+            let kir = build_kir_correlation_index(body, operation_count, &mut budget).unwrap();
+            let span = &fixture.correspondence.synthetic_operation_spans[0];
+            for pointer in [ValueId(1), ValueId(2)] {
+                let mut visiting = BTreeSet::new();
+                assert_eq!(
+                    compiler_owned_retained_local_storage_pointer_v1(
+                        pointer,
+                        &kir,
+                        &fixture.correspondence,
+                        span.correspondence_owner(),
+                        span.semantic_function(),
+                        &mut visiting,
+                        &mut budget,
+                    ),
+                    Some(expected),
+                    "unexpected exemption for {pointer:?} in counted={}",
+                    !expected,
+                );
+                assert!(visiting.is_empty());
+            }
+        }
+        assert!(matches!(
+            validate_translation_fixture(&counted, &lowering, &[], 16),
+            Err(
+                ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                    location: FunctionOperationLocation {
+                        block: BlockId(0),
+                        operation_index: 2,
+                    },
+                }
+            )
+        ));
     }
 
     #[test]

@@ -17,6 +17,15 @@ impl SemanticFunctionLoweringV1<'_> {
         if destination.projections().is_empty() {
             return Ok(PreparedSemanticCallDestinationV1::Unprojected);
         }
+        if self.retained_array_slot_v1(destination.local()).is_some() {
+            let (pointer, slot) =
+                self.retained_array_element_pointer_v1(block, None, destination, operations)?;
+            return Ok(PreparedSemanticCallDestinationV1::Memory {
+                pointer,
+                value_type: slot.kernel_type,
+                access: MemoryAccess::new(AddressSpace::Private, slot.alignment),
+            });
+        }
         if !destination
             .projections()
             .iter()
@@ -66,6 +75,14 @@ impl SemanticFunctionLoweringV1<'_> {
                         .retained_local_slots
                         .contains_key(&destination.local().index())
                 {
+                    if self.retained_array_slot_v1(destination.local()).is_some() {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            "guarded call result requires a scalar retained destination",
+                        ));
+                    }
                     self.store_retained_local_with_predicate_v1(
                         block,
                         None,

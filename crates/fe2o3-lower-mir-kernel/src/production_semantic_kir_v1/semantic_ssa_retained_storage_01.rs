@@ -19,6 +19,7 @@ struct SemanticRetainedLocalSlotPlanV1 {
     semantic_type: SemanticTypeIdV1,
     kernel_type: Type,
     alignment: u32,
+    array: Option<SemanticRetainedArrayLayoutV1>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -219,14 +220,15 @@ fn private_slot_candidate_locals_v1(
 
 fn kill_moved_retained_operand_v1(
     operand: &SemanticOperandV1,
-    retained: &BTreeSet<u32>,
+    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     budget.charge_work(1)?;
     if let SemanticOperandV1::Move(place) = operand
-        && place.projections().is_empty()
-        && retained.contains(&place.local().index())
+        && retained
+            .get(&place.local().index())
+            .is_some_and(|slot| place.projections().is_empty() || slot.array.is_some())
         && initialized.remove(&place.local().index())
     {
         budget.release_storage(1)?;
@@ -259,7 +261,7 @@ fn remove_retained_initialization_v1(
 
 fn apply_retained_rvalue_effects_v1(
     value: &SemanticRvalueKindV1,
-    retained: &BTreeSet<u32>,
+    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -297,7 +299,7 @@ fn apply_retained_rvalue_effects_v1(
 
 fn apply_retained_statement_effects_v1(
     statement: &SemanticStatementKindV1,
-    retained: &BTreeSet<u32>,
+    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -311,7 +313,7 @@ fn apply_retained_statement_effects_v1(
                 budget,
             )?;
             if assignment.destination().projections().is_empty()
-                && retained.contains(&assignment.destination().local().index())
+                && retained.contains_key(&assignment.destination().local().index())
             {
                 insert_retained_initialization_v1(
                     assignment.destination().local().index(),
@@ -323,7 +325,7 @@ fn apply_retained_statement_effects_v1(
         SemanticStatementKindV1::Store(store) => {
             kill_moved_retained_operand_v1(store.value(), retained, initialized, budget)?;
             if store.destination().projections().is_empty()
-                && retained.contains(&store.destination().local().index())
+                && retained.contains_key(&store.destination().local().index())
             {
                 insert_retained_initialization_v1(
                     store.destination().local().index(),
@@ -335,7 +337,7 @@ fn apply_retained_statement_effects_v1(
         SemanticStatementKindV1::AtomicRmw(operation) => {
             kill_moved_retained_operand_v1(operation.value(), retained, initialized, budget)?;
             if operation.destination().projections().is_empty()
-                && retained.contains(&operation.destination().local().index())
+                && retained.contains_key(&operation.destination().local().index())
             {
                 insert_retained_initialization_v1(
                     operation.destination().local().index(),
@@ -348,7 +350,7 @@ fn apply_retained_statement_effects_v1(
             kill_moved_retained_operand_v1(operation.expected(), retained, initialized, budget)?;
             kill_moved_retained_operand_v1(operation.replacement(), retained, initialized, budget)?;
             if operation.destination().projections().is_empty()
-                && retained.contains(&operation.destination().local().index())
+                && retained.contains_key(&operation.destination().local().index())
             {
                 insert_retained_initialization_v1(
                     operation.destination().local().index(),
@@ -362,12 +364,12 @@ fn apply_retained_statement_effects_v1(
             remove_retained_initialization_v1(local.index(), initialized, budget)?;
         }
         SemanticStatementKindV1::Deinitialize(place) => {
-            if place.projections().is_empty() {
-                remove_retained_initialization_v1(
-                    place.local().index(),
-                    initialized,
-                    budget,
-                )?;
+            if place.projections().is_empty()
+                || retained
+                    .get(&place.local().index())
+                    .is_some_and(|slot| slot.array.is_some())
+            {
+                remove_retained_initialization_v1(place.local().index(), initialized, budget)?;
             }
         }
         SemanticStatementKindV1::Assume(condition) => {
@@ -380,7 +382,7 @@ fn apply_retained_statement_effects_v1(
 
 fn apply_retained_terminator_move_effects_v1(
     terminator: &SemanticTerminatorKindV1,
-    retained: &BTreeSet<u32>,
+    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -507,14 +509,14 @@ fn retained_local_initialization_entries_with_budget_v1(
         for statement in block.statements() {
             apply_retained_statement_effects_v1(
                 statement.kind(),
-                &retained,
+                retained_local_slots,
                 &mut outgoing,
                 budget,
             )?;
         }
         apply_retained_terminator_move_effects_v1(
             block.terminator().kind(),
-            &retained,
+            retained_local_slots,
             &mut outgoing,
             budget,
         )?;

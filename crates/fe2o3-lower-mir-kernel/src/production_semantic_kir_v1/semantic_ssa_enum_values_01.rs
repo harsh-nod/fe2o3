@@ -577,6 +577,7 @@ struct SemanticRetainedLocalSlotV1 {
     semantic_type: SemanticTypeIdV1,
     kernel_type: Type,
     alignment: u32,
+    array: Option<SemanticRetainedArrayLayoutV1>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

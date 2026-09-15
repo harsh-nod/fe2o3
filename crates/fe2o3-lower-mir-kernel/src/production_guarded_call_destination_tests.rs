@@ -77,6 +77,7 @@ fn install_result_slot(
                     semantic_type,
                     kernel_type,
                     alignment,
+                    array: None,
                 }
             )
             .is_none()
