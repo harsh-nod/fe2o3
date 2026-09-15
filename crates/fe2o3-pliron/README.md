@@ -212,6 +212,18 @@ new barrier convergence facts, or grant source/output refinement authority.
 The fixed resource preflight includes the cached CFG and one pipeline's scratch;
 standalone diagnostics reserve the same bound before discovery. These remain
 logical phase bounds, not allocator/RSS or formal execution-cost proofs.
+
+Concrete epoch/slot queries also use the existing function-bound sparse cache,
+including constant affine remainders with nonzero divisors and block arguments
+whose incoming facts agree. Unknown values, conflicting joins, zero divisors
+and machine overflow remain unproven. Literal-only and recognized dynamic
+routes do not initialize this cache on demand. Query work is prepaid; a missing
+cache is admitted once with its peak overlapping live pipeline scratch, and
+admission or analysis failure returns `AnalysisIncomplete`. Current nested
+barrier/workgroup callers already prepare the cache before entering this check;
+future callers with additional live scratch must account for that overlap too.
+This adds neither a recursive evaluator nor new refinement authority.
+
 Cross-block regressions also run through the closed public entry point:
 
 ```sh

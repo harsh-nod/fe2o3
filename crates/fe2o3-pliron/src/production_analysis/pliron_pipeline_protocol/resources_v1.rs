@@ -68,6 +68,27 @@ fn pipeline_equivalence_unique_pair_upper_bound_v1(
     Ok(values.saturating_mul(values).min(query_expansions))
 }
 
+fn pipeline_concrete_fact_query_work_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    if census.pipeline_creates == 0 {
+        return Ok(0);
+    }
+    let queries = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(census.pipeline_events, 2)?,
+        census.ranked_accesses,
+    ])?;
+    // Per query: preflight literal scan, runtime literal read, borrowed fact
+    // lookup, at most MAX_RANK coefficients, and one constant remainder. One
+    // fixed cache decision per create. Aliased creates can revisit access rows.
+    // Cache construction/retention is separately admitted as SparseIndex.
+    let each = checked_pipeline_sum_v1(&[
+        1,
+        checked_pipeline_product_v1(queries, dialect_kernel::MAX_RANKED_MEMORY_RANK + 4)?,
+    ])?;
+    checked_pipeline_product_v1(census.pipeline_creates, each)
+}
+
 // The census cannot yet distinguish dynamic, same-block and cross-block
 // creates, so every create reserves the bounded concrete CFG attempt. No cap
 // changes, certificate storage or per-pipeline retained graph is introduced.
@@ -138,6 +159,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         return limits.require(ProductionAnalysisResourcePhaseV1::PipelineProtocol, bound);
     }
     let (concrete_work, concrete_temporary) = pipeline_concrete_cfg_resource_delta_v1(census)?;
+    let concrete_fact_work = pipeline_concrete_fact_query_work_v1(census)?;
     let blocks_squared = checked_pipeline_product_v1(census.blocks, census.blocks)?;
     let blocks_cubed = checked_pipeline_product_v1(blocks_squared, census.blocks.max(1))?;
     let equivalence_queries = pipeline_equivalence_query_upper_bound_v1(census)?;
@@ -176,6 +198,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         equivalence_work,
         uniformity_work,
         concrete_work,
+        concrete_fact_work,
     ])?;
     let certificates = census.pipeline_creates;
     let findings = census

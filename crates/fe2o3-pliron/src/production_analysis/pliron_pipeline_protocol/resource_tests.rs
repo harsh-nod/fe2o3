@@ -60,7 +60,8 @@ mod resource_upper_bound_tests {
         // Q = 2*3*7^2*6 + 2*7*174 + 3*2 + 4*11 + 7*3*7 = 4,397.
         // U = (40+13)^2 = 2,809; equivalence work is 2Q+8U+1.
         // Concrete CFG reserve: 32*(7+9+1) + 3*32*(7+9+29+19+1) = 6,784.
-        assert_eq!(exact.work_upper_bound(), 43_611);
+        // Concrete fact queries: 3*(1+(2*11+7)*(8+4))=1047.
+        assert_eq!(exact.work_upper_bound(), 44_658);
         assert_eq!(exact.retained_storage_upper_bound(), 33_513);
         // One-live-creation scratch delta: 17*7+9+29+2*19+48 = 243.
         assert_eq!(exact.peak_storage_upper_bound(), 48_434);

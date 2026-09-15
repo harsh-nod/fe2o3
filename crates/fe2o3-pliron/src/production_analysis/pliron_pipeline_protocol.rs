@@ -496,6 +496,12 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
         discovery: &loop_discovery,
         concrete: None,
     };
+    let mut concrete_indices = ConcreteIndexContextV1 {
+        function,
+        analyses,
+        census,
+        unavailable: false,
+    };
     let uniformity_visit_limit = inventory.operations().len();
     for (pointer, site, pipeline_type, view) in creates {
         let Some(pipeline_type) = pipeline_type else {
@@ -517,6 +523,7 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
         match verify_one_pipeline(
             context,
             &mut control,
+            &mut concrete_indices,
             site,
             pipeline_type.buffers(),
             pipeline_type.prefetch_distance(),
@@ -527,6 +534,15 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             &mut equivalence_resources,
         ) {
             Ok(certificate) => certificates.push(certificate),
+            Err(finding) if concrete_indices.unavailable => {
+                // Sparse preflight can scan the merge census before rejecting
+                // its full bound. Do not continue any protocol work after this
+                // uncommitted failed initialization, or retry another create.
+                return PlironPipelineProtocolReportV1 {
+                    findings: vec![finding],
+                    certificates: vec![],
+                };
+            }
             Err(finding) => push_finding(&mut findings, finding),
         }
         if equivalence_resources.exhausted() {
@@ -657,11 +673,13 @@ struct EpochLoopDiscoveryV1 {
 }
 
 include!("pliron_pipeline_protocol/concrete_cfg_v1.rs");
+include!("pliron_pipeline_protocol/concrete_index_facts_v1.rs");
 
 #[allow(clippy::too_many_arguments)]
 fn verify_one_pipeline(
     context: &Context,
     control: &mut PipelineControlContextV1<'_>,
+    concrete_indices: &mut ConcreteIndexContextV1<'_>,
     pipeline: PlironOperationSiteV1,
     buffers: u32,
     distance: u32,
@@ -688,12 +706,14 @@ fn verify_one_pipeline(
             .chain(accesses.iter().map(|access| access.site))
             .all(|site| site.block() == pipeline.block());
         let (epochs, staged_writes, consuming_reads, access_refinement_proven) = if same_block {
-            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses)?
+            let facts = concrete_indices.facts_for(context, schedule, accesses)?;
+            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses, facts)?
         } else {
             let actions = verify_cross_block_concrete_trace_v1(
                 context, control, pipeline, schedule, accesses,
             )?;
-            verify_ordered_concrete_schedule(context, pipeline, buffers, &actions)?
+            let facts = concrete_indices.facts_for(context, schedule, accesses)?;
+            verify_ordered_concrete_schedule(context, pipeline, buffers, &actions, facts)?
         };
         return Ok(PlironPipelineProtocolCertificateV1 {
             pipeline_block: pipeline.block(),
@@ -940,6 +960,7 @@ fn verify_concrete_schedule(
     buffers: u32,
     schedule: &[EventSiteV1],
     accesses: &[AccessSiteV1],
+    facts: Option<&SparseIndexAnalysisV1>,
 ) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let first_block = schedule[0].site.block();
     if first_block != pipeline.block() {
@@ -978,7 +999,7 @@ fn verify_concrete_schedule(
         ConcreteActionV1::Event(event) => (event.site.operation(), 1_u8),
         ConcreteActionV1::Access(access) => (access.site.operation(), 0_u8),
     });
-    verify_ordered_concrete_schedule(context, pipeline, buffers, &actions)
+    verify_ordered_concrete_schedule(context, pipeline, buffers, &actions, facts)
 }
 
 fn verify_ordered_concrete_schedule(
@@ -986,6 +1007,7 @@ fn verify_ordered_concrete_schedule(
     pipeline: PlironOperationSiteV1,
     buffers: u32,
     actions: &[ConcreteActionV1<'_>],
+    facts: Option<&SparseIndexAnalysisV1>,
 ) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let mut slots = vec![SlotStateV1::Free; buffers as usize];
     let mut epochs = HashSet::new();
@@ -994,7 +1016,7 @@ fn verify_ordered_concrete_schedule(
     let mut initialized = HashMap::<u64, HashSet<Vec<Value>>>::new();
     for action in actions.iter().copied() {
         if let ConcreteActionV1::Access(access) = action {
-            let Some(slot) = index_constant(context, access.slot) else {
+            let Some(slot) = concrete_index_constant_v1(context, facts, access.slot) else {
                 return Err(invalid(
                     pipeline,
                     Some(access.site),
@@ -1062,14 +1084,14 @@ fn verify_ordered_concrete_schedule(
                 "event kind is malformed",
             ));
         };
-        let Some(epoch) = index_constant(context, event.epoch) else {
+        let Some(epoch) = concrete_index_constant_v1(context, facts, event.epoch) else {
             return Err(invalid(
                 pipeline,
                 Some(event.site),
                 "symbolic event is not enclosed by a supported runtime-bounded loop",
             ));
         };
-        let Some(slot) = index_constant(context, event.slot) else {
+        let Some(slot) = concrete_index_constant_v1(context, facts, event.slot) else {
             return Err(invalid(
                 pipeline,
                 Some(event.site),
@@ -1171,3 +1193,7 @@ fn report(finding: PlironPipelineProtocolFindingV1) -> PlironPipelineProtocolRep
 include!("pliron_pipeline_protocol/resource_tests.rs");
 
 include!("pliron_pipeline_protocol/concrete_cfg_v1_tests.rs");
+
+#[cfg(test)]
+#[path = "pliron_pipeline_protocol/concrete_index_facts_v1_tests.rs"]
+mod concrete_index_facts_v1_tests;

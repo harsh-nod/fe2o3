@@ -279,8 +279,21 @@ mod concrete_cfg_tests {
     }
 
     #[test]
-    fn ordinal_edges_do_not_prove_block_arguments_are_constants() {
-        reject_detail(Shape::ArgumentEpoch, "symbolic event");
+    fn sparse_facts_prove_an_epoch_argument_grounded_by_its_actual_edge_payload() {
+        // The predecessor passes literal zero, not its unknown entry selector.
+        // CFG ordinals alone are insufficient; the separately admitted sparse
+        // cache now proves the actual incoming value at this exact argument.
+        let (context, function) = fixture(Shape::ArgumentEpoch, 1);
+        let mut analyses = PlironAnalysisManagerV1::new(&function);
+        assert!(!analyses.sparse_indices_prepared());
+        let report =
+            run_pliron_pipeline_protocol_check_with_analyses_v1(&context, &function, &mut analyses);
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(report.certificates().len(), 1);
+        assert_eq!(report.certificates()[0].concrete_epochs(), 1);
+        assert!(report.certificates()[0].dynamic_loop().is_none());
+        assert!(analyses.sparse_indices_prepared());
+        assert!(analyses.sparse_indices().is_ok());
     }
 
     #[test]
@@ -480,14 +493,15 @@ mod concrete_cfg_tests {
             (3_520, 192)
         );
         // Q=352/U=64, old W=2750, retained=28434, temporary=5756.
-        // New phase W=6270 and peak=28434+5756+192=34382.
+        // Concrete fact queries add 2*(1+(2*10+4)*12)=578.
+        // New phase W=6848 and peak=28434+5756+192=34382.
         let phase = ProductionAnalysisResourcePhaseV1::PipelineProtocol;
         let prefix =
             ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 7, 11, 13).unwrap();
         for (work, peak, accepted) in [
-            (6_277, 34_393, true),
-            (6_276, 34_393, false),
-            (6_277, 34_392, false),
+            (6_855, 34_393, true),
+            (6_854, 34_393, false),
+            (6_855, 34_392, false),
         ] {
             let mut contract = ProductionAnalysisResourceContractV1::new(
                 ProductionAnalysisResourceLimitsV1::new(work, peak),
@@ -500,11 +514,11 @@ mod concrete_cfg_tests {
             );
             if accepted {
                 let bound = result.unwrap();
-                assert_eq!(bound.work_upper_bound(), 6_270);
+                assert_eq!(bound.work_upper_bound(), 6_848);
                 assert_eq!(bound.retained_storage_upper_bound(), 28_434);
                 assert_eq!(bound.peak_storage_upper_bound(), 34_382);
                 contract.admit_retained(phase, bound).unwrap();
-                assert_eq!(contract.cumulative().work_upper_bound(), 6_277);
+                assert_eq!(contract.cumulative().work_upper_bound(), 6_855);
                 assert_eq!(contract.cumulative().retained_storage_upper_bound(), 28_445);
                 assert_eq!(contract.cumulative().peak_storage_upper_bound(), 34_393);
             } else {
@@ -520,11 +534,12 @@ mod concrete_cfg_tests {
         let prefix =
             ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 7, 11, 13).unwrap();
         // Existing formula: Q=108, U=9, W=856, retained=14150,
-        // temporary=4824. Add concrete (1984,129): W2840/peak19103.
+        // temporary=4824. Add concrete (1984,129) and query work242:
+        // W3082/peak19103.
         for (work, peak, accepted) in [
-            (2_847, 19_114, true),
-            (2_846, 19_114, false),
-            (2_847, 19_113, false),
+            (3_089, 19_114, true),
+            (3_088, 19_114, false),
+            (3_089, 19_113, false),
         ] {
             let mut contract = ProductionAnalysisResourceContractV1::new(
                 ProductionAnalysisResourceLimitsV1::new(work, peak),
@@ -537,11 +552,11 @@ mod concrete_cfg_tests {
             );
             if accepted {
                 let bound = phase_bound.unwrap();
-                assert_eq!(bound.work_upper_bound(), 2_840);
+                assert_eq!(bound.work_upper_bound(), 3_082);
                 assert_eq!(bound.retained_storage_upper_bound(), 14_150);
                 assert_eq!(bound.peak_storage_upper_bound(), 19_103);
                 contract.admit_retained(phase, bound).unwrap();
-                assert_eq!(contract.cumulative().work_upper_bound(), 2_847);
+                assert_eq!(contract.cumulative().work_upper_bound(), 3_089);
                 assert_eq!(contract.cumulative().retained_storage_upper_bound(), 14_161);
                 assert_eq!(contract.cumulative().peak_storage_upper_bound(), 19_114);
             } else {
