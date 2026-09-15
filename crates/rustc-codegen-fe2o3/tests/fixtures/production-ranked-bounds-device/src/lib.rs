@@ -79,6 +79,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "debug_mutated_argument",
     feature = "float_to_integer",
     feature = "wrapping_integer",
+    feature = "launch_wrapping_integer",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",
@@ -180,6 +181,31 @@ pub fn wrapping_integer(
     }
     if let Some(element) = signed_mul.get_mut(thread::index_1d()) {
         *element = lhs.wrapping_mul(rhs);
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "launch_wrapping_integer")]
+pub fn launch_wrapping_integer(
+    mut local_product: DisjointSlice<u64>,
+    mut group_difference: DisjointSlice<u64>,
+    mut group_size_sum: DisjointSlice<u64>,
+    mut group_count_product: DisjointSlice<u64>,
+) {
+    if let Some(element) = local_product.get_mut(thread::index_1d()) {
+        *element = thread::thread_idx_x().wrapping_mul(0x8000_0000_u32) as u64;
+    }
+    if let Some(element) = group_difference.get_mut(thread::index_1d()) {
+        *element = thread::block_idx_x().wrapping_sub(1) as u64;
+    }
+    if let Some(element) = group_size_sum.get_mut(thread::index_1d()) {
+        *element = thread::block_dim_x().wrapping_add(u32::MAX) as u64;
+    }
+    if let Some(element) = group_count_product.get_mut(thread::index_1d()) {
+        *element = thread::grid_dim_x().wrapping_mul(u32::MAX) as u64;
     }
 }
 

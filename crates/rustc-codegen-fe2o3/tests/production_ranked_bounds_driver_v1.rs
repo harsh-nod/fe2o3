@@ -738,6 +738,86 @@ fn ordinary_source_wrapping_integers_match_rust_in_simulation() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_source_launch_wrapping_integers_match_rust_in_simulation() {
+    const CANARY: u64 = 0xa5c3_7e19_4b82_d6f0;
+    const WORKGROUP: usize = 64;
+    let target = ScratchTarget::new();
+    for architecture in ["gfx942", "gfx950"] {
+        let bundle_path = target
+            .path()
+            .join(format!("launch-wrapping-{architecture}.fe2sim"));
+        let exported = output(
+            simulation_export_command_for_feature(
+                architecture,
+                &bundle_path,
+                &target.path().join(architecture),
+                None,
+                "launch_wrapping_integer",
+            ),
+            "export ordinary Rust launch wrapping integers",
+        );
+        assert!(exported.status.success(), "{}", exported.stderr);
+        for grid in [64_usize, 128, 192] {
+            let initial = CANARY.to_le_bytes().repeat(grid + 3);
+            let arguments = (0..4)
+                .map(|_| {
+                    json!({
+                        "kind": "buffer", "element": "u64", "access": "read_write",
+                        "alignment": 8, "bytes": format!("0x{}", hex(&initial)),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let request_path = target.path().join("launch-wrapping-request.json");
+            std::fs::write(
+                &request_path,
+                serde_json::to_vec(&json!({
+                    "schema": "fe2o3-simulation-request-v1", "kernel": "launch_wrapping_integer",
+                    "grid": [grid, 1, 1], "workgroup": [WORKGROUP, 1, 1], "arguments": arguments,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let admitted =
+                fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
+                    .unwrap();
+            let execution = admitted
+                .input()
+                .module
+                .simulate(
+                    &admitted.input().request,
+                    admitted.input().simulation_target(),
+                    admitted.input().simulation_limits,
+                )
+                .unwrap_or_else(|error| panic!("{architecture} grid={grid}: {error:?}"));
+            assert_eq!(execution.invocations_executed(), grid as u64);
+            let mut expected = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+            for invocation in 0..grid {
+                let local = (invocation % WORKGROUP) as u32;
+                let group = (invocation / WORKGROUP) as u32;
+                let values = [
+                    local.wrapping_mul(0x8000_0000_u32),
+                    group.wrapping_sub(1),
+                    (WORKGROUP as u32).wrapping_add(u32::MAX),
+                    ((grid / WORKGROUP) as u32).wrapping_mul(u32::MAX),
+                ];
+                for (bytes, value) in expected.iter_mut().zip(values) {
+                    bytes.extend_from_slice(&u64::from(value).to_le_bytes());
+                }
+            }
+            for (index, mut expected_bytes) in expected.into_iter().enumerate() {
+                expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                assert_eq!(
+                    execution.buffer(index).unwrap().bytes(),
+                    expected_bytes,
+                    "{architecture} grid={grid} output {index}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_source_sqrt_executes_exact_binary32_in_simulation() {
     use fe2o3_kir_sim::SimulationScheduleRequestV1;
 

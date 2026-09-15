@@ -1218,6 +1218,7 @@ for production_step in \
   rocm-production-simulation-bundle-gfx950 \
   rocm-production-simulation-float-casts \
   rocm-production-simulation-wrapping-integers \
+  rocm-production-simulation-launch-wrapping-integers \
   rocm-production-scalar-casts \
   rocm-production-simulation-bundle-v2-source-variables \
   rocm-production-simulation-bundle-v2-invalid-name \
@@ -1238,6 +1239,10 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_wrapping_integers_match_rust_in_simulation -- --ignored --exact' \
   "$(step_command rocm-production-simulation-wrapping-integers)" \
   'ROCm compile omitted the exact wrapping-integer source regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_launch_wrapping_integers_match_rust_in_simulation -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-launch-wrapping-integers)" \
+  'ROCm compile omitted the exact launch-wrapping-integer source regression'
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"

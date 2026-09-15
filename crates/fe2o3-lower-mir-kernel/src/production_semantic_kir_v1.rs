@@ -16965,18 +16965,38 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *offset,
                 true,
             )?,
-            SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
-                self.emit_launch_index_v1(operations, IndexKind::Local, lower_axis(*axis))?
-            }
-            SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(axis) => {
-                self.emit_launch_index_v1(operations, IndexKind::Workgroup, lower_axis(*axis))?
-            }
-            SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(axis) => {
-                self.emit_launch_index_v1(operations, IndexKind::WorkgroupSize, lower_axis(*axis))?
-            }
-            SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => {
-                self.emit_launch_index_v1(operations, IndexKind::WorkgroupCount, lower_axis(*axis))?
-            }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => self
+                .emit_source_launch_index_v1(
+                    block,
+                    call,
+                    operations,
+                    IndexKind::Local,
+                    lower_axis(*axis),
+                )?,
+            SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(axis) => self
+                .emit_source_launch_index_v1(
+                    block,
+                    call,
+                    operations,
+                    IndexKind::Workgroup,
+                    lower_axis(*axis),
+                )?,
+            SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(axis) => self
+                .emit_source_launch_index_v1(
+                    block,
+                    call,
+                    operations,
+                    IndexKind::WorkgroupSize,
+                    lower_axis(*axis),
+                )?,
+            SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => self
+                .emit_source_launch_index_v1(
+                    block,
+                    call,
+                    operations,
+                    IndexKind::WorkgroupCount,
+                    lower_axis(*axis),
+                )?,
             SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
             | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. } => {
                 self.require_call_argument_count(block, call, 1)?;
@@ -20584,6 +20604,55 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ),
             None => self.emit_index_intrinsic(operations, kind, axis),
         }
+    }
+
+    fn emit_source_launch_index_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        kind: IndexKind,
+        axis: Axis,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 0)?;
+        let destination = call.destination().ok_or_else(|| {
+            unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "source launch index has no destination",
+            )
+        })?;
+        if !matches!(
+            self.types
+                .get(destination.place().ty().index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            }))
+        ) {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "source launch index destination is not u32",
+            ));
+        }
+        // Source launch APIs return u32; internal geometry and capabilities use Index.
+        let mut result = self.emit_launch_index_v1(operations, kind, axis)?;
+        let path = plan_integer_cast_v1(ScalarType::Index, ScalarType::U32)
+            .expect("source launch index integer cast");
+        for (kind, scalar) in path.into_iter().flatten() {
+            let (value, _) = result.value().expect("emitted launch index cast");
+            let to = Type::Scalar(scalar);
+            result = self.emit(
+                operations,
+                to.clone(),
+                OperationKind::Cast { kind, value, to },
+            )?;
+        }
+        Ok(result)
     }
 
     fn retained_local_pointer_binding_v1(
