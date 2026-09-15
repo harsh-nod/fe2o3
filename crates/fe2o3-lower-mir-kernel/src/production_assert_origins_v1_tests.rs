@@ -1224,3 +1224,6 @@ fn occurrence_sealer_distinguishes_same_typed_argument_values_and_definition_kin
         assert_eq!(budget.storage(), FLOOR);
     }
 }
+
+#[path = "production_private_array_owner_v1_tests.rs"]
+mod private_array_owner_v1_tests;

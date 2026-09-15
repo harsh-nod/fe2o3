@@ -146,6 +146,7 @@ impl SemanticControlFlowSsaPlanV1 {
         let private_slot_candidates =
             private_slot_candidate_locals_v1(function, &shared_promoted, &retained_cross_edge);
         let mut retained_local_slots = BTreeMap::new();
+        let mut has_retained_arrays = false;
         let mut unsupported_retained_locals = Vec::new();
         for local in private_slot_candidates {
             let declaration = function
@@ -185,6 +186,7 @@ impl SemanticControlFlowSsaPlanV1 {
                 unsupported_retained_locals.push((local, declaration.ty().index()));
                 continue;
             };
+            has_retained_arrays |= slot.array.is_some();
             retained_local_slots.insert(local, slot);
         }
         if !unsupported_retained_locals.is_empty() {
@@ -410,6 +412,7 @@ impl SemanticControlFlowSsaPlanV1 {
             max_analysis_storage,
         )?;
         Ok(Self {
+            has_retained_arrays,
             compiler_issued_bindings,
             implicit_entry_locals,
             ssa_value_locals: shared_promoted,

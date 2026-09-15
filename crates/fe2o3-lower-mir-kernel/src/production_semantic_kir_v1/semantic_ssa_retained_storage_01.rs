@@ -1,5 +1,6 @@
 #[derive(Clone, Debug, Default)]
 struct SemanticControlFlowSsaPlanV1 {
+    has_retained_arrays: bool,
     compiler_issued_bindings: BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
     implicit_entry_locals: BTreeSet<u32>,
     ssa_value_locals: BTreeSet<u32>,
@@ -96,55 +97,6 @@ impl SemanticRetainedInitializationBudgetV1 {
     fn release_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1> {
         self.replace_storage(amount, 0)
     }
-}
-
-fn retained_local_slot_type_v1(
-    types: &[SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-) -> Option<(Type, u32)> {
-    let declaration = types.get(ty.index() as usize)?;
-    let layout = declaration.layout();
-    if layout.is_uninhabited() {
-        return None;
-    }
-    let (kernel_type, expected_size) = match declaration.shape() {
-        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
-            let kernel_type = lower_scalar_type(types, ty).ok()?;
-            let scalar = kernel_type.as_scalar()?;
-            let size = match scalar {
-                ScalarType::Bool => 1,
-                ScalarType::Index => return None,
-                scalar => u64::from(scalar.bit_width()? / 8),
-            };
-            (kernel_type, size)
-        }
-        SemanticTypeShapeV1::Pointer(pointer)
-            if pointer.metadata() == SemanticPointerMetadataV1::None
-                && matches!(pointer.pointer_width_bits(), 32 | 64) =>
-        {
-            let access = match pointer.mutability() {
-                SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
-                SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
-            };
-            let kernel_type = Type::pointer(
-                lower_memory_element_type(types, pointer.pointee()).ok()?,
-                lower_address_space(pointer.address_space()).ok()?,
-                access,
-            );
-            (kernel_type, u64::from(pointer.pointer_width_bits() / 8))
-        }
-        _ => return None,
-    };
-    let alignment = u32::try_from(layout.alignment_bytes()).ok()?;
-    if layout.size_bytes() != Some(expected_size)
-        || alignment == 0
-        || !alignment.is_power_of_two()
-        || u64::from(alignment) > expected_size
-        || !kernel_type.is_storable()
-    {
-        return None;
-    }
-    Some((kernel_type, alignment))
 }
 
 fn private_slot_candidate_locals_v1(

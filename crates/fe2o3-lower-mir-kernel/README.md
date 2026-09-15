@@ -179,3 +179,42 @@ or symbolic guard inference. Element admission uses the existing analysis extent
 limit; each whole-array gather or scatter separately checks its three-operations-
 per-element expansion against the existing total and per-block operation limits
 before reserving a gather buffer. No limits are raised or whole-memory bound added.
+
+## Private Array Correspondence
+
+Lowering records actual retained-array counted allocations and indexed ordinary
+memory effects with their original source roles, index definitions and physical
+operation coordinates. Fixed borrowed PreRanked queries use the same owner's
+selected body and sealed SSA plans. The boolean query returns false only for a
+supported proven-unretained occurrence; the constant-index query returns None
+for the same case. Missing required rows and unsupported relations are errors.
+The returned index is inert, not an independently transferable proof.
+
+The exact translation and retained-check discharge consumers compare the original
+constant index, counted allocation, element layout/access and GEP with the actual
+ranked private view and index. Ordinary materialized attachment uses the translation
+consumer; the second consumer remains a separate retained-check discharge path.
+The initial final rule covers ordinary constant-index writes only. Matched writes
+still pass the existing duplicate, order and control checks, and every correlated
+retained-array source row must be consumed. This is address/effect correspondence,
+not stored-value equivalence or a census of unrelated unsourced private operations.
+Read/mixed owners, initialization scatter, whole-value gather/scatter, dynamic or
+lossy index transport, atomics and volatile accesses gain no final proof here.
+
+The recorder activates only for selected retained arrays and shares a new monotone
+checked R*M proof-work phase, where R is selected root count and M the existing
+operation limit. Its subset census counts actual operations of array-bearing
+function instances before shared-helper deduplication; it does not impose S<=M.
+Failed or rolled-back proof work remains charged. Typed occupied/capacity
+admissions and fallible geometric buffers are separate from G+A; inherited trace
+payload, allocator capacity, relocation and RSS remain outside that receipt.
+Queries use the caller's canonical ledger with the same owner's G+A reserved,
+and final attachment retains its independent 64*M correlation phase. The index
+query adds one fixed work unit before the unchanged boolean-query relation.
+No configured limits, Native gates, formal or launch authority change.
+
+This is a lowerer-only component. The default rustc backend still projects before
+materializing executable KIR and does not yet use these same-owner private-array
+queries. Its materialize-before-project transition and common-projector private
+effect support require separate qualification, including all tutorial compile
+gates; this library change does not activate that route.

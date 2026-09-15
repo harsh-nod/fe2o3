@@ -75,6 +75,11 @@ use sha2::{Digest as _, Sha256};
 include!("production_pre_ranked_v1.rs");
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
+include!("production_private_array_facts_v1.rs");
+include!("production_private_array_records_v1.rs");
+include!("production_private_array_emission_v1.rs");
+include!("production_private_array_relation_v1.rs");
+include!("production_private_array_consumers_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
@@ -496,6 +501,7 @@ impl SemanticKirSyntheticOperationSpanV1 {
 /// and trace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticKirCorrespondenceV1 {
+    private_arrays: PrivateArrayCorrespondenceV1,
     semantic_sha256: [u8; 32],
     function_count: usize,
     lowered_functions: Box<[SemanticKirFunctionCorrespondenceV1]>,
@@ -2182,6 +2188,7 @@ impl ProductionSemanticKirOwnerV1 {
         unsupported_indices_match_ranked_sources_result(
             &self.module,
             &self.correspondence,
+            Some(self.semantic_ssa.source_semantic()),
             kernel_id,
             &checks.lowering,
             &checks.access_sources,
@@ -2734,6 +2741,7 @@ struct IndexedUnsupportedReasonV1 {
 fn unsupported_indices_match_ranked_sources_result(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
+    semantic: Option<&AdmittedInertSemanticMirV1>,
     kernel_id: &str,
     lowering: &ProductionRankedKernelLoweringInputV1,
     sources: &[ProductionRankedAccessSourceV1],
@@ -2818,6 +2826,22 @@ fn unsupported_indices_match_ranked_sources_result(
         ));
     };
 
+    let private_array_relation = PrivateArrayFinalRelationV1::new(
+        module,
+        correspondence,
+        semantic,
+        correspondence_owner,
+        semantic_function,
+        function,
+        lowering,
+        max_operations,
+        &mut budget,
+    )
+    .map_err(|_| {
+        ProductionMemoryDischargeFailureV1::stage(
+            "private array relation could not bind exact source and executable instances",
+        )
+    })?;
     let mut indexed_reasons = Vec::with_capacity(reasons.len());
     let mut reason_pointers = BTreeSet::new();
     for reason in reasons {
@@ -2912,17 +2936,29 @@ fn unsupported_indices_match_ranked_sources_result(
                     "semantic memory access site has no ranked access receipt",
                 ));
             };
-            let first_logical_use =
-                used_ranked_locations.insert((source.ranked_block, source.ranked_operation));
-            if (!first_logical_use
-                && !matches!(source.allocation, IndexedRankedAllocationV1::Direct(_)))
-                || !indexed_ranked_source_matches_allocation(
+            let allocation_matches = if consumer.memory_space
+                == dialect_kernel::MemorySpaceAttr::Private
+            {
+                private_array_relation.as_ref().ok_or_else(|| ProductionMemoryDischargeFailureV1::access(
+                    consumer.location, "private array access has no producer-owned relation"))?
+                    .check(lowering, source, *consumer, *site, &mut budget)
+                    .map_err(|_| ProductionMemoryDischargeFailureV1::access(consumer.location,
+                        "private array access differs from its exact source, allocation, or index"))?;
+                true
+            } else {
+                indexed_ranked_source_matches_allocation(
                     &ranked,
                     source,
                     consumer.access,
                     consumer.memory_space,
                     reason.allocation_parameter,
                 )
+            };
+            let first_logical_use =
+                used_ranked_locations.insert((source.ranked_block, source.ranked_operation));
+            if (!first_logical_use
+                && !matches!(source.allocation, IndexedRankedAllocationV1::Direct(_)))
+                || !allocation_matches
             {
                 return Err(ProductionMemoryDischargeFailureV1::access(
                     consumer.location,
@@ -2949,6 +2985,7 @@ fn unsupported_indices_match_ranked_sources(
     unsupported_indices_match_ranked_sources_result(
         module,
         correspondence,
+        None,
         kernel.id.as_str(),
         lowering,
         sources,
@@ -6087,6 +6124,17 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         );
     }
 
+    let private_array_relation = PrivateArrayFinalRelationV1::new(
+        module,
+        correspondence,
+        semantic,
+        correspondence_owner,
+        semantic_function,
+        function,
+        lowering,
+        max_operations,
+        &mut budget,
+    )?;
     let mut used_ranked_locations = BTreeSet::new();
     let mut effect_locations = Vec::new();
     let mut memory_effects = 0_usize;
@@ -6266,6 +6314,14 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 );
             }
         }
+        if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Private {
+            let relation = private_array_relation.as_ref().ok_or(
+                ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
+                    location: consumer.location,
+                },
+            )?;
+            relation.check(lowering, source, *consumer, site, &mut budget)?;
+        }
         let first_logical_use =
             used_ranked_locations.insert((source.ranked_block, source.ranked_operation));
         if !first_logical_use && !matches!(source.allocation, IndexedRankedAllocationV1::Direct(_))
@@ -6357,7 +6413,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
             .checked_add(1)
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     }
-    for source in ranked.sources_by_site.values() {
+    for (site, source) in &ranked.sources_by_site {
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
@@ -6373,8 +6429,13 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 definition.memory_space == dialect_kernel::MemorySpaceAttr::Private
             }
         };
+        let retained_private = is_private
+            && match private_array_relation.as_ref() {
+                Some(relation) => relation.requires_consumption(*site, source, &mut budget)?,
+                None => false,
+            };
         if !used_ranked_locations.contains(&(source.ranked_block, source.ranked_operation))
-            && !is_private
+            && (!is_private || retained_private)
         {
             return Err(ProductionMirPlironTranslationErrorV1::ExtraRankedEffect {
                 ranked_block: source.ranked_block,
@@ -9671,6 +9732,7 @@ enum PlannedParameterLocalBindingV1 {
 }
 
 struct LoweredFunctionResultV1 {
+    private_arrays: PrivateArrayFunctionRowsV1,
     function: Function,
     operation_capabilities: BTreeSet<fe2o3_kernel_ir::TargetCapability>,
     diagnostic_declarations: BTreeMap<FunctionId, Function>,
@@ -10107,6 +10169,8 @@ fn lower_one_semantic_function_v1(
     authenticated_ranked_control: bool,
     max_operations: usize,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    private_array_work: &mut PrivateArrayLazyBudgetV1,
+    private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -10177,6 +10241,8 @@ fn lower_one_semantic_function_v1(
         launch_rank,
         authenticated_ranked_control,
         max_operations,
+        PrivateArrayRecorderWorkV1::Shared(private_array_work),
+        private_array_sources,
     )?;
 
     let order = semantic_ssa
@@ -10339,6 +10405,7 @@ fn lower_one_semantic_function_v1(
     }
     let emitted_operations = lowering.emitted_operations;
     let generated_terminator_values = lowering.generated_terminator_values;
+    let private_arrays = lowering.private_arrays.into_rows()?;
     let operation_capabilities = target_blocks
         .iter()
         .flat_map(|block| block.operations.iter())
@@ -10395,6 +10462,7 @@ fn lower_one_semantic_function_v1(
         .required_capabilities
         .extend(operation_capabilities.iter().cloned());
     Ok(LoweredFunctionResultV1 {
+        private_arrays,
         function: lowered,
         operation_capabilities,
         diagnostic_declarations,
@@ -10469,7 +10537,8 @@ fn lower_module_with_assert_origins_v1(
             )
         })?;
         let mut closure_budget = ReachableClosureBlockBudgetV1::new(limits.max_blocks);
-        return lower_single_root_module(
+        let mut private_array_work = PrivateArrayLazyBudgetV1::new(1, limits.max_operations);
+        let (module, mut correspondence, _) = lower_single_root_module(
             owner,
             limits,
             selection.root(),
@@ -10477,7 +10546,16 @@ fn lower_module_with_assert_origins_v1(
             &mut closure_budget,
             true,
             assert_origins,
-        );
+            &mut private_array_work,
+            None,
+        )?;
+        if correspondence.private_arrays.active {
+            private_array_order_correspondence_v1(
+                &mut correspondence.private_arrays,
+                &mut private_array_work,
+            )?;
+        }
+        return Ok((module, correspondence));
     };
     if authenticated_launch_roots.is_empty()
         || authenticated_launch_roots.len() != semantic.roots().len()
@@ -10502,13 +10580,16 @@ fn lower_module_with_assert_origins_v1(
         ));
     }
 
+    let mut private_array_work =
+        PrivateArrayLazyBudgetV1::new(authenticated_launch_roots.len(), limits.max_operations);
+    let mut private_arrays: Option<PrivateArrayMergeV1> = None;
     let mut merged = Module::new(format!(
         "fe2o3::semantic::{}",
         hex_identity(semantic.semantic_sha256().as_bytes())
     ));
     let mut entry_functions = Vec::with_capacity(authenticated_launch_roots.len());
     let mut auxiliary_functions = Vec::new();
-    let mut function_index = BTreeMap::<FunctionId, Function>::new();
+    let mut function_index = BTreeMap::<FunctionId, (Function, (bool, usize))>::new();
     let mut entry_correspondence = Vec::with_capacity(authenticated_launch_roots.len());
     let mut auxiliary_correspondence = Vec::new();
     let mut correspondence_functions = BTreeSet::new();
@@ -10522,8 +10603,8 @@ fn lower_module_with_assert_origins_v1(
     let mut ignored_parameter_bindings = Vec::new();
     let mut closure_budget = ReachableClosureBlockBudgetV1::new(limits.max_blocks);
 
-    for launch in authenticated_launch_roots.iter().copied() {
-        let (root_module, root_correspondence) = lower_single_root_module(
+    for (root_ordinal, launch) in authenticated_launch_roots.iter().copied().enumerate() {
+        let (root_module, mut root_correspondence, root_payload) = lower_single_root_module(
             owner,
             limits,
             launch.selected_root,
@@ -10531,6 +10612,8 @@ fn lower_module_with_assert_origins_v1(
             &mut closure_budget,
             false,
             assert_origins.as_deref_mut(),
+            &mut private_array_work,
+            private_arrays.as_ref(),
         )?;
         let [kernel] = root_module.kernels.as_slice() else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -10551,8 +10634,9 @@ fn lower_module_with_assert_origins_v1(
         merged
             .required_capabilities
             .extend(root_module.required_capabilities.iter().cloned());
-        for function in root_module.functions {
-            if let Some(retained) = function_index.get(&function.id) {
+        let mut private_instance = 0;
+        for (function_ordinal, function) in root_module.functions.into_iter().enumerate() {
+            let physical = if let Some((retained, physical)) = function_index.get(&function.id) {
                 if retained != &function {
                     return Err(unsupported(
                         launch.selected_root.index(),
@@ -10561,17 +10645,63 @@ fn lower_module_with_assert_origins_v1(
                         "canonical multi-root lowering cross-wired a shared helper identity",
                     ));
                 }
-                continue;
-            }
-            function_index.insert(function.id.clone(), function.clone());
-            if function.id == kernel.entry {
-                entry_functions.push(function);
+                *physical
             } else {
-                auxiliary_functions.push(function);
+                let physical = if function.id == kernel.entry {
+                    (true, root_ordinal)
+                } else {
+                    (false, auxiliary_functions.len())
+                };
+                function_index.insert(function.id.clone(), (function.clone(), physical));
+                if function.id == kernel.entry {
+                    entry_functions.push(function);
+                } else {
+                    auxiliary_functions.push(function);
+                }
+                physical
+            };
+            let private_candidate = if root_correspondence.private_arrays.active {
+                // Candidate lookup and its possible ordinal comparison, including misses.
+                private_array_work.charge_private_array_work(2)?;
+                root_correspondence
+                    .private_arrays
+                    .instances
+                    .get_mut(private_instance)
+            } else {
+                None
+            };
+            if let Some(instance) = private_candidate
+                && instance.module_function_ordinal == function_ordinal
+            {
+                private_array_work.charge_private_array_work(3)?;
+                instance.module_function_ordinal = if physical.0 {
+                    physical.1
+                } else {
+                    private_array_work.charge_private_array_work(1)?;
+                    authenticated_launch_roots
+                        .len()
+                        .checked_add(physical.1)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                };
+                private_instance = private_instance
+                    .checked_add(1)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
             }
         }
+        if root_correspondence.private_arrays.active {
+            private_array_work.charge_private_array_work(1)?;
+            if private_instance != root_correspondence.private_arrays.instances.len() {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+        }
+        let mut private_instance = 0;
         let mut root_function_keys = BTreeSet::new();
-        for function in root_correspondence.lowered_functions.into_vec() {
+        for (function_ordinal, function) in root_correspondence
+            .lowered_functions
+            .into_vec()
+            .into_iter()
+            .enumerate()
+        {
             if function.correspondence_owner != launch.selected_root
                 || !root_function_keys
                     .insert((function.correspondence_owner, function.semantic_function))
@@ -10586,11 +10716,62 @@ fn lower_module_with_assert_origins_v1(
             if !correspondence_functions.insert(key) {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
+            let private_candidate = if root_correspondence.private_arrays.active {
+                // Candidate lookup and its possible ordinal comparison, including misses.
+                private_array_work.charge_private_array_work(2)?;
+                root_correspondence
+                    .private_arrays
+                    .instances
+                    .get_mut(private_instance)
+            } else {
+                None
+            };
+            if let Some(instance) = private_candidate
+                && instance.lowered_function_ordinal == function_ordinal
+            {
+                private_array_work.charge_private_array_work(6)?;
+                if instance.owner != function.correspondence_owner
+                    || instance.function != function.semantic_function
+                {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                instance.lowered_function_ordinal =
+                    if function.role == SemanticKirFunctionRoleV1::KernelEntry {
+                        root_ordinal
+                    } else {
+                        authenticated_launch_roots
+                            .len()
+                            .checked_add(auxiliary_correspondence.len())
+                            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                    };
+                private_instance = private_instance
+                    .checked_add(1)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            }
             if function.role == SemanticKirFunctionRoleV1::KernelEntry {
                 entry_correspondence.push(function);
             } else {
                 auxiliary_correspondence.push(function);
             }
+        }
+        if root_correspondence.private_arrays.active {
+            private_array_work.charge_private_array_work(1)?;
+            if private_instance != root_correspondence.private_arrays.instances.len() {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+        }
+        if root_correspondence.private_arrays.active {
+            if private_arrays.is_none() {
+                private_arrays = Some(PrivateArrayMergeV1::new(private_array_work.active_limit()?));
+            }
+            private_arrays
+                .as_mut()
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                .append(
+                    root_correspondence.private_arrays,
+                    root_payload,
+                    &mut private_array_work,
+                )?;
         }
         let exact_root_record = |owner, function| {
             owner == launch.selected_root && root_function_keys.contains(&(owner, function))
@@ -10788,7 +10969,15 @@ fn lower_module_with_assert_origins_v1(
         &function_ordinals,
         |record| (record.correspondence_owner, record.semantic_function),
     )?;
+    let mut private_arrays = match private_arrays {
+        Some(rows) => rows.into_correspondence(&mut private_array_work)?.0,
+        None => PrivateArrayCorrespondenceV1::default(),
+    };
+    if private_arrays.active {
+        private_array_order_correspondence_v1(&mut private_arrays, &mut private_array_work)?;
+    }
     let correspondence = SemanticKirCorrespondenceV1 {
+        private_arrays,
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
         function_count: semantic.functions().len(),
         lowered_functions: lowered_functions.into_boxed_slice(),
@@ -10862,7 +11051,12 @@ fn lower_single_root_module(
     closure_budget: &mut ReachableClosureBlockBudgetV1,
     validate_correspondence: bool,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
-) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    private_array_work: &mut PrivateArrayLazyBudgetV1,
+    outer_private_arrays: Option<&PrivateArrayMergeV1>,
+) -> Result<
+    (Module, SemanticKirCorrespondenceV1, PrivateArrayPayloadV1),
+    ProductionSemanticKirErrorV1,
+> {
     let semantic = owner.source_semantic();
     let launch_rank = authenticated_launch.map_or(1, |launch| launch.launch_rank);
     if !(1..=3).contains(&launch_rank) {
@@ -11202,6 +11396,7 @@ fn lower_single_root_module(
     let mut diagnostic_declarations = BTreeMap::new();
     let mut float_declarations = BTreeMap::new();
     let mut remaining_operations = limits.max_operations;
+    let mut private_arrays = PrivateArrayMergeV1::new(limits.max_operations);
     for (index, plan) in plans.iter().enumerate() {
         let semantic_ssa = owner
             .plan_for_function(plan.semantic_function)
@@ -11222,6 +11417,8 @@ fn lower_single_root_module(
             authenticated_launch.is_some() && index == 0,
             remaining_operations,
             assert_origins.as_deref_mut(),
+            private_array_work,
+            Some((&private_arrays, outer_private_arrays)),
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
@@ -11230,6 +11427,15 @@ fn lower_single_root_module(
                 actual: limits.max_operations.saturating_add(1),
                 limit: limits.max_operations,
             })?;
+        private_arrays.append_function(
+            plan.correspondence_owner,
+            plan.semantic_function,
+            index,
+            lowered.emitted_operations,
+            lowered.private_arrays,
+            outer_private_arrays,
+            private_array_work,
+        )?;
         module
             .required_capabilities
             .extend(lowered.operation_capabilities.iter().cloned());
@@ -11344,7 +11550,21 @@ fn lower_single_root_module(
         }
     }
 
+    if private_arrays.active {
+        private_array_work.charge_private_array_work(2)?;
+        if private_arrays.recorded_instance_operations
+            > limits
+                .max_operations
+                .checked_sub(remaining_operations)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+    }
+    let (private_arrays, private_payload) =
+        private_arrays.into_correspondence(private_array_work)?;
     let correspondence = SemanticKirCorrespondenceV1 {
+        private_arrays,
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
         function_count: semantic.functions().len(),
         lowered_functions: lowered_functions.into_boxed_slice(),
@@ -11365,7 +11585,7 @@ fn lower_single_root_module(
             limits.max_blocks,
         )?;
     }
-    Ok((module, correspondence))
+    Ok((module, correspondence, private_payload))
 }
 
 fn semantic_source_argument_for_kir_parameter_v1(
@@ -11418,6 +11638,7 @@ include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
+    private_arrays: PrivateArrayFunctionRecorderV1<'a>,
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
     function: &'a SemanticFunctionDeclV1,
@@ -11511,6 +11732,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             launch_rank,
             authenticated_ranked_control,
             max_operations,
+            PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, max_operations)),
+            None,
         )
     }
 
@@ -11532,6 +11755,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         launch_rank: u8,
         authenticated_ranked_control: bool,
         max_operations: usize,
+        mut private_array_work: PrivateArrayRecorderWorkV1<'a>,
+        private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -11626,6 +11851,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             max_operations,
         )?;
         let mut retained_local_slots = BTreeMap::new();
+        let private_array_enabled = control_flow_ssa.has_retained_arrays;
         for (local, plan) in &control_flow_ssa.retained_local_slots {
             let pointer = ValueId(next_value);
             next_value = next_value.checked_add(1).ok_or_else(|| {
@@ -11679,7 +11905,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .iter()
             .map(|(site, values)| (*site, values.iter().copied().collect()))
             .collect();
+        let mut private_array_outer = PrivateArrayPayloadV1::default();
+        if private_array_enabled {
+            private_array_work.activate()?;
+            if let Some((root, outer)) = private_array_sources {
+                private_array_outer = root.payload(0, 0, 0, &mut private_array_work)?;
+                if let Some(outer) = outer {
+                    private_array_outer = private_array_outer.add(
+                        outer.payload(0, 0, 0, &mut private_array_work)?,
+                        &mut private_array_work,
+                    )?;
+                }
+            }
+        }
         Ok(Self {
+            private_arrays: PrivateArrayFunctionRecorderV1::new(
+                private_array_work,
+                private_array_enabled,
+                max_operations,
+                private_array_outer,
+            ),
             types,
             callables,
             function,
@@ -11727,6 +11972,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         block: SemanticBlockIdV1,
         target: &mut BasicBlock,
     ) -> Result<SemanticBlockPrologueSpansV1, ProductionSemanticKirErrorV1> {
+        self.private_arrays.begin_block(block, target.id)?;
         self.retained_local_initialized = self
             .control_flow_ssa
             .retained_initialized_at_entry
@@ -11889,6 +12135,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         let slots = self.retained_local_slots.clone();
         for (local, slot) in slots {
+            let first = target.operations.len();
+            let private_facts = if slot.array.is_some() {
+                Some(self.private_arrays.prepare_slot(
+                    self.types,
+                    local,
+                    &slot,
+                    self.emitted_operations,
+                )?)
+            } else {
+                None
+            };
             let count = slot
                 .array
                 .map(|array| self.emit_index_constant(&mut target.operations, array.length))
@@ -11909,6 +12166,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     },
                 )
             })?;
+            if let Some(count) = count {
+                self.private_arrays.commit_slot(
+                    self.correspondence_owner,
+                    self.semantic_function,
+                    local,
+                    &slot,
+                    private_facts.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                    count,
+                    first,
+                    self.emitted_operations,
+                )?;
+            }
             if let Some(initial) = self.locals.get(local as usize).and_then(Option::as_ref) {
                 let (value, ty) = initial.value().map_err(|detail| {
                     unsupported(
@@ -12285,6 +12554,38 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn lower_statement(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        kind: &SemanticStatementKindV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let checkpoint = self.private_arrays.checkpoint();
+        let operation_checkpoint = (operations.len(), self.next_value, self.emitted_operations);
+        let result = (|| {
+            self.private_arrays.begin_statement(
+                self.function,
+                block,
+                statement,
+                kind,
+                operations.len(),
+            )?;
+            self.lower_statement_inner_v1(block, statement, kind, operations)?;
+            self.private_arrays.finish_statement(operations.len())
+        })();
+        if result.is_err()
+            && matches!(kind, SemanticStatementKindV1::Assign(assignment)
+            if matches!(assignment.value().kind(), SemanticRvalueKindV1::CheckedBinary(_)))
+        {
+            self.private_arrays.rollback(checkpoint);
+            operations.truncate(operation_checkpoint.0);
+            self.next_value = operation_checkpoint.1;
+            self.emitted_operations = operation_checkpoint.2;
+        }
+        result
+    }
+
+    fn lower_statement_inner_v1(
         &mut self,
         block: SemanticBlockIdV1,
         statement: Option<u32>,
@@ -21085,6 +21386,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         kind: OperationKind,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let id = ValueId(self.next_value);
+        let private_unsigned = self.private_arrays.prepare_unsigned(
+            &ty,
+            &kind,
+            id,
+            operations.len(),
+            self.emitted_operations,
+        )?;
         let emitted_unsigned_constant = match &kind {
             OperationKind::Constant(Constant::U8(value)) => Some(u64::from(*value)),
             OperationKind::Constant(Constant::U16(value)) => Some(u64::from(*value)),
@@ -21134,6 +21442,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         self.push_operation(operations, || {
             Operation::effect_free(ValueDef::new(id, ty.clone()), kind)
         })?;
+        self.private_arrays
+            .commit_unsigned(private_unsigned, self.emitted_operations)?;
         if let Some(extent) = emitted_workgroup_memory_extent {
             self.emitted_workgroup_memory_extents.insert(id, extent);
         }
@@ -25034,6 +25344,9 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod resource_tests {
     include!("production_semantic_kir_v1/resource_01_tests.rs");
+    mod private_array_resource_tests {
+        include!("production_semantic_kir_v1/tests/production_private_array_resource_tests.rs");
+    }
     mod correspondence_replay_core_tests {
         include!("production_semantic_kir_v1/tests/production_correspondence_replay_core_tests.rs");
     }
@@ -28201,6 +28514,7 @@ mod resource_tests {
             kernel_types: vec![Type::Scalar(ScalarType::U32)].into_boxed_slice(),
         };
         let plan = SemanticControlFlowSsaPlanV1 {
+            has_retained_arrays: false,
             compiler_issued_bindings: BTreeMap::new(),
             implicit_entry_locals: BTreeSet::new(),
             ssa_value_locals: BTreeSet::from([1]),
@@ -28831,6 +29145,7 @@ mod resource_tests {
             }] if allocation.parameter_index() == 0
         ));
         let correspondence = SemanticKirCorrespondenceV1 {
+            private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [7; 32],
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
@@ -28940,6 +29255,7 @@ mod resource_tests {
         let correspondence_owner = SemanticFunctionIdV1::from_index(0);
         let semantic_function = SemanticFunctionIdV1::from_index(0);
         let correspondence = SemanticKirCorrespondenceV1 {
+            private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [8; 32],
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
@@ -29221,6 +29537,7 @@ mod resource_tests {
         let failure = unsupported_indices_match_ranked_sources_result(
             &module,
             &correspondence,
+            None,
             module.kernels[0].id.as_str(),
             &lowering,
             &sources[..1],
@@ -30056,6 +30373,7 @@ mod resource_tests {
             },
         ));
         let correspondence = SemanticKirCorrespondenceV1 {
+            private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [10; 32],
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
@@ -30293,6 +30611,7 @@ mod resource_tests {
         );
         let body = function.body.as_ref().unwrap();
         let correspondence = SemanticKirCorrespondenceV1 {
+            private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [9; 32],
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
@@ -30589,6 +30908,7 @@ mod resource_tests {
         ));
         verify_module(&module).expect("value translation Kernel IR must verify");
         let correspondence = SemanticKirCorrespondenceV1 {
+            private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [8; 32],
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
@@ -31215,6 +31535,7 @@ mod resource_tests {
         .body
         .expect("the neutral recipe fixture has a body");
         let correspondence = SemanticKirCorrespondenceV1 {
+            private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [191; 32],
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
