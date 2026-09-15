@@ -327,7 +327,6 @@ fn induction_body_predicates_do_not_admit_unresolved_or_malformed_sources() {
     for fixture in [
         BodyPredicateFixtureV1::Unresolved,
         BodyPredicateFixtureV1::LaneDependent,
-        BodyPredicateFixtureV1::MultipleDefinitions,
         BodyPredicateFixtureV1::WrongWidth,
         BodyPredicateFixtureV1::Signed,
     ] {
@@ -345,6 +344,12 @@ fn induction_body_predicates_do_not_admit_unresolved_or_malformed_sources() {
         .unwrap_err();
         assert!(error.to_string().contains("FE2O3-TENSOR-LAYOUT-002"));
     }
+    let multiple_definitions =
+        induction_body_predicate_function_v1(BodyPredicateFixtureV1::MultipleDefinitions, 0, false);
+    assert_incomplete(
+        induction_body_ranked_tensor_v1(&multiple_definitions, false),
+        "a uniform induction comparison with multiple header definitions",
+    );
     for fixture in [
         BodyPredicateFixtureV1::Escaped,
         BodyPredicateFixtureV1::CyclicAlias,
@@ -650,6 +655,7 @@ fn induction_body_operand_rejects_header_latch_and_outside_uses() {
         assert!(result.is_none(), "out-of-body use in block {block}");
     }
     let mut proofs = SemanticAssertProofsV1::new(&types, &function).unwrap();
+    let mut exhausted_work = usize::MAX;
     assert!(matches!(
         induction_predicate_source_operand_v1(
             &types,
@@ -663,7 +669,7 @@ fn induction_body_operand_rejects_header_latch_and_outside_uses() {
             &definitions,
             &mut proofs,
             &inductions,
-            &mut usize::MAX,
+            &mut exhausted_work,
         ),
         Err(ProductionRankedProjectionErrorV1::Unsupported(_))
     ));
