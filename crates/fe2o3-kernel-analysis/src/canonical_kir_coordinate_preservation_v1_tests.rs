@@ -54,6 +54,10 @@ fn complete_borrowed_identity_accepts_canonical_equal_owners_and_rejects_changed
         storage.retained_storage(),
         size_of::<CheckedCanonicalKirCoordinatePreservationV1<'_, '_>>()
     );
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "End this borrowed witness before the next accounting check"
+    )]
     drop(checked);
     for candidate in [body(8, 93), body(7, 94)] {
         let other = admit(&candidate);
@@ -88,6 +92,10 @@ fn capability_extension_is_monotone_but_does_not_identify_a_target() {
     let (checked, _) =
         check_canonical_kir_coordinate_preservation_v1(&input, &output, &mut budget).unwrap();
     assert!(!checked.grants_authority());
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "End this borrowed witness before the next accounting check"
+    )]
     drop(checked);
     assert!(matches!(
         check_canonical_kir_coordinate_preservation_v1(&output, &input, &mut budget),
@@ -135,6 +143,10 @@ fn checked_view_storage_is_admitted_before_complete_payload_comparison() {
             let (checked, receipt) = result.unwrap();
             assert_eq!(receipt.retained_storage(), bytes);
             assert_eq!(budget.work(), 80);
+            #[allow(
+                clippy::drop_non_drop,
+                reason = "End this borrowed witness before the next accounting check"
+            )]
             drop(checked);
         } else {
             assert!(matches!(result, Err(Error::Resource(Resource::Storage(_)))));

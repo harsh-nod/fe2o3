@@ -107,6 +107,10 @@ fn source_output_catalogs_after_replay_v1(
         budget
             .reserve_storage(transported_storage.retained_storage())
             .map_err(Error::Resource)?;
+        #[allow(
+            clippy::drop_non_drop,
+            reason = "End the borrowed witness lifetime before releasing its ledger reservation"
+        )]
         drop(checked_catalog);
         budget
             .release_storage(checked_storage.retained_storage())

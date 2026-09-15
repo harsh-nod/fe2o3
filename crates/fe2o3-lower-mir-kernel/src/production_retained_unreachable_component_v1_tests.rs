@@ -167,6 +167,10 @@ fn independently_checked_identity_retains_unreachable_assertion_physical_placeme
     budget
         .release_storage(control_storage.retained_storage())
         .unwrap();
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "End the borrowed witness before releasing its ledger reservation"
+    )]
     drop(checked);
     budget
         .release_storage(checked_storage.retained_storage())

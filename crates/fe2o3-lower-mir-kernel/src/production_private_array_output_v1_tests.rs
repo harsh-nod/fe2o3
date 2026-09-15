@@ -59,6 +59,10 @@ fn with_output(
     assert_eq!(budget.storage(), live);
     drop(view);
     budget.release_storage(storage.retained_storage()).unwrap();
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "End the borrowed witness before releasing its ledger reservation"
+    )]
     drop(coordinates);
     budget
         .release_storage(coordinate_storage.retained_storage())
@@ -131,6 +135,10 @@ fn with_control(
     budget
         .release_storage(control_storage.retained_storage())
         .unwrap();
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "End the borrowed witness before releasing its ledger reservation"
+    )]
     drop(transition);
     budget
         .release_storage(transition_storage.retained_storage())
@@ -684,6 +692,10 @@ fn array_header_and_rows_remain_reserved_across_real_catalog_success_and_failure
                     budget.release_storage(payload + header).unwrap();
                     assert_eq!(budget.storage(), floor);
                 }
+                #[allow(
+                    clippy::drop_non_drop,
+                    reason = "End the borrowed witness before releasing its ledger reservation"
+                )]
                 drop(coordinates);
                 setup.release_storage(receipt.retained_storage()).unwrap();
             });

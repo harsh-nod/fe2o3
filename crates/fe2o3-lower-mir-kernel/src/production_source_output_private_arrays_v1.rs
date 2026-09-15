@@ -28,6 +28,10 @@ struct SourceOutputArrayAnchorsV1 {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Fixed-size Copy rows keep the prepaid contiguous payload free of per-row allocations"
+)]
 enum SourceOutputArrayPlacementV1 {
     Unsupported,
     OmittedUnreachable,

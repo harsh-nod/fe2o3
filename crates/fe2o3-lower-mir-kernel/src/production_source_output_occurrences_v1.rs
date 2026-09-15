@@ -456,6 +456,10 @@ pub fn derive_source_output_occurrences_v1<'source, 'output>(
         budget
             .release_storage(control_storage.retained_storage())
             .map_err(Error::Resource)?;
+        #[allow(
+            clippy::drop_non_drop,
+            reason = "End the borrowed witness lifetime before releasing its ledger reservation"
+        )]
         drop(transition);
         budget
             .release_storage(transition_storage.retained_storage())

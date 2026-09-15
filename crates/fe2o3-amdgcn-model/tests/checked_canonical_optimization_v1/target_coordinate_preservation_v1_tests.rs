@@ -40,6 +40,10 @@ fn actual_binder_delta_is_exact_for_both_targets_and_non_dense_executables() {
                 changed
             );
             drop(checked);
+            #[allow(
+                clippy::drop_non_drop,
+                reason = "End the borrowed witness before releasing its ledger reservation"
+            )]
             drop(coordinates);
             budget.release_storage(storage.retained_storage()).unwrap();
             assert_eq!(budget.storage(), floor);
