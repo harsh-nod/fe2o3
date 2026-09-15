@@ -8,6 +8,10 @@ use super::super::super::adapter::prepared_v1::{
 };
 use super::*;
 
+mod call_address_output_tests {
+    include!("call_address_output_v1_tests.rs");
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Overflow {
     Blocks,
@@ -618,7 +622,7 @@ fn duplicate_switch_occurrences_are_counted_individually() {
 }
 
 #[test]
-fn projected_call_destination_preserves_existing_grammar_only() {
+fn projected_call_destination_counts_only_address_inputs() {
     let function = test_function(vec![
         test_block(
             204,
@@ -631,16 +635,37 @@ fn projected_call_destination_preserves_existing_grammar_only() {
         test_block(205, vec![], SemanticTerminatorKindV1::Return),
     ]);
     let outcome = run_prepared(&function, None, &[]);
-    assert_eq!(outcome.counts.tuple(), (2, 0, 2, 0, 1));
+    assert_eq!(outcome.counts.tuple(), (2, 1, 2, 0, 1));
     assert_eq!(outcome.input.promotable(), [true, false, true, true]);
-    assert!(outcome.trace.events.is_empty());
+    assert_eq!(outcome.input.blocks()[0].events(), [used(2)]);
+    assert_eq!(
+        outcome.trace.events,
+        [row(
+            Site::Terminator { block: 0 },
+            Operand::CallDestinationAddress,
+            EventRole::ProjectionIndexUse(1),
+            0,
+            used(2),
+        )]
+    );
     assert!(outcome.trace.edge_definitions.is_empty());
-    assert!(
+    assert_eq!(
         outcome
             .trace
             .visits
             .iter()
-            .all(|(visit, _)| { !matches!(visit, Visit::Place | Visit::Projection) })
+            .filter(|(visit, _)| *visit == Visit::Projection)
+            .count(),
+        4
+    );
+    assert_eq!(
+        outcome
+            .trace
+            .visits
+            .iter()
+            .filter(|(visit, _)| *visit == Visit::Place)
+            .count(),
+        1
     );
     assert_eq!(outcome.input.blocks()[0].edges().len(), 2);
     assert_edge(

@@ -45,6 +45,7 @@ pub(in crate::production::semantic_ssa) enum SemanticSsaOperandRoleV1 {
     StorageLive,
     StorageDead,
     CallArgument(usize),
+    CallDestinationAddress,
     TailCallArgument(usize),
     SwitchDiscriminant,
     DropPlace,
@@ -486,6 +487,37 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         }
         Ok(())
     }
+    fn call_destination_address(
+        &mut self,
+        destination: &SemanticPlaceV1,
+    ) -> EmissionResultV1<O::Error, B::Error> {
+        self.visit(SemanticSsaVisitV1::Place)?;
+        let mut indirect = false;
+        for projection in destination.projections() {
+            self.visit(SemanticSsaVisitV1::Projection)?;
+            indirect |= projection.kind() == SemanticProjectionKindV1::Dereference;
+        }
+        let role = SemanticSsaOperandRoleV1::CallDestinationAddress;
+        if indirect {
+            self.event(
+                role,
+                SemanticSsaEventRoleV1::BaseUse,
+                SsaEventV1::Use(SsaVariableIdV1::new(destination.local().index())),
+            )?;
+        }
+        for (ordinal, projection) in destination.projections().iter().enumerate() {
+            self.visit(SemanticSsaVisitV1::Projection)?;
+            if let SemanticProjectionKindV1::Index(local) = projection.kind() {
+                self.event(
+                    role,
+                    SemanticSsaEventRoleV1::ProjectionIndexUse(ordinal),
+                    SsaEventV1::Use(SsaVariableIdV1::new(local.index())),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn definition(
         &mut self,
         place: &SemanticPlaceV1,
@@ -513,6 +545,11 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
                 self.operand(discriminant, R::SwitchDiscriminant)
             }
             SemanticTerminatorKindV1::Call(call) => {
+                if let Some(destination) = call.destination()
+                    && !destination.place().projections().is_empty()
+                {
+                    self.call_destination_address(destination.place())?;
+                }
                 for (ordinal, argument) in call.arguments().iter().enumerate() {
                     self.operand(argument, R::CallArgument(ordinal))?;
                 }

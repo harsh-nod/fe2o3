@@ -29,6 +29,9 @@ use fe2o3_pliron::{
 #[path = "production_semantic_kir_v1/source_launch_roster_v1.rs"]
 mod source_launch_roster_v1;
 
+#[path = "production_semantic_kir_v1/projected_call_destination_v1.rs"]
+mod projected_call_destination_v1;
+
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }

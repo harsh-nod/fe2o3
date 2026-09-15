@@ -11333,6 +11333,7 @@ include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
+include!("production_call_destination_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     types: &'a [SemanticTypeDeclV1],
@@ -14473,6 +14474,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "compiler intrinsic call has no destination",
             )
         })?;
+        let prepared_destination =
+            self.prepare_call_destination_v1(block, destination.place(), operations)?;
         let mut runtime_guard = None;
         let binding = match operation {
             SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
@@ -16679,12 +16682,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             &binding,
             operations,
         )?;
-        self.assign_place(
+        self.finish_call_destination_v1(
             block,
-            None,
             destination.place(),
+            prepared_destination,
             binding,
-            SemanticVolatilityV1::NonVolatile,
+            runtime_guard,
             operations,
         )?;
         let target = BlockId(destination.edge().target().index());
@@ -16760,6 +16763,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "defined call argument or result arity changed",
             ));
         }
+        let prepared_destination = match call.destination() {
+            Some(destination) if !destination.place().projections().is_empty() => {
+                self.prepare_call_destination_v1(block, destination.place(), operations)?
+            }
+            _ => PreparedSemanticCallDestinationV1::Unprojected,
+        };
         let mut arguments = Vec::with_capacity(call.arguments().len());
         for ((argument, expected_semantic), expected) in call
             .arguments()
@@ -16848,12 +16857,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?,
             _ => unreachable!("bounded helper plan admits at most one result"),
         };
-        self.assign_place(
+        self.finish_call_destination_v1(
             block,
-            None,
             destination.place(),
+            prepared_destination,
             binding,
-            SemanticVolatilityV1::NonVolatile,
+            None,
             operations,
         )?;
         Ok(Terminator::Branch {
@@ -19828,6 +19837,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.store_retained_local_with_predicate_v1(
+            block,
+            statement,
+            local,
+            value,
+            (volatility, None),
+            operations,
+        )
+    }
+
+    fn store_retained_local_with_predicate_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        local: SemanticLocalIdV1,
+        value: &SemanticValueBindingV1,
+        (volatility, predicate): (SemanticVolatilityV1, Option<ValueId>),
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         let slot = self
             .retained_local_slots
             .get(&local.index())
@@ -19848,16 +19876,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
         access.volatile = volatility == SemanticVolatilityV1::Volatile;
-        self.push_operation(operations, || {
-            Operation::new(
-                Vec::new(),
-                OperationKind::Store {
-                    pointer: slot.pointer,
-                    value,
-                    access,
-                },
-            )
-        })?;
+        self.push_memory_store_v1(operations, slot.pointer, value, access, predicate)?;
         self.retained_local_initialized.insert(local.index());
         Ok(())
     }
@@ -19927,16 +19946,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let mut access =
             memory_access_for_type(self.types, destination.ty(), pointer_type.address_space)?;
         access.volatile = volatility == SemanticVolatilityV1::Volatile;
-        self.push_operation(operations, || {
-            Operation::new(
-                vec![],
-                OperationKind::Store {
-                    pointer,
-                    value,
-                    access,
-                },
-            )
-        })?;
+        self.push_memory_store_v1(operations, pointer, value, access, None)?;
         Ok(())
     }
 
@@ -24824,12 +24834,40 @@ mod resource_tests {
         lowered_address_space: AddressSpace,
         lowered_access: AccessMode,
     ) -> Result<(Vec<Operation>, Terminator), ProductionSemanticKirErrorV1> {
+        with_volatile_load_context_for_test(
+            semantic_address_space,
+            semantic_reference_size,
+            index_type,
+            lowered_address_space,
+            lowered_access,
+            false,
+            |lowering, call| {
+                let mut operations = Vec::new();
+                let terminator =
+                    lowering.lower_call(SemanticBlockIdV1::from_index(0), call, &mut operations)?;
+                Ok((operations, terminator))
+            },
+        )
+    }
+
+    fn with_volatile_load_context_for_test<R>(
+        semantic_address_space: u32,
+        semantic_reference_size: u64,
+        index_type: SemanticTypeIdV1,
+        lowered_address_space: AddressSpace,
+        lowered_access: AccessMode,
+        projected_destination: bool,
+        run: impl FnOnce(
+            &mut SemanticFunctionLoweringV1<'_>,
+            &SemanticDirectCallV1,
+        ) -> Result<R, ProductionSemanticKirErrorV1>,
+    ) -> Result<R, ProductionSemanticKirErrorV1> {
         let unit = SemanticTypeIdV1::from_index(0);
         let element = SemanticTypeIdV1::from_index(1);
         let slice = SemanticTypeIdV1::from_index(3);
         let slice_reference = SemanticTypeIdV1::from_index(4);
         let source = SemanticSourceProvenanceV1::unavailable();
-        let types = vec![
+        let mut types = vec![
             unit_type(),
             unsigned_scalar_type(151, 32),
             u64_type(),
@@ -24856,6 +24894,27 @@ mod resource_tests {
                 ),
             ),
         ];
+        let destination_type = if projected_destination {
+            types.push(SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([185; 32]),
+                SemanticLayoutIdentityV1::from_sha256([186; 32]),
+                SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1::new_with_kind(
+                        element,
+                        SemanticPointerKindV1::Raw,
+                        SemanticMutabilityV1::Mutable,
+                        5,
+                        64,
+                        SemanticPointerMetadataV1::None,
+                    )
+                    .unwrap(),
+                ),
+            ));
+            SemanticTypeIdV1::from_index(5)
+        } else {
+            element
+        };
         let unit_abi = SemanticFunctionAbiV1::from_rustc(
             SemanticAbiIdentityV1::from_sha256([157; 32]),
             SemanticLayoutIdentityV1::from_sha256([158; 32]),
@@ -24933,7 +24992,7 @@ mod resource_tests {
                 ),
                 SemanticLocalDeclV1::new(
                     SemanticLocalIdentityV1::from_sha256([174; 32]),
-                    element,
+                    destination_type,
                     SemanticLocalRoleV1::Temporary,
                     source,
                 ),
@@ -24983,7 +25042,22 @@ mod resource_tests {
                 SemanticOperandV1::Copy(place(2, index_type)),
             ],
             Some(SemanticCallDestinationV1::new(
-                place(3, element),
+                if projected_destination {
+                    SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(3),
+                        vec![
+                            SemanticProjectionV1::new(
+                                SemanticProjectionKindV1::Dereference,
+                                element,
+                            )
+                            .unwrap(),
+                        ],
+                        element,
+                    )
+                    .unwrap()
+                } else {
+                    place(3, element)
+                },
                 SemanticControlFlowEdgeV1::new(
                     SemanticEdgeRoleV1::CallReturn,
                     SemanticBlockIdV1::from_index(1),
@@ -24992,10 +25066,11 @@ mod resource_tests {
             SemanticUnwindActionV1::Unreachable,
         )
         .unwrap();
-        let mut operations = Vec::new();
-        let terminator =
-            lowering.lower_call(SemanticBlockIdV1::from_index(0), &call, &mut operations)?;
-        Ok((operations, terminator))
+        run(&mut lowering, &call)
+    }
+
+    mod guarded_call_destination_tests {
+        include!("production_guarded_call_destination_tests.rs");
     }
 
     #[test]

@@ -174,7 +174,7 @@ pub(super) fn validate_partial_moves_v1(
                 && let Some(destination) = call.destination()
                 && destination.edge() == edge
             {
-                validate_partial_move_destination_v1(
+                apply_partial_move_destination_write_v1(
                     function,
                     types,
                     destination.place(),
@@ -477,6 +477,12 @@ fn validate_partial_move_terminator_v1(
     state: &mut SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
+    if let SemanticTerminatorKindV1::Call(call) = terminator
+        && let Some(destination) = call.destination()
+        && !destination.place().projections().is_empty()
+    {
+        validate_partial_move_call_address_v1(destination.place(), location, state, budget)?;
+    }
     let mut operand = |operand| {
         validate_partial_move_operand_v1(function, types, operand, location, state, budget)
     };
@@ -485,16 +491,6 @@ fn validate_partial_move_terminator_v1(
         SemanticTerminatorKindV1::Call(call) => {
             for argument in call.arguments() {
                 operand(argument)?;
-            }
-            if let Some(destination) = call.destination()
-                && !destination.place().projections().is_empty()
-            {
-                validate_partial_move_projection_indices_v1(
-                    destination.place(),
-                    location,
-                    state,
-                    budget,
-                )?;
             }
             Ok(())
         }
@@ -594,6 +590,18 @@ fn validate_partial_move_destination_v1(
     state: &mut SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
+    apply_partial_move_destination_write_v1(function, types, destination, location, state, budget)?;
+    validate_partial_move_projection_indices_v1(destination, location, state, budget)
+}
+
+fn apply_partial_move_destination_write_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    destination: &SemanticPlaceV1,
+    location: SemanticPartialMoveLocationV1,
+    state: &mut SemanticPartialMoveStateV1,
+    budget: &mut SemanticPartialMoveBudgetV1,
+) -> Result<(), ProductionSemanticSsaErrorV1> {
     if destination.projections().is_empty() {
         state.remove(&destination.local().index());
         return Ok(());
@@ -615,17 +623,12 @@ fn validate_partial_move_destination_v1(
             // An unknown element write cannot repair a tracked move. Require
             // the whole base to remain available and leave all move state intact.
             validate_partial_move_path_read_v1(local, &[], location, state, budget)?;
-            return validate_partial_move_projection_indices_v1(
-                destination,
-                location,
-                state,
-                budget,
-            );
+            return Ok(());
         }
         Err(error) => return Err(error),
     };
     let Some(path) = path else {
-        return validate_partial_move_projection_indices_v1(destination, location, state, budget);
+        return Ok(());
     };
     if let Some(moved) = state.get_mut(&local) {
         for prefix_length in 0..path.len() {
@@ -644,7 +647,7 @@ fn validate_partial_move_destination_v1(
             state.remove(&local);
         }
     }
-    validate_partial_move_projection_indices_v1(destination, location, state, budget)
+    Ok(())
 }
 
 fn is_supported_indexed_destination_v1(
@@ -705,6 +708,102 @@ fn is_supported_indexed_destination_v1(
         current = projection.result_type();
     }
     Ok(indexed)
+}
+
+fn validate_partial_move_call_address_v1(
+    destination: &SemanticPlaceV1,
+    location: SemanticPartialMoveLocationV1,
+    state: &SemanticPartialMoveStateV1,
+    budget: &mut SemanticPartialMoveBudgetV1,
+) -> Result<(), ProductionSemanticSsaErrorV1> {
+    let mut indirect = false;
+    for (ordinal, projection) in destination.projections().iter().enumerate() {
+        budget.charge_work()?;
+        match projection.kind() {
+            SemanticProjectionKindV1::Index(index) => {
+                validate_partial_move_path_read_v1(index.index(), &[], location, state, budget)?;
+            }
+            SemanticProjectionKindV1::Dereference if !indirect => {
+                indirect = true;
+                validate_partial_move_call_pointer_prefix_v1(
+                    destination,
+                    ordinal,
+                    location,
+                    state,
+                    budget,
+                )?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_partial_move_call_pointer_prefix_v1(
+    destination: &SemanticPlaceV1,
+    end: usize,
+    location: SemanticPartialMoveLocationV1,
+    state: &SemanticPartialMoveStateV1,
+    budget: &mut SemanticPartialMoveBudgetV1,
+) -> Result<(), ProductionSemanticSsaErrorV1> {
+    budget.charge_work()?;
+    let local = destination.local().index();
+    let Some(moved) = state.get(&local) else {
+        return Ok(());
+    };
+    for path in moved {
+        budget.charge_work()?;
+        let mut disjoint = false;
+        for (element, projection) in path.iter().zip(&destination.projections()[..end]) {
+            budget.charge_work()?;
+            let equal = match (element, projection.kind()) {
+                (
+                    SemanticMovePathElementV1::Field(left),
+                    SemanticProjectionKindV1::Field(right),
+                ) => *left == right,
+                (
+                    SemanticMovePathElementV1::ConstantIndex {
+                        offset: left,
+                        from_end: left_end,
+                    },
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset: right,
+                        from_end: right_end,
+                        ..
+                    },
+                ) => {
+                    if *left_end != right_end {
+                        break;
+                    }
+                    *left == right
+                }
+                (
+                    SemanticMovePathElementV1::Downcast(left),
+                    SemanticProjectionKindV1::Downcast(right),
+                ) => {
+                    if *left != right {
+                        break;
+                    }
+                    true
+                }
+                // An unknown projection can overlap a tracked move. Do not read
+                // the whole destination merely to select its pointer prefix.
+                _ => break,
+            };
+            if !equal {
+                disjoint = true;
+                break;
+            }
+        }
+        if !disjoint {
+            return Err(partial_move_error_v1(
+                location,
+                local,
+                SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_partial_move_projection_indices_v1(
@@ -910,3 +1009,7 @@ fn merge_partial_move_state_v1(
 #[cfg(test)]
 #[path = "partial_move_indexed_path_tests.rs"]
 mod indexed_path_tests;
+
+#[cfg(test)]
+#[path = "partial_move_call_address_v1_tests.rs"]
+mod call_address_tests;

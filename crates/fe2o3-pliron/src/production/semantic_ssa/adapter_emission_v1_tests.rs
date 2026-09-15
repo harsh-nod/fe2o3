@@ -18,6 +18,10 @@ mod prepared_driver_v1_tests {
     include!("prepared_driver_v1_tests.rs");
 }
 
+mod projected_call_destination_v1_tests {
+    include!("projected_call_destination_v1_tests.rs");
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct Event {
     site: Site,
