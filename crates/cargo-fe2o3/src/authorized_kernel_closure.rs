@@ -212,7 +212,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
 )];
 // The complete workspace tree includes nested fixture lockfiles.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "8e3b1b343f80964f87c87c7e387793c3448a3e94a6ad29ac0f554762065b789d";
+    "89856f69fe536c6e5288bf4cde1427597670b0a90fa75727702f46a1cc04b346";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
@@ -1651,6 +1651,10 @@ mod tests {
         fs::create_dir(&source).unwrap();
         let manifest = directory.path().join("Cargo.toml");
         let library = source.join("lib.rs");
+        let fixture = directory.path().join("tests/fixtures/worker");
+        fs::create_dir_all(&fixture).unwrap();
+        let fixture_lock = fixture.join("Cargo.lock");
+        fs::write(&fixture_lock, b"version = 4\n").unwrap();
         fs::write(&manifest, b"[package]\nname='fixture'\nversion='0.1.0'\n").unwrap();
         fs::write(&library, b"pub fn reviewed() {}\n").unwrap();
         let reviewed = canonical_tree_digest(directory.path(), None).unwrap();
@@ -1663,6 +1667,14 @@ mod tests {
         fs::write(&library, b"pub fn substituted() {}\n").unwrap();
         let source_drift = canonical_tree_digest(directory.path(), None).unwrap();
         assert_ne!(source_drift, reviewed);
+
+        fs::write(
+            &fixture_lock,
+            b"version = 4\n[[package]]\nname = 'dependency'\nversion = '0.1.0'\n",
+        )
+        .unwrap();
+        let lock_drift = canonical_tree_digest(directory.path(), None).unwrap();
+        assert_ne!(lock_drift, source_drift);
     }
 
     #[test]
