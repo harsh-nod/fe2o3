@@ -27907,13 +27907,27 @@ mod resource_tests {
         rhs_storage: SemanticMfmaStorageLayoutV1,
     ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
         let unit = SemanticTypeIdV1::from_index(0);
-        let fragment = SemanticTypeIdV1::from_index(1);
+        let lhs_fragment = SemanticTypeIdV1::from_index(1);
+        let rhs_fragment = SemanticTypeIdV1::from_index(2);
+        let accumulator_fragment = SemanticTypeIdV1::from_index(3);
         let source = SemanticSourceProvenanceV1::unavailable();
         let types = [
             unit_type(),
             SemanticTypeDeclV1::new(
                 SemanticTypeIdentityV1::from_sha256([151; 32]),
                 SemanticLayoutIdentityV1::from_sha256([152; 32]),
+                SemanticTypeLayoutV1::new(Some(16), 4).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([181; 32]),
+                SemanticLayoutIdentityV1::from_sha256([182; 32]),
+                SemanticTypeLayoutV1::new(Some(16), 4).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([183; 32]),
+                SemanticLayoutIdentityV1::from_sha256([184; 32]),
                 SemanticTypeLayoutV1::new(Some(16), 4).unwrap(),
                 SemanticTypeShapeV1::Opaque,
             ),
@@ -27942,31 +27956,38 @@ mod resource_tests {
             ),
             operation: SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
                 context: unit,
-                lhs_fragment: fragment,
-                rhs_fragment: fragment,
-                accumulator_fragment: fragment,
+                lhs_fragment,
+                rhs_fragment,
+                accumulator_fragment,
                 lhs: operand_contract(SemanticMfmaOperandRoleV1::A),
                 rhs: operand_contract(SemanticMfmaOperandRoleV1::B),
                 accumulator: accumulator_contract(),
             },
             operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([160; 32]),
         }];
-        let locals = [unit, unit, fragment, fragment, fragment, fragment]
-            .into_iter()
-            .enumerate()
-            .map(|(ordinal, ty)| {
-                SemanticLocalDeclV1::new(
-                    SemanticLocalIdentityV1::from_sha256([161 + ordinal as u8; 32]),
-                    ty,
-                    if ordinal == 0 {
-                        SemanticLocalRoleV1::Return
-                    } else {
-                        SemanticLocalRoleV1::Temporary
-                    },
-                    source,
-                )
-            })
-            .collect();
+        let locals = [
+            unit,
+            unit,
+            lhs_fragment,
+            rhs_fragment,
+            accumulator_fragment,
+            accumulator_fragment,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([161 + ordinal as u8; 32]),
+                ty,
+                if ordinal == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                source,
+            )
+        })
+        .collect();
         let blocks = [
             SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
                 SemanticEdgeRoleV1::Goto,
@@ -28044,12 +28065,17 @@ mod resource_tests {
         };
         let call = SemanticDirectCallV1::new_callable(
             SemanticCallableIdV1::from_index(0),
-            [(1, unit), (2, fragment), (3, fragment), (4, fragment)]
-                .into_iter()
-                .map(|(local, ty)| SemanticOperandV1::Copy(place(local, ty)))
-                .collect(),
+            [
+                (1, unit),
+                (2, lhs_fragment),
+                (3, rhs_fragment),
+                (4, accumulator_fragment),
+            ]
+            .into_iter()
+            .map(|(local, ty)| SemanticOperandV1::Copy(place(local, ty)))
+            .collect(),
             Some(SemanticCallDestinationV1::new(
-                place(5, fragment),
+                place(5, accumulator_fragment),
                 SemanticControlFlowEdgeV1::new(
                     SemanticEdgeRoleV1::CallReturn,
                     SemanticBlockIdV1::from_index(1),
