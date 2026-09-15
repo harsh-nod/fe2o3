@@ -75,17 +75,18 @@ impl<'data> Bf16MfmaBColumnMajorMatrix<'data> {
         let mut component = 0;
         while component < 4 {
             let reduction = first_reduction.and_then(|base| base.checked_add(component));
-            if let (Some(column), Some(reduction)) = (column, reduction) {
-                if column < self.columns && reduction < self.reduction {
-                    values[component] = column
-                        .checked_mul(self.stride)
-                        .and_then(|base| self.offset.checked_add(base))
-                        .and_then(|base| base.checked_add(reduction))
-                        .and_then(|index| self.bits.get(index))
-                        .copied()
-                        .map(Bf16::from_bits)
-                        .unwrap_or(Bf16::ZERO);
-                }
+            if let (Some(column), Some(reduction)) = (column, reduction)
+                && column < self.columns
+                && reduction < self.reduction
+            {
+                values[component] = column
+                    .checked_mul(self.stride)
+                    .and_then(|base| self.offset.checked_add(base))
+                    .and_then(|base| base.checked_add(reduction))
+                    .and_then(|index| self.bits.get(index))
+                    .copied()
+                    .map(Bf16::from_bits)
+                    .unwrap_or(Bf16::ZERO);
             }
             component += 1;
         }
