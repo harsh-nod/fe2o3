@@ -952,53 +952,6 @@
         );
     }
 
-    fn authenticated_tensor_state(
-        lhs_storage: SemanticMfmaStorageLayoutV1,
-        rhs_storage: SemanticMfmaStorageLayoutV1,
-    ) -> ProjectedCapabilityStateV1 {
-        HashMap::from([
-            (
-                0,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
-                    root: 10,
-                }),
-            ),
-            (
-                1,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
-                    ProjectedMfmaOperandV1 {
-                        contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
-                        storage_layout: lhs_storage,
-                        lane_root: 20,
-                        allocation: tensor_test_allocation(),
-                    },
-                )),
-            ),
-            (
-                2,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
-                    ProjectedMfmaOperandV1 {
-                        contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
-                        storage_layout: rhs_storage,
-                        lane_root: 20,
-                        allocation: tensor_test_allocation(),
-                    },
-                )),
-            ),
-            (
-                3,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
-                    ProjectedMfmaAccumulatorV1 {
-                        contract: mfma_accumulator_contract(),
-                        lane_root: 20,
-                        value_root: 30,
-                        flow_root: 30,
-                    },
-                )),
-            ),
-        ])
-    }
-
     #[test]
     fn column_major_b_preserves_register_layout_but_has_distinct_source_identity() {
         let call = tensor_test_call();
