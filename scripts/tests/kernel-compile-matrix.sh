@@ -571,12 +571,15 @@ fi
 
 : >"${LOG}"
 gfx950_output="${TEST_ROOT}/gfx950.out"
+# Dispatch wrappers must supply their own suite and source directory.
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
 CARGO=cargo \
 ROCM_PATH="${FAKE_ROCM}" \
 FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST_724}" \
 FE2O3_EXAMPLE_CARGO_ARGS=--no-default-features \
 FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
+FE2O3_ADVANCED_SUITE=undeclared-parent-suite \
+FE2O3_ADVANCED_SCRIPT_DIR="${TEST_ROOT}/absent-parent-suite" \
 TMPDIR="${TEST_ROOT}/tmp" \
 KERNEL_MATRIX_TEST_LOG="${LOG}" \
 KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
