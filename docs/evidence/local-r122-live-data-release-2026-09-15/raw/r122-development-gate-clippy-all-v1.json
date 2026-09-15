@@ -1,0 +1,103 @@
+{
+  "source_head": "f6d3fb50e4fd1eb6949d4a29f55c79432a5989e1",
+  "source_map_sha256": "178fa1fb2c9d3267440dbf36c50e4d79916e66fb2765446d7e1fa8acb8fc90c4",
+  "started_at": "2026-09-15T11:48:37.957Z",
+  "finished_at": "2026-09-15T11:49:23.158Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "clippy",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-completion",
+    "-p",
+    "fe2o3-runtime-model",
+    "-p",
+    "fe2o3-resource-accounting",
+    "-p",
+    "fe2o3-kfd",
+    "-p",
+    "fe2o3-runtime",
+    "-p",
+    "fe2o3-host",
+    "-p",
+    "fe2o3-macros",
+    "--all-features",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r122-development-gate-clippy-all-v1.log",
+  "source": "/home/harsh/.codex-tmp/r122-development-gate-clippy-all-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r122-development-gate-clippy-all-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r122-development-run-v1.js",
+    "sha256": "b1d89a2f4ea181499651e2f7a1d69203f4a94fc0bfb0e1dca716b311e29a828b"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 3568403,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789472963170,
+        "monotonic_ns": "69671826257804",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 45.202103478,
+  "verification_elapsed_seconds": 0.398334006,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r122-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r122-development-gate-macro-fixtures-v1.json",
+      "sha256": "9a7f810ae879d6c34d3e5762b170b9c27bf3b58daf6cae91ba83b64b098e9d15",
+      "observation": {
+        "utc_ms": 1789472917549,
+        "monotonic_ns": "69626205468614",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789472917957,
+      "monotonic_ns": "69626613128120",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789472963158,
+      "monotonic_ns": "69671815231598",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789472963557,
+      "monotonic_ns": "69672213565604",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

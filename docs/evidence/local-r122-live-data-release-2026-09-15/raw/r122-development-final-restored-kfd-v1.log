@@ -1,0 +1,52 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.17s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 35 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_all_five_variants_commit_after_retake_and_reuse_exact_hole ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_closing_currentness_failure_retains_native_disposal_receipt has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_complete_receipt_survives_every_failed_retake_without_ledger_commit has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_host_model_commit_failures_retain_unmap_or_disposal_receipt has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_host_model_commit_failures_retain_unmap_or_disposal_receipt ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_closing_currentness_failure_retains_native_disposal_receipt ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_incomplete_success_and_commit_panic_cannot_remove_ledger_entry has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_incomplete_success_and_commit_panic_cannot_remove_ledger_entry ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_model_opening_rejection_and_panic_retain_original_input has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_native_error_and_panic_preserve_exact_prefix_and_neighbors has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_model_opening_rejection_and_panic_retain_original_input ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_complete_receipt_survives_every_failed_retake_without_ledger_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_original_native_panic_wins_over_secondary_retake_failures has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_partial_unmap_preserves_exact_prefix_without_reusable_hole has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_retake_failure_precedes_ordinary_native_error ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_original_native_panic_wins_over_secondary_retake_failures ... ok
+test queue::live::rebind_tests::data_release::detached_release_bound_dispatch_precedes_bad_ledger ... ok
+test queue::live::rebind_tests::data_release::detached_release_direct_missing_engine_transports_parent ... ok
+test queue::live::rebind_tests::data_release::detached_release_facade_restores_before_transport_even_after_suppressed_error ... ok
+test queue::live::rebind_tests::data_release::detached_release_public_preflight_preserves_precedence_and_owners ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_actual_commit_rejection_keeps_unmapped_or_disposed_custody ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_mapping_snapshot_zero_encoding_preserves_every_byte_and_length ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_native_failure_retains_typed_control_and_exact_destructive_prefix ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_projection_failures_keep_native_disposal_distinct_from_model_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_success_commits_original_model_and_exact_native_control_order ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::public_typed_disposal_bridges_route_through_retained_cleanup ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_partial_unmap_results ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_native_error_and_panic_prefixes ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_terminal_receipt_on_accounting_underflow ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_consuming_wrapper_returns_success_without_retention ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_rejection_keeps_healthy_receiving_session_unchanged ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_host_cleanup_retains_projection_and_actual_commit_failures ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_revision_exhaustion_poison_hook_preserves_original_error ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_native_error_and_panic_preserve_exact_prefix_and_neighbors ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_partial_unmap_preserves_exact_prefix_without_reusable_hole ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 1155 filtered out; finished in 357.75s
+

@@ -147,13 +147,62 @@ impl DispatchDataReleaseV1 for crate::shared_memory::PreparationMemoryFixtureV1 
         &mut self,
         custody: &mut DataCleanupCustodyV1,
     ) -> Result<(), MemorySessionError> {
+        let started = custody.observation().started;
         let f = &mut self.fixture;
-        data_cleanup::release_v1(
-            &mut f.engine,
-            &mut control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm),
-            custody,
-            || panic!("unexpected prepared data cleanup preflight failure"),
-        )
+        let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
+        projection.fault = self.data_release_projection_fault;
+        let poisoned = &mut self.data_release_process_poisoned;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            data_cleanup::release_v1(&mut f.engine, &mut projection, custody, || *poisoned += 1)
+        }));
+        if !started && let Some(host) = custody.observation().host {
+            let record = f
+                .engine
+                .allocations
+                .iter()
+                .find(|r| r.id == host.identity.id)
+                .unwrap();
+            assert_eq!(record.generation, host.identity.generation);
+            if record.phase == SharedAllocationPhaseV1::Released {
+                assert!(!self.disposed_host_data.contains(&host.identity));
+                self.disposed_host_data.push(host.identity);
+            }
+        }
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+}
+
+impl crate::shared_memory::PreparationMemoryFixtureV1 {
+    pub(crate) fn clear_data_release_faults_v1(&mut self) {
+        self.insertion_clear_faults_v1();
+        self.fixture.engine.backend.unmap_progress = 1;
+        self.fixture.engine.backend.unmap_errno = false;
+        self.data_release_projection_fault = None;
+    }
+
+    pub(crate) fn arm_data_release_unmap_v1(&mut self, prefix: u32, errno: bool) {
+        self.fixture.engine.backend.unmap_progress = prefix;
+        self.fixture.engine.backend.unmap_errno = errno;
+    }
+
+    pub(crate) fn arm_data_release_projection_v1(&mut self, stage: Stage, panic: bool) {
+        self.data_release_projection_fault =
+            Some((stage, if panic { Fault::Panic } else { Fault::Error }));
+    }
+
+    pub(crate) fn data_release_process_poisoned_v1(&self) -> usize {
+        self.data_release_process_poisoned
+    }
+
+    pub(crate) fn exhaust_data_release_revision_v1(&mut self, stage: Stage) {
+        assert!(matches!(
+            stage,
+            Stage::UnmapPreflight | Stage::ReleasePreflight
+        ));
+        self.data_release_projection_fault = Some((stage, Fault::ExhaustRevision));
     }
 }
 
@@ -221,6 +270,44 @@ impl Snapshot {
         active: Option<&DataCleanupObservationV1>,
     ) {
         let after = memory.memory_snapshot();
+        self.assert_data_prefix_between_v1(
+            &after,
+            memory.fixture.vm,
+            controls,
+            order,
+            completed,
+            active,
+        );
+    }
+
+    pub(crate) fn assert_prepared_data_prefix_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        queue: &QueueModelFoundationV1,
+        order: &[Identity],
+        completed: usize,
+        active: Option<&DataCleanupObservationV1>,
+    ) {
+        let after = memory.data_release_snapshot_v1(queue);
+        self.assert_data_prefix_between_v1(
+            &after,
+            memory.fixture.vm,
+            &[],
+            order,
+            completed,
+            active,
+        );
+    }
+
+    fn assert_data_prefix_between_v1(
+        &self,
+        after: &Snapshot,
+        vm: VmKeyV1,
+        controls: &[SharedGttAllocationIdentityV1],
+        order: &[Identity],
+        completed: usize,
+        active: Option<&DataCleanupObservationV1>,
+    ) {
         let mut records = self.records.clone();
         let mut devices = self.devices.clone();
         let mut model = self.model.clone();
@@ -234,8 +321,7 @@ impl Snapshot {
                 .find(|r| (r.id, r.generation) == (id.id, id.generation))
                 .unwrap();
             calls.extend(shared_calls(r));
-            let (reservation, allocation, mapping) =
-                model_keys(memory.fixture.vm, id.id, id.generation);
+            let (reservation, allocation, mapping) = model_keys(vm, id.id, id.generation);
             model = project_unmap(&model, mapping).unwrap();
             model = project_release(&model, reservation, allocation, mapping).unwrap();
             retained_va -= r.layout.gpu_va_bytes();
@@ -288,8 +374,7 @@ impl Snapshot {
                         r.reservation = None;
                     }
                     r.free_attempted |= attempts[2];
-                    let (reservation, allocation, mapping) =
-                        model_keys(memory.fixture.vm, id.id, id.generation);
+                    let (reservation, allocation, mapping) = model_keys(vm, id.id, id.generation);
                     if done
                         || a.is_some_and(|a| {
                             matches!(

@@ -6790,6 +6790,8 @@ pub(crate) use tests::preparation::{
 #[cfg(test)]
 pub(crate) use tests::primary_projection::PrimaryProjectionCaseV1;
 #[cfg(test)]
+pub(crate) use tests::pristine_abort::DataReleaseSnapshotV1;
+#[cfg(test)]
 pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
 #[cfg(test)]
 pub(crate) use tests::queue_construction::{

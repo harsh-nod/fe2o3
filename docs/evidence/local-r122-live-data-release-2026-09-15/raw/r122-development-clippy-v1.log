@@ -1,0 +1,29 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: call to `std::mem::forget` with a value that does not implement `Drop`. Forgetting such a type is the same as dropping it
+   --> crates/fe2o3-kfd/src/queue_live/data_release.rs:111:9
+    |
+111 |         core::mem::forget(root);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: argument has type `shared_memory::data_cleanup::DataCleanupCustodyV1`
+   --> crates/fe2o3-kfd/src/queue_live/data_release.rs:111:27
+    |
+111 |         core::mem::forget(root);
+    |                           ^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#forget_non_drop
+    = note: `-D clippy::forget-non-drop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::forget_non_drop)]`
+
+error: could not compile `fe2o3-kfd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: useless conversion to the same type: `usize`
+   --> crates/fe2o3-kfd/src/queue_live/rebind_tests/data_release.rs:438:29
+    |
+438 |             if index + 1 == usize::from(lane.ordinal) {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider removing `usize::from()`: `lane.ordinal`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+    = note: `-D clippy::useless-conversion` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::useless_conversion)]`
+
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

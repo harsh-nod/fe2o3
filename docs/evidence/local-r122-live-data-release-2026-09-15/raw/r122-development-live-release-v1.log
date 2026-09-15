@@ -1,0 +1,19 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0425]: cannot find type `ProjectionFaultV1` in module `transitions`
+  --> crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:55:22
+   |
+55 |         transitions::ProjectionFaultV1,
+   |                      ^^^^^^^^^^^^^^^^^ not found in `transitions`
+   |
+help: consider importing this enum
+   |
+ 3 + use crate::shared_memory::transitions::ProjectionFaultV1;
+   |
+help: if you import `ProjectionFaultV1`, refer to it directly
+   |
+55 -         transitions::ProjectionFaultV1,
+55 +         ProjectionFaultV1,
+   |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

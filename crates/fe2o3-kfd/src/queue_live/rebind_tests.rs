@@ -14,6 +14,9 @@ pub(super) mod preparation;
 #[path = "rebind_tests/insertion.rs"]
 mod insertion;
 
+#[path = "rebind_tests/data_release.rs"]
+mod data_release;
+
 #[test]
 fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation() {
     let source = include_str!("rebind.rs");

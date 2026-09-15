@@ -1,0 +1,103 @@
+{
+  "source_map_sha256": "178fa1fb2c9d3267440dbf36c50e4d79916e66fb2765446d7e1fa8acb8fc90c4",
+  "source_bundle_sha256": "1d1b4e03fd04f94246936320d3674bcb0613555db33f75b96c007be40d8c7514",
+  "mutation_plan_sha256": "8baf6407a324331eea491857c2c3a051dac30ae6e61b1c76b130a490ab3a94f8",
+  "patches": [
+    {
+      "id": "01-preflight-custody",
+      "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+      "original_sha256": "d6ac1bd9490812a5be0e288f0262238929c79fd1da1bd6aab54da89cc0f37a23",
+      "mutated_sha256": "56e1dd3bfdaca19650baa7ce1fe3d150e0fe897df02b9a69c1d2cbe7fbf6ddb9",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n     let transport = result.is_err() || entered && failed;\n     if failed {\n         // Preflight also consumes the caller's input; retain it without poisoning a healthy parent.\n-        context.retain(root);\n+        if entered { context.retain(root); }\n         if transport {\n             context.poison(result.is_err());\n         }\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n     let transport = result.is_err() || entered && failed;\n     if failed {\n         // Preflight also consumes the caller's input; retain it without poisoning a healthy parent.\n-        if entered { context.retain(root); }\n+        context.retain(root);\n         if transport {\n             context.poison(result.is_err());\n         }\n*** End Patch"
+    },
+    {
+      "id": "02-missing-identity",
+      "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+      "original_sha256": "d6ac1bd9490812a5be0e288f0262238929c79fd1da1bd6aab54da89cc0f37a23",
+      "mutated_sha256": "c6143e57526c45d70b8231268167088a9e5231f289242faf53f3042ecf7cf387",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n             .iter()\n             .enumerate()\n             .filter(|(_, retained)| **retained == identity);\n-        let Some((index, _)) = matching.next() else {\n-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {\n-                index: *ledger.count,\n-                detail: \"detached release storage identity\",\n-            }\n-            .into());\n-        };\n+        let index = matching.next().map(|(index, _)| index).unwrap_or(0);\n         if matching.next().is_some() {\n             return Err(ComputeAqlQueueSessionErrorV1::Contract(\n                 \"duplicate detached storage identity\",\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n             .iter()\n             .enumerate()\n             .filter(|(_, retained)| **retained == identity);\n-        let index = matching.next().map(|(index, _)| index).unwrap_or(0);\n+        let Some((index, _)) = matching.next() else {\n+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {\n+                index: *ledger.count,\n+                detail: \"detached release storage identity\",\n+            }\n+            .into());\n+        };\n         if matching.next().is_some() {\n             return Err(ComputeAqlQueueSessionErrorV1::Contract(\n                 \"duplicate detached storage identity\",\n*** End Patch"
+    },
+    {
+      "id": "03-duplicate-identity",
+      "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+      "original_sha256": "d6ac1bd9490812a5be0e288f0262238929c79fd1da1bd6aab54da89cc0f37a23",
+      "mutated_sha256": "be744bef48655eb9b6dae4a87645ca9d450975b2634a5e7a14ee8bfcdc2af71f",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n             }\n             .into());\n         };\n-        if matching.next().is_some() {\n+        if matching.next().is_some() && false {\n             return Err(ComputeAqlQueueSessionErrorV1::Contract(\n                 \"duplicate detached storage identity\",\n             ));\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n             }\n             .into());\n         };\n-        if matching.next().is_some() && false {\n+        if matching.next().is_some() {\n             return Err(ComputeAqlQueueSessionErrorV1::Contract(\n                 \"duplicate detached storage identity\",\n             ));\n*** End Patch"
+    },
+    {
+      "id": "04-incomplete-lower",
+      "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+      "original_sha256": "d6ac1bd9490812a5be0e288f0262238929c79fd1da1bd6aab54da89cc0f37a23",
+      "mutated_sha256": "6861ae968dec87156515fdc28d58b8443599887cb51ee23943892616bf3233d4",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n                     \"detached dispatch-data ledger underflow\",\n                 ))?;\n         context.release(&mut root)?;\n-        if !root.is_complete() {\n+        if !root.is_complete() && false {\n             return Err(MemorySessionError::InvalidAllocationAuthority.into());\n         }\n         // The lower adapter changes memory ownership, never the detached ledger.\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n                     \"detached dispatch-data ledger underflow\",\n                 ))?;\n         context.release(&mut root)?;\n-        if !root.is_complete() && false {\n+        if !root.is_complete() {\n             return Err(MemorySessionError::InvalidAllocationAuthority.into());\n         }\n         // The lower adapter changes memory ownership, never the detached ledger.\n*** End Patch"
+    },
+    {
+      "id": "05-early-ledger-commit",
+      "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+      "original_sha256": "d6ac1bd9490812a5be0e288f0262238929c79fd1da1bd6aab54da89cc0f37a23",
+      "mutated_sha256": "d122e2424d840a7a5814ee791c735caccbfd9f9369b6e10eb939c7ef41471269",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n                 .ok_or(ComputeAqlQueueSessionErrorV1::Contract(\n                     \"detached dispatch-data ledger underflow\",\n                 ))?;\n-        context.release(&mut root)?;\n-        if !root.is_complete() {\n-            return Err(MemorySessionError::InvalidAllocationAuthority.into());\n-        }\n-        // The lower adapter changes memory ownership, never the detached ledger.\n-        let ledger = context.ledger();\n-        ledger.identities.remove(index);\n-        *ledger.count = next_count;\n-        *ledger.next = Some(index);\n+        *ledger.count = next_count;\n+        *ledger.next = Some(index);\n+        context.release(&mut root)?;\n+        if !root.is_complete() {\n+            return Err(MemorySessionError::InvalidAllocationAuthority.into());\n+        }\n+        // The lower adapter changes memory ownership, never the detached ledger.\n+        let ledger = context.ledger();\n+        ledger.identities.remove(index);\n         Ok(())\n     }));\n     let failed = !matches!(result, Ok(Ok(())));\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n                 .ok_or(ComputeAqlQueueSessionErrorV1::Contract(\n                     \"detached dispatch-data ledger underflow\",\n                 ))?;\n-        *ledger.count = next_count;\n-        *ledger.next = Some(index);\n-        context.release(&mut root)?;\n-        if !root.is_complete() {\n-            return Err(MemorySessionError::InvalidAllocationAuthority.into());\n-        }\n-        // The lower adapter changes memory ownership, never the detached ledger.\n-        let ledger = context.ledger();\n-        ledger.identities.remove(index);\n+        context.release(&mut root)?;\n+        if !root.is_complete() {\n+            return Err(MemorySessionError::InvalidAllocationAuthority.into());\n+        }\n+        // The lower adapter changes memory ownership, never the detached ledger.\n+        let ledger = context.ledger();\n+        ledger.identities.remove(index);\n+        *ledger.count = next_count;\n+        *ledger.next = Some(index);\n         Ok(())\n     }));\n     let failed = !matches!(result, Ok(Ok(())));\n*** End Patch"
+    },
+    {
+      "id": "06-preflight-transport",
+      "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+      "original_sha256": "d6ac1bd9490812a5be0e288f0262238929c79fd1da1bd6aab54da89cc0f37a23",
+      "mutated_sha256": "763b9427b4d4bab41d064cf73da1aec4380b4b49bb6bfa7a17730c3060ca1f47",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n         Ok(())\n     }));\n     let failed = !matches!(result, Ok(Ok(())));\n-    let transport = result.is_err() || entered && failed;\n+    let transport = failed;\n     if failed {\n         // Preflight also consumes the caller's input; retain it without poisoning a healthy parent.\n         context.retain(root);\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/data_release.rs\n@@\n         Ok(())\n     }));\n     let failed = !matches!(result, Ok(Ok(())));\n-    let transport = failed;\n+    let transport = result.is_err() || entered && failed;\n     if failed {\n         // Preflight also consumes the caller's input; retain it without poisoning a healthy parent.\n         context.retain(root);\n*** End Patch"
+    },
+    {
+      "id": "07-direct-transport",
+      "path": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+      "original_sha256": "2ea4f2edda6280d512952bf9c3452703fc31aca5334cb6cc2d3edcc39ea43c39",
+      "mutated_sha256": "4ffd2447bfeaf4cbb6e22da68e227aa3edb24d3e01579c38730430ad20a4c03e",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs\n@@\n         data: Gfx942FixedDispatchDataV1,\n     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {\n         let settled = self.release_data_settled_v1(data);\n-        if settled.transport {\n+        if !settled.transport {\n             self.retain_terminal_rebind_parent_v1(core::mem::forget);\n         }\n         settled.into_result()\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs\n@@\n         data: Gfx942FixedDispatchDataV1,\n     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {\n         let settled = self.release_data_settled_v1(data);\n-        if !settled.transport {\n+        if settled.transport {\n             self.retain_terminal_rebind_parent_v1(core::mem::forget);\n         }\n         settled.into_result()\n*** End Patch"
+    },
+    {
+      "id": "08-sticky-transport",
+      "path": "crates/fe2o3-kfd/src/queue_live.rs",
+      "original_sha256": "87c76d28ddcb81918e39c6ad2eede1f3db54b58fc06f32b20862cbebf7ad0f0e",
+      "mutated_sha256": "6a5fd633a1447a0bbe09da3088361fccf21939ee8f833e36af1e661a056faf8a",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live.rs\n@@\n         data: Gfx942FixedDispatchDataV1,\n     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {\n         let settled = self.session.release_data_settled_v1(data);\n-        *self.terminal_transport |= settled.transport;\n+        *self.terminal_transport = settled.transport;\n         settled.into_result()\n     }\n \n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live.rs\n@@\n         data: Gfx942FixedDispatchDataV1,\n     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {\n         let settled = self.session.release_data_settled_v1(data);\n-        *self.terminal_transport = settled.transport;\n+        *self.terminal_transport |= settled.transport;\n         settled.into_result()\n     }\n \n*** End Patch"
+    },
+    {
+      "id": "09-error-suffix",
+      "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+      "original_sha256": "55d9847ede81116d4f9c7be4a16bfcf55f88b75e61c73e33bf5338a851ed695f",
+      "mutated_sha256": "5b1337d0a0600f41157d25a5156aebef240018d5904f448d91435ca0451122f5",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n             Err(\"KFD resident-data release callback left owned data\".to_owned())\n         }\n         Ok(Err(error)) => {\n+            custody.remaining = Vec::new().into_iter();\n             retain(custody);\n             Err(error)\n         }\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n             Err(\"KFD resident-data release callback left owned data\".to_owned())\n         }\n         Ok(Err(error)) => {\n-            custody.remaining = Vec::new().into_iter();\n             retain(custody);\n             Err(error)\n         }\n*** End Patch"
+    },
+    {
+      "id": "10-panic-suffix",
+      "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+      "original_sha256": "55d9847ede81116d4f9c7be4a16bfcf55f88b75e61c73e33bf5338a851ed695f",
+      "mutated_sha256": "cef56b825d2ed3ef44c71b8006e5104ecf27806e4fdd6342953fb9beb934e0c7",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n             Err(error)\n         }\n         Err(payload) => {\n+            custody.remaining = Vec::new().into_iter();\n             retain(custody);\n             std::panic::resume_unwind(payload)\n         }\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n             Err(error)\n         }\n         Err(payload) => {\n-            custody.remaining = Vec::new().into_iter();\n             retain(custody);\n             std::panic::resume_unwind(payload)\n         }\n*** End Patch"
+    },
+    {
+      "id": "11-incomplete-outer",
+      "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+      "original_sha256": "55d9847ede81116d4f9c7be4a16bfcf55f88b75e61c73e33bf5338a851ed695f",
+      "mutated_sha256": "3fa07aed808e5e7eb86bd387e58b32d925db35cbebf62035bfd9e92cd08b7b11",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n         completed: 0,\n     };\n     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut custody))) {\n-        Ok(Ok(())) if custody.active.is_none() && custody.remaining.len() == 0 => Ok(()),\n+        Ok(Ok(())) if custody.completed == 0 || (custody.active.is_none() && custody.remaining.len() == 0) => Ok(()),\n         Ok(Ok(())) => {\n             retain(custody);\n             Err(\"KFD resident-data release callback left owned data\".to_owned())\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n         completed: 0,\n     };\n     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut custody))) {\n-        Ok(Ok(())) if custody.completed == 0 || (custody.active.is_none() && custody.remaining.len() == 0) => Ok(()),\n+        Ok(Ok(())) if custody.active.is_none() && custody.remaining.len() == 0 => Ok(()),\n         Ok(Ok(())) => {\n             retain(custody);\n             Err(\"KFD resident-data release callback left owned data\".to_owned())\n*** End Patch"
+    },
+    {
+      "id": "12-ignore-lower-error",
+      "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+      "original_sha256": "55d9847ede81116d4f9c7be4a16bfcf55f88b75e61c73e33bf5338a851ed695f",
+      "mutated_sha256": "1a80825f0e3b7c8c0623e7116b7bf727336ec50b2135a34276e614a902c01f2a",
+      "apply": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n ) -> Result<(), String> {\n     while let Some(data) = custody.active.take() {\n         // The consuming lower boundary roots this item before any fallible work.\n-        release(data)?;\n+        let _ = release(data);\n         custody.completed += 1;\n         custody.active = custody.remaining.next();\n     }\n*** End Patch",
+      "restore": "*** Begin Patch\n*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs\n@@\n ) -> Result<(), String> {\n     while let Some(data) = custody.active.take() {\n         // The consuming lower boundary roots this item before any fallible work.\n-        let _ = release(data);\n+        release(data)?;\n         custody.completed += 1;\n         custody.active = custody.remaining.next();\n     }\n*** End Patch"
+    }
+  ]
+}

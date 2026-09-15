@@ -1,0 +1,12 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.86s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-9280442e7aa71d90)
+
+running 4 tests
+test queue::live::rebind_tests::data_release::detached_release_direct_missing_engine_transports_parent ... ok
+test queue::live::rebind_tests::data_release::detached_release_bound_dispatch_precedes_bad_ledger ... ok
+test queue::live::rebind_tests::data_release::detached_release_public_preflight_preserves_precedence_and_owners ... ok
+test queue::live::rebind_tests::data_release::detached_release_facade_restores_before_transport_even_after_suppressed_error ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1186 filtered out; finished in 0.06s
+

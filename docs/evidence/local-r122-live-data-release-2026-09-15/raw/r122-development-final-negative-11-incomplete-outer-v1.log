@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.50s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items ... FAILED
+
+failures:
+
+---- kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items stdout ----
+
+thread 'kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items' (3625342) panicked at crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/resident_release_tests.rs:266:9:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err("KFD resident-data release callback left owned data")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 742 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

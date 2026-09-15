@@ -5,6 +5,7 @@ use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
 use crate::shared_memory::{control_cleanup, transitions};
 
 mod cleanup_tests;
+pub(crate) use cleanup_tests::Snapshot as DataReleaseSnapshotV1;
 
 type Code = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,

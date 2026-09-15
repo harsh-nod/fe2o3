@@ -48,6 +48,10 @@ pub(crate) enum PreparationNativeFaultV1 {
 pub(crate) struct PreparationMemoryFixtureV1 {
     pub(super) fixture: BackingConstructorFixture,
     pub(super) disposed_controls: Vec<SharedGttAllocationIdentityV1>,
+    pub(super) disposed_host_data: Vec<SharedGttAllocationIdentityV1>,
+    pub(super) data_release_process_poisoned: usize,
+    pub(super) data_release_projection_fault:
+        Option<(control_cleanup::CleanupStageV1, adapter::ProjectionFaultV1)>,
     code_count: usize,
     projection_rejection_va: u64,
     pub(crate) fault: Option<(PreparationMemoryCallV1, PreparationNativeFaultV1)>,
@@ -137,6 +141,9 @@ impl PreparationMemoryFixtureV1 {
         Self {
             fixture,
             disposed_controls: Vec::new(),
+            disposed_host_data: Vec::new(),
+            data_release_process_poisoned: 0,
+            data_release_projection_fault: None,
             code_count: 0,
             projection_rejection_va: 0x1_0000_u64.checked_add(bytes).unwrap(),
             fault: None,
@@ -497,11 +504,32 @@ impl PreparationMemoryFixtureV1 {
             assert!(record.host_backing_charge.is_none());
         }
         assert_eq!(
+            self.disposed_host_data.len(),
+            self.disposed_host_data
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
+        for id in &self.disposed_host_data {
+            assert!(!self.disposed_controls.contains(id));
+            assert_eq!(id.session_id, e.session_id);
+            let record = e.allocations.iter().find(|r| r.id == id.id).unwrap();
+            assert_eq!(record.generation, id.generation);
+            assert_eq!(record.profile, SharedGttProfileV1::HostVisibleCoherent);
+            assert_eq!(record.phase, SharedAllocationPhaseV1::Released);
+            assert!(record.free_attempted);
+            assert!(
+                record.reservation.is_none() && record.handle.is_none() && record.mapping.is_none()
+            );
+            assert!(record.host_backing_charge.is_none());
+            assert!(!e.allocation_record_slots.contains_key(&id.id));
+        }
+        assert_eq!(
             e.allocations
                 .iter()
                 .filter(|r| r.phase == SharedAllocationPhaseV1::Released)
                 .count(),
-            self.disposed_controls.len()
+            self.disposed_controls.len() + self.disposed_host_data.len()
         );
     }
 

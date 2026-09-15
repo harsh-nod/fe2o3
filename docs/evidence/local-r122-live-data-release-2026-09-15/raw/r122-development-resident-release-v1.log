@@ -1,0 +1,17 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.11s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 8 tests
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_custody_and_traversal_do_not_allocate_on_success ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_error_retains_exact_partition ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_error_formatting_panic_still_retains_suffix ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_panic_retains_exact_partition ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_pre_handoff_errors_retain_original_storage_and_all_items ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_success_is_forward_and_not_truncated_by_descriptors ... ok
+test kfd_backend::compute_dispatch::resident_release_tests::resident_release_pre_handoff_panic_preserves_original_payload_and_full_roster ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.00s
+

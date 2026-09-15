@@ -7,11 +7,62 @@ use transitions::ProjectionFaultV1 as Fault;
 mod data;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum MappingBytesV1 {
+    Zeroes(usize),
+    Dense(Vec<u8>),
+}
+
+impl MappingBytesV1 {
+    fn capture(bytes: &[u8]) -> Self {
+        const ZERO_PAGE: [u8; 4096] = [0; 4096];
+        // Compare every byte without cloning large zero-filled context-save mappings.
+        if bytes
+            .chunks(ZERO_PAGE.len())
+            .all(|chunk| chunk == &ZERO_PAGE[..chunk.len()])
+        {
+            Self::Zeroes(bytes.len())
+        } else {
+            Self::Dense(bytes.to_vec())
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Zeroes(len) => *len,
+            Self::Dense(bytes) => bytes.len(),
+        }
+    }
+}
+
+#[test]
+fn cleanup_mapping_snapshot_zero_encoding_preserves_every_byte_and_length() {
+    for len in [0, 1, 4095, 4096, 4097, 8193] {
+        let mut bytes = vec![0; len];
+        let zero = MappingBytesV1::capture(&bytes);
+        assert_eq!(zero, MappingBytesV1::Zeroes(len));
+        assert_eq!(zero.len(), len);
+        for index in [0, 4095, 4096, len.saturating_sub(1)] {
+            if index >= len {
+                continue;
+            }
+            bytes[index] = 0x5a;
+            let changed = MappingBytesV1::capture(&bytes);
+            assert_eq!(changed, MappingBytesV1::Dense(bytes.clone()));
+            assert_eq!(changed.len(), len);
+            assert_ne!(changed, zero);
+            bytes[index] = 0;
+            assert_eq!(MappingBytesV1::capture(&bytes), zero);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct MappingSnapshot {
     address: u64,
     pointer: usize,
     capacity: usize,
-    bytes: Vec<u8>,
+    bytes: MappingBytesV1,
+    byte_offset: usize,
     active: bool,
     writable: bool,
     reads: usize,
@@ -22,7 +73,8 @@ fn mapping_snapshot(m: &FakeMapping) -> MappingSnapshot {
         address: m.address,
         pointer: m.bytes.as_ptr() as usize,
         capacity: m.bytes.capacity(),
-        bytes: m.bytes.clone(),
+        bytes: MappingBytesV1::capture(&m.bytes),
+        byte_offset: m.byte_offset,
         active: m.active,
         writable: m.writable,
         reads: m.readback_calls.get(),
@@ -219,12 +271,36 @@ pub(crate) struct Snapshot {
 
 impl PristineAbortMemoryFixtureV1 {
     pub(crate) fn memory_snapshot(&self) -> Snapshot {
-        let f = &self.fixture;
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.process_poisoned,
+        )
+    }
+}
+
+impl crate::shared_memory::PreparationMemoryFixtureV1 {
+    pub(crate) fn data_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            self.coherent_active_foundation_v1(queue),
+            self.data_release_process_poisoned,
+        )
+    }
+}
+
+impl Snapshot {
+    fn from_fixture(
+        f: &BackingConstructorFixture,
+        foundation: &QueueModelFoundationV1,
+        process_poisoned: usize,
+    ) -> Self {
         let e = &f.engine;
         Snapshot {
-            model: f.foundation.memory().clone(),
-            identity: f.foundation.identity().clone(),
-            certificate: f.foundation.certificate_snapshot_for_test(),
+            model: foundation.memory().clone(),
+            identity: foundation.identity().clone(),
+            certificate: foundation.certificate_snapshot_for_test(),
             controls: Vec::new(),
             records: allocation_records(e),
             devices: device_records(e),
@@ -238,7 +314,7 @@ impl PristineAbortMemoryFixtureV1 {
             calls: e.backend.cleanup_calls.clone(),
             operations: e.backend.operations.clone(),
             currentness: e.backend.currentness_calls,
-            process_poisoned: self.process_poisoned,
+            process_poisoned,
             storage: [
                 (e.allocations.as_ptr() as usize, e.allocations.capacity()),
                 (

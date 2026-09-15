@@ -4507,40 +4507,11 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         data: Gfx942FixedDispatchDataV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.require_unbound_fixed_dispatch()?;
-        let identity = data.storage_identity();
-        let mut matching = self
-            .detached_data_identities
-            .iter()
-            .enumerate()
-            .filter(|(_, retained)| **retained == identity);
-        let Some((identity_index, _)) = matching.next() else {
-            self.poison_terminal();
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: self.detached_data_count,
-                detail: "detached release storage identity",
-            }
-            .into());
-        };
-        if matching.next().is_some() {
-            self.poison_terminal();
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "duplicate detached storage identity",
-            ));
+        let settled = self.release_data_settled_v1(data);
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
-        let result = self.with_live_queue_memory_model(|memory| {
-            memory.release_fixed_dispatch_data(data).map_err(Into::into)
-        });
-        if let Err(error) = result {
-            self.poison_terminal();
-            return Err(error);
-        }
-        self.detached_data_count = self.detached_data_count.checked_sub(1).ok_or(
-            ComputeAqlQueueSessionErrorV1::Contract("detached dispatch-data ledger underflow"),
-        )?;
-        self.detached_data_identities.remove(identity_index);
-        self.detached_next_insertion_index = Some(identity_index);
-        Ok(())
+        settled.into_result()
     }
 
     pub(super) fn require_unbound_fixed_dispatch(

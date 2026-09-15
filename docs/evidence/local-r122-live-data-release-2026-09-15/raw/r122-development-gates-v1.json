@@ -1,0 +1,632 @@
+{
+  "accepted": false,
+  "source_parent": "f6d3fb50e4fd1eb6949d4a29f55c79432a5989e1",
+  "source_map": "r122-development-clippy-v2-source.json",
+  "source_map_sha256": "178fa1fb2c9d3267440dbf36c50e4d79916e66fb2765446d7e1fa8acb8fc90c4",
+  "source_count": 5700,
+  "runner": "r122-development-run-v1.js",
+  "runner_sha256": "b1d89a2f4ea181499651e2f7a1d69203f4a94fc0bfb0e1dca716b311e29a828b",
+  "mutation_plan": "r122-development-mutations-v1.json",
+  "mutation_plan_sha256": "8baf6407a324331eea491857c2c3a051dac30ae6e61b1c76b130a490ab3a94f8",
+  "accepted_commit": "f6d3fb50e4fd1eb6949d4a29f55c79432a5989e1",
+  "accepted_inputs": {
+    "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gates-v2.json": "7db1c9671038939caf37860e43a81fd4ad864ba979babc370f71714c4518f28f"
+  },
+  "scope": "Prospective exact commands for 17 source gates and 10 auxiliary checks, including GNU/musl full runs. Declaration is not execution or acceptance.",
+  "counts": {
+    "baseline_full": 2818,
+    "full": 2846,
+    "baseline_kfd": 1172,
+    "kfd": 1190,
+    "baseline_runtime": 733,
+    "runtime": 743,
+    "ignored": 5,
+    "harnesses": 48,
+    "csv_targets": 1
+  },
+  "full_runs": [
+    {
+      "name": "r122-development-gnu-all-v1",
+      "predecessor": "r122-development-clippy-v2.json",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "--no-fail-fast",
+        "-p",
+        "fe2o3-completion",
+        "-p",
+        "fe2o3-runtime-model",
+        "-p",
+        "fe2o3-resource-accounting",
+        "-p",
+        "fe2o3-kfd",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--all-targets"
+      ],
+      "kind": "gnu",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gnu-all-v2.log",
+      "accepted_log_sha256": "038369f3407fb84ab0776a516a2b4c81283431ababcff662e851c04052f4e210"
+    },
+    {
+      "name": "r122-development-musl-all-v1",
+      "predecessor": "r122-development-gnu-all-v1.json",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "--no-fail-fast",
+        "-p",
+        "fe2o3-completion",
+        "-p",
+        "fe2o3-runtime-model",
+        "-p",
+        "fe2o3-resource-accounting",
+        "-p",
+        "fe2o3-kfd",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--all-targets",
+        "--target",
+        "x86_64-unknown-linux-musl"
+      ],
+      "kind": "musl",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-musl-retry1.log",
+      "accepted_log_sha256": "9d2a5b86d630ac0debae5236dd054d8818f42b27cca0b7da4a145d2206509bf9"
+    }
+  ],
+  "gates": [
+    {
+      "name": "gnu-docs",
+      "run": "r122-development-gate-gnu-docs-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "--no-fail-fast",
+        "-p",
+        "fe2o3-completion",
+        "-p",
+        "fe2o3-runtime-model",
+        "-p",
+        "fe2o3-resource-accounting",
+        "-p",
+        "fe2o3-kfd",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "-p",
+        "fe2o3-host",
+        "--doc"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-gnu-docs-v1.log",
+      "accepted_log_sha256": "f48cb545c4c5c83375549b654d28e67892e52aad06c1d6629c2fe99907d5c924",
+      "predecessor": "r122-development-musl-all-v1.json"
+    },
+    {
+      "name": "musl-docs",
+      "run": "r122-development-gate-musl-docs-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "--no-fail-fast",
+        "-p",
+        "fe2o3-completion",
+        "-p",
+        "fe2o3-runtime-model",
+        "-p",
+        "fe2o3-resource-accounting",
+        "-p",
+        "fe2o3-kfd",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--doc",
+        "--target",
+        "x86_64-unknown-linux-musl"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-musl-docs-v1.log",
+      "accepted_log_sha256": "0b4bfc7a0271ee339f8196989eddff7cad0649b58a0a025e7f0da0346ddcf535",
+      "predecessor": "r122-development-gate-gnu-docs-v1.json"
+    },
+    {
+      "name": "musl-host-docs",
+      "run": "r122-development-gate-musl-host-docs-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-host",
+        "--doc",
+        "--target",
+        "x86_64-unknown-linux-musl"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-musl-host-docs-v1.log",
+      "accepted_log_sha256": "95b68dc755d7a255d79e2c815c0e69f11f108d0dcfd98d20aca55415536bfb92",
+      "predecessor": "r122-development-gate-musl-docs-v1.json"
+    },
+    {
+      "name": "gnu-host",
+      "run": "r122-development-gate-gnu-host-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-host",
+        "--all-features",
+        "--lib"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-gnu-host-v1.log",
+      "accepted_log_sha256": "eac455a6d88e55ee5fb0d35ef40dc57f1c4dbceed7042275de99d05fab71a95f",
+      "predecessor": "r122-development-gate-musl-host-docs-v1.json"
+    },
+    {
+      "name": "musl-host",
+      "run": "r122-development-gate-musl-host-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-host",
+        "--lib",
+        "--target",
+        "x86_64-unknown-linux-musl"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-musl-host-v1.log",
+      "accepted_log_sha256": "0228063535921dc52317a311f73d5d2f7c16ce283c1d56cd34b20c3014707b40",
+      "predecessor": "r122-development-gate-gnu-host-v1.json"
+    },
+    {
+      "name": "macro-fixtures",
+      "run": "r122-development-gate-macro-fixtures-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-macros",
+        "--test",
+        "typed_kernel_fixtures"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-macro-fixtures-v1.log",
+      "accepted_log_sha256": "12a9ee379f0adc6e971f607757a6cb3337ddf292bc1c3e08d00c33dee2382410",
+      "predecessor": "r122-development-gate-musl-host-v1.json"
+    },
+    {
+      "name": "clippy-all",
+      "run": "r122-development-gate-clippy-all-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-completion",
+        "-p",
+        "fe2o3-runtime-model",
+        "-p",
+        "fe2o3-resource-accounting",
+        "-p",
+        "fe2o3-kfd",
+        "-p",
+        "fe2o3-runtime",
+        "-p",
+        "fe2o3-host",
+        "-p",
+        "fe2o3-macros",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-clippy-all-v1.log",
+      "accepted_log_sha256": "a25a461d8cc3dc2c03239532d2098d3f93c41dc8312f8b9f107fffa885f6943d",
+      "predecessor": "r122-development-gate-macro-fixtures-v1.json"
+    },
+    {
+      "name": "clippy-production",
+      "run": "r122-development-gate-clippy-production-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-completion",
+        "-p",
+        "fe2o3-runtime-model",
+        "-p",
+        "fe2o3-resource-accounting",
+        "-p",
+        "fe2o3-kfd",
+        "-p",
+        "fe2o3-runtime",
+        "-p",
+        "fe2o3-host",
+        "-p",
+        "fe2o3-macros",
+        "--no-default-features",
+        "--lib",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-clippy-production-v1.log",
+      "accepted_log_sha256": "1b257c8f107db592488e4daa805dbb50eb4379d4e3e44b2b76297f4da13788b9",
+      "predecessor": "r122-development-gate-clippy-all-v1.json"
+    },
+    {
+      "name": "python",
+      "run": "r122-development-gate-python-v1",
+      "command": [
+        "env",
+        "--chdir=/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942",
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test_run_r26_inplace_runner",
+        "test_check_r40_striped",
+        "test_run_r40_striped_runner",
+        "test_run_r60_pipeline",
+        "test_check_r60_pipeline",
+        "test_run_r61_owner",
+        "test_run_r62_control",
+        "test_run_r63_graph",
+        "test_run_r65_drain_versions",
+        "test_run_r66_coexistence",
+        "test_check_scale3_protocol",
+        "test_check_drain_capture",
+        "test_run_drain_capture"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-python-v1.log",
+      "accepted_log_sha256": "e3b3651d7436369b6472d6006ec69d40670e6e1bb40135d0c92fa6d324a322bd",
+      "predecessor": "r122-development-gate-clippy-production-v1.json"
+    },
+    {
+      "name": "fmt",
+      "run": "r122-development-gate-fmt-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-fmt-v1.log",
+      "accepted_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "predecessor": "r122-development-gate-python-v1.json"
+    },
+    {
+      "name": "whitespace",
+      "run": "r122-development-gate-whitespace-v1",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-whitespace-v1.log",
+      "accepted_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "predecessor": "r122-development-gate-fmt-v1.json"
+    },
+    {
+      "name": "dependency-policy",
+      "run": "r122-development-gate-dependency-policy-v1",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/workspace_dependency_policy.py"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-dependency-policy-v1.log",
+      "accepted_log_sha256": "e4909791d89201a88e23213fca74159a2d5b8e869b5227635acbe74c893d6e25",
+      "predecessor": "r122-development-gate-whitespace-v1.json"
+    },
+    {
+      "name": "dependency-tests",
+      "run": "r122-development-gate-dependency-tests-v1",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/tests/workspace_dependency_policy.py"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-dependency-tests-v1.log",
+      "accepted_log_sha256": "c6352adff70a6982c739a1cd77bbb43d2425eefd2dc2112b92b0ceebf2a6ca31",
+      "predecessor": "r122-development-gate-dependency-policy-v1.json"
+    },
+    {
+      "name": "ci-test-gate",
+      "run": "r122-development-gate-ci-test-gate-v1",
+      "command": [
+        "bash",
+        "scripts/tests/ci-local-test-gate.sh"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-ci-test-gate-v1.log",
+      "accepted_log_sha256": "7614173c0974c8aa8202f60f5fc9a9ed8691211147a0004dab9299a3555f5b9b",
+      "predecessor": "r122-development-gate-dependency-tests-v1.json"
+    },
+    {
+      "name": "standalone-lockfiles",
+      "run": "r122-development-gate-standalone-lockfiles-v1",
+      "command": [
+        "bash",
+        "scripts/check-standalone-lockfiles.sh"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-standalone-lockfiles-v1.log",
+      "accepted_log_sha256": "a7d6a6c6afbcd384631227a6134f4aa7c926320c840dcc9cc18735cb11304d1f",
+      "predecessor": "r122-development-gate-ci-test-gate-v1.json"
+    },
+    {
+      "name": "registration",
+      "run": "r122-development-gate-registration-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue_linux::primary_fixture::tests::"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-registration-v1.log",
+      "accepted_log_sha256": "aa060cad79caa346f049dbad7ae5b406f650348bf5601af7a4b5baad1dc8d091",
+      "predecessor": "r122-development-gate-standalone-lockfiles-v1.json"
+    },
+    {
+      "name": "ordinary",
+      "run": "r122-development-gate-ordinary-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "ordinary_constructor_root_"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-ordinary-v1.log",
+      "accepted_log_sha256": "5ef924634848a27a7650c92e0c7fe8c692cd5b92fa493281377acb8a3c19118c",
+      "predecessor": "r122-development-gate-registration-v1.json"
+    },
+    {
+      "name": "linux-helpers",
+      "run": "r122-development-gate-linux-helpers-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue_linux::tests::"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-linux-helpers-v1.log",
+      "accepted_log_sha256": "5e78d7637c3ffee8d713c26ffae09cf2e123ebe4ece7be284264c87c454f41b3",
+      "predecessor": "r122-development-gate-ordinary-v1.json"
+    },
+    {
+      "name": "initialization",
+      "run": "r122-development-gate-initialization-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "queue::tests::initialization::"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-initialization-v1.log",
+      "accepted_log_sha256": "ae92a95c2d347c6399c30caee38c5f72b0ed0134f3547f1a3210be8d32b7dbe5",
+      "predecessor": "r122-development-gate-linux-helpers-v1.json"
+    },
+    {
+      "name": "transitions",
+      "run": "r122-development-gate-transitions-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "shared_memory::tests::transitions::"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-transitions-v1.log",
+      "accepted_log_sha256": "1e54dab1823854e71fa6d303d3c0a63416c8e31bc9f0f7548d2d0061d7294369",
+      "predecessor": "r122-development-gate-initialization-v1.json"
+    },
+    {
+      "name": "preparation",
+      "run": "r122-development-gate-preparation-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "preparation::tests::"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-preparation-v1.log",
+      "accepted_log_sha256": "36627ec10b190eb8dddb29a92c202b1102a73079e17ace7228c4c5475b1b0725",
+      "predecessor": "r122-development-gate-transitions-v1.json"
+    },
+    {
+      "name": "bind",
+      "run": "r122-development-gate-bind-v1",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "persistent_bind_"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-bind-v1.log",
+      "accepted_log_sha256": "d208b64384c7d934c94b0d86f6a4efaefa5e41f9f8deb56c5c8951bd57e298ba",
+      "predecessor": "r122-development-gate-preparation-v1.json"
+    },
+    {
+      "name": "proof-inventory",
+      "run": "r122-development-gate-proof-inventory-v1",
+      "command": [
+        "python3",
+        "-I",
+        "crates/fe2o3-runtime-model/verus/check-negative-quality.py",
+        "crates/fe2o3-runtime-model/verus/negative",
+        "crates/fe2o3-runtime-model/verus/verify-verus.sh"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-proof-inventory-v1.log",
+      "accepted_log_sha256": "71666f9ef118d670089a13bab3ca328ec739b8b3870abc98706f4b572884f2e5",
+      "predecessor": "r122-development-gate-bind-v1.json"
+    },
+    {
+      "name": "production-metadata",
+      "run": "r122-development-gate-production-metadata-v1",
+      "command": [
+        "node",
+        "-e",
+        "const fs = require('fs'); const cp = require('child_process'); const fd = fs.openSync(\"/home/harsh/.codex-tmp/r122-development-gate-production-metadata-v1.stderr.log\", 'wx'); let result; try { result = cp.spawnSync(\"cargo\", [\"+nightly-2026-04-03\",\"metadata\",\"--locked\",\"--offline\",\"--no-default-features\",\"--format-version\",\"1\",\"--filter-platform\",\"x86_64-unknown-linux-musl\"], {stdio: ['ignore', 1, fd]}); } finally { fs.closeSync(fd); } if (result.error) throw result.error; if (result.signal) process.kill(process.pid, result.signal); else process.exitCode = result.status;"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-production-metadata-v1.log",
+      "accepted_log_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca",
+      "native_command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--no-default-features",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-musl"
+      ],
+      "stderr_log": "/home/harsh/.codex-tmp/r121-development-gate-production-metadata-v1.stderr.log",
+      "predecessor": "r122-development-gate-proof-inventory-v1.json"
+    },
+    {
+      "name": "production-audit",
+      "run": "r122-development-gate-production-audit-v1",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/runtime_pure_rust_audit.py",
+        "metadata",
+        "--input",
+        "/home/harsh/.codex-tmp/r122-development-gate-production-metadata-v1.log",
+        "--root",
+        "fe2o3-runtime"
+      ],
+      "effective_cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+      "accepted_log": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gate-production-audit-v1.log",
+      "accepted_log_sha256": "400860e866d558eb288fcb5fa535c2f1df7461ba462f0c21f77e3b96009a228c",
+      "predecessor": "r122-development-gate-production-metadata-v1.json"
+    }
+  ],
+  "doc_relocations": [
+    {
+      "path": "crates/fe2o3-kfd/src/queue_live.rs",
+      "from": 3818,
+      "to": 3821
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/queue_live.rs",
+      "from": 3873,
+      "to": 3876
+    },
+    {
+      "path": "crates/fe2o3-kfd/src/queue_live.rs",
+      "from": 4357,
+      "to": 4360
+    }
+  ],
+  "auxiliary_counts": {
+    "registration": 2,
+    "ordinary": 1,
+    "linux-helpers": 20,
+    "initialization": 4,
+    "transitions": 30,
+    "preparation": 23,
+    "bind": 4
+  },
+  "normalization_contract": {
+    "standalone_cache_wait": "Remove only the exact observed package-cache wait line from both accepted and fresh standalone logs; preserve the exact 32-lockfile roster and completion.",
+    "linux_split": "Actual gate baseline is committed R121; a separately pinned historical split-row transcript is a parser calibration fixture only.",
+    "docs": "Only the three declared relocations of complete byte-identical fences are permitted."
+  },
+  "acceptance": "Require normal zero-exit closed records on this exact source map, valid clocks, exact commands and no live owned group members. Compare exact accepted executable, passing and ignored rosters; add only the 18 KFD and 10 runtime tests declared independently in the pinned mutation plan. All summary fields must match. Metadata must be valid JSON with empty separately captured stderr, and production audit must match the accepted graph. The 12 compiled mutations, restored controls, calibrated parsers, complete evidence collection and independent review are additional publication requirements. Failed and superseded-source runs remain history only. CPU tests, syntax and inventory do not establish native execution, solver correspondence, total memory bounds or HIP/HSA parity."
+}

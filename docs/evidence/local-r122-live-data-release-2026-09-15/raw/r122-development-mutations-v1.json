@@ -1,0 +1,402 @@
+{
+  "accepted": false,
+  "scope": "Final corrected-source R122 local CPU/test qualification inputs; 12 planned compiled behavioral negatives, not native/formal/performance acceptance.",
+  "source_parent": "f6d3fb50e4fd1eb6949d4a29f55c79432a5989e1",
+  "source_map": "r122-development-clippy-v2-source.json",
+  "source_map_sha256": "178fa1fb2c9d3267440dbf36c50e4d79916e66fb2765446d7e1fa8acb8fc90c4",
+  "source_count": 5700,
+  "runner": "r122-development-run-v1.js",
+  "runner_sha256": "b1d89a2f4ea181499651e2f7a1d69203f4a94fc0bfb0e1dca716b311e29a828b",
+  "test_commands": {
+    "kfd": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib"
+    ],
+    "runtime": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--lib"
+    ]
+  },
+  "baseline": {
+    "name": "r122-development-gnu-all-v1",
+    "predecessor": "r122-development-clippy-v2.json",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets"
+    ]
+  },
+  "accepted_baseline": {
+    "commit": "f6d3fb50e4fd1eb6949d4a29f55c79432a5989e1",
+    "path": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15/raw/r121-development-gnu-all-v2.log",
+    "sha256": "038369f3407fb84ab0776a516a2b4c81283431ababcff662e851c04052f4e210"
+  },
+  "new_tests": {
+    "kfd": [
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_all_five_variants_commit_after_retake_and_reuse_exact_hole",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_closing_currentness_failure_retains_native_disposal_receipt",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_complete_receipt_survives_every_failed_retake_without_ledger_commit",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_host_model_commit_failures_retain_unmap_or_disposal_receipt",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_incomplete_success_and_commit_panic_cannot_remove_ledger_entry",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_model_opening_rejection_and_panic_retain_original_input",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_native_error_and_panic_preserve_exact_prefix_and_neighbors",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_original_native_panic_wins_over_secondary_retake_failures",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_partial_unmap_preserves_exact_prefix_without_reusable_hole",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_retake_failure_precedes_ordinary_native_error",
+      "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_revision_exhaustion_poison_hook_preserves_original_error",
+      "queue::live::rebind_tests::data_release::detached_release_bound_dispatch_precedes_bad_ledger",
+      "queue::live::rebind_tests::data_release::detached_release_direct_missing_engine_transports_parent",
+      "queue::live::rebind_tests::data_release::detached_release_facade_restores_before_transport_even_after_suppressed_error",
+      "queue::live::rebind_tests::data_release::detached_release_public_preflight_preserves_precedence_and_owners",
+      "shared_memory::tests::pristine_abort::cleanup_tests::cleanup_mapping_snapshot_zero_encoding_preserves_every_byte_and_length"
+    ],
+    "runtime": [
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_custody_and_traversal_do_not_allocate_on_success",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_error_formatting_panic_still_retains_suffix",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_error_retains_exact_partition",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_panic_retains_exact_partition",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_pre_handoff_errors_retain_original_storage_and_all_items",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_pre_handoff_panic_preserves_original_payload_and_full_roster",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_real_empty_state_does_not_require_a_lane",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_real_lane_selection_rejection_keeps_installed_roster",
+      "kfd_backend::compute_dispatch::resident_release_tests::resident_release_success_is_forward_and_not_truncated_by_descriptors"
+    ]
+  },
+  "source_guards": [],
+  "counts": {
+    "baseline_full": 2818,
+    "full": 2846,
+    "baseline_kfd": 1172,
+    "kfd": 1190,
+    "baseline_runtime": 733,
+    "runtime": 743,
+    "ignored": 5,
+    "harnesses": 48,
+    "csv_targets": 1
+  },
+  "mutations": [
+    {
+      "id": "01-preflight-custody",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_data_release_v1(",
+          "end": "\nimpl DataReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "context.retain(root);",
+            "if entered { context.retain(root); }"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:228:9",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: 0",
+        "right: 1"
+      ],
+      "expected_file_sha256": "56e1dd3bfdaca19650baa7ce1fe3d150e0fe897df02b9a69c1d2cbe7fbf6ddb9"
+    },
+    {
+      "id": "02-missing-identity",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_data_release_v1(",
+          "end": "\nimpl DataReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "let Some((index, _)) = matching.next() else {\n            return Err(Gfx942DispatchBindingErrorV1::InvalidData {\n                index: *ledger.count,\n                detail: \"detached release storage identity\",\n            }\n            .into());\n        };",
+            "let index = matching.next().map(|(index, _)| index).unwrap_or(0);"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:581:17",
+      "oracle": [
+        "assertion failed: released.transport"
+      ],
+      "expected_file_sha256": "c6143e57526c45d70b8231268167088a9e5231f289242faf53f3042ecf7cf387"
+    },
+    {
+      "id": "03-duplicate-identity",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_data_release_v1(",
+          "end": "\nimpl DataReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "if matching.next().is_some() {",
+            "if matching.next().is_some() && false {"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:581:17",
+      "oracle": [
+        "assertion failed: released.transport"
+      ],
+      "expected_file_sha256": "be744bef48655eb9b6dae4a87645ca9d450975b2634a5e7a14ee8bfcdc2af71f"
+    },
+    {
+      "id": "04-incomplete-lower",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_incomplete_success_and_commit_panic_cannot_remove_ledger_entry",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_data_release_v1(",
+          "end": "\nimpl DataReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "if !root.is_complete() {",
+            "if !root.is_complete() && false {"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:674:17",
+      "oracle": [
+        "assertion failed: released.transport"
+      ],
+      "expected_file_sha256": "6861ae968dec87156515fdc28d58b8443599887cb51ee23943892616bf3233d4"
+    },
+    {
+      "id": "05-early-ledger-commit",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_complete_receipt_survives_every_failed_retake_without_ledger_commit",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_data_release_v1(",
+          "end": "\nimpl DataReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "context.release(&mut root)?;",
+            "*ledger.count = next_count;\n        *ledger.next = Some(index);\n        context.release(&mut root)?;"
+          ],
+          [
+            "ledger.identities.remove(index);\n        *ledger.count = next_count;\n        *ledger.next = Some(index);",
+            "ledger.identities.remove(index);"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:397:17",
+      "oracle": [
+        "assertion `left == right` failed",
+        "Some(0)",
+        "None"
+      ],
+      "expected_file_sha256": "d122e2424d840a7a5814ee791c735caccbfd9f9369b6e10eb939c7ef41471269"
+    },
+    {
+      "id": "06-preflight-transport",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/data_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_data_release_v1(",
+          "end": "\nimpl DataReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "let transport = result.is_err() || entered && failed;",
+            "let transport = failed;"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:902:13",
+      "oracle": [
+        "assertion failed: !released.transport"
+      ],
+      "expected_file_sha256": "763b9427b4d4bab41d064cf73da1aec4380b4b49bb6bfa7a17730c3060ca1f47"
+    },
+    {
+      "id": "07-direct-transport",
+      "kind": "kfd",
+      "test": "queue::live::rebind_tests::data_release::detached_release_direct_missing_engine_transports_parent",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+        "edits": [
+          [
+            "        let settled = self.release_data_settled_v1(data);\n        if settled.transport {",
+            "        let settled = self.release_data_settled_v1(data);\n        if !settled.transport {"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:184:5",
+      "oracle": [
+        "assertion failed: session.completion_owner.0.is_none()"
+      ],
+      "expected_file_sha256": "4ffd2447bfeaf4cbb6e22da68e227aa3edb24d3e01579c38730430ad20a4c03e"
+    },
+    {
+      "id": "08-sticky-transport",
+      "kind": "kfd",
+      "test": "queue::live::rebind_tests::data_release::detached_release_facade_restores_before_transport_even_after_suppressed_error",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live.rs",
+        "edits": [
+          [
+            "        let settled = self.session.release_data_settled_v1(data);\n        *self.terminal_transport |= settled.transport;",
+            "        let settled = self.session.release_data_settled_v1(data);\n        *self.terminal_transport = settled.transport;"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/data_release.rs:272:29",
+      "oracle": [
+        "preflight cannot clear earlier transport"
+      ],
+      "expected_file_sha256": "6a5fd633a1447a0bbe09da3088361fccf21939ee8f833e36af1e661a056faf8a"
+    },
+    {
+      "id": "09-error-suffix",
+      "kind": "runtime",
+      "test": "kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_error_retains_exact_partition",
+      "patch": {
+        "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+        "scope": {
+          "start": "fn with_resident_release_custody_v1<T>(",
+          "end": "\nfn release_resident_items_v1<T>("
+        },
+        "edits": [
+          [
+            "        Ok(Err(error)) => {\n            retain(custody);",
+            "        Ok(Err(error)) => {\n            custody.remaining = Vec::new().into_iter();\n            retain(custody);"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/resident_release_tests.rs:185:5",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: []",
+        "right: [1, 2]"
+      ],
+      "expected_file_sha256": "5b1337d0a0600f41157d25a5156aebef240018d5904f448d91435ca0451122f5"
+    },
+    {
+      "id": "10-panic-suffix",
+      "kind": "runtime",
+      "test": "kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_panic_retains_exact_partition",
+      "patch": {
+        "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+        "scope": {
+          "start": "fn with_resident_release_custody_v1<T>(",
+          "end": "\nfn release_resident_items_v1<T>("
+        },
+        "edits": [
+          [
+            "        Err(payload) => {\n            retain(custody);",
+            "        Err(payload) => {\n            custody.remaining = Vec::new().into_iter();\n            retain(custody);"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/resident_release_tests.rs:185:5",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: []",
+        "right: [1, 2]"
+      ],
+      "expected_file_sha256": "cef56b825d2ed3ef44c71b8006e5104ecf27806e4fdd6342953fb9beb934e0c7"
+    },
+    {
+      "id": "11-incomplete-outer",
+      "kind": "runtime",
+      "test": "kfd_backend::compute_dispatch::resident_release_tests::resident_release_incomplete_success_retains_unhanded_items",
+      "patch": {
+        "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+        "scope": {
+          "start": "fn with_resident_release_custody_v1<T>(",
+          "end": "\nfn release_resident_items_v1<T>("
+        },
+        "edits": [
+          [
+            "Ok(Ok(())) if custody.active.is_none() && custody.remaining.len() == 0 => Ok(()),",
+            "Ok(Ok(())) if custody.completed == 0 || (custody.active.is_none() && custody.remaining.len() == 0) => Ok(()),"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/resident_release_tests.rs:266:9",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(\"KFD resident-data release callback left owned data\")"
+      ],
+      "expected_file_sha256": "3fa07aed808e5e7eb86bd387e58b32d925db35cbebf62035bfd9e92cd08b7b11"
+    },
+    {
+      "id": "12-ignore-lower-error",
+      "kind": "runtime",
+      "test": "kfd_backend::compute_dispatch::resident_release_tests::resident_release_first_middle_last_error_retains_exact_partition",
+      "patch": {
+        "path": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs",
+        "scope": {
+          "start": "fn release_resident_items_v1<T>(",
+          "end": "\nfn release_resident_data_v1("
+        },
+        "edits": [
+          [
+            "release(data)?;",
+            "let _ = release(data);"
+          ]
+        ]
+      },
+      "oracle_location": "crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/resident_release_tests.rs:180:9",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: Ok(())",
+        "right: Err(\"release 0\")"
+      ],
+      "expected_file_sha256": "1a80825f0e3b7c8c0623e7116b7bf727336ec50b2135a34276e614a902c01f2a"
+    }
+  ],
+  "parser_inputs": {
+    "r119-integrated-qualification-evidence-v1.js": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2",
+    "r119-integrated-qualification-plan-v1.js": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7",
+    "r119-integrated-mutation-core-v1.js": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583",
+    "r119-persistent-mutations-v1.js": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad",
+    "r119-persistent-mutations-v2.js": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a"
+  }
+}

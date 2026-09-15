@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.36s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport' (3589259) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_data_release_tests.rs:228:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1189 filtered out; finished in 1.91s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

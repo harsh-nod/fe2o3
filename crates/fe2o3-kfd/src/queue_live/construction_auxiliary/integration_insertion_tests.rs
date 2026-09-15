@@ -19,6 +19,9 @@ mod coherent_cases;
 #[path = "integration_uninitialized_device_insertion_tests.rs"]
 mod allocation_cases;
 
+#[path = "integration_data_release_tests.rs"]
+mod release_cases;
+
 #[derive(Default)]
 struct PrimaryDetached {
     identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,

@@ -1,0 +1,29 @@
+node:assert:150
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: predeclared behavioral assertion
++ actual - expected
+
++ 'crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_data_release_tests.rs:228:9'
+- 'crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:228:9'
+
+    at assertNegative (/home/harsh/.codex-tmp/r122-development-check-v2.js:114:10)
+    at negative (/home/harsh/.codex-tmp/r122-development-check-v2.js:139:17)
+    at Object.<anonymous> (/home/harsh/.codex-tmp/r122-development-check-v2.js:167:14)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_data_release_tests.rs:228:9',
+  expected: 'crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_data_release_tests.rs:228:9',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

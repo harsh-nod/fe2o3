@@ -1,0 +1,29 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.31s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-9280442e7aa71d90)
+
+running 13 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_all_five_variants_commit_after_retake_and_reuse_exact_hole ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_host_model_commit_failures_retain_unmap_or_disposal_receipt ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_closing_currentness_failure_retains_native_disposal_receipt has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_complete_receipt_survives_every_failed_retake_without_ledger_commit has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_closing_currentness_failure_retains_native_disposal_receipt ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_incomplete_success_and_commit_panic_cannot_remove_ledger_entry has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_incomplete_success_and_commit_panic_cannot_remove_ledger_entry ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_missing_and_duplicate_identity_retain_before_native_work ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_model_opening_rejection_and_panic_retain_original_input has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_native_error_and_panic_preserve_exact_prefix_and_neighbors has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_model_opening_rejection_and_panic_retain_original_input ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_complete_receipt_survives_every_failed_retake_without_ledger_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_original_native_panic_wins_over_secondary_retake_failures has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_preflight_rejection_retains_input_without_new_terminal_transport ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_partial_unmap_preserves_exact_prefix_without_reusable_hole has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_original_native_panic_wins_over_secondary_retake_failures ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_retake_failure_precedes_ordinary_native_error ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_revision_exhaustion_poison_hook_preserves_original_error ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_native_error_and_panic_preserve_exact_prefix_and_neighbors ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::data_release_partial_unmap_preserves_exact_prefix_without_reusable_hole ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1173 filtered out; finished in 335.77s
+

@@ -571,7 +571,7 @@ impl PreparationMemoryFixtureV1 {
     ) {
         trace.expected_model = Some(self.coherent_active_foundation_v1(queue).memory().clone());
     }
-    fn coherent_active_foundation_v1<'a>(
+    pub(super) fn coherent_active_foundation_v1<'a>(
         &'a self,
         queue: &'a QueueModelFoundationV1,
     ) -> &'a QueueModelFoundationV1 {

@@ -260,6 +260,9 @@ mod pristine_abort;
 use pristine_abort::UnpublishedDispatchStateV1;
 #[path = "queue_live/data_insertion.rs"]
 pub(in crate::queue) mod data_insertion;
+
+#[path = "queue_live/data_release.rs"]
+pub(in crate::queue) mod data_release;
 #[path = "queue_live/rebind.rs"]
 pub(in crate::queue) mod rebind;
 #[cfg(test)]
@@ -4484,7 +4487,9 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         &mut self,
         data: Gfx942FixedDispatchDataV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.session.release_detached_fixed_dispatch_data(data)
+        let settled = self.session.release_data_settled_v1(data);
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn submit_fixed_dispatch<const N: usize>(

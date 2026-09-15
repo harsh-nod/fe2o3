@@ -1,0 +1,40 @@
+{
+  "schema": "r122-development-forwarding-negatives-v1",
+  "qualification": false,
+  "source_head": "f6d3fb50e4fd1eb6949d4a29f55c79432a5989e1",
+  "baseline_run": "r122-development-release-facade-v3",
+  "source_map_sha256": "a732399cc06c8608ec86f2064f64e3fc85c3e099e570471e0425db5117625f40",
+  "count": 5700,
+  "files": {
+    "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs": "2ea4f2edda6280d512952bf9c3452703fc31aca5334cb6cc2d3edcc39ea43c39",
+    "crates/fe2o3-kfd/src/queue_live.rs": "87c76d28ddcb81918e39c6ad2eede1f3db54b58fc06f32b20862cbebf7ad0f0e",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs": "1e9e3d766d7246c17e5f038ce32039296602e1d3b6aa90069c676ccbe84199b1",
+    "crates/fe2o3-kfd/src/queue_live/rebind_tests/data_release.rs": "b9c7a35532cb14d0f4e61bb412fd25185c4ae95b44136d98c68d8ce4462af050"
+  },
+  "runner": {
+    "name": "r122-development-run-v1.js",
+    "sha256": "b1d89a2f4ea181499651e2f7a1d69203f4a94fc0bfb0e1dca716b311e29a828b"
+  },
+  "mutations": [
+    {
+      "run": "r122-development-negative-direct-transport-v1",
+      "file": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+      "original": "        let settled = self.release_data_settled_v1(data);\n        if settled.transport {",
+      "replacement": "        let settled = self.release_data_settled_v1(data);\n        if !settled.transport {",
+      "test": "queue::live::rebind_tests::data_release::detached_release_direct_missing_engine_transports_parent",
+      "failure_location": "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:184:",
+      "failure_message": "assertion failed: session.completion_owner.0.is_none()"
+    },
+    {
+      "run": "r122-development-negative-sticky-transport-v1",
+      "file": "crates/fe2o3-kfd/src/queue_live.rs",
+      "original": "        let settled = self.session.release_data_settled_v1(data);\n        *self.terminal_transport |= settled.transport;",
+      "replacement": "        let settled = self.session.release_data_settled_v1(data);\n        *self.terminal_transport = settled.transport;",
+      "test": "queue::live::rebind_tests::data_release::detached_release_facade_restores_before_transport_even_after_suppressed_error",
+      "failure_location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/data_release.rs:272:",
+      "failure_message": "preflight cannot clear earlier transport"
+    }
+  ],
+  "restored_run": "r122-development-forwarding-restored-v1",
+  "acceptance": "Each independent production mutation must compile, run exactly its named behavioral test and fail at its predeclared assertion with normal exit 101. Reject compiler errors, signals, timeouts and process cleanup failures. Require exact baseline source restoration and all four restored facade tests passing. This two-mutation development check is not full R122 qualification."
+}
