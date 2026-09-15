@@ -51,7 +51,7 @@ fn data_snapshot(data: &[Gfx942FixedDispatchDataV1]) -> impl std::fmt::Debug + P
         .collect::<Vec<_>>()
 }
 
-fn attachment_snapshot(
+pub(super) fn attachment_snapshot(
     session: &ComputeAqlQueueSessionV1,
 ) -> impl std::fmt::Debug + PartialEq + use<> {
     (
@@ -214,7 +214,7 @@ fn retained_control_facade_restores_exact_selected_owner_before_sticky_parent_tr
     }
 }
 
-fn unpublished_fixture() -> (
+pub(super) fn unpublished_fixture() -> (
     Memory,
     Vec<Gfx942FixedDispatchDataV1>,
     PristineDispatchContinuationV1,

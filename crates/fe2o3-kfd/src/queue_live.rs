@@ -268,6 +268,8 @@ pub(in crate::queue) mod rebind;
 #[cfg(test)]
 #[path = "queue_live/rebind_tests.rs"]
 mod rebind_tests;
+#[path = "queue_live/recycled_detach.rs"]
+pub(in crate::queue) mod recycled_detach;
 #[path = "queue_live/retained_control_release.rs"]
 pub(in crate::queue) mod retained_control_release;
 #[path = "queue_live/sdma_logical_mux.rs"]
@@ -4380,7 +4382,9 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
     pub fn detach_recycled_fixed_dispatch(
         &mut self,
     ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
-        self.session.detach_recycled_fixed_dispatch()
+        let settled = self.session.detach_recycled_settled_v1();
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     /// Returns complete data from a strictly pristine recipe, without a completion receipt.

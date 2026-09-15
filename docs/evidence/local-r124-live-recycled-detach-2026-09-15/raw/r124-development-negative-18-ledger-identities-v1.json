@@ -1,0 +1,91 @@
+{
+  "source_head": "948d1f2637ef08061aabf42485929869e3ed5dbc",
+  "source_map_sha256": "415b594750a13ca6cd3a6df6603e385085452220ddedee2467ad0016d3225b98",
+  "started_at": "2026-09-15T19:22:41.397Z",
+  "finished_at": "2026-09-15T19:23:32.137Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r124-development-negative-18-ledger-identities-v1.log",
+  "source": "/home/harsh/.codex-tmp/r124-development-negative-18-ledger-identities-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r124-development-negative-18-ledger-identities-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r124-development-run-v3.js",
+    "sha256": "add6a54f66604f70674fcae67ea45fc73a39056f2be26272a155bd7c089b9b0e"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 364117,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789500212144,
+        "monotonic_ns": "6793916656455",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 50.739615894,
+  "verification_elapsed_seconds": 0.311958034,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r124-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r124-development-restored-17-ledger-count-v1.json",
+      "sha256": "036effe67a93e49f68ad2131a5301f35e867918a0edb022f00f3d0f5844acea6",
+      "observation": {
+        "utc_ms": 1789500159819,
+        "monotonic_ns": "6741591736827",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789500161397,
+      "monotonic_ns": "6743169815533",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789500212137,
+      "monotonic_ns": "6793909431427",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789500212449,
+      "monotonic_ns": "6794221389461",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

@@ -1,15 +1,36 @@
 # Runtime Swarm Dispatch After R114
 
-Current Native checkpoint: [R123 live retained-control release is locally accepted](runtime-live-retained-control-release-v1.md),
+Current Native checkpoint: [R124 ordinary recycled detach is locally accepted](runtime-live-recycled-detach-v1.md),
+with [476 raw artifacts](evidence/local-r124-live-recycled-detach-2026-09-15/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,882 tests with
+five ignored; all 25 source/auxiliary leaves, their exact transcript checker,
+19 compiled behavioral negatives across 19 maps, and the final 158-test restored
+regression pass. All 5,706 source identities match. The explicit two-boot
+qualification retains 175 historical helper cases separately from 197 fresh
+calibrations, pins 16 prior-boot closure records without rescanning old PGIDs,
+and observes all 91 current-boot groups absent, including the closed collector.
+The interrupted first musl run remains unqualified. This accepts ordinary live
+recycled-detach ownership settlement at the CPU/test boundary only. Native
+execution, formal implementation correspondence, aggregate-memory and
+performance acceptance remain open; A1/A2 and issue #182 are not complete.
+
+Preceding Native checkpoint: [R123 live retained-control release is locally accepted](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with
 five ignored; seventeen source gates, ten auxiliary checks, restored 128/17
 suites, ten compiled negatives across ten maps and 134 checker calibrations
-pass. All 5,703 source identities match and all 76 recorded owned process groups
-are absent. This accepts live retained persistent-control release at the CPU/test
-boundary. Remaining live detach/control routes, queue cleanup, N5 adoption,
-native execution, formal correspondence, aggregate-memory and performance
-acceptance remain open; A1/A2 are not complete.
+pass. All 5,703 source identities matched and all 76 recorded owned process
+groups were observed absent at acceptance. This accepts live retained
+persistent-control release at the CPU/test boundary.
+
+The next identified live cleanup gap is prepared persistent cancellation.
+Both single- and three-binding callers remove their attachment before cleanup,
+and `release_persistent_dispatch_data(false)` sends returned data through the
+model driver's generic result. A closing panic can unwind that data and the
+caller's removed owners. The next packet must root the complete cancellation
+through cleanup, retake, native restore and allocation-ledger cancellation,
+while preserving existing receipt recovery and terminal-state observations.
+This is a source-reviewed handoff, not an implemented or qualified fix.
 
 Preceding Native checkpoint: [R122 live detached-data release is locally accepted](runtime-live-data-release-v1.md),
 with [402 raw artifacts](evidence/local-r122-live-data-release-2026-09-15/README.md)
@@ -40,6 +61,73 @@ qualification-contract tests pass; all 5,688 source identities are restored.
 Earlier 2,744-test full runs retain their original source cohort. This accepts
 executable-model settlement only, not production Context, authenticated proofs,
 native execution or performance. Resources next takes V4-J1 issuance proofs.
+
+Resources development update: the external V13 issuance candidate
+`r120-journal-issuance-v13.rs`, SHA-256
+`1bc85ba1280dc0bfd5f0ac99a726bd0d21ad1b57fe71dbf837247ed3487f47cd`,
+passed its first unchanged positive run with 56 verified obligations and zero
+errors. `r120-development-v13-positive-01` took 10.929 seconds, closed normally,
+left no live owned process-group members and retained unchanged source/named-tool
+hashes. This is development sequence-refinement evidence, not authenticated
+formal acceptance or production Rust correspondence. Five isolated executable
+registration mutations subsequently reach only their intended unchanged
+postcondition, each with 55 verified obligations and one error: omitted free-slot
+pop, wrong slot, wrong content, wrong reserved count and next-value watermark.
+The corrected V2 checker rejects competing diagnostics and checks exact source
+replacements, source/tool stability, normal exit and the declaration/return
+locations. Its return-line predicate passes ten calibration cases. The first
+omitted-pop attempt remains failed harness history because V1 rejected Verus's
+extra diagnostic gutter marker; it is not reused as a passing probe.
+The fresh post-negative positive run, `r120-development-v13-positive-02`,
+again reports 56 verified and zero errors on unchanged V13 and named tools;
+it closes normally after 10.058 seconds with no live owned process-group members.
+These development probes do not establish full proof qualification.
+Full toolchain authentication, constructor/abort refinement,
+physical storage/ownership and unwind correspondence remain open. The accepted
+Resources checkpoint remains R116/V3.
+
+An external V14 draft now extends V13 with executable abort sequence refinement:
+`r120-journal-issuance-v14.rs`, SHA-256
+`33dcc4a54f626e4fbbc1ce74f016125aca8f99c9ace503bb3541c85d8ff016de`.
+Read-only review confirms the intended preflight and update ordering, including
+unchanged watermark/history and malformed-state rejection. The first positive
+solver run, `r120-development-v14-positive-01`, now passes with 58 verified and
+zero errors in 14.904 seconds. Source and named tool hashes remain unchanged;
+the run closes normally with no live owned process-group members. Following the
+host reboot, a new independent calibration record passes all 82 diagnostic/source
+checker cases. Six independent executor-only abort mutations then each produce
+57 verified and exactly one intended postcondition error at line 550: omitted
+slot clear, omitted free push, omitted count update, reset watermark, wrong error,
+and a watermark write on rejection. Four failures bind the exact body-end source
+at line 565; two bind the exact early-return arm at line 556. All six harnesses
+close normally with unchanged source/named-tool identities and no live owned
+groups on their current boot. Their same-boot chain starts at the fresh
+calibration, not at the old-boot positive record. The post-negative unchanged
+positive rerun, `r120-development-v14-positive-02`, again passes 58 verified and
+zero errors in 19.622 seconds, with unchanged source/named tools, normal closure
+and no live owned process-group members. These remain development
+sequence-refinement results.
+V14's observed-capacity argument and projection framing do not establish
+physical storage, constructor, production-source or unwind refinement.
+
+An external V15 candidate adds constructor contents refinement, using generic
+vacant-slot and descending-free-list loops, all five production scalar fields
+and seven vectors, and a projection that reads every actual field. Its exact
+initial-state equality is independent of storage admission; the issuance
+invariant remains conditional on storage labels. The candidate has SHA-256
+`366c03768a9f662e511c5a5efaa6290cfdaba9b0534e04032af4ac45267825c8`.
+Static review found no field, guard-priority or ownership mismatch. The positive
+development run, `r120-development-v15-positive-01`, passes exactly 65 verified
+and zero errors in 17.408 seconds. Independent read-only review confirms unchanged
+source/named-tool identities, the same-boot V14-positive-02 predecessor and normal
+closure with no live owned group members. Record SHA-256:
+`92b2eb430d66b8d905c6736dabb0171e5c362bc51dca793b2549556b06255c51`.
+The evidence-pinned candidate retains its historical "unexecuted" header; these
+results supersede that annotation without altering executed bytes. No V15
+negative campaign has run. Preflight-before-initialization order is source-reviewed,
+not an observable property of the Result-only postcondition. Allocation failure,
+physical storage, production resize/iterator binding and unwind remain outside
+this contents-only development proof. R116/V3 remains the accepted Resources checkpoint.
 
 Preceding Native checkpoint: [R117 detached persistent controls are locally accepted](runtime-detached-persistent-control-cleanup-v1.md)
 with [372 retained artifacts](evidence/local-r117-detached-persistent-control-cleanup-2026-09-14/README.md)

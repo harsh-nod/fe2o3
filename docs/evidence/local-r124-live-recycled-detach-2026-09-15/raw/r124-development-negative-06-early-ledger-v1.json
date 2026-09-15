@@ -1,0 +1,91 @@
+{
+  "source_head": "948d1f2637ef08061aabf42485929869e3ed5dbc",
+  "source_map_sha256": "7a898661c3e26f54c419ae713e7f93a67d18973eb468ef505d12f365f567517e",
+  "started_at": "2026-09-15T19:12:31.229Z",
+  "finished_at": "2026-09-15T19:13:15.350Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_completed_returned_authorities_survive_every_failed_retake",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r124-development-negative-06-early-ledger-v1.log",
+  "source": "/home/harsh/.codex-tmp/r124-development-negative-06-early-ledger-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r124-development-negative-06-early-ledger-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r124-development-run-v3.js",
+    "sha256": "add6a54f66604f70674fcae67ea45fc73a39056f2be26272a155bd7c089b9b0e"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 323962,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789499595356,
+        "monotonic_ns": "6177128822587",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 44.120709301,
+  "verification_elapsed_seconds": 0.289668991,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r124-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r124-development-restored-05-retake-error-v1.json",
+      "sha256": "65d3d0bff8eb70a9f33691f5f66ed1a733021711c1680a5198f663c309548657",
+      "observation": {
+        "utc_ms": 1789499549620,
+        "monotonic_ns": "6131392665563",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789499551229,
+      "monotonic_ns": "6133001943031",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789499595350,
+      "monotonic_ns": "6177122652332",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789499595639,
+      "monotonic_ns": "6177412321323",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

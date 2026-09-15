@@ -1,0 +1,977 @@
+{
+  "accepted": false,
+  "scope": "R124 local CPU/test qualification only",
+  "source_parent": "948d1f2637ef08061aabf42485929869e3ed5dbc",
+  "source_map_sha256": "a633edf685c4cbe3a24b1500a6a086ba36d39bec9b042abb5f88c52e4024cc24",
+  "source_identities": 5706,
+  "runner": {
+    "name": "r124-development-run-v2.js",
+    "sha256": "6223358ccbec2aee825946df10479e2a806c22cbd84bca251248e1babd6683e8"
+  },
+  "inputs": {
+    "r119-integrated-qualification-evidence-v1.js": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2",
+    "r119-integrated-qualification-plan-v1.js": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7",
+    "r119-integrated-mutation-core-v1.js": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583",
+    "r119-persistent-mutations-v1.js": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad",
+    "r119-persistent-mutations-v2.js": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a",
+    "r124-development-run-v1.js": "e6c174f4e031740b104b4d29248949f46c6f0da4d127620e351a8a63b7439553",
+    "r124-development-run-v2.js": "6223358ccbec2aee825946df10479e2a806c22cbd84bca251248e1babd6683e8",
+    "r124-development-full-plan-v1.json": "7b56d255f63cc2c839cd2b16928d0ed4ba7db2b94f73d50baef9bb48697b24b3",
+    "r124-development-mutations-v1.json": "02d94b392d6b62eee40152fa5391db2ccb0a10d111db4e6c05625605280bee48",
+    "r124-development-evidence-v1.js": "3c271a4b63e4ff51942fda5ebfa0eb5f901c5d92aea4d4caa4f35c930399a63a",
+    "r124-development-check-v1.js": "1caef52ee3c10a2d8efd49d82debadfbe227822fb575fc88ea32f99cd0bb82ad",
+    "r124-development-anchor-check-v1.js": "76d08bd21c098b2873838b8ac7c5658c6d7624129cacead2470bda688621dd61",
+    "r124-development-gate-check-v1.js": "29276457e534266a342fa7e2bc577286f4ec2d11f9f91fd3ebb88f4d1f5a12aa",
+    "r124-development-mutation-check-v1.js": "0d72aad2e3d8bed06cd6e954c0cbe2c7f13c1704d624dd702e059fa7c2a190cc",
+    "r124-development-mutation-inventory-v1.js": "63aded2e9e5b08cc85723716d23901d9a3a0e22189219ecefe2d6010c67db53a",
+    "r124-development-mutation-patch-v1.js": "9837d8a6565d789e03e7c787e002b2e001b6d8aeb20bdb56b6f5b7e6f0d05b42",
+    "r124-development-parser-tests-v1.js": "0a42f68e47f1fb95a018eb153fd0b6864cc3381066987f615546f7929de28683",
+    "r124-development-gate-parser-tests-v1.js": "db32949e107decc54eb1001f041cb6e244c33500f7a2900428aa31a7f4670781",
+    "r124-development-mutation-parser-tests-v1.js": "7248e5d788c1f11247c710d81f6774360364d4ab6a2a0c928acd32f75c23d255",
+    "r124-development-source-bundle-v1.js": "c0a26184742dabf83ee87578c7d81ec8d86fecf2b33c91b86d18225a297a02bb",
+    "r124-development-source-bundle-v1.json": "7ba51ddfaa96f0b1c8b7c765120aab4cd5482c6d29dfbc3aa101c15edfc1ca99",
+    "r119-integrated-linux-helpers.log": "b78cb48f28f17aaad884d876e8fce4b4cae038155be715c5b678d77113956815"
+  },
+  "full_checker": "r124-development-check-v1.js",
+  "gate_checker": "r124-development-gate-check-v1.js",
+  "mutation_checker": "r124-development-mutation-check-v1.js",
+  "source_bundle": "r124-development-source-bundle-v1.json",
+  "source_snapshot": {
+    "name": "r124-development-source-snapshot-01",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r124-development-source-bundle-v1.js"
+    ],
+    "predecessor": "r124-development-mutation-parser-calibration-01.json"
+  },
+  "bootstrap": [
+    {
+      "name": "r124-development-anchor-check-01",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r124-development-anchor-check-v1.js"
+      ],
+      "predecessor": "r124-development-clippy-02.json"
+    },
+    {
+      "name": "r124-development-gnu-check-v1",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r124-development-check-v1.js",
+        "baseline",
+        "gnu"
+      ],
+      "predecessor": "r124-development-gnu-all-v1.json"
+    },
+    {
+      "name": "r124-development-parser-calibration-01",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r124-development-parser-tests-v1.js"
+      ],
+      "predecessor": "r124-development-gnu-check-v1.json",
+      "cases": [
+        {
+          "name": "actual GNU exact executable and test roster",
+          "expected": "accept"
+        },
+        {
+          "name": "GNU missing new KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU duplicate new KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing preserved KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU duplicate preserved KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing preserved runtime test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU duplicate preserved runtime test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU wrong measured",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU wrong filtered",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU unknown executable",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU unknown passing row",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU contradictory failed row",
+          "expected": "reject"
+        },
+        {
+          "name": "actual GNU 60-minute record",
+          "expected": "accept"
+        },
+        {
+          "name": "record rejects old full deadline",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects excess full deadline",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong runner version",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong command",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects unclosed child",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects timed-out child",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects recorded live group",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects changed source endpoint",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong source identity",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong predecessor identity",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects nonmonotonic finish",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong elapsed time",
+          "expected": "reject"
+        },
+        {
+          "name": "actual ordinary runner-v1 record",
+          "expected": "accept"
+        },
+        {
+          "name": "ordinary record cannot borrow full-run deadline",
+          "expected": "reject"
+        },
+        {
+          "name": "actual focused executable and exact filtered roster",
+          "expected": "accept"
+        },
+        {
+          "name": "focused replacement preserves count but changes identity",
+          "expected": "reject"
+        },
+        {
+          "name": "focused unexpected ignored row",
+          "expected": "reject"
+        },
+        {
+          "name": "focused wrong executable",
+          "expected": "reject"
+        },
+        {
+          "name": "focused duplicate passing row",
+          "expected": "reject"
+        }
+      ],
+      "helper_sha256": "1caef52ee3c10a2d8efd49d82debadfbe227822fb575fc88ea32f99cd0bb82ad"
+    },
+    {
+      "name": "r124-development-gate-parser-calibration-01",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r124-development-gate-parser-tests-v1.js"
+      ],
+      "predecessor": "r124-development-parser-calibration-01.json",
+      "cases": [
+        {
+          "name": "actual GNU target and complete summary roster",
+          "expected": "accept"
+        },
+        {
+          "name": "GNU measured count",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU filtered count",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU executable identity",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU unknown successful row",
+          "expected": "reject"
+        },
+        {
+          "name": "historical observed Linux split normalization",
+          "expected": "accept"
+        },
+        {
+          "name": "Linux malformed extra row",
+          "expected": "reject"
+        },
+        {
+          "name": "Linux unknown partial row",
+          "expected": "reject"
+        },
+        {
+          "name": "Linux whitespace orphan",
+          "expected": "reject"
+        },
+        {
+          "name": "Linux intervening named result",
+          "expected": "reject"
+        },
+        {
+          "name": "Linux synthetic corrected-cohort filtered count",
+          "expected": "accept"
+        },
+        {
+          "name": "Linux stale filtered count",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU exact relocated doctest roster",
+          "expected": "accept"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3043",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3043",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3053",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3053",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3061",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3061",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3087",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_dispatch_binding.rs:3087",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_live.rs:3825",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_live.rs:3825",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_live.rs:3880",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_live.rs:3880",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU stale doctest crates/fe2o3-kfd/src/queue_live.rs:4364",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing doctest crates/fe2o3-kfd/src/queue_live.rs:4364",
+          "expected": "reject"
+        },
+        {
+          "name": "Python declared test count",
+          "expected": "accept"
+        },
+        {
+          "name": "Python wrong test count",
+          "expected": "reject"
+        },
+        {
+          "name": "strict Clippy completion",
+          "expected": "accept"
+        },
+        {
+          "name": "Clippy warning",
+          "expected": "reject"
+        },
+        {
+          "name": "empty formatting transcript",
+          "expected": "accept"
+        },
+        {
+          "name": "nonempty formatting transcript",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone exact lockfile roster",
+          "expected": "accept"
+        },
+        {
+          "name": "standalone synthetic exact cache wait",
+          "expected": "accept"
+        },
+        {
+          "name": "standalone repeated exact cache waits",
+          "expected": "accept"
+        },
+        {
+          "name": "standalone unknown cache wait suffix",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone missing lockfile with cache wait",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone duplicate lockfile with cache wait",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone wrong completion count with cache wait",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone completion without roster",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone error with cache wait",
+          "expected": "reject"
+        },
+        {
+          "name": "standalone warning with cache wait",
+          "expected": "reject"
+        }
+      ],
+      "helper_sha256": "29276457e534266a342fa7e2bc577286f4ec2d11f9f91fd3ebb88f4d1f5a12aa"
+    },
+    {
+      "name": "r124-development-mutation-parser-calibration-01",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r124-development-mutation-parser-tests-v1.js"
+      ],
+      "predecessor": "r124-development-gate-parser-calibration-01.json",
+      "cases": [
+        {
+          "name": "01-opening-terminal synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "01-opening-terminal wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "01-opening-terminal authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "01-opening-terminal out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "02-original-restore synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "02-original-restore wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "02-original-restore authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "02-original-restore out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "03-reserve-terminal synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "03-reserve-terminal wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "03-reserve-terminal authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "03-reserve-terminal out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "04-reserve-order synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "04-reserve-order wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "04-reserve-order authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "04-reserve-order out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "05-retake-error synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "05-retake-error wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "05-retake-error authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "05-retake-error out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "06-early-ledger synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "06-early-ledger wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "06-early-ledger authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "06-early-ledger out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "07-lower-panic synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "07-lower-panic wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "07-lower-panic authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "07-lower-panic out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "08-final-poison synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "08-final-poison wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "08-final-poison authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "08-final-poison out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "09-converted-data synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "09-converted-data wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "09-converted-data authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "09-converted-data out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "10-zero-generation synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "10-zero-generation wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "10-zero-generation authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "10-zero-generation out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "11-borrowed-generation synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "11-borrowed-generation wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "11-borrowed-generation authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "11-borrowed-generation out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "12-borrowed-cardinality synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "12-borrowed-cardinality wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "12-borrowed-cardinality authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "12-borrowed-cardinality out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "13-currentness synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "13-currentness wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "13-currentness authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "13-currentness out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "14-direct-transport synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "14-direct-transport wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "14-direct-transport authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "14-direct-transport out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "15-sticky-transport synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "15-sticky-transport wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "15-sticky-transport authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "15-sticky-transport out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "16-ledger-generation synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "16-ledger-generation wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "16-ledger-generation authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "16-ledger-generation out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "17-ledger-count synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "17-ledger-count wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "17-ledger-count authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "17-ledger-count out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "18-ledger-identities synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "18-ledger-identities wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "18-ledger-identities authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "18-ledger-identities out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "19-ledger-next synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "19-ledger-next wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "19-ledger-next authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "19-ledger-next out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "negative unknown failed test",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong executable",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra executable",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra doctest",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong filtered count",
+          "expected": "reject"
+        },
+        {
+          "name": "negative compilation error",
+          "expected": "reject"
+        },
+        {
+          "name": "negative subprocess abort",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong diagnostic",
+          "expected": "reject"
+        },
+        {
+          "name": "negative missing panic PID",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong panic owner",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra passing row",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra ignored row",
+          "expected": "reject"
+        },
+        {
+          "name": "negative unrelated final panic",
+          "expected": "reject"
+        },
+        {
+          "name": "source wrong declared mutant hash",
+          "expected": "reject"
+        },
+        {
+          "name": "source mismatched inverse patch",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky outer unwrap alone is insufficient",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky missing outer unwrap",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky unrelated intervening panic",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky wrong following location",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky wrong following diagnostic",
+          "expected": "reject"
+        },
+        {
+          "name": "negative prior caught panic remains distinguishable",
+          "expected": "accept"
+        },
+        {
+          "name": "negative malformed trailing header cannot hide later failure",
+          "expected": "reject"
+        },
+        {
+          "name": "negative complete header outside selected body",
+          "expected": "reject"
+        },
+        {
+          "name": "negative malformed header outside selected body",
+          "expected": "reject"
+        }
+      ],
+      "helper_sha256": "0d72aad2e3d8bed06cd6e954c0cbe2c7f13c1704d624dd702e059fa7c2a190cc"
+    }
+  ],
+  "musl_check": {
+    "name": "r124-development-musl-gate-check-v1",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r124-development-gate-check-v1.js",
+      "full",
+      "musl"
+    ],
+    "predecessor": "r124-development-musl-all-v1.json"
+  },
+  "gate_check": {
+    "name": "r124-development-gate-check-all-v1",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r124-development-gate-check-v1.js",
+      "all"
+    ],
+    "predecessor": "r124-development-gate-production-audit-v1.json"
+  },
+  "mutations": [
+    {
+      "id": "01-opening-terminal",
+      "negative": "r124-development-negative-01-opening-terminal-v1",
+      "check": "r124-development-negative-check-01-opening-terminal-v1",
+      "restored": "r124-development-restored-01-opening-terminal-v1"
+    },
+    {
+      "id": "02-original-restore",
+      "negative": "r124-development-negative-02-original-restore-v1",
+      "check": "r124-development-negative-check-02-original-restore-v1",
+      "restored": "r124-development-restored-02-original-restore-v1"
+    },
+    {
+      "id": "03-reserve-terminal",
+      "negative": "r124-development-negative-03-reserve-terminal-v1",
+      "check": "r124-development-negative-check-03-reserve-terminal-v1",
+      "restored": "r124-development-restored-03-reserve-terminal-v1"
+    },
+    {
+      "id": "04-reserve-order",
+      "negative": "r124-development-negative-04-reserve-order-v1",
+      "check": "r124-development-negative-check-04-reserve-order-v1",
+      "restored": "r124-development-restored-04-reserve-order-v1"
+    },
+    {
+      "id": "05-retake-error",
+      "negative": "r124-development-negative-05-retake-error-v1",
+      "check": "r124-development-negative-check-05-retake-error-v1",
+      "restored": "r124-development-restored-05-retake-error-v1"
+    },
+    {
+      "id": "06-early-ledger",
+      "negative": "r124-development-negative-06-early-ledger-v1",
+      "check": "r124-development-negative-check-06-early-ledger-v1",
+      "restored": "r124-development-restored-06-early-ledger-v1"
+    },
+    {
+      "id": "07-lower-panic",
+      "negative": "r124-development-negative-07-lower-panic-v1",
+      "check": "r124-development-negative-check-07-lower-panic-v1",
+      "restored": "r124-development-restored-07-lower-panic-v1"
+    },
+    {
+      "id": "08-final-poison",
+      "negative": "r124-development-negative-08-final-poison-v1",
+      "check": "r124-development-negative-check-08-final-poison-v1",
+      "restored": "r124-development-restored-08-final-poison-v1"
+    },
+    {
+      "id": "09-converted-data",
+      "negative": "r124-development-negative-09-converted-data-v1",
+      "check": "r124-development-negative-check-09-converted-data-v1",
+      "restored": "r124-development-restored-09-converted-data-v1"
+    },
+    {
+      "id": "10-zero-generation",
+      "negative": "r124-development-negative-10-zero-generation-v1",
+      "check": "r124-development-negative-check-10-zero-generation-v1",
+      "restored": "r124-development-restored-10-zero-generation-v1"
+    },
+    {
+      "id": "11-borrowed-generation",
+      "negative": "r124-development-negative-11-borrowed-generation-v1",
+      "check": "r124-development-negative-check-11-borrowed-generation-v1",
+      "restored": "r124-development-restored-11-borrowed-generation-v1"
+    },
+    {
+      "id": "12-borrowed-cardinality",
+      "negative": "r124-development-negative-12-borrowed-cardinality-v1",
+      "check": "r124-development-negative-check-12-borrowed-cardinality-v1",
+      "restored": "r124-development-restored-12-borrowed-cardinality-v1"
+    },
+    {
+      "id": "13-currentness",
+      "negative": "r124-development-negative-13-currentness-v1",
+      "check": "r124-development-negative-check-13-currentness-v1",
+      "restored": "r124-development-restored-13-currentness-v1"
+    },
+    {
+      "id": "14-direct-transport",
+      "negative": "r124-development-negative-14-direct-transport-v1",
+      "check": "r124-development-negative-check-14-direct-transport-v1",
+      "restored": "r124-development-restored-14-direct-transport-v1"
+    },
+    {
+      "id": "15-sticky-transport",
+      "negative": "r124-development-negative-15-sticky-transport-v1",
+      "check": "r124-development-negative-check-15-sticky-transport-v1",
+      "restored": "r124-development-restored-15-sticky-transport-v1"
+    },
+    {
+      "id": "16-ledger-generation",
+      "negative": "r124-development-negative-16-ledger-generation-v1",
+      "check": "r124-development-negative-check-16-ledger-generation-v1",
+      "restored": "r124-development-restored-16-ledger-generation-v1"
+    },
+    {
+      "id": "17-ledger-count",
+      "negative": "r124-development-negative-17-ledger-count-v1",
+      "check": "r124-development-negative-check-17-ledger-count-v1",
+      "restored": "r124-development-restored-17-ledger-count-v1"
+    },
+    {
+      "id": "18-ledger-identities",
+      "negative": "r124-development-negative-18-ledger-identities-v1",
+      "check": "r124-development-negative-check-18-ledger-identities-v1",
+      "restored": "r124-development-restored-18-ledger-identities-v1"
+    },
+    {
+      "id": "19-ledger-next",
+      "negative": "r124-development-negative-19-ledger-next-v1",
+      "check": "r124-development-negative-check-19-ledger-next-v1",
+      "restored": "r124-development-restored-19-ledger-next-v1"
+    }
+  ],
+  "restored": [
+    {
+      "name": "r124-development-final-restored-regression-v1",
+      "kind": "kfd",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "fe2o3-kfd",
+        "--all-features",
+        "--lib",
+        "--",
+        "recycled_detach",
+        "retained_control",
+        "control_release",
+        "preparation"
+      ],
+      "filters": [
+        "recycled_detach",
+        "retained_control",
+        "control_release",
+        "preparation"
+      ],
+      "passed": 158,
+      "filtered": 1068,
+      "predecessor": "r124-development-restored-19-ledger-next-v1.json"
+    }
+  ],
+  "collector_run": "r124-development-qualification-collect-v1",
+  "collector_predecessor": "r124-development-final-restored-regression-v1.json",
+  "helper_calibrations": 175,
+  "exclusions": [
+    "native execution",
+    "authenticated formal refinement",
+    "continuous source immutability",
+    "aggregate retained-memory bounds",
+    "multi-device acceptance",
+    "HIP/HSA performance parity"
+  ]
+}

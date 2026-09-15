@@ -1,0 +1,91 @@
+{
+  "source_head": "948d1f2637ef08061aabf42485929869e3ed5dbc",
+  "source_map_sha256": "7b8133de9af63b2ca2e5e5f0b59dda497aa431fdac34afd2b9b6e425c983f05c",
+  "started_at": "2026-09-15T19:13:21.093Z",
+  "finished_at": "2026-09-15T19:14:03.511Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_original_panic_survives_envelope_and_final_poison_panics",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r124-development-negative-07-lower-panic-v1.log",
+  "source": "/home/harsh/.codex-tmp/r124-development-negative-07-lower-panic-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r124-development-negative-07-lower-panic-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r124-development-run-v3.js",
+    "sha256": "add6a54f66604f70674fcae67ea45fc73a39056f2be26272a155bd7c089b9b0e"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 327615,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789499643518,
+        "monotonic_ns": "6225290399249",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 42.417754681,
+  "verification_elapsed_seconds": 0.33095892,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r124-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r124-development-restored-06-early-ledger-v1.json",
+      "sha256": "89fddd1ebaaba7b06013d90b2db609e001512bbe83d0f30493983f40490c5251",
+      "observation": {
+        "utc_ms": 1789499599629,
+        "monotonic_ns": "6181401727335",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789499601093,
+      "monotonic_ns": "6182866193707",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789499643511,
+      "monotonic_ns": "6225283948388",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789499643842,
+      "monotonic_ns": "6225614907308",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

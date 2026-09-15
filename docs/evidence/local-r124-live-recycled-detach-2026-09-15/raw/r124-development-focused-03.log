@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.14s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 16 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_currentness_failure_preserves_unconsumed_dispatch ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_both_output_reserves_reject_before_currentness_or_ownership_transfer ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_malformed_shape_is_rejected_before_currentness_and_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_opening_rejection_restores_exact_owner_without_retake_or_poison ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_missing_callback_and_incomplete_lower_success_cannot_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_original_panic_survives_envelope_and_final_poison_panics ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_post_conversion_panic_keeps_all_data_without_partial_ledger_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_closing_error_precedes_lower_error_but_not_original_lower_panic has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_completed_returned_authorities_survive_every_failed_retake has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_closing_error_precedes_lower_error_but_not_original_lower_panic ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_production_routing_roots_before_loan_and_commits_after_retake ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_public_preflight_rejection_preserves_owner_without_transport ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_completed_returned_authorities_survive_every_failed_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_returns_exact_data_and_commits_ledger_after_successful_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_projection_failure_retains_disposed_receipt_and_all_data has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_projection_failure_retains_disposed_receipt_and_all_data ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 1210 filtered out; finished in 127.73s
+

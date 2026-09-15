@@ -1,0 +1,91 @@
+{
+  "source_head": "948d1f2637ef08061aabf42485929869e3ed5dbc",
+  "source_map_sha256": "c5642bf232e4bf1ccc2af6af4a958a20cb8ce0b3c144541ec4f66403f09b72ad",
+  "started_at": "2026-09-15T19:16:37.111Z",
+  "finished_at": "2026-09-15T19:17:22.686Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_malformed_shape_is_rejected_before_currentness_and_loan",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r124-development-negative-11-borrowed-generation-v1.log",
+  "source": "/home/harsh/.codex-tmp/r124-development-negative-11-borrowed-generation-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r124-development-negative-11-borrowed-generation-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r124-development-run-v3.js",
+    "sha256": "add6a54f66604f70674fcae67ea45fc73a39056f2be26272a155bd7c089b9b0e"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 339340,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789499842694,
+        "monotonic_ns": "6424467065308",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 45.574991979,
+  "verification_elapsed_seconds": 0.325865907,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r124-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r124-development-restored-10-zero-generation-v1.json",
+      "sha256": "80f6971103cf9aafb4770dc5728abd78bb5bb4af860e243adf2f64eb2e1e5f0c",
+      "observation": {
+        "utc_ms": 1789499795570,
+        "monotonic_ns": "6377343156991",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789499797111,
+      "monotonic_ns": "6378884241720",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789499842686,
+      "monotonic_ns": "6424459233699",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789499843012,
+      "monotonic_ns": "6424785099606",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

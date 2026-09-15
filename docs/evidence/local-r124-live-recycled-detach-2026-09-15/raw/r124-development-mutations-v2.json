@@ -1,0 +1,586 @@
+{
+  "accepted": false,
+  "scope": "Nineteen predeclared R124 behavioral negatives; compile failures, aborts and unrelated assertions do not qualify.",
+  "source_plan": "r124-development-full-plan-v2.json",
+  "source_plan_sha256": "e0d5f50276944d64e626c8f7dac4a06477fd1a290c6a396ef2a011dbb568a63d",
+  "checker": "r124-development-check-v2.js",
+  "checker_sha256": "8fd3e10f8240bb49fae000a1b6b1aa2340704df74399ddfea6878ca57459973d",
+  "inventory": "r124-development-mutation-inventory-v1.js",
+  "inventory_sha256": "63aded2e9e5b08cc85723716d23901d9a3a0e22189219ecefe2d6010c67db53a",
+  "source_parent": "948d1f2637ef08061aabf42485929869e3ed5dbc",
+  "source_map_sha256": "a633edf685c4cbe3a24b1500a6a086ba36d39bec9b042abb5f88c52e4024cc24",
+  "source_count": 5706,
+  "runner": "r124-development-run-v3.js",
+  "runner_sha256": "add6a54f66604f70674fcae67ea45fc73a39056f2be26272a155bd7c089b9b0e",
+  "test_command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib"
+  ],
+  "test_count": 1226,
+  "diagnostic_path_aliases": {
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_recycled_detach_tests.rs"
+  },
+  "excluded_source_only_guards": [
+    "Outer completeness and returned-shape checks are additionally protected by unchanged lower guarantees; isolated deletion has no decisive reachable behavioral negative."
+  ],
+  "mutations": [
+    {
+      "id": "01-opening-terminal",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_opening_rejection_restores_exact_owner_without_retake_or_poison",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "terminal_on_error = entered;\n                return Err(error);",
+            "terminal_on_error = true;\n                return Err(error);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "28fbfb0461cd8a1dc045ebf9cba6e17c174e444add18795bb7f550267569514a",
+      "expected_source_map_sha256": "6e1b3591bd2df62e028bf1641eb9994b78c744965d51fd0377d80299776e603f",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:500:9",
+        "fragments": [
+          "assertion failed: !result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-gate-check-all-v2.json"
+    },
+    {
+      "id": "02-original-restore",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_opening_rejection_restores_exact_owner_without_retake_or_poison",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "*context.dispatch() = Some(dispatch);",
+            "core::mem::forget(dispatch);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "3edcdeac5f7f8a5d2f22f5d345e6efc62566c9d1173875f74c6fcdc3a5f65875",
+      "expected_source_map_sha256": "76214c43aeb0f46922e6faabab93ab0a990fee0df2953d1b7ed344a71e14d8e0",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:507:9",
+        "fragments": [
+          "opening rejection restores dispatch custody"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-01-opening-terminal-v1.json"
+    },
+    {
+      "id": "03-reserve-terminal",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_both_output_reserves_reject_before_currentness_or_ownership_transfer",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "terminal_on_error = false;\n        let capacities = (count, count);",
+            "terminal_on_error = true;\n        let capacities = (count, count);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "e12c7ffe7af9d9a826da49fa0a829dd8f102d1e26e344e51f496afb4a056bc11",
+      "expected_source_map_sha256": "17b51d9e7c1e31f7f00c947527bde2e3873cf0353fd87be6422d18eef38a46d4",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:528:13",
+        "fragments": [
+          "assertion failed: !result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-02-original-restore-v1.json"
+    },
+    {
+      "id": "04-reserve-order",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_both_output_reserves_reject_before_currentness_or_ownership_transfer",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "root.reserve_output(count, capacities)?;\n        terminal_on_error = true;\n        context.check_currentness()?;",
+            "context.check_currentness()?;\n        root.reserve_output(count, capacities)?;\n        terminal_on_error = true;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "a04c0fe34734ea215b40a47a2bb36a5a565ac4b7a89d44275c91498941e3465a",
+      "expected_source_map_sha256": "fbda2cbba8a358fc1447edb12187b10b0b47868bdfc0273083aa3f85a99a51c3",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:538:13",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: Snapshot {",
+          "right: Snapshot {",
+          "currentness:"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-03-reserve-terminal-v1.json"
+    },
+    {
+      "id": "05-retake-error",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_closing_error_precedes_lower_error_but_not_original_lower_panic",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "retake?;",
+            "let _ = retake;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "8d339591b6264d09b668e7bd71dc9a06f60cad5bef812299c9ee9b5561442a9a",
+      "expected_source_map_sha256": "dc4e1513f110ec3bd77d302175e26e05d348c02ddabdc5c5e9596cffd586b7aa",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:575:14",
+        "fragments": [
+          "unexpected recycled-detach retake provenance"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-04-reserve-order-v1.json"
+    },
+    {
+      "id": "06-early-ledger",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_completed_returned_authorities_survive_every_failed_retake",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "retake?;",
+            "*context.ledger().count = count;\n        retake?;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "0c022e412d1a6ee71d085c05778ea6948e96db57f292f9144e3058958b8eee28",
+      "expected_source_map_sha256": "7a898661c3e26f54c419ae713e7f93a67d18973eb468ef505d12f365f567517e",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:376:13",
+        "fragments": [
+          "failed settlement cannot alter any ledger field or backing",
+          "left: (None, 5, []",
+          "right: (None, 0, []"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-05-retake-error-v1.json"
+    },
+    {
+      "id": "07-lower-panic",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_original_panic_survives_envelope_and_final_poison_panics",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "core::mem::forget(result);\n            Err(payload)",
+            "core::mem::forget(payload);\n            result"
+          ]
+        ]
+      },
+      "expected_file_sha256": "6b45ece9528778e1672605cac1fa3b1025c5366dbf6179c67b8ec24737b66022",
+      "expected_source_map_sha256": "7b8133de9af63b2ca2e5e5f0b59dda497aa431fdac34afd2b9b6e425c983f05c",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:763:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: None",
+          "right: Some((\"N2 native panic\", \"free\"))"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-06-early-ledger-v1.json"
+    },
+    {
+      "id": "08-final-poison",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_original_panic_survives_envelope_and_final_poison_panics",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "if result.is_err() {\n                core::mem::forget(payload);",
+            "if result.is_err() {\n                result = Err(payload);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "53b8f36a1790350a7d27d7347d4036d26d703c98c8a96ffddbbbcc00fe4a2ccb",
+      "expected_source_map_sha256": "8db889ecfbe0be467732a1522203f83d52754243f2e00672958b9fd694affd06",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:763:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: None",
+          "right: Some((\"N2 native panic\", \"free\"))"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-07-lower-panic-v1.json"
+    },
+    {
+      "id": "09-converted-data",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_post_conversion_panic_keeps_all_data_without_partial_ledger_commit",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "context.retain(root);",
+            "core::mem::forget(core::mem::take(&mut root.data));\n        context.retain(root);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "e78a6f484192e7755892e7d38f5192150af05dba13438441bf543890b337ec8e",
+      "expected_source_map_sha256": "0a66553bc7b9062ea30d3593e2206cea4af17bdfbfb04b2f9a4cf38a6da92719",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:746:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: []",
+          "right: [(Device("
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-08-final-poison-v1.json"
+    },
+    {
+      "id": "10-zero-generation",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_malformed_shape_is_rejected_before_currentness_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "if generation == 0 {",
+            "if false && generation == 0 {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "6555130092e5cc69a843d8d96194825b40c352541978c3e55fed8ad066e87600",
+      "expected_source_map_sha256": "8c11ea9f5b3d884b033ed0333a02f5379e3e4182eaa4a55f5203e09fe8ec53da",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:788:13",
+        "fragments": [
+          "assertion failed: result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-09-converted-data-v1.json"
+    },
+    {
+      "id": "11-borrowed-generation",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_malformed_shape_is_rejected_before_currentness_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+        "scope": {
+          "start": "    pub(super) fn recycled_data_shape_v1(",
+          "end": "\n    pub(super) fn ensure_returnable_for_destroy("
+        },
+        "edits": [
+          [
+            "let generation = self.ensure_returnable()?;",
+            "let generation = self.ensure_returnable().unwrap_or(1);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "11f2c148b12bf086be6d41313b555b3f902c4db3d16048fa4efa8f1573b864f8",
+      "expected_source_map_sha256": "c5642bf232e4bf1ccc2af6af4a958a20cb8ce0b3c144541ec4f66403f09b72ad",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:813:13",
+        "fragments": [
+          "borrowed shape rejection preserves original dispatch custody"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-10-zero-generation-v1.json"
+    },
+    {
+      "id": "12-borrowed-cardinality",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_malformed_shape_is_rejected_before_currentness_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+        "scope": {
+          "start": "    pub(super) fn recycled_data_shape_v1(",
+          "end": "\n    pub(super) fn ensure_returnable_for_destroy("
+        },
+        "edits": [
+          [
+            "if self.data.len() != self.data_premises.len() {",
+            "if false && self.data.len() != self.data_premises.len() {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "364f051b1e381517425462109b62ffdc818b0f2eb503a13e071d98d2d7bf10b6",
+      "expected_source_map_sha256": "d1dc8351997b3a35199b84a08b0013fdd4a7e1e027d328d1c106614bacfa661e",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:813:13",
+        "fragments": [
+          "borrowed shape rejection preserves original dispatch custody"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-11-borrowed-generation-v1.json"
+    },
+    {
+      "id": "13-currentness",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_currentness_failure_preserves_unconsumed_dispatch",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_recycled_detach_v1(",
+          "end": "\nimpl RecycledDetachContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "context.check_currentness()?;",
+            "context.check_currentness().unwrap_or(());"
+          ]
+        ]
+      },
+      "expected_file_sha256": "f3f3ab1c2e2d1bd02779efa71dc909de47286cd4e0ab8ef2cdf166a606d6dacf",
+      "expected_source_map_sha256": "9c2807c4c50549155fee5ef58fc0b530f1e9f78373bdf3e6abc083e97a8d0cab",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:842:17",
+        "fragments": [
+          "assertion failed: matches!(result.result,",
+          "ComputeAqlQueueSessionErrorV1::Memory",
+          "MemorySessionError::Injected(\"currentness\")"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-12-borrowed-cardinality-v1.json"
+    },
+    {
+      "id": "14-direct-transport",
+      "kind": "kfd",
+      "test": "queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+        "scope": {
+          "start": "    pub(super) fn detach_recycled_fixed_dispatch_inner(",
+          "end": "\n    /// Binds a new fixed batch"
+        },
+        "edits": [
+          [
+            "if settled.transport {",
+            "if false && settled.transport {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "6aed1c838dbc8b1a1b58678fb8c2f0c16d6f893685e498a01330e4b761cd4fcd",
+      "expected_source_map_sha256": "734707632e20606121a061c2e6ee47e889dd032986a8f2b86a6a6d6c5fa4240d",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:190:5",
+        "fragments": [
+          "assertion failed: session.completion_owner.0.is_none()"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-13-currentness-v1.json"
+    },
+    {
+      "id": "15-sticky-transport",
+      "kind": "kfd",
+      "test": "queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live.rs",
+        "scope": {
+          "start": "impl ComputeAqlQueueLaneDispatchV1<'_> {",
+          "end": "\n    /// Returns complete data from a strictly pristine recipe"
+        },
+        "edits": [
+          [
+            "*self.terminal_transport |= settled.transport;",
+            "*self.terminal_transport = settled.transport;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "aefe9f399645502c6a9f6d1fe4cb19d77c56c933d5b934939a31edb111c4dd59",
+      "expected_source_map_sha256": "50f16333ce37e4cce6fb17dc1bf2f9e8ef340dd8ae63fd9bf1e202b745eb22fd",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:93:25",
+        "fragments": [
+          "assertion failed: *selected.terminal_transport"
+        ]
+      },
+      "final_panic": "caught_then_unwrap",
+      "following_panic": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:127:35",
+        "fragments": [
+          "called `Result::unwrap()` on an `Err` value: Any { .. }"
+        ]
+      },
+      "predecessor": "r124-development-restored-14-direct-transport-v1.json"
+    },
+    {
+      "id": "16-ledger-generation",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "impl RecycledDetachLedgerV1<'_> {",
+          "end": "\npub(in crate::queue) trait RecycledDetachContextV1 {"
+        },
+        "edits": [
+          [
+            "self.generation.is_none()",
+            "true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "d7a3d267e1a3e06de3868adaae78c751c61715d03d2d783710d09e4bd09385d7",
+      "expected_source_map_sha256": "7511c1d6aae02b3046f5e401f29697d2d98c75fe3eb94a5b9fe3bd2666917c38",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:898:13",
+        "fragments": [
+          "assertion failed: result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-15-sticky-transport-v1.json"
+    },
+    {
+      "id": "17-ledger-count",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "impl RecycledDetachLedgerV1<'_> {",
+          "end": "\npub(in crate::queue) trait RecycledDetachContextV1 {"
+        },
+        "edits": [
+          [
+            "&& *self.count == 0",
+            "&& true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "f674d256c2aef26a5c0f2d780f70d379d8133dc849d45d6c967af869e35a73c1",
+      "expected_source_map_sha256": "5a7592f77ce50ac48dca5323e1a90a46487d82ed5bec4ec2c0fdee486e1ddf58",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:898:13",
+        "fragments": [
+          "assertion failed: result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-16-ledger-generation-v1.json"
+    },
+    {
+      "id": "18-ledger-identities",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "impl RecycledDetachLedgerV1<'_> {",
+          "end": "\npub(in crate::queue) trait RecycledDetachContextV1 {"
+        },
+        "edits": [
+          [
+            "&& self.identities.is_empty()",
+            "&& true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "a998e6f18a0c9ad0723922b40da237bf88bc95cb0e3f99dac0b34e9c06c3aa85",
+      "expected_source_map_sha256": "415b594750a13ca6cd3a6df6603e385085452220ddedee2467ad0016d3225b98",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:898:13",
+        "fragments": [
+          "assertion failed: result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-17-ledger-count-v1.json"
+    },
+    {
+      "id": "19-ledger-next",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/recycled_detach.rs",
+        "scope": {
+          "start": "impl RecycledDetachLedgerV1<'_> {",
+          "end": "\npub(in crate::queue) trait RecycledDetachContextV1 {"
+        },
+        "edits": [
+          [
+            "&& self.next.is_none()",
+            "&& true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "3106da1f82c7a86db0f4a32a76e63bb7148a62a4d9f973886f977f53365aaff8",
+      "expected_source_map_sha256": "cbf8d28cad1f397b6b1434903811bbc2a2dfdf03d03d45814551a2f1d923d8ef",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_recycled_detach_tests.rs:898:13",
+        "fragments": [
+          "assertion failed: result.transport"
+        ]
+      },
+      "final_panic": "primary",
+      "predecessor": "r124-development-restored-18-ledger-identities-v1.json"
+    }
+  ]
+}

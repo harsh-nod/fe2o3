@@ -287,6 +287,68 @@ impl Snapshot {
         snapshot(root)
     }
 
+    pub(in crate::queue) fn recycled_owner_v1(owner: &DispatchResourceOwnerV1) -> Self {
+        owner_snapshot(owner, Mode::AfterRecycle)
+    }
+
+    pub(in crate::queue) fn assert_recycled_prefix_v1(
+        &self,
+        root: &Root,
+        completed: usize,
+        active: bool,
+        complete: bool,
+    ) {
+        let after = snapshot(root);
+        let touched = completed + usize::from(active);
+        let code_touched = touched.saturating_sub(1);
+        assert_eq!(self.mode, Mode::AfterRecycle);
+        assert_eq!(after.mode, self.mode);
+        assert_eq!(after.code_identity, self.code_identity);
+        assert_eq!(after.packets, self.packets);
+        assert_eq!(after.generation, self.generation);
+        assert_eq!(after.slots_pointer, self.slots_pointer);
+        assert_eq!(after.persistent, self.persistent);
+        assert_eq!(after.storage[..4], self.storage[..4]);
+        assert_eq!(after.storage[5], self.storage[5]);
+        assert_eq!(
+            after.returned_generation,
+            self.generation.recycled_generation
+        );
+        assert_eq!(after.persistent_returned, self.persistent_returned);
+        assert_eq!(after.persistent_output, self.persistent_output);
+        if complete {
+            assert!(after.data.is_empty() && after.premises.is_empty());
+            assert_eq!(after.returned.len(), self.data.len());
+            for ((data, premise), (expected_data, expected_premise)) in after
+                .returned
+                .iter()
+                .zip(self.data.iter().zip(&self.premises))
+            {
+                assert_eq!(data, expected_data);
+                assert_eq!(premise, expected_premise);
+            }
+        } else {
+            assert_eq!(after.data, self.data);
+            assert_eq!(after.premises, self.premises);
+            assert!(after.returned.is_empty());
+        }
+        assert!(after.started);
+        assert_eq!(after.complete, complete);
+        assert_eq!(
+            after.kernarg.as_ref(),
+            (touched == 0).then_some(self.kernarg.as_ref()).flatten()
+        );
+        assert_eq!(after.code, self.code[code_touched..]);
+        assert_eq!(
+            after.code_pointer,
+            self.code_pointer + code_touched * size_of::<CodeAuthority>()
+        );
+        assert_eq!(
+            after.active.as_ref().map(|a| a.identity),
+            active.then(|| self.order_v1()[completed])
+        );
+    }
+
     pub(in crate::queue) fn order_v1(&self) -> Vec<SharedGttAllocationIdentityV1> {
         order(self)
     }

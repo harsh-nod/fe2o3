@@ -1,0 +1,21 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0507]: cannot move out of `error` in pattern guard
+    --> crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:185:40
+     |
+ 185 |                 if matches!((poisoned, error), (true, Gfx942DispatchBindingErrorV1::Poisoned) | (false, Gfx942DispatchBindingError...
+     |                                        ^^^^^ move occurs because `error` has type `queue::dispatch_binding::Gfx942DispatchBindingErrorV1`, which does not implement the `Copy` trait
+     |
+     = note: variables bound in patterns cannot be moved from until after the end of the pattern guard
+note: if `queue::dispatch_binding::Gfx942DispatchBindingErrorV1` implemented `Clone`, you could clone the value
+    --> crates/fe2o3-kfd/src/queue_dispatch_binding.rs:1267:1
+     |
+1267 | pub enum Gfx942DispatchBindingErrorV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+     |
+    ::: crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:185:40
+     |
+ 185 | ...   if matches!((poisoned, error), (true, Gfx942DispatchBindingErrorV1::Poisoned) | (false, Gfx942DispatchBindingErrorV1::Resour...
+     |                              ----- you could clone this value
+
+For more information about this error, try `rustc --explain E0507`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

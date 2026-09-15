@@ -1,0 +1,64 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.17s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 16 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_currentness_failure_preserves_unconsumed_dispatch ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_both_output_reserves_reject_before_currentness_or_ownership_transfer ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_each_nonempty_ledger_field_precedes_completion_and_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_malformed_shape_is_rejected_before_currentness_and_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_missing_callback_and_incomplete_lower_success_cannot_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_closing_error_precedes_lower_error_but_not_original_lower_panic has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_completed_returned_authorities_survive_every_failed_retake has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_opening_rejection_restores_exact_owner_without_retake_or_poison ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_original_panic_survives_envelope_and_final_poison_panics ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_completed_returned_authorities_survive_every_failed_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_closing_error_precedes_lower_error_but_not_original_lower_panic ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error ... FAILED
+test queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky ... FAILED
+test queue::live::rebind_tests::recycled_detach::recycled_detach_production_routing_roots_before_loan_and_commits_after_retake ... ok
+test queue::live::rebind_tests::recycled_detach::recycled_detach_public_preflight_rejection_preserves_owner_without_transport ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_post_conversion_panic_keeps_all_data_without_partial_ledger_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_returns_exact_data_and_commits_ledger_after_successful_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_native_faults_preserve_data_and_exact_control_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_native_faults_preserve_data_and_exact_control_prefixes ... ok
+
+failures:
+
+---- queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error stdout ----
+
+thread 'queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error' (4061104) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:37:5:
+assertion failed: matches!(session.detach_recycled_fixed_dispatch(),
+    Err(ComputeAqlQueueSessionErrorV1::Contract("missing queue engine")))
+
+---- queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky stdout ----
+
+thread 'queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky' (4061106) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:74:25:
+assertion failed: matches!(error,
+    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine"))
+
+thread 'queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky' (4061106) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:119:35:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::live::rebind_tests::recycled_detach::recycled_detach_public_preflight_rejection_preserves_owner_without_transport stdout ----
+
+thread 'queue::live::rebind_tests::recycled_detach::recycled_detach_public_preflight_rejection_preserves_owner_without_transport' (4061108) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/recycled_detach.rs:195:17:
+assertion failed: matches!((mode, error),
+    (0,
+    ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::Poisoned))
+    |
+    (1..=3 | 5,
+    ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::ResourcePhase))
+    |
+    (4,
+    ComputeAqlQueueSessionErrorV1::Completion(Gfx942CompletionErrorV1::Poisoned)))
+
+
+failures:
+    queue::live::rebind_tests::recycled_detach::recycled_detach_direct_missing_engine_transports_parent_before_error
+    queue::live::rebind_tests::recycled_detach::recycled_detach_facade_restores_selected_owner_and_keeps_transport_sticky
+    queue::live::rebind_tests::recycled_detach::recycled_detach_public_preflight_rejection_preserves_owner_without_transport
+
+test result: FAILED. 13 passed; 3 failed; 0 ignored; 0 measured; 1209 filtered out; finished in 351.20s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

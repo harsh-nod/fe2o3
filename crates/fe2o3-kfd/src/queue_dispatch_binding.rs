@@ -2487,6 +2487,31 @@ impl DispatchResourceOwnerV1 {
         self.generation.returned_generation()
     }
 
+    pub(super) fn recycled_data_shape_v1(
+        &self,
+    ) -> Result<(u64, usize), Gfx942DispatchBindingErrorV1> {
+        let generation = self.ensure_returnable()?;
+        if self.data.len() != self.data_premises.len() {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: self.data.len().min(self.data_premises.len()),
+                detail: "retained data/premise cardinality",
+            });
+        }
+        Ok((generation, self.data.len()))
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn set_recycled_generation_for_test(&mut self, generation: Option<u64>) {
+        self.generation.recycled_generation = generation;
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn remove_recycled_premise_for_test(&mut self) {
+        self.data_premises
+            .pop()
+            .expect("fixture retains data premises");
+    }
+
     pub(super) fn ensure_returnable_for_destroy(
         &self,
     ) -> Result<u64, Gfx942DispatchBindingErrorV1> {

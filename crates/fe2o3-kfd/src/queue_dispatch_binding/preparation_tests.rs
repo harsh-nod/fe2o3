@@ -17,6 +17,64 @@ pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourc
     (memory, custody.take_completed().unwrap())
 }
 
+pub(in crate::queue) type RecycledDataExpectationV1 = (
+    Gfx942SdmaBufferStorageIdentityV1,
+    Gfx942FixedDispatchDataLayoutV1,
+    bool,
+);
+
+pub(in crate::queue) fn ordinary_recycled_in_memory_v1(
+    memory: &mut Memory,
+    queue: QueueKeyV1,
+    bindings: usize,
+) -> (DispatchResourceOwnerV1, u64, Vec<RecycledDataExpectationV1>) {
+    let (programs, packets, mut data) = match bindings {
+        1 => (programs(), [packet(2)], memory.roster()),
+        3 => {
+            let (program, packets, mut data) = three_binding_inputs(memory);
+            data.extend([memory.host(true), memory.device(false), memory.host(false)]);
+            (vec![program], packets, data)
+        }
+        _ => panic!("ordinary fixture binding count"),
+    };
+    let DispatchDataStorageV1::Uninitialized(lease) = memory.device(false).storage else {
+        unreachable!();
+    };
+    // Synthetic completed typing exercises representation recovery, not GPU initialization.
+    data.push(Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease));
+    let expected = data
+        .iter()
+        .map(|data| {
+            (
+                data.sdma_storage_identity(),
+                data.layout(),
+                data.is_fully_initialized(),
+            )
+        })
+        .collect();
+    let mut custody = FixedDispatchPreparationCustodyV1::new(packets, data);
+    prepare_public_fixed_dispatch_resources_in_place(memory, &programs, &mut custody).unwrap();
+    let mut owner = custody.take_completed().unwrap();
+    assert!(matches!(
+        owner.persistent_control,
+        PersistentFixedDispatchControlStateV1::Ordinary
+    ));
+    let generation = owner.generation.next_generation;
+    // These are real logical transitions with a fixture occurrence, not GPU completion evidence.
+    let mut completion = test_completion_occurrence_v1(generation);
+    completion.queue = queue;
+    completion.dispatch_roster.queue = queue;
+    completion.signal_mapping.allocation.vm = queue.vm;
+    let epoch = owner
+        .generation
+        .reserve(queue, completion.dispatch_roster)
+        .unwrap();
+    owner.generation.mark_published(epoch, completion).unwrap();
+    owner.generation.complete_epoch(epoch, completion).unwrap();
+    owner.generation.recycle_epoch(epoch, completion).unwrap();
+    (owner, generation, expected)
+}
+
 pub(in crate::queue) fn single_persistent_control_fixture_v1() -> (Memory, DispatchResourceOwnerV1)
 {
     let mut memory = Memory::new(true);
@@ -69,6 +127,36 @@ pub(in crate::queue) fn three_persistent_control_in_memory_v1(
     memory: &mut Memory,
     queue: QueueKeyV1,
 ) -> DispatchResourceOwnerV1 {
+    let (program, packets, data) = three_binding_inputs(memory);
+    let identity = three_binding_persistent_fixed_dispatch_control_identity_v1(
+        queue,
+        core::slice::from_ref(&program),
+        &packets,
+        core::array::from_fn(|i| data[i].layout()),
+        [true; 3],
+        core::array::from_fn(|i| Gfx942DeviceContentRoleV1::new([0x62; 32], i as u32).unwrap()),
+        core::array::from_fn(|i| data[i].sdma_storage_identity()),
+    )
+    .unwrap();
+    let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
+    prepare_three_binding_persistent_fixed_dispatch_resources_v1(
+        memory,
+        &[program],
+        &mut preparation,
+        Some(7),
+        identity,
+    )
+    .unwrap();
+    preparation.take_completed().unwrap()
+}
+
+fn three_binding_inputs(
+    memory: &mut Memory,
+) -> (
+    ValidatedKernelEnvelope<'static>,
+    [Gfx942FixedDispatchPacketV1; 1],
+    Vec<Gfx942FixedDispatchDataV1>,
+) {
     use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
     let image =
         include_bytes!("../../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
@@ -106,26 +194,7 @@ pub(in crate::queue) fn three_persistent_control_in_memory_v1(
         memory.device(true),
         memory.device(true),
     ];
-    let identity = three_binding_persistent_fixed_dispatch_control_identity_v1(
-        queue,
-        core::slice::from_ref(&program),
-        &packets,
-        core::array::from_fn(|i| data[i].layout()),
-        [true; 3],
-        core::array::from_fn(|i| Gfx942DeviceContentRoleV1::new([0x62; 32], i as u32).unwrap()),
-        core::array::from_fn(|i| data[i].sdma_storage_identity()),
-    )
-    .unwrap();
-    let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
-    prepare_three_binding_persistent_fixed_dispatch_resources_v1(
-        memory,
-        &[program],
-        &mut preparation,
-        Some(7),
-        identity,
-    )
-    .unwrap();
-    preparation.take_completed().unwrap()
+    (program, packets, data)
 }
 
 pub(in crate::queue) fn recycle_and_detach_persistent_fixture_v1(

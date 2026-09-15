@@ -20,6 +20,9 @@ mod data_release;
 #[path = "rebind_tests/retained_control_release.rs"]
 mod retained_control_release;
 
+#[path = "rebind_tests/recycled_detach.rs"]
+mod recycled_detach;
+
 #[test]
 fn ordinary_rebind_production_routing_roots_before_loan_and_commits_after_validation() {
     let source = include_str!("rebind.rs");

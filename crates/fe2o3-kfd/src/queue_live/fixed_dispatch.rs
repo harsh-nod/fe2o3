@@ -4158,52 +4158,11 @@ impl ComputeAqlQueueSessionV1 {
     pub(super) fn detach_recycled_fixed_dispatch_inner(
         &mut self,
     ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
-        if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        let settled = self.detach_recycled_settled_v1();
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
-        if !self.unpublished_dispatch.is_clear() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
-        }
-        if self.detached_data_count != 0
-            || self.detached_dispatch_generation.is_some()
-            || !self.detached_data_identities.is_empty()
-            || self.detached_next_insertion_index.is_some()
-        {
-            self.poison_terminal();
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached dispatch-data ledger was not empty",
-            ));
-        }
-        self.completion_owner.ensure_releasable()?;
-        let dispatch = self
-            .dispatch
-            .take()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
-        let returned = self.with_live_queue_memory_model(|memory| {
-            dispatch
-                .release_non_data_after_recycle(memory)
-                .map_err(Into::into)
-        });
-        let returned = match returned {
-            Ok(returned) => returned,
-            Err(error) => {
-                self.poison_terminal();
-                return Err(error);
-            }
-        };
-        let generation = returned.generation();
-        let data = recover_fixed_dispatch_data(returned);
-        if generation == 0 {
-            self.poison_terminal();
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached dispatch generation was zero",
-            ));
-        }
-        self.detached_data_count = data.len();
-        self.detached_dispatch_generation = Some(generation);
-        self.detached_data_identities = fixed_dispatch_storage_identities(&data);
-        self.detached_next_insertion_index = None;
-        Ok(Gfx942DetachedFixedDispatchV1 { generation, data })
+        settled.into_result()
     }
 
     /// Binds a new fixed batch to the same live native queue.

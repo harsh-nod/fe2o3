@@ -1,0 +1,48 @@
+{
+  "classification": "interrupted_no_completion_record",
+  "qualification": false,
+  "run": "r124-development-musl-all-v1",
+  "observation": {
+    "utc": "2026-09-15T17:49:17.926Z",
+    "monotonic_ns": "1139699784874",
+    "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+    "clock_source": "node-process-hrtime-linux-monotonic"
+  },
+  "prior_completed_prerequisite": {
+    "path": "/home/harsh/.codex-tmp/r124-development-gnu-all-v1.json",
+    "sha256": "7dcfc8a2edd044899ff6bb5ee07fd869e5f8624e66e54198e6631a0817969b2c",
+    "boot_id": "f78ad468-d752-4634-8e79-45a154b73909"
+  },
+  "artifacts": [
+    {
+      "path": "/home/harsh/.codex-tmp/r124-development-musl-all-v1.log",
+      "bytes": 47748,
+      "sha256": "8410dc099e9020d2882767ab2161360f5acfac9792ee6e6820fd19167333e306"
+    },
+    {
+      "path": "/home/harsh/.codex-tmp/r124-development-musl-all-v1-source.json",
+      "bytes": 796464,
+      "sha256": "dcb514f96f92c948914e640035f853ad02f2663109963aaf8135fae4a3247f2e"
+    }
+  ],
+  "missing_completion_artifacts": [
+    "r124-development-musl-all-v1.json",
+    "r124-development-musl-all-v1-source-after.json",
+    "r124-development-musl-all-v1-gate-failure.json"
+  ],
+  "current_source_map_sha256": "a633edf685c4cbe3a24b1500a6a086ba36d39bec9b042abb5f88c52e4024cc24",
+  "current_source_identities": 5706,
+  "current_matching_processes": [],
+  "observed_returncode": null,
+  "observed_signal": null,
+  "observed_finish": null,
+  "observed_child_close": null,
+  "observed_elapsed_seconds": null,
+  "exclusions": [
+    "test acceptance",
+    "normal original cleanup",
+    "verified descendant containment",
+    "original start or finish reconstruction",
+    "cross-boot monotonic duration"
+  ]
+}
