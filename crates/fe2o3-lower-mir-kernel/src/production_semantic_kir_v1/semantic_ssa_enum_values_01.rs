@@ -985,6 +985,36 @@ fn index_and_u64_are_transport_equivalent(actual: &Type, expected: &Type) -> boo
     )
 }
 
+fn wave_lane_reference_dereference_matches_v1(
+    types: &[SemanticTypeDeclV1],
+    compiler_issued: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    reference_type: SemanticTypeIdV1,
+    projection: &SemanticProjectionV1,
+    binding: &SemanticValueBindingV1,
+) -> bool {
+    let SemanticValueBindingV1::WaveLane { wave, .. } = binding else {
+        return false;
+    };
+    let Some(SemanticTypeShapeV1::Pointer(reference)) = types
+        .get(reference_type.index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return false;
+    };
+    projection.kind() == SemanticProjectionKindV1::Dereference
+        && reference.kind() == SemanticPointerKindV1::Reference
+        && reference.address_space() == 0
+        && reference.pointer_width_bits() == 64
+        && reference.metadata() == SemanticPointerMetadataV1::None
+        && reference.pointee() == projection.result_type()
+        && wave.width == 64
+        && matches!(
+            compiler_issued.get(&reference.pointee()),
+            Some(SemanticPromotedBindingV1::WaveLane { wave_width })
+                if *wave_width == wave.width
+        )
+}
+
 fn require_current_wave_lane(
     block: SemanticBlockIdV1,
     binding: SemanticValueBindingV1,

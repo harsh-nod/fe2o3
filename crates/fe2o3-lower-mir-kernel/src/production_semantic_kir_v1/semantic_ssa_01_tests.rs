@@ -39,5 +39,6 @@ mod semantic_ssa_transport_tests {
 
     include!("semantic_ssa_capability_01_tests.rs");
     include!("semantic_ssa_transport_01_tests.rs");
+    include!("slice_reborrow_transport_v1_tests.rs");
     include!("semantic_ssa_enum_01_tests.rs");
 }

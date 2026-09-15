@@ -111,6 +111,41 @@ emission, native scalar bindings, optimizer, target or host route. Origin custod
 and connected structural admission do not grant source equivalence, formal
 Complete, artifact or launch authority.
 
+## Same-Type Slice Reborrows
+
+An exact single-Dereference reborrow can preserve an ordinary slice reference
+when the source local and result have the same semantic reference type,
+SliceLength metadata, address space zero, and 64-bit pointer width. Shared
+reborrows retain ReadOnly access; mutable reborrows retain ReadWrite access.
+The lowerer checks and transports the same whole `Type::Slice` value, including
+its data and length, through existing SSA definitions and block arguments.
+
+This narrowly tightens admission: a thin `Borrow` result for an actual Slice
+place is rejected rather than dropping its length. Non-Slice thin borrow rules
+are unchanged. Raw address formation, fake borrows, extra projections, distinct
+source/result reference types, and either access-changing direction remain
+outside this rule. Mutable-to-shared narrowing requires a separate preserving
+slice operation; it is not implemented by relabeling a carrier. This support
+does not add capability elision, general Rust place coverage, or native scalar
+proofs, and does not discharge pipeline, formal, or host correspondence gates.
+
+## Issued Wave Lane Reborrows
+
+An already issued wave-lane binding can pass through an exact reference
+Dereference without issuing another lane or loading memory. The source must be
+a thin 64-bit reference in address space zero, with the exact projected pointee
+registered as the existing 64-lane compiler-issued type. Both admitted reference
+mutabilities preserve the same typed binding and numeric value; an ordinary U32
+or a caller-chosen type cannot create that capability. Raw-address results remain
+rejected, and other capability projection rules are unchanged.
+
+This does not generalize reference-alias promotion. The tests cover reborrows,
+issued lane-value Copy/Move and lane-value SSA joins, not arbitrary reference
+alias joins. Existing storage classification, admission, operation limits and
+later correspondence gates remain in force. The new predicate and projection
+branch add no emitted operations or retained owner rows, and make no whole-work
+or whole-memory accounting claim.
+
 ## Fixed Retained Arrays
 
 Existing storage-observable locals may use counted private storage for nonempty

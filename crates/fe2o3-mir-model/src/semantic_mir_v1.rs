@@ -13836,10 +13836,23 @@ fn validate_rvalue(
                 }
                 SemanticBorrowKindV1::Fake => false,
             };
+            let metadata_valid = if matches!(
+                type_shape(context, place.ty),
+                SemanticTypeShapeV1::Slice { .. }
+            ) {
+                pointer.metadata == SemanticPointerMetadataV1::SliceLength
+                    && function.locals[place.local.0 as usize].ty == rvalue.result_type
+                    && matches!(
+                        place.projections(),
+                        [projection] if projection.kind == SemanticProjectionKindV1::Dereference
+                    )
+            } else {
+                pointer.metadata == SemanticPointerMetadataV1::None
+            };
             if pointer.kind != SemanticPointerKindV1::Reference
                 || pointer.address_space != 0
                 || pointer.pointer_width_bits != 64
-                || pointer.metadata != SemanticPointerMetadataV1::None
+                || !metadata_valid
                 || pointer.pointee != place.ty
                 || !mutability_valid
             {

@@ -12493,6 +12493,64 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         )
     }
 
+    fn lower_same_type_slice_reborrow_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        result_type: SemanticTypeIdV1,
+        kind: SemanticBorrowKindV1,
+        place: &SemanticPlaceV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let local = self.require_local(block, statement, place.local().index())?;
+        let Some(SemanticTypeShapeV1::Pointer(pointer)) = self
+            .types
+            .get(result_type.index() as usize)
+            .map(SemanticTypeDeclV1::shape)
+        else {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        };
+        let access_matches = matches!(
+            (kind, pointer.mutability()),
+            (
+                SemanticBorrowKindV1::Shared,
+                SemanticMutabilityV1::Immutable
+            ) | (SemanticBorrowKindV1::Mutable, SemanticMutabilityV1::Mutable)
+        );
+        if self.function.locals()[local].ty() != result_type
+            || pointer.kind() != SemanticPointerKindV1::Reference
+            || pointer.address_space() != 0
+            || pointer.pointer_width_bits() != 64
+            || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+            || pointer.pointee() != place.ty()
+            || !access_matches
+            || !matches!(
+                place.projections(),
+                [projection] if projection.kind() == SemanticProjectionKindV1::Dereference
+                    && projection.result_type() == place.ty()
+            )
+            || !matches!(
+                self.types
+                    .get(place.ty().index() as usize)
+                    .map(SemanticTypeDeclV1::shape),
+                Some(SemanticTypeShapeV1::Slice { .. })
+            )
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let expected = lower_parameter_type(self.types, &[], result_type)?;
+        // A reborrow preserves the whole slice value, including its length and access.
+        let binding = self.resolve_place(block, statement, place, operations)?;
+        if !matches!(
+            &binding,
+            SemanticValueBindingV1::Value { ty, .. }
+                if matches!(ty, Type::Slice(_)) && *ty == expected
+        ) {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        Ok(binding)
+    }
+
     fn lower_rvalue(
         &mut self,
         block: SemanticBlockIdV1,
@@ -12507,6 +12565,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                if let SemanticRvalueKindV1::Borrow { kind, .. } = value
+                    && (matches!(
+                        self.types
+                            .get(place.ty().index() as usize)
+                            .map(SemanticTypeDeclV1::shape),
+                        Some(SemanticTypeShapeV1::Slice { .. })
+                    ) || matches!(
+                        self.types.get(result_type.index() as usize).map(SemanticTypeDeclV1::shape),
+                        Some(SemanticTypeShapeV1::Pointer(pointer))
+                            if pointer.metadata() == SemanticPointerMetadataV1::SliceLength
+                    ))
+                {
+                    return self.lower_same_type_slice_reborrow_v1(
+                        block,
+                        statement,
+                        result_type,
+                        *kind,
+                        place,
+                        operations,
+                    );
+                }
                 if self.retained_array_slot_v1(place.local()).is_some() {
                     return Err(unsupported(
                         self.semantic_function.index(),
@@ -12611,7 +12690,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }) {
                     self.lower_indexed_place_address(block, statement, place, operations)
                 } else {
-                    self.resolve_place(block, statement, place, operations)
+                    let binding = self.resolve_place(block, statement, place, operations)?;
+                    if matches!(value, SemanticRvalueKindV1::AddressOf { .. })
+                        && matches!(binding, SemanticValueBindingV1::WaveLane { .. })
+                    {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            statement,
+                            "wave lane capability cannot form a raw address",
+                        ));
+                    }
+                    Ok(binding)
                 }
             }
             SemanticRvalueKindV1::Discriminant(place) => {
@@ -20659,6 +20749,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticProjectionKindV1::Subtype,
                 ) => SemanticValueBindingV1::CollectiveContext,
                 (
+                    binding @ SemanticValueBindingV1::WaveLane { .. },
+                    SemanticProjectionKindV1::Dereference,
+                ) if wave_lane_reference_dereference_matches_v1(
+                    self.types,
+                    &self.control_flow_ssa.compiler_issued_bindings,
+                    place.projections()[..projection_index]
+                        .last()
+                        .map_or(self.function.locals()[index].ty(), |previous| {
+                            previous.result_type()
+                        }),
+                    projection,
+                    &binding,
+                ) =>
+                {
+                    binding
+                }
+                (
                     SemanticValueBindingV1::Aggregate(fields),
                     SemanticProjectionKindV1::Field(field),
                 ) => fields.get(field as usize).cloned().ok_or_else(|| {
@@ -27347,6 +27454,10 @@ mod resource_tests {
             ),
             None
         );
+    }
+
+    mod wave_lane_reference_v1_tests {
+        include!("production_semantic_kir_v1/wave_lane_reference_v1_tests.rs");
     }
 
     #[test]
