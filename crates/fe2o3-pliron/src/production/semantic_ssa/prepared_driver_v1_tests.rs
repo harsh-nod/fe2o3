@@ -8,6 +8,10 @@ use super::super::super::adapter::prepared_v1::{
 };
 use super::*;
 
+mod capture_prepass_v1_tests {
+    include!("capture_prepass_v1_tests.rs");
+}
+
 mod call_address_output_tests {
     include!("call_address_output_v1_tests.rs");
 }
@@ -396,6 +400,8 @@ fn two_implicit_scopes() -> (
 }
 
 fn assert_same_trace(left: &Trace, right: &Trace) {
+    assert_eq!(left.block_passes, right.block_passes);
+    assert_eq!(left.entry_passes, right.entry_passes);
     assert_eq!(left.visits, right.visits);
     assert_eq!(left.events, right.events);
     assert_eq!(left.constants, right.constants);

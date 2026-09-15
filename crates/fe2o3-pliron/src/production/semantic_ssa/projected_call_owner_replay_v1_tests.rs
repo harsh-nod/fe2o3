@@ -1,4 +1,8 @@
 use super::*;
+
+#[path = "projected_call_capture_v1_tests.rs"]
+mod projected_call_capture_v1_tests;
+
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBackendPrimitiveV1, SemanticBackendScalarV1, SemanticFieldsShapeV1,
     SemanticRustcVariantsV1, SemanticScalarTypeV1, SemanticScalarValidityRangeV1,

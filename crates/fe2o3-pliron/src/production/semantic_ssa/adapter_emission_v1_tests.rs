@@ -57,12 +57,16 @@ struct Trace {
     elision_lookups: Vec<(Site, usize)>,
     blocks: Vec<(usize, usize, usize)>,
     input: Vec<(usize, usize)>,
+    block_passes: Vec<usize>,
+    entry_passes: Vec<(usize, usize)>,
     reject_event: Option<usize>,
     reject_hook: Option<RejectedHook>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RejectedHook {
+    BlockPass,
+    EntryPass,
     Visit(Visit),
     ElisionLookup(Site),
     Successor { block: usize, ordinal: usize },
@@ -85,6 +89,16 @@ impl Trace {
 
 impl SemanticSsaEmissionObserverV1 for Trace {
     type Error = usize;
+
+    fn block_pass_begin(&mut self, elisions: usize) -> Result<(), usize> {
+        self.block_passes.push(elisions);
+        self.refuse(RejectedHook::BlockPass)
+    }
+
+    fn entry_pass_begin(&mut self, locals: usize, implicit: usize) -> Result<(), usize> {
+        self.entry_passes.push((locals, implicit));
+        self.refuse(RejectedHook::EntryPass)
+    }
 
     fn visit(&mut self, kind: Visit, site: Site) -> Result<(), usize> {
         self.visits.push((kind, site));

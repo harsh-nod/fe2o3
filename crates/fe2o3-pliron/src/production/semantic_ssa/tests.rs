@@ -13,6 +13,9 @@ mod transparent_borrow_occurrence_tests;
 #[path = "streaming_replay_tests.rs"]
 mod streaming_replay_tests;
 
+#[path = "occurrence_capture_v1_tests.rs"]
+mod occurrence_capture_v1_tests;
+
 use crate::ProductionSemanticMirLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, InertSemanticMirRequestV1, SemanticAbiIdentityV1,

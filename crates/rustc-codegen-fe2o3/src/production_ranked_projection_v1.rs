@@ -23516,6 +23516,10 @@ mod cold_compile_error_tests;
 #[cfg(test)]
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
+
+    mod implicit_capability_capture_v1_tests {
+        include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");
+    }
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");

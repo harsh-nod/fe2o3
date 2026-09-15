@@ -74,6 +74,12 @@ pub(in crate::production::semantic_ssa) enum SemanticSsaEntryOriginV1 {
 // must stop on denial; auxiliary analysis always uses the no-op observer.
 pub(in crate::production::semantic_ssa) trait SemanticSsaEmissionObserverV1 {
     type Error;
+    fn block_pass_begin(&mut self, _: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn entry_pass_begin(&mut self, _: usize, _: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn visit(
         &mut self,
         kind: SemanticSsaVisitV1,

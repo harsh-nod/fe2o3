@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "occurrence_resource_v1_tests.rs"]
+mod occurrence_resource_v1_tests;
+
 fn two_root_semantic() -> AdmittedInertSemanticMirV1 {
     let base = admitted_single_function_semantic();
     let second = SemanticFunctionDeclV1::new(

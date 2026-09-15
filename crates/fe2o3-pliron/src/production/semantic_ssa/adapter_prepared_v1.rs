@@ -103,6 +103,9 @@ impl<'a> PreparedSemanticSsaAdapterV1<'a> {
         S: SemanticSsaBlockOutputV1,
         O: SemanticSsaEmissionObserverV1,
     {
+        observer
+            .block_pass_begin(self.elided_borrows.len())
+            .map_err(EmissionError::Observer)?;
         let mut elided = self.elided_borrows.iter().peekable();
         for (block_index, block) in self.function.blocks().iter().enumerate() {
             observer
@@ -227,6 +230,9 @@ impl PreparedSemanticSsaEntriesV1<'_> {
         S: SemanticSsaEntryOutputV1,
         O: SemanticSsaEmissionObserverV1,
     {
+        observer
+            .entry_pass_begin(self.function.locals().len(), self.implicit.len())
+            .map_err(EmissionError::Observer)?;
         let mut implicit = self.implicit.iter().peekable();
         for (local, declaration) in self.function.locals().iter().enumerate() {
             observer

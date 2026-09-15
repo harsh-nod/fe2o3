@@ -150,6 +150,22 @@ Checked accumulation rejects arithmetic overflow before comparing the summary
 with the fixed module envelope. A stricter validated module policy may lower
 these ceilings, but no public limit value can exceed them.
 
+Optional source-to-SSA occurrence capture performs one full replay on the same
+move-only SSA owner. Its sealed ordered rows preserve original event and edge
+occurrences, constants as source locators, and actual elision/entry categories.
+Only borrowed descriptive views escape; these rows do not prove scalar,
+lifecycle, output, or formal equivalence. Ordinary construction/replay does not
+allocate capture arrays, and native materialization is not activated by this API.
+
+Capture uses a separate logical byte/work ledger for its count/fill/join actions,
+not for inherited source checks, classification, planning, hashing, or allocator
+overhead. Fresh fixed-row Vecs use one prepaid exact reservation and never grow
+or convert to boxes. Exact capacity relies on pinned nightly-2026-04-03
+RawVec/Global behavior; a mismatch fails without retrospective top-up, and a
+toolchain change requires re-audit. Success transfers a receipt at the caller
+entry floor; errors/unwind drop pending rows before restoring that floor.
+An already captured owner is rejected without work or ledger changes.
+
 ## Closed generic kernel-check production path
 
 The implementation lives in private `src/production_analysis/` modules. The
