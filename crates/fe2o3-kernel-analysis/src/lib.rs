@@ -10,6 +10,7 @@ mod authenticated_machine_effect;
 mod canonical_kir_contract_catalog_v1;
 mod canonical_kir_inventory_v1;
 mod canonical_kir_must_alias_v1;
+mod canonical_kir_physical_occurrences_v1;
 mod canonical_kir_sparse_scalar_v1;
 mod canonical_kir_sparse_v1;
 mod canonical_kir_transition_v1;
@@ -42,6 +43,7 @@ pub use authenticated_machine_effect::*;
 pub use canonical_kir_contract_catalog_v1::*;
 pub use canonical_kir_inventory_v1::*;
 pub use canonical_kir_must_alias_v1::*;
+pub use canonical_kir_physical_occurrences_v1::*;
 pub use canonical_kir_sparse_v1::*;
 pub use canonical_kir_transition_v1::*;
 pub use control_flow::{

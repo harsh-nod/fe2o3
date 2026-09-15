@@ -339,7 +339,7 @@ fn casts_offsets_and_calls_are_not_invented_identity_transfers() {
     );
 }
 
-fn exact_payloads(definitions: usize, dependencies: usize) -> (usize, usize) {
+pub(crate) fn exact_payloads(definitions: usize, dependencies: usize) -> (usize, usize) {
     // Independent structural equation: report = inventory pointer, Vec header,
     // retained byte count; engine adds five Vec headers and three queue counters.
     // Origin is a discriminant + dense index; Link is target + next.

@@ -304,6 +304,15 @@ fn find_binding<'a>(
     storage: u32,
     budget: &mut Budget<'_>,
 ) -> Result<Option<&'a Binding>, BindingError> {
+    Ok(find_binding_index(bindings, function, storage, budget)?.map(|index| &bindings[index]))
+}
+
+pub(crate) fn find_binding_index(
+    bindings: &[Binding],
+    function: u32,
+    storage: u32,
+    budget: &mut Budget<'_>,
+) -> Result<Option<usize>, BindingError> {
     let mut low = 0;
     let mut high = bindings.len();
     while low < high {
@@ -313,7 +322,7 @@ fn find_binding<'a>(
         match (row.function, row.storage).cmp(&(function, storage)) {
             std::cmp::Ordering::Less => low = middle + 1,
             std::cmp::Ordering::Greater => high = middle,
-            std::cmp::Ordering::Equal => return Ok(Some(row)),
+            std::cmp::Ordering::Equal => return Ok(Some(middle)),
         }
     }
     Ok(None)

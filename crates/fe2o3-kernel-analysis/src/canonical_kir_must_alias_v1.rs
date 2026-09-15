@@ -435,4 +435,4 @@ fn allocate<T: Copy>(count: usize, value: T, budget: &mut Budget<'_>) -> Result<
 
 #[cfg(test)]
 #[path = "canonical_kir_must_alias_v1_tests.rs"]
-mod tests;
+pub(crate) mod tests;
