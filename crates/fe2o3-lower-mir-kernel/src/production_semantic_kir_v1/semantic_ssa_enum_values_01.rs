@@ -28,32 +28,83 @@ impl SemanticEnumSsaFactsV1 {
         self.variants.len().saturating_add(self.discriminants.len())
     }
 
-    fn renamed_for_edge(&self, arguments: &[SsaArgumentV1], target: u32) -> Self {
-        let renames = arguments
-            .iter()
-            .map(|argument| {
-                (
-                    argument.value(),
-                    SsaValueV1::BlockArgument {
-                        block: SsaBlockIdV1::new(target),
-                        variable: argument.variable(),
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let rename = |value: &SsaValueV1| renames.get(value).copied().unwrap_or(*value);
-        Self {
-            variants: self
-                .variants
-                .iter()
-                .map(|(value, variant)| (rename(value), *variant))
-                .collect(),
-            discriminants: self
-                .discriminants
-                .iter()
-                .map(|(value, source)| (rename(value), rename(source)))
-                .collect(),
-        }
+    fn renamed_for_edge(
+        &self,
+        arguments: &[SsaArgumentV1],
+        target: u32,
+        budget: &mut SemanticEnumAnalysisBudgetV1,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let argument_count = arguments.len();
+        let fact_count = self.retained_entries();
+        budget.charge_work(
+            1_usize
+                .saturating_add(argument_count.saturating_mul(2))
+                .saturating_add(fact_count),
+        )?;
+        // Two argument indexes, carried facts, and at most two copied facts per argument.
+        // These are logical entries, matching this analyzer's existing storage domain.
+        let temporary_entries = fact_count.saturating_add(argument_count.saturating_mul(4));
+        budget.reserve_temporary_entries(temporary_entries)?;
+        let result = (|| {
+            let mut destinations = BTreeSet::new();
+            let mut renames = BTreeMap::new();
+            for argument in arguments {
+                let destination = SsaValueV1::BlockArgument {
+                    block: SsaBlockIdV1::new(target),
+                    variable: argument.variable(),
+                };
+                if !destinations.insert(destination) {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                renames
+                    .entry(argument.value())
+                    .and_modify(|rename| *rename = None)
+                    .or_insert(Some(destination));
+            }
+            let rename_source = |source: &SsaValueV1| match renames.get(source) {
+                Some(destination) => *destination,
+                None if destinations.contains(source) => None,
+                None => Some(*source),
+            };
+            let carry =
+                |value: &SsaValueV1| !destinations.contains(value) && !renames.contains_key(value);
+            let mut next = Self::default();
+            for (value, variant) in &self.variants {
+                if carry(value) {
+                    next.variants.insert(*value, *variant);
+                }
+            }
+            for (value, source) in &self.discriminants {
+                if carry(value)
+                    && let Some(source) = rename_source(source)
+                {
+                    next.discriminants.insert(*value, source);
+                }
+            }
+            // Read every source from the original snapshot: phi assignment is simultaneous.
+            // Duplicate sources may fan out variants; ambiguous discriminator aliases refuse.
+            for argument in arguments {
+                let destination = SsaValueV1::BlockArgument {
+                    block: SsaBlockIdV1::new(target),
+                    variable: argument.variable(),
+                };
+                if let Some(variant) = self.variants.get(&argument.value()) {
+                    next.variants.insert(destination, *variant);
+                }
+                if let Some(source) = self
+                    .discriminants
+                    .get(&argument.value())
+                    .and_then(rename_source)
+                {
+                    next.discriminants.insert(destination, source);
+                }
+            }
+            Ok(next)
+        })();
+        let retained_entries = result.as_ref().map_or(0, Self::retained_entries);
+        // The indexes have dropped; the caller keeps the output reservation until merge/drop.
+        budget.replace_storage(temporary_entries, retained_entries)?;
+        result
     }
 }
 
@@ -132,6 +183,19 @@ impl SemanticEnumAnalysisBudgetV1 {
             self.storage,
             self.storage_limit,
         )
+    }
+
+    fn reserve_temporary_entries(
+        &mut self,
+        amount: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let previous = self.storage;
+        if let Err(error) = self.charge_storage(amount) {
+            // A denied reservation has not allocated any entries; retain its error diagnostic.
+            self.storage = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
@@ -534,34 +598,52 @@ fn propagate_promoted_enum_facts_v1(
         .edge_arguments
         .get(&(source, edge_ordinal))
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    budget.charge_work(
-        1_usize
-            .saturating_add(facts.variants.len())
-            .saturating_add(facts.discriminants.len()),
-    )?;
-    let edge_facts = facts.renamed_for_edge(arguments, target);
-    let Some(target_incoming) = incoming.get_mut(target as usize) else {
-        return Err(unsupported(
-            0,
-            Some(source),
-            None,
-            "promoted enum analysis references a missing successor",
-        ));
-    };
-    let previous_storage = target_incoming
-        .as_ref()
-        .map_or(0, SemanticEnumSsaFactsV1::retained_entries);
-    let next = target_incoming
-        .as_ref()
-        .map_or_else(|| edge_facts.clone(), |current| current.meet(&edge_facts));
-    if target_incoming.as_ref() != Some(&next) {
-        budget.replace_storage(previous_storage, next.retained_entries())?;
-        *target_incoming = Some(next);
-        if queued.insert(target) {
-            worklist.push_back(target);
+    let edge_facts = facts.renamed_for_edge(arguments, target, budget)?;
+    let edge_storage = edge_facts.retained_entries();
+    let result = (|| {
+        let Some(target_incoming) = incoming.get_mut(target as usize) else {
+            return Err(unsupported(
+                0,
+                Some(source),
+                None,
+                "promoted enum analysis references a missing successor",
+            ));
+        };
+        let previous_storage = target_incoming
+            .as_ref()
+            .map_or(0, SemanticEnumSsaFactsV1::retained_entries);
+        let next_bound = target_incoming
+            .as_ref()
+            .map_or(edge_storage, SemanticEnumSsaFactsV1::retained_entries);
+        budget.charge_work(
+            1_usize
+                .saturating_add(edge_storage)
+                .saturating_add(previous_storage.saturating_mul(2)),
+        )?;
+        budget.reserve_temporary_entries(next_bound)?;
+        let next = target_incoming
+            .as_ref()
+            .map_or_else(|| edge_facts.clone(), |current| current.meet(&edge_facts));
+        if target_incoming.as_ref() != Some(&next) {
+            let retained_entries = next.retained_entries();
+            let previous = target_incoming.replace(next);
+            drop(previous);
+            budget.replace_storage(
+                previous_storage.saturating_add(next_bound),
+                retained_entries,
+            )?;
+            if queued.insert(target) {
+                worklist.push_back(target);
+            }
+        } else {
+            drop(next);
+            budget.replace_storage(next_bound, 0)?;
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+    drop(edge_facts);
+    budget.replace_storage(edge_storage, 0)?;
+    result
 }
 
 #[derive(Clone, Debug)]

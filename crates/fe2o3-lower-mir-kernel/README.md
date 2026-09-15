@@ -111,6 +111,28 @@ emission, native scalar bindings, optimizer, target or host route. Origin custod
 and connected structural admission do not grant source equivalence, formal
 Complete, artifact or launch authority.
 
+## Enum SSA Facts
+
+Enum facts follow simultaneous block-argument assignment. Each edge reads
+its incoming SSA snapshot before replacing target facts, so a stale loop-header
+variant cannot overwrite a fresh backedge definition. Discriminator relations
+are transported with their referenced enum values; overwritten or ambiguous
+relations become unknown. This analysis does not replace runtime discriminants
+with constants merely because a variant fact is available.
+
+A dynamic downcast needs an authenticated variant edge for the exact source
+local. Concrete payload storage alone is not that evidence. Shared switch
+targets, including an otherwise edge, cannot identify a variant. Known
+constructors and variant-refined SSA bindings retain their existing behavior;
+unknown aliases and nested values require their own authentication.
+
+Edge transfer and meet use the analyzer's bounded logical work and map-entry
+accounting, including temporary reservations and failure cleanup. These are
+not allocator-byte or whole-compiler peak-memory bounds. Component tests cover
+changing and invariant loops, simultaneous transfers, ambiguous edges and
+exact resource limits; admitted lowering tests preserve the runtime selector
+and variant-guarded payload paths.
+
 ## Same-Type Slice Reborrows
 
 An exact single-Dereference reborrow can preserve an ordinary slice reference
