@@ -7566,6 +7566,22 @@ fn validate_semantic_kir_correspondence(
     owner
         .verify_replay()
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+    validate_semantic_kir_correspondence_after_source_replay_v1(
+        owner,
+        module,
+        expected_roots,
+        max_blocks,
+        correspondence,
+    )
+}
+
+fn validate_semantic_kir_correspondence_after_source_replay_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    module: &Module,
+    expected_roots: &[SemanticFunctionIdV1],
+    max_blocks: usize,
+    correspondence: &SemanticKirCorrespondenceV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
         || correspondence.function_count != semantic.functions().len()
@@ -24725,6 +24741,9 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod resource_tests {
     include!("production_semantic_kir_v1/resource_01_tests.rs");
+    mod correspondence_replay_core_tests {
+        include!("production_semantic_kir_v1/tests/production_correspondence_replay_core_tests.rs");
+    }
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
 

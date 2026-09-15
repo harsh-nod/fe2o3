@@ -68,3 +68,11 @@ part of [issue #271](https://github.com/harsh-nod/fe2o3/issues/271).
 The `production_semantic_kir_v1` integration target covers source launch
 agreement without ranked IR, including sparse roots with reachable helpers,
 full-binding substitutions, per-root workgroup failures and retained identity.
+
+## Internal Correspondence Replay
+
+The existing correspondence wrapper always replays the same immutable source
+SSA owner before entering its private structural checker. The private split
+preserves all checks and error ordering, including for an owner with captured
+occurrences. It adds no public skip-replay API, native-source activation, proof
+authority, resource-accounting claim or reduction in replay work on this path.
