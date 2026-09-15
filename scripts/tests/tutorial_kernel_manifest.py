@@ -109,6 +109,214 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(), "1df009c40fff2d9e667fecfb4081cde24ce6aba228f44c8d0b05a3f645655e9f")
 
+    def test_full_runtime_curriculum_snapshot_preserves_pending_obligations(self):
+        curriculum = self.manifest["curriculum"]
+        lessons = curriculum["lessons"]
+        self.assertEqual(len(lessons), 56)
+        self.assertEqual(Counter(lesson["role"] for lesson in lessons), {"executable": 46, "conceptual": 10})
+        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 306)
+        self.assertEqual(
+            [lesson["lessonId"] for lesson in lessons if any(v["kind"] == "mixed" for v in lesson["variants"])],
+            ["reductions-scans", "gemm-tiling", "softmax-invariant"],
+        )
+        payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "87c88792365c86375f0a13dff6676e7a6b32d7252057bba3d22acdffe9a2b776")
+
+    def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
+        del self.manifest["curriculum"]
+        self.assertEqual(len(self.validator.validate_manifest(ROOT, self.manifest)), 48)
+        with tempfile.TemporaryDirectory(prefix="fe2o3-curriculum-") as temporary:
+            path = Path(temporary) / "legacy.json"
+            path.write_text(json.dumps(self.manifest), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(CHECKER), "--manifest", str(path), "--require-curriculum"],
+                text=True, capture_output=True, check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exhaustive curriculum extension is required", result.stderr)
+
+    def validate_curriculum(self):
+        self.validator.validate_curriculum(
+            self.manifest["curriculum"],
+            {entry["lessonId"]: entry for entry in self.manifest["entries"]},
+            {fixture["fixtureId"]: fixture for fixture in self.manifest["compilerFixtures"]},
+        )
+
+    def curriculum_lesson(self, lesson_id="first-fill"):
+        return next(lesson for lesson in self.manifest["curriculum"]["lessons"] if lesson["lessonId"] == lesson_id)
+
+    def test_curriculum_rejects_duplicate_unknown_and_detached_source_entries(self):
+        for ids, pattern in ((["first-fill", "first-fill"], "duplicate"), (["absent"], "unknown"), (["typed-vecadd"], "detach")):
+            with self.subTest(ids=ids):
+                self.manifest = copy.deepcopy(self.original)
+                self.curriculum_lesson()["sourceEntryIds"] = ids
+                with self.assertRaisesRegex(SystemExit, pattern):
+                    self.validate_curriculum()
+        self.manifest = copy.deepcopy(self.original)
+        self.manifest["curriculum"]["lessons"].append(copy.deepcopy(self.curriculum_lesson()))
+        with self.assertRaisesRegex(SystemExit, "duplicate or invalid curriculum lessonId"):
+            self.validate_curriculum()
+
+    def test_conceptual_lessons_cannot_hide_existing_or_carry_new_runnable_obligations(self):
+        self.curriculum_lesson()["role"] = "conceptual"
+        with self.assertRaisesRegex(SystemExit, "cannot downgrade"):
+            self.validate_curriculum()
+        self.manifest = copy.deepcopy(self.original)
+        self.curriculum_lesson("compiler-checks")["variants"] = copy.deepcopy(self.curriculum_lesson()["variants"])
+        with self.assertRaisesRegex(SystemExit, "conceptual lesson cannot carry runnable obligations"):
+            self.validate_curriculum()
+
+    def test_variants_require_both_programming_modes_and_cannot_claim_implementation(self):
+        for mutate, pattern in (
+            (lambda variants: variants.pop(), "ordered SIMT/tile"),
+            (lambda variants: variants.reverse(), "ordered SIMT/tile"),
+            (lambda variants: variants[0].update(status="qualified"), "pending obligations"),
+            (lambda variants: variants[0].update(sourceItems=[{"symbol": "invented"}]), "pending obligations"),
+            (lambda variants: variants[0].pop("sourceItems"), "keys differ"),
+        ):
+            self.manifest = copy.deepcopy(self.original)
+            mutate(self.curriculum_lesson()["variants"])
+            with self.assertRaisesRegex(SystemExit, pattern):
+                self.validate_curriculum()
+        self.manifest = copy.deepcopy(self.original)
+        for lesson in self.manifest["curriculum"]["lessons"]:
+            lesson["variants"] = [variant for variant in lesson["variants"] if variant["kind"] != "mixed"]
+        with self.assertRaisesRegex(SystemExit, "mixed SIMT/tile showcase"):
+            self.validate_curriculum()
+
+    def test_missing_new_source_association_remains_an_explicit_unqualified_gap(self):
+        lesson = self.curriculum_lesson("gemm-autoresearch")
+        lesson["sourceEntryIds"] = []
+        with self.assertRaisesRegex(SystemExit, "sourceBindingGap"):
+            self.validate_curriculum()
+        lesson["sourceBindingGap"] = "An actual source fixture must be supplied; this is not implementation."
+        self.validate_curriculum()
+
+    def test_source_item_obligations_cannot_be_manufactured_or_dropped(self):
+        for key, value in (("sourceItem", {"symbol": "fill"}), ("sourceItemStatus", "not-applicable")):
+            self.manifest = copy.deepcopy(self.original)
+            self.curriculum_lesson()["codeTabs"][0][key] = value
+            with self.assertRaisesRegex(SystemExit, "source-item obligation"):
+                self.validate_curriculum()
+
+    def test_whole_file_metadata_and_tab_ordinals_remain_required(self):
+        tab = next(tab for lesson in self.manifest["curriculum"]["lessons"] for tab in lesson["codeTabs"] if tab["sourceDigestScope"] == "file")
+        tab["sourceCommit"] = None
+        with self.assertRaisesRegex(SystemExit, "incomplete whole-file"):
+            self.validate_curriculum()
+        self.manifest = copy.deepcopy(self.original)
+        self.curriculum_lesson()["codeTabs"][0]["ordinal"] = True
+        with self.assertRaisesRegex(SystemExit, "ordered ordinal"):
+            self.validate_curriculum()
+
+    def test_malformed_enum_values_use_controlled_diagnostics(self):
+        for key, value in (("kind", []), ("language", {}), ("sourceDigestScope", [])):
+            self.manifest = copy.deepcopy(self.original)
+            self.curriculum_lesson()["codeTabs"][0][key] = value
+            with self.assertRaisesRegex(SystemExit, "must be a nonempty string"):
+                self.validate_curriculum()
+        self.manifest = copy.deepcopy(self.original)
+        self.curriculum_lesson()["role"] = {}
+        with self.assertRaisesRegex(SystemExit, "must be a nonempty string"):
+            self.validate_curriculum()
+
+    def test_new_aliases_require_selected_source_path_overlap_even_with_gap_text(self):
+        for gap in (None, "A claimed gap must not authorize unrelated source entries."):
+            self.manifest = copy.deepcopy(self.original)
+            lesson = self.curriculum_lesson("gfx950-fp4-gemm-performance-lab")
+            lesson["sourceEntryIds"] = ["typed-vecadd"]
+            lesson["sourceBindingGap"] = gap
+            with self.assertRaisesRegex(SystemExit, "no matching pinned kernel source path"):
+                self.validate_curriculum()
+
+    def test_selected_fixture_paths_support_aliases_without_package_widening(self):
+        self.validate_curriculum()
+        entry = next(entry for entry in self.manifest["entries"] if entry["lessonId"] == "gemm-tiling")
+        self.assertNotIn("examples/gemm_autoresearch_v1/src/kernel.rs", entry["sourcePaths"])
+        self.assertIn("gfx942-gemm-autoresearch", entry["compilerFixtureIds"])
+        lesson = self.curriculum_lesson("gfx950-fp4-gemm-performance-lab")
+        lesson["codeTabs"][0]["sourcePath"] = "examples/gfx950_low_precision/src/unselected.rs"
+        with self.assertRaisesRegex(SystemExit, "no matching pinned kernel source path"):
+            self.validate_curriculum()
+
+    def test_existing_and_partially_matched_sources_report_exact_pending_paths(self):
+        gaps = {}
+        self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
+        self.assertEqual(gaps, {
+            "cpu-semantic-simulation": ["crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"],
+            "gemm-proof-plan": ["examples/tiled_gemm_v1/src/kernel.rs"],
+            "gfx950-gpt-oss-120b-megakernel": [
+                "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs",
+                "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs",
+            ],
+        })
+        self.curriculum_lesson("cpu-semantic-simulation")["sourceBindingGap"] = None
+        with self.assertRaisesRegex(SystemExit, "sourceBindingGap.*production-ranked-bounds-device"):
+            self.validate_curriculum()
+
+    def test_unjustified_source_gap_claims_are_rejected(self):
+        self.curriculum_lesson("gemm-autoresearch")["sourceBindingGap"] = "Not a real gap."
+        with self.assertRaisesRegex(SystemExit, "fully linked paths"):
+            self.validate_curriculum()
+
+    def test_site_inventory_rejects_non_utf8_display_or_source_fragments(self):
+        for key, value in (("displayedCode", "\ud800"), ("sourceFragments", ["\ud800"])):
+            curriculum, inventory = self.site_inventory_fixture()
+            inventory["lessons"][0]["codeTabs"][0][key] = value
+            with self.assertRaisesRegex(SystemExit, "not valid UTF-8"):
+                self.validator.validate_site_inventory(curriculum, inventory)
+
+    def site_inventory_fixture(self):
+        # Independent tiny rendered strings exercise hashing without retaining the full site.
+        curriculum = copy.deepcopy(self.original["curriculum"])
+        inventory = {"schema": self.validator.SITE_INVENTORY_SCHEMA, "site": copy.deepcopy(curriculum["site"]), "lessons": []}
+        for lesson in curriculum["lessons"]:
+            actual = {"id": lesson["lessonId"], "codeTabs": []}
+            for tab in lesson["codeTabs"]:
+                code = f"{lesson['lessonId']}:{tab['ordinal']}\n"
+                tab["displayedUtf8Bytes"] = len(code.encode("utf-8"))
+                tab["displayedSha256"] = hashlib.sha256(code.encode("utf-8")).hexdigest()
+                tab["sourceFragmentsSha256"] = None
+                projected = {key: tab[key] for key in self.validator.CURRICULUM_TAB_FIELDS if key != "sourceFragmentsSha256"}
+                projected.update(displayedCode=code, sourceFragments=None)
+                actual["codeTabs"].append(projected)
+            inventory["lessons"].append(actual)
+        return curriculum, inventory
+
+    def test_site_only_commits_do_not_create_a_circular_pin_dependency(self):
+        curriculum, inventory = self.site_inventory_fixture()
+        inventory["site"].update(commit="a" * 40, tree="b" * 40)
+        self.validator.validate_site_inventory(curriculum, inventory)
+
+    def test_site_inventory_rejects_missing_new_or_reordered_lessons(self):
+        for mutate in (lambda rows: rows.pop(), lambda rows: rows.append(copy.deepcopy(rows[0])), lambda rows: rows.reverse()):
+            curriculum, inventory = self.site_inventory_fixture()
+            mutate(inventory["lessons"])
+            with self.assertRaisesRegex(SystemExit, "ordered lesson coverage"):
+                self.validator.validate_site_inventory(curriculum, inventory)
+
+    def test_site_inventory_rejects_missing_new_and_reordered_tabs(self):
+        for mutate in (lambda rows: rows.pop(), lambda rows: rows.append(copy.deepcopy(rows[0])), lambda rows: rows.reverse()):
+            curriculum, inventory = self.site_inventory_fixture()
+            mutate(inventory["lessons"][0]["codeTabs"])
+            with self.assertRaisesRegex(SystemExit, "code-tab coverage|source/display binding"):
+                self.validator.validate_site_inventory(curriculum, inventory)
+
+    def test_site_inventory_checks_actual_rendered_bytes_and_exact_metadata(self):
+        for key, value, pattern in (
+            ("displayedCode", "changed\n", "displayed bytes do not match"),
+            ("displayedSha256", "0" * 64, "displayed bytes do not match"),
+            ("label", "renamed", "source/display binding"),
+            ("sourceCommit", "a" * 40, "source/display binding"),
+            ("sourcePath", "examples/absent.rs", "source/display binding"),
+            ("sourceFragments", ["new fragment"], "source/display binding"),
+            ("ordinal", False, "source/display binding"),
+        ):
+            curriculum, inventory = self.site_inventory_fixture()
+            inventory["lessons"][0]["codeTabs"][0][key] = value
+            with self.assertRaisesRegex(SystemExit, pattern):
+                self.validator.validate_site_inventory(curriculum, inventory)
+
     def test_scalar_gemm_adds_compile_and_pending_oracle_obligations(self):
         fixture = next(f for f in self.manifest["compilerFixtures"] if f["fixtureId"] == "gfx942-scalar-gemm")
         self.assertEqual(fixture["compilerInput"]["kernelSymbols"], ["scalar_gemm_v1"])

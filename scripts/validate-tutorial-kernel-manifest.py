@@ -4,6 +4,13 @@
 The source scanner is the recovered donor inventory scanner, not rustc semantic
 analysis. Feature reachability, observed compiler inputs, optimized-graph policy
 checks, simulation and hardware remain separate qualification obligations.
+
+The optional curriculum extension binds every displayed lesson/tab to an
+immutable site snapshot and records pending SIMT/tile/mixed and source-item
+obligations. It references existing source entries instead of cloning fixtures.
+Consumers must use --require-curriculum; --site-inventory additionally checks
+the current runtime projection without requiring an unchanged site Git HEAD.
+Neither option upgrades a pending obligation to execution or launch evidence.
 """
 
 from __future__ import annotations
@@ -28,6 +35,21 @@ TOP_LEVEL_KEYS = {
     "compilerFixtures",
     "entries",
 }
+CURRICULUM_SCHEMA = "fe2o3-tutorial-curriculum-obligations-v1"
+SITE_INVENTORY_SCHEMA = "fe2o3-tutorial-runtime-projection-v1"
+CURRICULUM_KEYS = {"schema", "site", "status", "lessons"}
+CURRICULUM_LESSON_KEYS = {
+    "lessonId", "role", "roleReason", "sourceEntryIds", "sourceBindingGap",
+    "variants", "codeTabs",
+}
+CURRICULUM_TAB_FIELDS = (
+    "ordinal", "kind", "label", "language", "displayedUtf8Bytes", "displayedSha256",
+    "sourcePath", "sourceCommit", "sourceSha256", "sourceDigestScope",
+    "sourceFragmentsSha256", "explanatory", "evidenceId",
+)
+CURRICULUM_TAB_KEYS = set(CURRICULUM_TAB_FIELDS) | {"sourceItem", "sourceItemStatus"}
+MAX_SITE_INVENTORY_BYTES = 16 * 1024 * 1024
+MAX_CURRICULUM_TABS = 1024
 ENTRY_KEYS = {
     "lessonId",
     "siteEvidenceKind",
@@ -1062,8 +1084,206 @@ def validate_qualification(
                     fail(f"missing pending {gate} obligation for {lesson}/{fixture_id}")
 
 
-def validate_manifest(repo_root: Path, manifest: Any) -> dict[str, Any]:
-    require_exact_keys(require_object(manifest, "manifest"), TOP_LEVEL_KEYS, "manifest")
+def require_digest(value: Any, label: str, length: int = 64) -> None:
+    if not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None:
+        fail(f"{label} must be an exact lowercase {length}-digit digest")
+
+
+def validate_curriculum_tab(tab: Any, ordinal: int, lesson: str, role: str) -> None:
+    label = f"curriculum {lesson} tab {ordinal}"
+    require_exact_keys(require_object(tab, label), CURRICULUM_TAB_KEYS, label)
+    if type(tab["ordinal"]) is not int or tab["ordinal"] != ordinal:
+        fail(f"{label} must retain its ordered ordinal")
+    kind = require_string(tab["kind"], f"{label}.kind")
+    if kind not in {"kernel", "reference", "spec", "verus", "comparison", "host", "result", "performance"}:
+        fail(f"{label} has an unknown kind")
+    language = require_string(tab["language"], f"{label}.language")
+    if language not in {"rust", "bash", "cpp", "python", "text"}:
+        fail(f"{label} has an unknown language")
+    if len(require_string(tab["label"], f"{label}.label")) > 256:
+        fail(f"{label} label exceeds its bound")
+    size = tab["displayedUtf8Bytes"]
+    if type(size) is not int or not 0 <= size <= MAX_ATTRIBUTED_SOURCE_BYTES:
+        fail(f"{label} displayed bytes exceed their bound")
+    require_digest(tab["displayedSha256"], f"{label}.displayedSha256")
+    for key, length in (("sourceCommit", 40), ("sourceSha256", 64)):
+        if tab[key] is not None:
+            require_digest(tab[key], f"{label}.{key}", length)
+    if tab["sourcePath"] is not None:
+        expected_path(tab["sourcePath"], f"{label}.sourcePath")
+    scope = tab["sourceDigestScope"]
+    if scope is not None and require_string(scope, f"{label}.sourceDigestScope") not in {"file", "displayed"}:
+        fail(f"{label} has an unknown source digest scope")
+    if tab["sourceDigestScope"] == "file" and any(
+        tab[key] is None for key in ("sourcePath", "sourceCommit", "sourceSha256")
+    ):
+        fail(f"{label} has incomplete whole-file source metadata")
+    fragments = tab["sourceFragmentsSha256"]
+    if fragments is not None:
+        for digest in bounded_list(fragments, f"{label}.sourceFragmentsSha256", 64):
+            require_digest(digest, f"{label}.sourceFragmentsSha256")
+    if tab["explanatory"] is not None and type(tab["explanatory"]) is not bool:
+        fail(f"{label}.explanatory must be Boolean or null")
+    if tab["evidenceId"] is not None:
+        require_string(tab["evidenceId"], f"{label}.evidenceId")
+    requires_item = role == "executable" and tab["kind"] == "kernel" and tab["language"] == "rust"
+    expected_status = "pending" if requires_item else "not-applicable"
+    if tab["sourceItem"] is not None or tab["sourceItemStatus"] != expected_status:
+        fail(f"{label} must retain its {expected_status} source-item obligation; metadata is not compiler custody")
+
+
+def validate_curriculum(
+    curriculum: Any, entries: dict[str, Any], fixtures: dict[str, Any]
+) -> dict[str, list[str]]:
+    require_exact_keys(require_object(curriculum, "curriculum"), CURRICULUM_KEYS, "curriculum")
+    if curriculum["schema"] != CURRICULUM_SCHEMA or curriculum["status"] != "pending":
+        fail("curriculum must use the pending obligation schema, not qualification")
+    site = require_object(curriculum["site"], "curriculum.site")
+    require_exact_keys(site, {"repository", "commit", "tree"}, "curriculum.site")
+    if site["repository"] != "harsh-nod/fe2o3-kernels":
+        fail("curriculum.site must identify the tutorial repository")
+    require_digest(site["commit"], "curriculum.site.commit", 40)
+    require_digest(site["tree"], "curriculum.site.tree", 40)
+    seen: set[str] = set()
+    associated: set[str] = set()
+    tabs = 0
+    mixed = False
+    gaps: dict[str, list[str]] = {}
+    source_paths = {
+        entry_id: set(entry["sourcePaths"]) | {
+            path for fixture_id in entry["compilerFixtureIds"]
+            for path in fixtures[fixture_id]["compilerInput"]["sourcePaths"]
+        }
+        for entry_id, entry in entries.items()
+    }
+    for lesson in bounded_list(curriculum["lessons"], "curriculum.lessons", 256):
+        require_exact_keys(require_object(lesson, "curriculum lesson"), CURRICULUM_LESSON_KEYS, "curriculum lesson")
+        lesson_id = require_string(lesson["lessonId"], "curriculum.lessonId")
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", lesson_id) is None or lesson_id in seen:
+            fail("duplicate or invalid curriculum lessonId")
+        seen.add(lesson_id)
+        role = require_string(lesson["role"], f"{lesson_id}.role")
+        if role not in {"executable", "conceptual"}:
+            fail(f"{lesson_id} has an unknown curriculum role")
+        require_string(lesson["roleReason"], f"{lesson_id}.roleReason")
+        ids = require_string_array(lesson["sourceEntryIds"], f"{lesson_id}.sourceEntryIds")
+        if len(ids) != len(set(ids)) or not set(ids) <= entries.keys():
+            fail(f"{lesson_id} has duplicate or unknown sourceEntryIds")
+        associated.update(ids)
+        if lesson_id in entries and (role != "executable" or lesson_id not in ids):
+            fail(f"{lesson_id} cannot downgrade or detach its existing compiler source entry")
+        variants = lesson["variants"]
+        if not isinstance(variants, list) or len(variants) > 3:
+            fail(f"{lesson_id} variants must be a bounded array")
+        kinds = []
+        for variant in variants:
+            require_exact_keys(require_object(variant, "variant"), {"kind", "status", "sourceItems", "reason"}, "variant")
+            kinds.append(variant["kind"])
+            if variant["status"] != "pending" or variant["sourceItems"] != []:
+                fail(f"{lesson_id} variants are pending obligations, not source implementations or qualification")
+            require_string(variant["reason"], f"{lesson_id}.variant.reason")
+        if role == "conceptual":
+            if ids or variants or lesson["sourceBindingGap"] is not None:
+                fail(f"{lesson_id} conceptual lesson cannot carry runnable obligations")
+        else:
+            if kinds not in (["simt", "tile"], ["simt", "tile", "mixed"]):
+                fail(f"{lesson_id} must retain ordered SIMT/tile and any mixed obligations")
+            mixed |= "mixed" in kinds
+        kernel_paths: set[str] = set()
+        for ordinal, tab in enumerate(bounded_list(lesson["codeTabs"], f"{lesson_id}.codeTabs", 64)):
+            tabs += 1
+            if tabs > MAX_CURRICULUM_TABS:
+                fail("curriculum code-tab count exceeds its bound")
+            validate_curriculum_tab(tab, ordinal, lesson_id, role)
+            if tab["kind"] == "kernel" and tab["language"] == "rust" and tab["sourcePath"] is not None:
+                kernel_paths.add(tab["sourcePath"])
+        if role == "executable":
+            # Retain old same-ID obligations even when historical displayed paths
+            # differ. New aliases need an actual selected-source path association;
+            # package membership alone does not establish feature/symbol coverage.
+            for entry_id in ids:
+                if entry_id != lesson_id and not kernel_paths & source_paths[entry_id]:
+                    fail(f"{lesson_id} sourceEntryId {entry_id} has no matching pinned kernel source path")
+            linked_paths = set().union(*(source_paths[entry_id] for entry_id in ids))
+            missing_paths = kernel_paths - linked_paths
+            if not ids or missing_paths:
+                require_string(
+                    lesson["sourceBindingGap"],
+                    f"{lesson_id}.sourceBindingGap for unmatched paths {sorted(missing_paths)}",
+                )
+                gaps[lesson_id] = sorted(missing_paths)
+            elif lesson["sourceBindingGap"] is not None:
+                fail(f"{lesson_id} fully linked paths cannot have a missing-binding claim")
+    if associated != entries.keys():
+        fail("curriculum must retain every existing compiler source entry")
+    if not mixed:
+        fail("curriculum must retain a mixed SIMT/tile showcase obligation")
+    return gaps
+
+
+def validate_site_inventory(curriculum: Any, inventory: Any) -> None:
+    """Compare actual ordered display data; site-only CI changes need no repin."""
+    require_object(inventory, "site inventory")
+    if inventory.get("schema") != SITE_INVENTORY_SCHEMA:
+        fail("site inventory has an unsupported projection schema")
+    site = require_object(inventory.get("site"), "site inventory.site")
+    if site.get("repository") != curriculum["site"]["repository"]:
+        fail("site inventory repository differs from the curriculum")
+    for key in ("commit", "tree"):
+        require_digest(site.get(key), f"site inventory.{key}", 40)
+    lessons = bounded_list(inventory.get("lessons"), "site inventory.lessons", 256)
+    if [lesson.get("id") for lesson in lessons if isinstance(lesson, dict)] != [
+        lesson["lessonId"] for lesson in curriculum["lessons"]
+    ] or not all(isinstance(lesson, dict) for lesson in lessons):
+        fail("site inventory ordered lesson coverage differs from the curriculum")
+    for expected, actual in zip(curriculum["lessons"], lessons, strict=True):
+        tabs = bounded_list(actual.get("codeTabs"), "site inventory.codeTabs", 64)
+        if len(tabs) != len(expected["codeTabs"]):
+            fail(f"site inventory {expected['lessonId']} code-tab coverage differs")
+        for retained, tab in zip(expected["codeTabs"], tabs, strict=True):
+            require_object(tab, "site inventory tab")
+            required = set(CURRICULUM_TAB_FIELDS) - {"sourceFragmentsSha256"}
+            if not required <= tab.keys() or "sourceFragments" not in tab:
+                fail("site inventory tab is missing explicit source/display fields")
+            code = tab.get("displayedCode")
+            if not isinstance(code, str) or len(code) > MAX_ATTRIBUTED_SOURCE_BYTES:
+                fail("site inventory displayed code is missing or exceeds its bound")
+            try:
+                encoded = code.encode("utf-8")
+            except UnicodeError:
+                fail("site inventory displayed code is not valid UTF-8")
+            if len(encoded) > MAX_ATTRIBUTED_SOURCE_BYTES:
+                fail("site inventory displayed UTF-8 exceeds its bound")
+            if type(tab["displayedUtf8Bytes"]) is not int or len(encoded) != tab["displayedUtf8Bytes"] or hashlib.sha256(encoded).hexdigest() != tab["displayedSha256"]:
+                fail("site inventory displayed bytes do not match their digest/length")
+            fragments = tab["sourceFragments"]
+            if fragments is not None:
+                fragments = bounded_list(fragments, "site inventory.sourceFragments", 64)
+                if any(not isinstance(value, str) for value in fragments):
+                    fail("site inventory source fragments must be strings")
+                try:
+                    fragment_bytes = [value.encode("utf-8") for value in fragments]
+                except UnicodeError:
+                    fail("site inventory source fragments are not valid UTF-8")
+                if any(len(value) > MAX_ATTRIBUTED_SOURCE_BYTES for value in fragment_bytes):
+                    fail("site inventory source fragments exceed their bound")
+            projection = {key: tab[key] for key in required}
+            projection["sourceFragmentsSha256"] = None if fragments is None else [
+                hashlib.sha256(value).hexdigest() for value in fragment_bytes
+            ]
+            # JSON comparison retains Boolean/integer distinctions unlike Python equality.
+            if json.dumps(projection, sort_keys=True) != json.dumps(
+                {key: retained[key] for key in CURRICULUM_TAB_FIELDS}, sort_keys=True
+            ):
+                fail(f"site inventory {expected['lessonId']} tab {retained['ordinal']} source/display binding differs")
+
+
+def validate_manifest(
+    repo_root: Path, manifest: Any, *, curriculum_gaps: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
+    require_object(manifest, "manifest")
+    keys = TOP_LEVEL_KEYS | ({"curriculum"} if "curriculum" in manifest else set())
+    require_exact_keys(manifest, keys, "manifest")
     if manifest["schema"] != "fe2o3-tutorial-kernel-source-contract-v1":
         fail("expected a source-contract schema, not a release or evidence manifest")
     if manifest["roadmapIssue"] != "https://github.com/harsh-nod/fe2o3/issues/271":
@@ -1162,6 +1382,10 @@ def validate_manifest(repo_root: Path, manifest: Any) -> dict[str, Any]:
     if associated != set(fixtures):
         fail("every compiler fixture must retain a lesson/scope association")
     validate_qualification(manifest["qualification"], entries, fixtures)
+    if "curriculum" in manifest:
+        gaps = validate_curriculum(manifest["curriculum"], entries, fixtures)
+        if curriculum_gaps is not None:
+            curriculum_gaps.update(gaps)
     return fixtures
 
 
@@ -1207,8 +1431,8 @@ def reject_duplicate_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]
     return result
 
 
-def load_manifest(path: Path) -> Any:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_CARGO_MANIFEST_BYTES:
+def load_manifest(path: Path, maximum_bytes: int = MAX_CARGO_MANIFEST_BYTES) -> Any:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > maximum_bytes:
         fail("manifest must be a bounded regular file")
     try:
         return json.loads(
@@ -1226,10 +1450,21 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--emit-matrix", choices=sorted(ALLOWED_TARGETS))
     parser.add_argument("--require-qualified", action="store_true")
+    parser.add_argument("--require-curriculum", action="store_true")
+    parser.add_argument("--site-inventory", type=Path)
     arguments = parser.parse_args()
     root = arguments.repo_root.resolve()
     manifest = load_manifest(arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json")
-    fixtures = validate_manifest(root, manifest)
+    curriculum_gaps: dict[str, list[str]] = {}
+    fixtures = validate_manifest(root, manifest, curriculum_gaps=curriculum_gaps)
+    if arguments.require_curriculum or arguments.site_inventory:
+        if "curriculum" not in manifest:
+            fail("the exhaustive curriculum extension is required")
+    if arguments.site_inventory:
+        validate_site_inventory(
+            manifest["curriculum"],
+            load_manifest(arguments.site_inventory, MAX_SITE_INVENTORY_BYTES),
+        )
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
     if arguments.emit_matrix:
@@ -1243,6 +1478,8 @@ def main() -> None:
             f"SOURCE CONTRACT VALID fixtures={len(fixtures)} qualified=false "
             "compiler_inputs=expected semantic_oracles=pending policy_verification=pending"
         )
+        for lesson_id, paths in sorted(curriculum_gaps.items()):
+            print(f"CURRICULUM SOURCE BINDING PENDING lesson={lesson_id} unmatchedPaths={json.dumps(paths)}")
 
 
 if __name__ == "__main__":
