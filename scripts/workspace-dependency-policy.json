@@ -164,6 +164,13 @@
   "allowed_dependency_edges": [
     {
       "from": "fe2o3-lower-mir-kernel",
+      "to": "fe2o3-kir-sim",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-lower-mir-kernel",
       "to": "dialect-amdgcn",
       "kinds": [
         "dev"

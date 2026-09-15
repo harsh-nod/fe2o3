@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -126,6 +127,33 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
         violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
         self.assertEqual(1, len(violations))
         self.assertIn("(dev;", violations[0])
+
+    def test_production_simulator_oracle_exception_is_exact_and_dev_only(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        for source, target, kind, allowed in [
+            ("fe2o3-lower-mir-kernel", "fe2o3-kir-sim", "dev", True),
+            ("fe2o3-lower-mir-kernel", "fe2o3-kir-sim", None, False),
+            ("fe2o3-lower-mir-kernel", "fe2o3-kir-sim", "build", False),
+            ("fe2o3-lower-mir-kernel", "fe2o3-runtime", "dev", False),
+            ("fe2o3-pliron", "fe2o3-kir-sim", "dev", False),
+        ]:
+            with self.subTest(source=source, target=target, kind=kind):
+                packages = [
+                    package(
+                        source,
+                        f"crates/{source}",
+                        [dependency(target, f"crates/{target}", kind)],
+                    ),
+                    package(target, f"crates/{target}"),
+                ]
+                violations, stats = CHECKER.check_policy(metadata(packages), reviewed)
+                expected = [] if allowed else [
+                    "forbidden dependency: "
+                    f"{source} [pliron-framework] -> {target} [host-runtime] "
+                    f"({kind or 'normal'}; crates/{source}/Cargo.toml)"
+                ]
+                self.assertEqual(expected, violations)
+                self.assertEqual(1, stats["internal_dependencies"])
 
     def test_rejects_exception_that_does_not_cross_a_forbidden_direction(self) -> None:
         invalid = policy()
