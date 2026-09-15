@@ -122,6 +122,10 @@ struct PrivateArrayFinalRelationV1<'a> {
 }
 
 impl<'a> PrivateArrayFinalRelationV1<'a> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Bind explicit source and physical instances with the shared correlation budget"
+    )]
     fn new(
         module: &'a Module,
         correspondence: &'a SemanticKirCorrespondenceV1,

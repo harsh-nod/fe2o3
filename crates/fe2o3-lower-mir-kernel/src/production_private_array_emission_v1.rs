@@ -332,6 +332,10 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         Ok(facts)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep source ownership, physical coordinates, and the admission frontier explicit"
+    )]
     fn commit_slot(
         &mut self,
         owner: SemanticFunctionIdV1,
@@ -893,6 +897,10 @@ impl PrivateArrayMergeV1 {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Keep instance identity and independently shared transfer accounting explicit"
+    )]
     fn append_function(
         &mut self,
         owner: SemanticFunctionIdV1,

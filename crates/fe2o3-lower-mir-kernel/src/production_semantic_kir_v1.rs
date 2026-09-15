@@ -2738,6 +2738,10 @@ struct IndexedUnsupportedReasonV1 {
     location: FunctionOperationLocation,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Correlate explicit source and ranked inputs under the existing operation limit"
+)]
 fn unsupported_indices_match_ranked_sources_result(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
@@ -11043,6 +11047,10 @@ where
     Ok(ordered)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Keep shared root budgets and outer retained storage independently borrowed"
+)]
 fn lower_single_root_module(
     owner: &ProductionSemanticSsaOwnerV1,
     limits: ProductionSemanticKirLimitsV1,

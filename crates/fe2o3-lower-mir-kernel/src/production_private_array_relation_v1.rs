@@ -308,6 +308,10 @@ fn private_array_slot_facts_equal_v1<W: PrivateArrayChargeV1>(
     })
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Compare source, physical body, and retained rows under the caller's shared budget"
+)]
 fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
