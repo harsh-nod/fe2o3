@@ -152,7 +152,7 @@
         .unwrap();
         let error = ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
             block: 19,
-            source: SemanticSourceProvenanceV1::new(Some(origin), Some(origin)),
+            source: Box::new(SemanticSourceProvenanceV1::new(Some(origin), Some(origin))),
             callee: 23,
             tail: false,
         };

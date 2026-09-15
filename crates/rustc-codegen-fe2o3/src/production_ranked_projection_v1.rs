@@ -1724,13 +1724,13 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
     UnprovenDeterministicDivisor(Box<DeterministicDivisorDiagnosticV1>),
     UnresolvedCallableEffect {
         block: usize,
-        source: SemanticSourceProvenanceV1,
+        source: Box<SemanticSourceProvenanceV1>,
         callee: u32,
         tail: bool,
     },
     UnresolvedDropEffect {
         block: usize,
-        source: SemanticSourceProvenanceV1,
+        source: Box<SemanticSourceProvenanceV1>,
         drop_glue: u32,
     },
     MissingAllocationProvenance {
@@ -1743,13 +1743,13 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
         kind: &'static str,
         expected: bool,
         condition_local: Option<u32>,
-        source: SemanticSourceProvenanceV1,
+        source: Box<SemanticSourceProvenanceV1>,
     },
     Unsupported(&'static str),
     Recipe(ProductionRankedKernelErrorV1),
     Construction(fe2o3_pliron::NameError),
     Compile {
-        error: ProductionRankedCompileErrorV1,
+        error: Box<ProductionRankedCompileErrorV1>,
         ranked_ir: String,
         access_sources: Vec<ProjectedAccessSourceV1>,
     },
@@ -1852,7 +1852,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 formatter,
                 "semantic-to-ranked projection incomplete: a {}call terminator before exact callable memory-effect summaries are available; semantic block bb{block} at {} targets callable {callee}",
                 if *tail { "tail " } else { "" },
-                source_label(*source),
+                source_label(**source),
             ),
             Self::UnresolvedDropEffect {
                 block,
@@ -1861,7 +1861,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
             } => write!(
                 formatter,
                 "semantic-to-ranked projection incomplete: a drop terminator before exact drop-glue memory-effect summaries are available; semantic block bb{block} at {} targets drop glue {drop_glue}",
-                source_label(*source),
+                source_label(**source),
             ),
             Self::MissingAllocationProvenance {
                 local,
@@ -1880,7 +1880,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
             } => write!(
                 formatter,
                 "semantic-to-ranked projection incomplete: Rust {kind} assert terminator in semantic block bb{block} at {} expected condition{} to be {}; no exact dominating proof establishes it on every incoming path",
-                source_label(*source),
+                source_label(**source),
                 condition_local
                     .map(|local| format!(" local {local}"))
                     .unwrap_or_default(),
@@ -1896,6 +1896,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 ranked_ir,
                 access_sources,
             } => {
+                let error = error.as_ref();
                 error.fmt(formatter)?;
                 if let ProductionRankedCompileErrorV1::Session(
                     ProductionSessionErrorV1::RankedBounds(bounds),
@@ -1943,7 +1944,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
             Self::Recipe(error) => Some(error),
-            Self::Compile { error, .. } => Some(error),
+            Self::Compile { error, .. } => Some(error.as_ref()),
             Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
             | Self::UnprovenDeterministicDivisor(_)
@@ -3478,7 +3479,7 @@ fn project_and_verify_ranked_root_v1(
             system_coherent_allocations,
         )
         .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-            error,
+            error: Box::new(error),
             ranked_ir,
             access_sources: sources,
         })?
@@ -19184,7 +19185,7 @@ fn projected_cfg_terminator(
                     kind: semantic_assert_kind_v1(message),
                     expected: *expected,
                     condition_local: simple_operand_local(condition).map(SemanticLocalIdV1::index),
-                    source: block.terminator().source(),
+                    source: Box::new(block.terminator().source()),
                 });
             }
             Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
@@ -22065,7 +22066,7 @@ fn project_terminator_accesses(
         SemanticTerminatorKindV1::Drop { drop_glue, .. } => {
             Err(ProductionRankedProjectionErrorV1::UnresolvedDropEffect {
                 block: block_index,
-                source,
+                source: Box::new(source),
                 drop_glue: drop_glue.index(),
             })
         }
@@ -22320,7 +22321,7 @@ fn require_bounds_neutral_callable(
         | None => Err(
             ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
                 block,
-                source,
+                source: Box::new(source),
                 callee: callable.index(),
                 tail,
             },
@@ -23507,6 +23508,10 @@ fn indent_ir(ir: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+#[path = "production_ranked_projection_v1/cold_compile_error_v1_tests.rs"]
+mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
