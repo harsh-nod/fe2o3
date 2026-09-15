@@ -574,3 +574,6 @@ mod private_array_caller_v1_tests;
 
 #[path = "production_private_array_facts_v1_tests.rs"]
 mod private_array_facts_v1_tests;
+
+#[path = "production_private_array_output_v1_tests.rs"]
+mod private_array_output_v1_tests;

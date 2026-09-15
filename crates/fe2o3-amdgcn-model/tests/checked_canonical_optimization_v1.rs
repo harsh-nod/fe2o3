@@ -17,6 +17,9 @@ use fe2o3_kernel_opt::{
     KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2, optimize_checked_canonical_kernel_ir_v1,
 };
 
+#[path = "checked_canonical_optimization_v1/target_coordinate_preservation_v1_tests.rs"]
+mod target_coordinate_preservation_v1_tests;
+
 const WORK: usize = 1_000_000_000_000;
 const STORAGE: usize = 1_000_000_000;
 const PREFIX: usize = 29;

@@ -12,6 +12,9 @@ mod issued_scope_legacy_source_v1_tests;
 #[path = "production_checked_output_formal_v1_tests.rs"]
 mod checked_output_formal_v1_tests;
 
+#[path = "production_optimized_assert_origins_v1_tests.rs"]
+mod optimized_assert_origins_v1_tests;
+
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 const FLOOR: usize = 17;

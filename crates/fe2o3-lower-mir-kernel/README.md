@@ -236,3 +236,97 @@ policy and are not included in the canonical optimizer ledger or receipt.
 Source-qualified output occurrence transport, final ranked/formal consumers,
 and explicit V12 lineage/evidence migration remain required before activation.
 Existing final owners, wire formats and authority gates are unchanged.
+
+## Source-Qualified Checked Output Occurrences
+
+The library checks complete V12 executable-coordinate preservation across the
+exact existing AMD target-binding metadata delta, then reconnects sealed source
+N to actual admitted B and independently checked optimizer O. It retains numeric
+source block/control aliases and transported assertion outcomes. The codegen
+connection that computes fresh sparse facts on O is not included in this library
+publication. Failure selection is not successful assertion discharge,
+and physical unreachable placement is distinct from checked omission.
+
+This B0 connection does not activate a backend or admit a final executable. Its
+source-qualified library queries do not replace the published codegen consumer.
+The catalog and private-array placement prerequisites below do not complete
+pipeline lifecycle/effect correspondence, final ranked/formal correlation, or
+serialized final evidence. Old N-only assertion transport keeps its pointer
+contract unchanged. Canonical equality of separately admitted B owners is
+checked using complete bytes, never a digest alone.
+
+New indexes, queries, and temporary payloads share the caller canonical ledger.
+The caller retains N graph/source rows, B, checked O/history, and transfer receipts;
+the constructor checks only the stated N-plus-O floor lower bound. Source replay
+uses its inherited source limits outside that ledger. Row receipts describe
+logical requested payload under the existing allocation convention, not portable
+allocator capacity, RSS, or a whole-compiler memory bound.
+
+## Source-Qualified Pipeline Catalogs
+
+The B1 library extension constructs pipeline contracts from the actual sealed
+source declarations and replay-checked create-call spans. It binds the resulting
+catalog to the same admitted B inventory, transports it through the independently
+checked B/O transition, and checks the fresh catalog against actual O. Exact
+source coverage comes from the preceding full source replay, not from a catalog
+digest or the isolated graph catalog checker.
+
+The catalog covers pipeline allocation layout/geometry and, when actual graph
+markers exist, their contract, storage alias and epoch type. Ordinary pre-ranked
+materialization emits the pipeline allocation and Wait barrier, but no V12 event
+markers. Its source-qualified catalog therefore has zero marker placements;
+this is not complete source-event transport. The isolated graph checker may
+accept missing bindings when no actual markers require them; source catalog
+completeness instead relies on the sealed constructor and full source replay.
+The catalog does not establish lifecycle safety, payload
+Load/Store value correspondence, ordinary Global parameter ancestry, generated
+scalar/enum-storage exemptions, call timing, final ranked/formal admission, or
+NativeSource authority. Those remain separate consumers; no backend is activated.
+
+Source scratch, input catalog/check, transported output catalog/audit and retained
+view share the same caller canonical ledger. Existing catalog logical row,
+comparison and swap charges are preserved; borrowed getters charge one dispatch
+and do not prepay caller traversal. Receipts describe requested typed payload,
+not allocator capacity or RSS. The included lowerer constructor tests exercise
+empty source/output catalogs and their header/payload accounting. The nonempty
+source-pipeline, both-target catalog/getter, and six-marker graph-component tests
+remain in the held codegen integration and are not part of this publication.
+Nonempty source-catalog coverage therefore remains a publication test gap; empty
+catalog success is not source-event or lifecycle coverage. No included test
+establishes a whole-constructor resource bound or completed source-to-final proof.
+
+### Checked Output Private-Array Writes
+
+The source/output occurrence view can retain the five checked operand uses for
+an ordinary retained-array write: allocation count, GEP base/offset, and Store
+pointer/value. Original source type, role, unsigned index definition, whole-value
+initialization policy, and N allocation/span correlation remain checked at N by
+the unchanged source query. Output checks use actual checked O coordinates and
+use-specific definition ancestry, not N ordinals or an invented N-shaped graph.
+The original unsigned source definition may have no O descendant.
+
+Required missing output uses refuse; a checked-unreachable omitted write is
+distinct from a proven-unretained source access. A physically retained write
+also carries independent reachability. The codegen adapter that consumes these
+outcomes is not included here; the published projector is unchanged.
+Other retained memory forms remain unsupported. These inert queries do not
+activate the backend or establish final ranked/formal, lifecycle, artifact, or
+launch authority.
+
+All additional capture, sort, lookup and physical checks use the same caller
+canonical ledger. One fixed-size numeric row is fallibly reserved per original
+effect while the B/O inventories and checked control index are still live. Its
+payload and the added view headers remain reserved with the existing view;
+failure drops temporary rows before the enclosing constructor restores its
+incoming storage floor. Legacy N query and 64*M correlation allowances do not
+pay for added O work. Existing source replay/trace and allocator/RSS exclusions
+are unchanged; fresh-vector requested payload is a logical storage receipt,
+not a whole-process memory guarantee.
+
+This library-only packet adds 21 Rust tests: four coordinate checks, two actual
+target-binder checks, eight optimized source-assertion tests, one independently
+checked retained-unreachable assertion component, and six checked-output array
+query/header tests. The array tests use genuinely admitted source and actual
+fixed optimization, including sparse coordinates and Boolean-selected omission.
+They do not cover a physically retained unreachable Store query or final ranked
+attachment. The held codegen source/output session and its tests are excluded.
