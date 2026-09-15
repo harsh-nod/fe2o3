@@ -142,6 +142,10 @@ pub enum PreservedOperationKindAttr {
     Gfx950LdsTranspose,
     Wave,
     InlineAssembly,
+    VerificationContractV12,
+    VectorLoadV12,
+    VectorStoreV12,
+    VectorLayoutConvertV12,
 }
 
 /// Canonical Kernel IR terminators whose payload is retained by the bridge.
@@ -2093,6 +2097,16 @@ impl BranchOpFoldInterface for CondBranchOp {
         )
         .get_operation();
         rewriter.insert_operation(ctx, replacement);
+        if rewriter.observes_occurrences() {
+            rewriter.notify_occurrence(
+                ctx,
+                pliron::irbuild::observer::RewriteOccurrenceEvent::BranchSuccessorSelected {
+                    old: self.get_operation(),
+                    new: replacement,
+                    successor: successor_index,
+                },
+            );
+        }
         rewriter.replace_operation(ctx, self.get_operation(), replacement);
         IRStatus::Changed
     }

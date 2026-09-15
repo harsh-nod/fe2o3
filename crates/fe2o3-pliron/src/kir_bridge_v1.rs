@@ -278,6 +278,7 @@ enum KirBridgeCanonicalVersionV1 {
     V9,
     V10,
     V11,
+    V12,
 }
 
 #[derive(Clone, Default)]
@@ -584,6 +585,7 @@ fn digest(
         KirBridgeCanonicalVersionV1::V9 => KIR_PLIRON_BRIDGE_IDENTITY_DOMAIN_V1,
         KirBridgeCanonicalVersionV1::V10 => KIR_PLIRON_BRIDGE_V10_IDENTITY_DOMAIN_V1,
         KirBridgeCanonicalVersionV1::V11 => KIR_PLIRON_BRIDGE_V11_IDENTITY_DOMAIN_V1,
+        KirBridgeCanonicalVersionV1::V12 => KIR_PLIRON_BRIDGE_V12_IDENTITY_DOMAIN_V1,
     };
     hasher.update(
         u32::try_from(domain.len())
@@ -618,7 +620,12 @@ fn import_module(
         .copied()
         .ok_or(KirBridgeErrorV1::GraphIdentityMismatch)?;
     let built = catch_unwind(AssertUnwindSafe(|| {
-        build_module_graph(&mut session.context, root_pointer, &module)
+        build_module_graph(
+            &mut session.context,
+            root_pointer,
+            &module,
+            KirBridgeTypeProfileV12::Legacy,
+        )
     }));
     let origins = match built {
         Ok(Ok(origins)) => origins,
@@ -656,7 +663,13 @@ fn extract_module(
         .copied()
         .ok_or(KirBridgeErrorV1::GraphIdentityMismatch)?;
     match catch_unwind(AssertUnwindSafe(|| {
-        extract_module_graph(&session.context, root, &graph.metadata, &graph.origins)
+        extract_module_graph(
+            &session.context,
+            root,
+            &graph.metadata,
+            &graph.origins,
+            KirBridgeTypeProfileV12::Legacy,
+        )
     })) {
         Ok(result) => result,
         Err(_) => {
@@ -680,7 +693,13 @@ fn extract_optimized_module(
         .copied()
         .ok_or(KirBridgeErrorV1::GraphIdentityMismatch)?;
     match catch_unwind(AssertUnwindSafe(|| {
-        extract_optimized_module_graph(&session.context, root, &graph.metadata, &graph.origins)
+        extract_optimized_module_graph(
+            &session.context,
+            root,
+            &graph.metadata,
+            &graph.origins,
+            KirBridgeTypeProfileV12::Legacy,
+        )
     })) {
         Ok(result) => result,
         Err(_) => {
@@ -691,6 +710,13 @@ fn extract_optimized_module(
 }
 
 fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
+    preflight_with_profile_v12(module, KirBridgeTypeProfileV12::Legacy)
+}
+
+fn preflight_with_profile_v12(
+    module: &Module,
+    profile: KirBridgeTypeProfileV12,
+) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
     let mut tree_work = BUILTIN_MODULE_ROOT_TREE_WORK_V1;
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
@@ -700,7 +726,7 @@ fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>),
             .parameters
             .iter()
             .chain(&function.signature.results)
-            .try_for_each(preflight_type)?;
+            .try_for_each(|ty| profile.preflight_type(ty))?;
         let Some(body) = &function.body else {
             continue;
         };
@@ -727,7 +753,7 @@ fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>),
             block
                 .parameters
                 .iter()
-                .try_for_each(|value| preflight_type(&value.ty))?;
+                .try_for_each(|value| profile.preflight_type(&value.ty))?;
             for (operation_index, operation) in block.operations.iter().enumerate() {
                 let coordinate = KirBridgeCoordinateV1::Operation {
                     function: function_index,
@@ -737,8 +763,8 @@ fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>),
                 operation
                     .results
                     .iter()
-                    .try_for_each(|value| preflight_type(&value.ty))?;
-                preflight_operation(operation, coordinate)?;
+                    .try_for_each(|value| profile.preflight_type(&value.ty))?;
+                profile.preflight_operation(operation, coordinate)?;
                 add_tree_work(&mut tree_work, 2)?;
                 push_correspondence(&mut correspondence, &mut ordinal, coordinate)?;
             }
@@ -864,6 +890,7 @@ fn build_module_graph(
     context: &mut Context,
     root: Ptr<Operation>,
     module: &Module,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<KirBridgeOriginsV1, KirBridgeErrorV1> {
     if !Operation::is_op::<ModuleOp>(root, context) {
         return Err(KirBridgeErrorV1::MalformedGraph);
@@ -878,13 +905,13 @@ fn build_module_graph(
             .signature
             .parameters
             .iter()
-            .map(|ty| type_to_pliron(context, ty))
+            .map(|ty| profile.to_pliron(context, ty))
             .collect::<Result<Vec<_>, _>>()?;
         let results = function
             .signature
             .results
             .iter()
-            .map(|ty| type_to_pliron(context, ty))
+            .map(|ty| profile.to_pliron(context, ty))
             .collect::<Result<Vec<_>, _>>()?;
         let function_type = FunctionType::get(context, parameters, results);
         let name = Identifier::try_from(format!("kir_fn_{function_index}"))
@@ -908,14 +935,14 @@ fn build_module_graph(
             .blocks
             .insert(entry, (function_index, entry_source.id));
         for parameter in &entry_source.parameters {
-            let ty = type_to_pliron(context, &parameter.ty)?;
+            let ty = profile.to_pliron(context, &parameter.ty)?;
             BasicBlock::push_argument(entry, context, ty);
         }
         for block in body.blocks.iter().skip(1) {
             let argument_types = block
                 .parameters
                 .iter()
-                .map(|value| type_to_pliron(context, &value.ty))
+                .map(|value| profile.to_pliron(context, &value.ty))
                 .collect::<Result<Vec<_>, _>>()?;
             let label = Identifier::try_from(format!("kir_bb_{}", block.id.0))
                 .map_err(|_| KirBridgeErrorV1::MalformedGraph)?;
@@ -952,7 +979,7 @@ fn build_module_graph(
             let block = &body.blocks[block_index];
             let operation = &block.operations[operation_index];
             let live_block = block_for(&blocks, function_index, block.id)?;
-            let live = build_operation(context, function_index, operation, &values)?;
+            let live = build_operation(context, function_index, operation, &values, profile)?;
             live.insert_at_back(live_block, context);
             if Operation::is_op::<PreservedOperationOp>(live, context)
                 && origins
@@ -967,7 +994,7 @@ fn build_module_graph(
                 return Err(KirBridgeErrorV1::MalformedGraph);
             }
             for (index, result) in operation.results.iter().enumerate() {
-                let expected = type_to_pliron(context, &result.ty)?;
+                let expected = profile.to_pliron(context, &result.ty)?;
                 if raw.get_type(index) != expected {
                     return Err(KirBridgeErrorV1::MalformedGraph);
                 }
@@ -1125,6 +1152,7 @@ fn build_operation(
     function: usize,
     operation: &KirOperation,
     values: &BTreeMap<ValueId, Value>,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<Ptr<Operation>, KirBridgeErrorV1> {
     let live = match &operation.kind {
         OperationKind::Constant(value) => {
@@ -1155,7 +1183,7 @@ fn build_operation(
         )
         .get_operation(),
         OperationKind::Cast { kind, value, to } => {
-            let to = type_to_pliron(context, to)?;
+            let to = profile.to_pliron(context, to)?;
             CastOp::new(
                 context,
                 cast_to_pliron(*kind),
@@ -1179,7 +1207,7 @@ fn build_operation(
             let result_types = operation
                 .results
                 .iter()
-                .map(|result| type_to_pliron(context, &result.ty))
+                .map(|result| profile.to_pliron(context, &result.ty))
                 .collect::<Result<Vec<_>, _>>()?;
             CallOp::new(
                 context,
@@ -1228,7 +1256,7 @@ fn build_operation(
             let result_types = operation
                 .results
                 .iter()
-                .map(|result| type_to_pliron(context, &result.ty))
+                .map(|result| profile.to_pliron(context, &result.ty))
                 .collect::<Result<Vec<_>, _>>()?;
             PreservedOperationOp::new(
                 context,
@@ -1260,6 +1288,12 @@ fn preserved_operation_kind(
         OperationKind::Gfx950LdsTranspose(_) => PreservedOperationKindAttr::Gfx950LdsTranspose,
         OperationKind::Wave(_) => PreservedOperationKindAttr::Wave,
         OperationKind::InlineAssembly(_) => PreservedOperationKindAttr::InlineAssembly,
+        OperationKind::VerificationContract(_) => {
+            PreservedOperationKindAttr::VerificationContractV12
+        }
+        OperationKind::VectorLoad(_) => PreservedOperationKindAttr::VectorLoadV12,
+        OperationKind::VectorStore(_) => PreservedOperationKindAttr::VectorStoreV12,
+        OperationKind::VectorLayoutConvert(_) => PreservedOperationKindAttr::VectorLayoutConvertV12,
         _ => return Err(KirBridgeErrorV1::MalformedGraph),
     })
 }
@@ -1544,11 +1578,47 @@ const fn cast_to_pliron(kind: CastKind) -> CastKindAttr {
     }
 }
 
+fn index_live_functions(
+    live_functions: impl IntoIterator<Item = Ptr<Operation>>,
+    metadata: &Module,
+    origins: &KirBridgeOriginsV1,
+) -> Result<Vec<Option<Ptr<Operation>>>, KirBridgeErrorV1> {
+    // Establish a bijection once; extraction then follows canonical metadata order.
+    let mut indexed = Vec::new();
+    indexed
+        .try_reserve_exact(metadata.functions.len())
+        .map_err(|_| KirBridgeErrorV1::SizeOverflow)?;
+    indexed.resize(metadata.functions.len(), None);
+    for live in live_functions {
+        let index = *origins
+            .functions
+            .get(&live)
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+        let function = metadata
+            .functions
+            .get(index)
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+        if function.body.is_none() || indexed[index].replace(live).is_some() {
+            return Err(KirBridgeErrorV1::MalformedGraph);
+        }
+    }
+    if metadata
+        .functions
+        .iter()
+        .zip(&indexed)
+        .any(|(function, live)| function.body.is_some() != live.is_some())
+    {
+        return Err(KirBridgeErrorV1::MalformedGraph);
+    }
+    Ok(indexed)
+}
+
 fn extract_optimized_module_graph(
     context: &Context,
     root: Ptr<Operation>,
     metadata: &Module,
     origins: &KirBridgeOriginsV1,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<(Module, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
     if !Operation::is_op::<ModuleOp>(root, context) || root.deref(context).num_regions() != 1 {
         return Err(KirBridgeErrorV1::MalformedGraph);
@@ -1558,18 +1628,13 @@ fn extract_optimized_module_graph(
     let [root_block] = root_blocks.as_slice() else {
         return Err(KirBridgeErrorV1::MalformedGraph);
     };
-    let live_functions: Vec<_> = root_block.deref(context).iter(context).collect();
-    if live_functions.len()
-        != metadata
-            .functions
-            .iter()
-            .filter(|function| function.body.is_some())
-            .count()
-    {
-        return Err(KirBridgeErrorV1::MalformedGraph);
-    }
+    let live_functions =
+        index_live_functions(root_block.deref(context).iter(context), metadata, origins)?;
 
-    let mut output = metadata.clone();
+    let mut output = match profile {
+        KirBridgeTypeProfileV12::Legacy => metadata.clone(),
+        KirBridgeTypeProfileV12::V12 => module_metadata_v12(metadata),
+    };
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
     for (function_index, function) in output.functions.iter_mut().enumerate() {
@@ -1584,11 +1649,8 @@ fn extract_optimized_module_graph(
                 function: function_number,
             },
         )?;
-        let live_function = live_functions
-            .iter()
-            .copied()
-            .find(|live| origins.functions.get(live) == Some(&function_index))
-            .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+        let live_function =
+            live_functions[function_index].ok_or(KirBridgeErrorV1::MalformedGraph)?;
         let Some(function_op) = Operation::get_op::<FuncOp>(live_function, context) else {
             return Err(KirBridgeErrorV1::MalformedGraph);
         };
@@ -1600,12 +1662,12 @@ fn extract_optimized_module_graph(
         function.signature.parameters = function_type
             .arg_types()
             .into_iter()
-            .map(|ty| type_from_pliron(context, ty))
+            .map(|ty| profile.decode_type(context, ty))
             .collect::<Result<Vec<_>, _>>()?;
         function.signature.results = function_type
             .res_types()
             .into_iter()
-            .map(|ty| type_from_pliron(context, ty))
+            .map(|ty| profile.decode_type(context, ty))
             .collect::<Result<Vec<_>, _>>()?;
         if function.signature.parameters.len() != source_body.parameters.len()
             || live_function.deref(context).num_regions() != 1
@@ -1658,7 +1720,7 @@ fn extract_optimized_module_graph(
         let mut body_parameters = Vec::with_capacity(function.signature.parameters.len());
         for (index, ty) in function.signature.parameters.iter().enumerate() {
             let live = entry.deref(context).get_argument(index);
-            if live.get_type(context) != type_to_pliron(context, ty)? {
+            if live.get_type(context) != profile.to_pliron(context, ty)? {
                 return Err(KirBridgeErrorV1::MalformedGraph);
             }
             let id = origin_or_fresh_value_id(
@@ -1748,7 +1810,7 @@ fn extract_optimized_module_graph(
                 .map(|argument| {
                     Ok(fe2o3_kernel_ir::ValueDef::new(
                         id_for(&reverse_values, argument)?,
-                        type_from_pliron(context, argument.get_type(context))?,
+                        profile.decode_type(context, argument.get_type(context))?,
                     ))
                 })
                 .collect::<Result<Vec<_>, KirBridgeErrorV1>>()?;
@@ -1766,7 +1828,7 @@ fn extract_optimized_module_graph(
                 let result_types: Vec<_> = live_operation
                     .deref(context)
                     .result_types()
-                    .map(|ty| type_from_pliron(context, ty))
+                    .map(|ty| profile.decode_type(context, ty))
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut results = Vec::with_capacity(result_types.len());
                 for (index, ty) in result_types.into_iter().enumerate() {
@@ -1780,6 +1842,7 @@ fn extract_optimized_module_graph(
                     &reverse_values,
                     coordinate,
                     origins,
+                    profile,
                 )?;
                 block.operations.push(KirOperation::new(results, kind));
             }
@@ -1857,6 +1920,7 @@ fn extract_any_operation(
     reverse: &HashMap<Value, ValueId>,
     coordinate: KirBridgeCoordinateV1,
     origins: &KirBridgeOriginsV1,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<OperationKind, KirBridgeErrorV1> {
     let raw = live.deref(context);
     if let Some(operation) = Operation::get_op::<PlironConstantOp>(live, context) {
@@ -1911,7 +1975,7 @@ fn extract_any_operation(
                     .ok_or(KirBridgeErrorV1::MalformedGraph)?,
             ),
             value: id_for(reverse, raw.get_operand(0))?,
-            to: type_from_pliron(context, raw.get_type(0))?,
+            to: profile.decode_type(context, raw.get_type(0))?,
         });
     }
     if Operation::is_op::<PlironSelectOp>(live, context) {
@@ -2082,6 +2146,7 @@ fn extract_module_graph(
     root: Ptr<Operation>,
     metadata: &Module,
     origins: &KirBridgeOriginsV1,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<Module, KirBridgeErrorV1> {
     if !Operation::is_op::<ModuleOp>(root, context) {
         return Err(KirBridgeErrorV1::MalformedGraph);
@@ -2124,12 +2189,12 @@ fn extract_module_graph(
         output_function.signature.parameters = function_type
             .arg_types()
             .into_iter()
-            .map(|ty| type_from_pliron(context, ty))
+            .map(|ty| profile.decode_type(context, ty))
             .collect::<Result<Vec<_>, _>>()?;
         output_function.signature.results = function_type
             .res_types()
             .into_iter()
-            .map(|ty| type_from_pliron(context, ty))
+            .map(|ty| profile.decode_type(context, ty))
             .collect::<Result<Vec<_>, _>>()?;
 
         let raw_function = live_function.deref(context);
@@ -2166,6 +2231,7 @@ fn extract_module_graph(
                         live_block.deref(context).get_argument(index),
                         *value_id,
                         &metadata.functions[function_index].signature.parameters[index],
+                        profile,
                     )?;
                 }
             }
@@ -2178,6 +2244,7 @@ fn extract_module_graph(
                         .get_argument(parameter_offset + index),
                     parameter.id,
                     &parameter.ty,
+                    profile,
                 )?;
             }
             let live_operations: Vec<_> = live_block.deref(context).iter(context).collect();
@@ -2198,6 +2265,7 @@ fn extract_module_graph(
                         raw.get_result(index),
                         result.id,
                         &result.ty,
+                        profile,
                     )?;
                 }
             }
@@ -2226,10 +2294,11 @@ fn extract_module_graph(
                     &source_operation.kind,
                     &reverse_values,
                     origins,
+                    profile,
                 )?;
                 for (index, result) in output_operation.results.iter_mut().enumerate() {
-                    result.ty =
-                        type_from_pliron(context, live_operation.deref(context).get_type(index))?;
+                    result.ty = profile
+                        .decode_type(context, live_operation.deref(context).get_type(index))?;
                 }
             }
             output_block.terminator = Some(extract_terminator(
@@ -2244,7 +2313,7 @@ fn extract_module_graph(
             for (index, parameter) in output_block.parameters.iter_mut().enumerate() {
                 let offset = usize::from(output_block.id == source_body.blocks[0].id)
                     * source_body.parameters.len();
-                parameter.ty = type_from_pliron(
+                parameter.ty = profile.decode_type(
                     context,
                     live_block
                         .deref(context)
@@ -2263,8 +2332,9 @@ fn bind_live_value(
     live: Value,
     id: ValueId,
     expected_type: &Type,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<(), KirBridgeErrorV1> {
-    if live.get_type(context) != type_to_pliron(context, expected_type)?
+    if live.get_type(context) != profile.to_pliron(context, expected_type)?
         || reverse.insert(live, id).is_some()
     {
         return Err(KirBridgeErrorV1::MalformedGraph);
@@ -2295,6 +2365,7 @@ fn extract_operation(
     expected: &OperationKind,
     reverse: &HashMap<Value, ValueId>,
     origins: &KirBridgeOriginsV1,
+    profile: KirBridgeTypeProfileV12,
 ) -> Result<OperationKind, KirBridgeErrorV1> {
     let raw = live.deref(context);
     match expected {
@@ -2360,7 +2431,7 @@ fn extract_operation(
                         .ok_or(KirBridgeErrorV1::MalformedGraph)?,
                 ),
                 value: id_for(reverse, raw.get_operand(0))?,
-                to: type_from_pliron(context, raw.get_type(0))?,
+                to: profile.decode_type(context, raw.get_type(0))?,
             })
         }
         OperationKind::Select { .. } => {
@@ -2643,6 +2714,28 @@ fn remap_preserved_operation(
                 }
             }
         }
+        OperationKind::VerificationContract(contract) => match contract {
+            fe2o3_kernel_ir::VerificationContractOperationV12::WorkgroupPipelineEvent {
+                storage,
+                epoch,
+                ..
+            } => {
+                remap(storage)?;
+                remap(epoch)?;
+            }
+        },
+        OperationKind::VectorLoad(load) => {
+            let mut pointer = load.provenance.pointer();
+            remap(&mut pointer)?;
+            load.provenance = fe2o3_kernel_ir::VectorAccessProvenanceV12::Pointer(pointer);
+        }
+        OperationKind::VectorStore(store) => {
+            let mut pointer = store.provenance.pointer();
+            remap(&mut pointer)?;
+            store.provenance = fe2o3_kernel_ir::VectorAccessProvenanceV12::Pointer(pointer);
+            remap(&mut store.value)?;
+        }
+        OperationKind::VectorLayoutConvert(conversion) => remap(&mut conversion.value)?,
         OperationKind::Barrier(_)
         | OperationKind::Fence(_)
         | OperationKind::WorkgroupBarrier(_)
@@ -2658,11 +2751,7 @@ fn remap_preserved_operation(
         | OperationKind::SliceData { .. }
         | OperationKind::GetElementPointer { .. }
         | OperationKind::Load { .. }
-        | OperationKind::Store { .. }
-        | OperationKind::VerificationContract(_)
-        | OperationKind::VectorLoad(_)
-        | OperationKind::VectorStore(_)
-        | OperationKind::VectorLayoutConvert(_) => return Err(KirBridgeErrorV1::MalformedGraph),
+        | OperationKind::Store { .. } => return Err(KirBridgeErrorV1::MalformedGraph),
     }
     Ok(kind)
 }
@@ -2972,6 +3061,8 @@ const fn cast_from_pliron(kind: CastKindAttr) -> CastKind {
         CastKindAttr::Bitcast => CastKind::Bitcast,
     }
 }
+
+include!("kir_bridge_v12.rs");
 
 #[cfg(test)]
 mod tests {

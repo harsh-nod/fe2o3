@@ -407,6 +407,35 @@ impl PlironSession {
         root: &OperationHandle,
         plan: &PlironOptimizationPlanV1,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
+        self.execute_optimization_impl_v1(root, plan, None, None)
+    }
+
+    pub(crate) fn execute_optimization_with_capture_v12(
+        &mut self,
+        root: &OperationHandle,
+        plan: &PlironOptimizationPlanV1,
+        capture: &crate::kir_optimization_map_v12::CaptureV12,
+    ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
+        self.execute_optimization_impl_v1(root, plan, Some(capture), None)
+    }
+
+    pub(crate) fn execute_optimization_with_occurrences_v1(
+        &mut self,
+        root: &OperationHandle,
+        plan: &PlironOptimizationPlanV1,
+        capture: &crate::kir_optimization_map_v12::CaptureV12,
+        occurrences: &crate::kir_occurrence_capture_v1::Capture,
+    ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
+        self.execute_optimization_impl_v1(root, plan, Some(capture), Some(occurrences))
+    }
+
+    fn execute_optimization_impl_v1(
+        &mut self,
+        root: &OperationHandle,
+        plan: &PlironOptimizationPlanV1,
+        capture: Option<&crate::kir_optimization_map_v12::CaptureV12>,
+        occurrences: Option<&crate::kir_occurrence_capture_v1::Capture>,
+    ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
         let pointer = self.with_operation(root, |pointer, _| pointer)?;
         let Some(owner_root) = self.operation_roots.get(&root.identity).copied() else {
             self.poisoned = true;
@@ -466,9 +495,28 @@ impl PlironSession {
         for pass in plan.passes.iter().copied() {
             let input_graph_work = current_graph_work;
             let input_snapshot = self.operation_graph_snapshot_v1(root)?;
+            if capture.is_some_and(|capture| !capture.begin_pass(pass, input_snapshot.epoch())) {
+                self.poisoned = true;
+                return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+            }
+            if occurrences.is_some_and(|capture| !capture.begin_pass(pass, input_snapshot.epoch()))
+            {
+                self.poisoned = true;
+                return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+            }
             let transaction = self.begin_checked_operation_graph_mutation_v1(root)?;
-            let changed = match catch_unwind(AssertUnwindSafe(|| {
-                run_trusted_pass(pass, pointer, &mut self.context, &mut analyses)
+            let changed = match catch_unwind(AssertUnwindSafe(|| match capture {
+                Some(capture) => run_observed_pass_v12(
+                    pass,
+                    pointer,
+                    &mut self.context,
+                    &mut analyses,
+                    match occurrences {
+                        Some(occurrences) => occurrences.observer(capture.observer()),
+                        None => capture.observer(),
+                    },
+                ),
+                None => run_trusted_pass(pass, pointer, &mut self.context, &mut analyses),
             })) {
                 Ok(Ok(changed)) => changed,
                 Ok(Err(TrustedPassFailure)) => {
@@ -493,6 +541,19 @@ impl PlironSession {
                 .commit_checked_operation_graph_mutation_v1(transaction, changed)
                 .map_err(PlironOptimizationErrorV1::Operation)?;
             let output_snapshot = commit.snapshot();
+            if capture
+                .is_some_and(|capture| !capture.end_pass(&self.context, output_snapshot.epoch()))
+            {
+                self.poisoned = true;
+                return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+            }
+
+            if occurrences
+                .is_some_and(|capture| !capture.end_pass(&self.context, output_snapshot.epoch()))
+            {
+                self.poisoned = true;
+                return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+            }
 
             let pass_work = input_graph_work
                 .checked_add(output_graph_work.checked_mul(2).ok_or_else(|| {
@@ -711,6 +772,85 @@ fn run_trusted_pass(
         }
         PlironOptimizationPassV1::SimplifyControlFlow => passes.add_pass(SimplifyCFGPass),
     }
+    passes
+        .run(pointer, context, analyses)
+        .map(|report| report.ir_changed == IRStatus::Changed)
+        .map_err(|_| TrustedPassFailure)
+}
+
+// This wrapper retains the pinned passes' analysis preservation contracts and
+// uses the same Passes manager. It does not clone or reimplement the algorithms.
+fn run_observed_pass_v12(
+    pass: PlironOptimizationPassV1,
+    pointer: Ptr<Operation>,
+    context: &mut pliron::context::Context,
+    analyses: &mut AnalysisManager,
+    observer: Box<dyn pliron::irbuild::observer::RewriteObserver>,
+) -> Result<bool, TrustedPassFailure> {
+    struct Observed {
+        pass: PlironOptimizationPassV1,
+        observer: Option<Box<dyn pliron::irbuild::observer::RewriteObserver>>,
+    }
+    impl Pass for Observed {
+        fn name(&self) -> &str {
+            match self.pass {
+                PlironOptimizationPassV1::SparseConditionalConstantPropagation => "sccp",
+                PlironOptimizationPassV1::DeadCodeElimination => "dce",
+                PlironOptimizationPassV1::SimplifyControlFlow => "simplify-cfg",
+                PlironOptimizationPassV1::SelectSameValueCanonicalization => {
+                    "gpu-select-same-value-v1"
+                }
+                PlironOptimizationPassV1::LocalPureCommonSubexpressionElimination => {
+                    "gpu-local-pure-cse-v1"
+                }
+            }
+        }
+        fn run(
+            &mut self,
+            root: Ptr<Operation>,
+            context: &mut pliron::context::Context,
+            _analyses: &mut AnalysisManager,
+        ) -> pliron::result::Result<pliron::pass::PassResult> {
+            let observer = self.observer.take().expect("one observed pass execution");
+            let mut result = pliron::pass::PassResult::default();
+            result.ir_changed = match self.pass {
+                PlironOptimizationPassV1::SparseConditionalConstantPropagation => {
+                    pliron::opts::constants::sccp::sccp_with_observer(root, context, observer)?
+                }
+                PlironOptimizationPassV1::DeadCodeElimination => {
+                    pliron::opts::dce::dce_with_observer(root, context, observer)?
+                }
+                PlironOptimizationPassV1::SimplifyControlFlow => {
+                    pliron::opts::simplify_cfg::simplify_cfg_with_observer(root, context, observer)?
+                }
+                PlironOptimizationPassV1::SelectSameValueCanonicalization => {
+                    pliron::irbuild::match_rewrite::apply_match_rewrite_with_observer(
+                        context,
+                        &mut SelectSameValuePattern,
+                        pliron::irbuild::match_rewrite::RewriterOrder::default(),
+                        root,
+                        observer,
+                    )?
+                }
+                PlironOptimizationPassV1::LocalPureCommonSubexpressionElimination => {
+                    dialect_gpu::cse_v1::local_pure_cse_with_observer_v12(root, context, observer)
+                }
+            };
+            if matches!(
+                self.pass,
+                PlironOptimizationPassV1::SparseConditionalConstantPropagation
+                    | PlironOptimizationPassV1::DeadCodeElimination
+            ) {
+                result.set_preserved::<pliron::graph::dominance::DomInfo>();
+            }
+            Ok(result)
+        }
+    }
+    let mut passes = Passes::default();
+    passes.add_pass(Observed {
+        pass,
+        observer: Some(observer),
+    });
     passes
         .run(pointer, context, analyses)
         .map(|report| report.ir_changed == IRStatus::Changed)
