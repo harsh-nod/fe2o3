@@ -1527,10 +1527,10 @@ fn validate_executable_mappings(
         let permissions = fields
             .next()
             .ok_or_else(|| process_failure("malformed process map"))?;
-        if !permissions
+        if permissions
             .as_bytes()
             .get(2)
-            .is_some_and(|value| *value == b'x')
+            .is_none_or(|value| *value != b'x')
         {
             continue;
         }
