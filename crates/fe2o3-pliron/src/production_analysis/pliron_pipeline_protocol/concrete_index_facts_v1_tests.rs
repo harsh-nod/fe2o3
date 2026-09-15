@@ -6,6 +6,10 @@ use pliron::{dialect::DialectName, op::Op, operation::verify_operation, parsable
 const COMPUTED: &str = include_str!("../tests/lit/pipeline_computed_constant.pliron");
 const AMBIGUOUS: &str = include_str!("../tests/lit/pipeline_computed_ambiguous_slot.pliron");
 
+mod coordinate_equivalence_tests {
+    include!("concrete_coordinate_equivalence_v1_tests.rs");
+}
+
 fn parse(source: &str) -> (Context, FuncOp) {
     let ir = source
         .lines()

@@ -707,13 +707,28 @@ fn verify_one_pipeline(
             .all(|site| site.block() == pipeline.block());
         let (epochs, staged_writes, consuming_reads, access_refinement_proven) = if same_block {
             let facts = concrete_indices.facts_for(context, schedule, accesses)?;
-            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses, facts)?
+            verify_concrete_schedule(
+                context,
+                pipeline,
+                buffers,
+                schedule,
+                accesses,
+                facts,
+                equivalence_resources,
+            )?
         } else {
             let actions = verify_cross_block_concrete_trace_v1(
                 context, control, pipeline, schedule, accesses,
             )?;
             let facts = concrete_indices.facts_for(context, schedule, accesses)?;
-            verify_ordered_concrete_schedule(context, pipeline, buffers, &actions, facts)?
+            verify_ordered_concrete_schedule(
+                context,
+                pipeline,
+                buffers,
+                &actions,
+                facts,
+                equivalence_resources,
+            )?
         };
         return Ok(PlironPipelineProtocolCertificateV1 {
             pipeline_block: pipeline.block(),
@@ -961,6 +976,7 @@ fn verify_concrete_schedule(
     schedule: &[EventSiteV1],
     accesses: &[AccessSiteV1],
     facts: Option<&SparseIndexAnalysisV1>,
+    equivalence_resources: &mut EquivalenceResourceMeterV1,
 ) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let first_block = schedule[0].site.block();
     if first_block != pipeline.block() {
@@ -999,7 +1015,14 @@ fn verify_concrete_schedule(
         ConcreteActionV1::Event(event) => (event.site.operation(), 1_u8),
         ConcreteActionV1::Access(access) => (access.site.operation(), 0_u8),
     });
-    verify_ordered_concrete_schedule(context, pipeline, buffers, &actions, facts)
+    verify_ordered_concrete_schedule(
+        context,
+        pipeline,
+        buffers,
+        &actions,
+        facts,
+        equivalence_resources,
+    )
 }
 
 fn verify_ordered_concrete_schedule(
@@ -1008,12 +1031,16 @@ fn verify_ordered_concrete_schedule(
     buffers: u32,
     actions: &[ConcreteActionV1<'_>],
     facts: Option<&SparseIndexAnalysisV1>,
+    equivalence_resources: &mut EquivalenceResourceMeterV1,
 ) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let mut slots = vec![SlotStateV1::Free; buffers as usize];
     let mut epochs = HashSet::new();
     let mut staged_writes = 0;
     let mut consuming_reads = 0;
-    let mut initialized = HashMap::<u64, HashSet<Vec<Value>>>::new();
+    // Source-ordered borrowed coordinates make resource-sensitive matching
+    // deterministic. Repeated writes retain at most one row per actual access;
+    // the existing A-row/A^2-query envelope also covered the former owned sets.
+    let mut initialized = HashMap::<u64, Vec<&[Value]>>::new();
     for action in actions.iter().copied() {
         if let ConcreteActionV1::Access(access) = action {
             let Some(slot) = concrete_index_constant_v1(context, facts, access.slot) else {
@@ -1042,17 +1069,30 @@ fn verify_ordered_concrete_schedule(
                     initialized
                         .entry(epoch)
                         .or_default()
-                        .insert(access.indices[1..].to_vec());
+                        .push(&access.indices[1..]);
                     staged_writes += 1;
                 }
                 AccessKindAttr::Read if matches!(state, SlotStateV1::Consuming(_)) => {
                     let SlotStateV1::Consuming(epoch) = state else {
                         unreachable!("the guarded state is consuming")
                     };
-                    if !initialized
-                        .get(&epoch)
-                        .is_some_and(|writes| writes.contains(&access.indices[1..]))
-                    {
+                    if !initialized.get(&epoch).is_some_and(|writes| {
+                        writes.iter().any(|written| {
+                            written.len() == access.indices.len() - 1
+                                && written
+                                    .iter()
+                                    .copied()
+                                    .zip(access.indices[1..].iter().copied())
+                                    .all(|(left, right)| {
+                                        index_values_equivalent(
+                                            context,
+                                            left,
+                                            right,
+                                            equivalence_resources,
+                                        )
+                                    })
+                        })
+                    }) {
                         return Err(invalid(
                             pipeline,
                             Some(access.site),

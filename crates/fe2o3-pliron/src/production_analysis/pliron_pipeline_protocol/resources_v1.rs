@@ -31,6 +31,10 @@ fn pipeline_equivalence_query_upper_bound_v1(
         checked_pipeline_product_v1(census.ranked_accesses, census.ranked_accesses)?;
     // Coordinate comparison is bidirectional for every create. Aliased
     // creations can each reuse the same access slice.
+    // A concrete create instead compares each read with source-ordered writes
+    // in the same epoch, using at most A^2*arity metered queries (including
+    // failed matches). Concrete/dynamic routes are exclusive per create, so
+    // the same 2*P*A^2*arity bound covers both without changing any limits.
     let coordinate_queries = checked_pipeline_product_v1(
         checked_pipeline_product_v1(
             checked_pipeline_product_v1(census.pipeline_creates, accesses_squared)?,

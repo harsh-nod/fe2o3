@@ -224,6 +224,14 @@ barrier/workgroup callers already prepare the cache before entering this check;
 future callers with additional live scratch must account for that overlap too.
 This adds neither a recursive evaluator nor new refinement authority.
 
+Concrete initialized-coordinate checks compare a read only with earlier writes
+in the same epoch, using the existing budgeted structural index-equivalence
+checker. Separately emitted equal constants and supported equivalent expressions
+can match; unequal or unproved coordinate pairs cannot. Borrowed write rows retain
+source order, making resource-sensitive comparison order deterministic. The
+existing access-pair query bound covers this route; dynamic-loop matching and
+its separate rules are unchanged.
+
 Cross-block regressions also run through the closed public entry point:
 
 ```sh
