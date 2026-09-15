@@ -22,14 +22,23 @@ before HSA load until that wrapper can deliver the linear receipt in-process.
 
 ## Machine-checked mathematical model
 
-`verus/moe_top2_v1.rs` is a real pinned Verus proof for the exact fixed
-`T8/E4/K2/C4` routing profile. It uses mathematical integer scores and verifies
-28 obligations covering profile/source/model identity admission, expert range
+`verus/moe_top2_v1.rs` retains the pinned Verus model for the exact fixed
+`T8/E4/K2/C4` routing profile. It uses mathematical integer scores; its runner
+requires 28 verified obligations covering profile/source/model identity
+admission, expert range
 and distinctness, deterministic lower-expert-ID tie order, requested and
 capacity-clamped admitted counts, exclusive-scan offsets and total bounds,
 stable-prefix acceptance and dropping, accepted-slot bounds and uniqueness,
 permutation/inverse round trips, and sentinel tails. Nine independently pinned
 mutations must each fail its named postcondition.
+
+Both proof files now anchor the current kernel bytes after commit
+`5e35bd967e3e038cc6399c46ed8cb89db82405cd` removed two unreachable returns
+after diverging traps. Only their source-identity literals changed; their new
+proof hashes are expected inputs, not execution receipts. Fresh Verus
+qualification of both reanchored proof files is pending. Historical runs for
+the prior kernel/proof hashes do not qualify these bytes. Profile, namespace,
+proof logic, expected-negative cases and all authority boundaries are unchanged.
 
 Run the authenticated proof on a host with the pinned Verus release:
 
@@ -50,8 +59,9 @@ above does not establish those joins either.
 ## Bounded memory/effect proof
 
 `verus/moe_top2_memory_v1.rs` independently models the fixed logical memory
-effects of the same `T8/E4/K2/C4` source profile. Its pinned Verus run verifies
-16 obligations over the exact eight-buffer ABI: `logits: f32[32]` is read-only,
+effects of the same `T8/E4/K2/C4` source profile. Its pinned runner requires
+16 verified obligations over the exact eight-buffer ABI: `logits: f32[32]` is
+read-only,
 while `top2_experts: u32[16]`, `requested_counts: u32[4]`,
 `admitted_counts: u32[4]`, `expert_offsets: u32[5]`, `route_slots: u32[16]`,
 `permutation: u32[16]`, and `inverse: u32[16]` are bounded outputs.

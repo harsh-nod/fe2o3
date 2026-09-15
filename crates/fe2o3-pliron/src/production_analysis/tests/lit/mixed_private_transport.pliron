@@ -1,0 +1,11 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+// Exact typed transport only: this does not authenticate a counted allocation.
+builtin.func @mixed_private_transport: builtin.function <(gpu.index, builtin.integer ui32, gpu.pointer <builtin.integer ui32,Private,ReadWrite>) -> ()>
+{
+  ^entry(i: gpu.index, x: builtin.integer ui32, p: gpu.pointer <builtin.integer ui32,Private,ReadWrite>):
+    kernel.br_args (i, x, p) [^exit] []: <(gpu.index, builtin.integer ui32, gpu.pointer <builtin.integer ui32,Private,ReadWrite>) -> ()>
+  ^exit(j: gpu.index, y: builtin.integer ui32, q: gpu.pointer <builtin.integer ui32,Private,ReadWrite>):
+    kernel.return () [] []: <() -> ()>
+}

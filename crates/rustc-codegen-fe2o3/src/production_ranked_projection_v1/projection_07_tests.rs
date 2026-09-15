@@ -522,7 +522,15 @@
             let payload =
                 SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
             let mut state = HashMap::from([(1, capability_state_origin())]);
-            transfer_capability_statements_v1(&function, 0, &mut state, &payload).unwrap();
+            transfer_capability_statements_v1(
+                &projection_types(),
+                &function,
+                0,
+                &mut state,
+                &payload,
+                &mut 0,
+            )
+            .unwrap();
             assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
             assert_eq!(state[&2], capability_state_origin());
             assert_eq!(state[&3], ProjectedCapabilityValueV1::Invalid);
@@ -564,7 +572,15 @@
                     .unwrap();
             let wrapped = wrap_capability_enum_value_v1(capability_state_origin(), 4).unwrap();
             let mut state = HashMap::from([(1, wrapped)]);
-            transfer_capability_statements_v1(&function, 0, &mut state, &payload).unwrap();
+            transfer_capability_statements_v1(
+                &projection_types_with_enum(),
+                &function,
+                0,
+                &mut state,
+                &payload,
+                &mut 0,
+            )
+            .unwrap();
             assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
             assert_eq!(
                 capability_origin_from_assignment_operand_v1(

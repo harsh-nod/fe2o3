@@ -129,11 +129,7 @@ fn source_launch_production_any_and_at_most_are_exactly_incomplete() {
             source_launch_input_v1(&inputs[0].source_launch),
             ProductionSourceLaunchInputV1::new(1, None, [3, 1, 1])
         );
-        let result = project_and_verify_ranked_semantic_mir_v1(
-            source_launch_test_ssa_owner_v1(),
-            &inputs,
-            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
-        );
+        let result = materialize_ranked_fixture_v1(source_launch_test_ssa_owner_v1(), &inputs);
         assert!(matches!(
             result,
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -146,7 +142,7 @@ fn source_launch_production_any_and_at_most_are_exactly_incomplete() {
 #[test]
 fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root() {
     let program = neutral_ranked_program_v1();
-    let semantic = program.semantic_ssa_owner.source_semantic();
+    let semantic = program.materialized.semantic_ssa().source_semantic();
     let mut inputs = [ranked_root_input_1d("neutral_generated_hostile", 247, 64)];
     let [finite_launch, _] = source_launch_test_inputs_v1();
     inputs[0].source_launch = finite_launch.source_launch;
@@ -166,14 +162,19 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
         .unwrap();
     let references = crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
     let project = |launch: &LaunchContract, row: ProductionSourceLaunchRootV1| {
+        let input = ProductionRankedRootInputV1::new(
+            &inputs[0].logical_name,
+            inputs[0].kernel_binding,
+            launch,
+        );
         project_and_verify_ranked_root_v1(
-            semantic,
+            program.materialized.semantic_ssa(),
             &effects,
             selected,
-            &inputs[0].logical_name,
-            launch,
+            &input,
             row,
             &references,
+            &mut ComponentDynamicAssertionFactsV1,
         )
     };
 
@@ -273,11 +274,14 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
 #[test]
 fn source_launch_production_checks_later_geometry_before_earlier_body_failure() {
     let inputs = source_launch_test_inputs_v1();
-    let individual = project_and_verify_ranked_semantic_mir_v1(
-        source_launch_test_ssa_owner_v1(),
-        &inputs,
-        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
-    );
+    let individual = materialize_ranked_fixture_v1(source_launch_test_ssa_owner_v1(), &inputs)
+        .and_then(|materialized| {
+            project_and_verify_ranked_materialized_semantic_mir_v1(
+                materialized,
+                &inputs,
+                &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+            )
+        });
     assert!(matches!(
         individual,
         Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -295,11 +299,14 @@ fn source_launch_production_checks_later_geometry_before_earlier_body_failure() 
     )
     .unwrap();
     assert_eq!(conflicting[0].source_launch, inputs[0].source_launch);
-    let combined = project_and_verify_ranked_semantic_mir_v1(
-        source_launch_test_ssa_owner_v1(),
-        &conflicting,
-        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
-    );
+    let combined = materialize_ranked_fixture_v1(source_launch_test_ssa_owner_v1(), &conflicting)
+        .and_then(|materialized| {
+            project_and_verify_ranked_materialized_semantic_mir_v1(
+                materialized,
+                &conflicting,
+                &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+            )
+        });
     assert!(matches!(
         combined,
         Err(ProductionRankedProjectionErrorV1::Unsupported(

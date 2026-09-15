@@ -70,6 +70,7 @@
             &mut sources,
             &mut next_value,
             &mut ranked_ir,
+            &mut ComponentDynamicAssertionFactsV1,
         )
         .unwrap();
 
@@ -536,6 +537,7 @@
                 },
                 ProjectedSemanticBlockV1 { items: vec![] },
             ],
+            &mut ComponentDynamicAssertionFactsV1,
         )
         .unwrap();
         assert!(matches!(
@@ -563,6 +565,7 @@
                     items: vec![guarded()],
                 },
             ],
+            &mut ComponentDynamicAssertionFactsV1,
         )
         .unwrap();
         assert!(matches!(

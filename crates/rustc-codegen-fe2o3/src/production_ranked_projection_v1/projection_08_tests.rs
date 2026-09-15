@@ -1084,7 +1084,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1109,7 +1109,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1132,7 +1132,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1147,7 +1147,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1167,7 +1167,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1190,7 +1190,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1213,7 +1213,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             ),
@@ -1231,8 +1231,16 @@
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[])
-                .unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,
                 second_block: 2,
@@ -1321,28 +1329,4 @@
             targets,
             &local_definition_counts(&scalar),
         ));
-    }
-
-    fn non_bounds_assert_function(condition: SemanticOperandV1) -> SemanticFunctionDeclV1 {
-        projection_function_with_locals(
-            vec![
-                block(
-                    138,
-                    vec![],
-                    SemanticTerminatorKindV1::Assert {
-                        condition,
-                        expected: true,
-                        message: SemanticAssertMessageV1::DivisionByZero(tensor_operand(2)),
-                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
-                        unwind: SemanticUnwindActionV1::Unreachable,
-                    },
-                ),
-                block(139, vec![], SemanticTerminatorKindV1::Return),
-            ],
-            vec![
-                local(138, SCALAR_TYPE, SemanticLocalRoleV1::Return),
-                local(139, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
-                local(140, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)),
-            ],
-        )
     }

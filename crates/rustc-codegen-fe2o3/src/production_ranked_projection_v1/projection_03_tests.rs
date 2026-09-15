@@ -915,11 +915,12 @@
             decisions: Box::new([]),
         };
         for (block_index, basic_block) in function.blocks().iter().enumerate() {
-            for semantic_statement in basic_block.statements() {
+            for (statement_index, semantic_statement) in basic_block.statements().iter().enumerate() {
                 project_statement_accesses(
                     &types,
                     function,
                     block_index,
+                    statement_index,
                     &[],
                     semantic_statement,
                     &constants,
@@ -931,6 +932,7 @@
                     &mut sources,
                     &mut next_value,
                     &mut ranked_ir,
+                    &mut ComponentDynamicAssertionFactsV1,
                 )?;
             }
             project_terminator_accesses(
@@ -1064,6 +1066,7 @@
             vec![ProjectedSemanticBlockV1 {
                 items: vec![ProjectedBlockItemV1::Guarded(access)],
             }],
+            &mut ComponentDynamicAssertionFactsV1,
         )
         .unwrap();
         let ranked_ir = format_ranked_cfg("guarded_test", &blocks).unwrap();

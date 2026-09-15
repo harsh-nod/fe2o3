@@ -124,6 +124,7 @@ struct PreparedReferenceOutputV2 {
     reference_write: ReferenceOutputWriteV1,
     output_argument: u32,
     gpu_expression: ProductionSemanticExpressionV2,
+    preattached_gpu_value: Option<ProductionRankedValueIdV1>,
     reference_expression: ProductionSemanticExpressionV2,
     numerical_contract: ProductionNumericalContractV2,
     reserved_values: Vec<ProductionRankedValueIdV1>,
@@ -323,6 +324,8 @@ pub(crate) fn prepare_reference_effect_request_v2(
         }
         let numerical_contract =
             ProductionNumericalContractV2::exact_for_expression(&reference_expression);
+        let preattached_gpu_value =
+            preattached_gpu_write_value_v2(&kernel, &write, &gpu_expression, numerical_contract)?;
         let reference_rank = reference_logical_point_rank_v2(&reference_write.coordinate)?;
         let reserved_count = 3_usize
             .checked_add(reference_rank)
@@ -345,6 +348,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
             reference_write: reference_write.clone(),
             output_argument,
             gpu_expression,
+            preattached_gpu_value,
             reference_expression,
             numerical_contract,
             reserved_values: output_reserved_values,
@@ -432,11 +436,27 @@ pub(crate) fn prepare_reference_effect_request_v2(
             },
             ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
         )?;
+        // A pre-attached ordinary value remains at its actual write site. The
+        // legacy entry reservation is retained as an unused exact zero scalar;
+        // it must not hoist a second copy of the source-derived load expression.
+        let reserved_gpu_expression = if output.preattached_gpu_value.is_some() {
+            ProductionSemanticExpressionV2::Constant {
+                scalar: output.gpu_expression.scalar(),
+                bits: 0,
+            }
+        } else {
+            output.gpu_expression.clone()
+        };
+        let reserved_gpu_contract = if output.preattached_gpu_value.is_some() {
+            ProductionNumericalContractV2::exact_for_expression(&reserved_gpu_expression)
+        } else {
+            output.numerical_contract
+        };
         replace_reserved_semantic_expression_v2(
             &mut entry_operations,
             *gpu_value_id,
-            output.gpu_expression.clone(),
-            output.numerical_contract,
+            reserved_gpu_expression,
+            reserved_gpu_contract,
         )?;
         replace_reserved_semantic_expression_v2(
             &mut entry_operations,
@@ -472,6 +492,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
         else {
             unreachable!("validated per-output reservation")
         };
+        let exact_gpu_value = output.preattached_gpu_value.unwrap_or(*gpu_value_id);
         let coordinate_values = coordinate_identities
             .iter()
             .copied()
@@ -493,6 +514,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
                 view,
                 indices,
             } if kind.writes_memory()
+                && output.preattached_gpu_value.is_none()
                 && view == output.write.view
                 && indices == output.write.indices =>
             {
@@ -500,9 +522,20 @@ pub(crate) fn prepare_reference_effect_request_v2(
                     kind,
                     view,
                     indices,
-                    value: ProductionRankedValueV1::Local(*gpu_value_id),
+                    value: ProductionRankedValueV1::Local(exact_gpu_value),
                 };
             }
+            ProductionRankedOperationV1::ValueAccess {
+                kind,
+                view,
+                indices,
+                value,
+            } if kind.writes_memory()
+                && !kind.is_atomic()
+                && output.preattached_gpu_value == Some(exact_gpu_value)
+                && view == output.write.view
+                && indices == output.write.indices
+                && value == ProductionRankedValueV1::Local(exact_gpu_value) => {}
             _ => {
                 return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
                     block: output.write.block,
@@ -533,7 +566,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
             ProductionRankedValueV1::Local(*true_value),
             ProductionRankedValueV1::Local(*true_value),
             ProductionRankedValueV1::Local(*true_value),
-            ProductionRankedValueV1::Local(*gpu_value_id),
+            ProductionRankedValueV1::Local(exact_gpu_value),
             ProductionRankedValueV1::Local(*reference_value_id),
         )
         .map_err(ProductionReferenceEffectJoinErrorV2::Recipe)?;
@@ -555,6 +588,56 @@ pub(crate) fn prepare_reference_effect_request_v2(
         requests,
         proof_timeout_seconds,
     })
+}
+
+fn preattached_gpu_write_value_v2(
+    kernel: &ProductionRankedKernelV1,
+    write: &RankedGpuWriteV2,
+    expected: &ProductionSemanticExpressionV2,
+    numerical_contract: ProductionNumericalContractV2,
+) -> Result<Option<ProductionRankedValueIdV1>, ProductionReferenceEffectJoinErrorV2> {
+    let operation = kernel
+        .blocks()
+        .get(write.block)
+        .and_then(|block| block.operations().get(write.operation))
+        .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
+    let ProductionRankedOperationV1::ValueAccess {
+        kind,
+        view,
+        indices,
+        value,
+    } = operation
+    else {
+        return Ok(None);
+    };
+    let ProductionRankedValueV1::Local(value) = value else {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+            block: write.block,
+            operation: write.operation,
+            detail: "pre-attached GPU write value is not the exact adjacent source expression",
+        });
+    };
+    let expression = write
+        .operation
+        .checked_sub(1)
+        .and_then(|index| kernel.blocks()[write.block].operations().get(index));
+    if !kind.writes_memory()
+        || kind.is_atomic()
+        || *view != write.view
+        || *indices != write.indices
+        || !matches!(expression, Some(ProductionRankedOperationV1::SemanticExpression {
+            result, expression, numerical_contract: actual_contract,
+        }) if result == value && expression == expected
+            && *actual_contract == numerical_contract
+            && *actual_contract == ProductionNumericalContractV2::exact_for_expression(expected))
+    {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+            block: write.block,
+            operation: write.operation,
+            detail: "pre-attached GPU write value differs from its exact source expression or numerical contract",
+        });
+    }
+    Ok(Some(*value))
 }
 
 fn supported_ranked_scalar_v2(scalar: ReferenceScalarTypeV1) -> bool {
@@ -1588,6 +1671,8 @@ mod tests {
         ReferenceTerminatorV1, ReferenceValueV1,
     };
     use dialect_kernel::{AccessKindAttr, MemorySpaceAttr};
+
+    include!("production_reference_effect_join_v2_ordinary_values_tests.rs");
 
     #[test]
     fn output_proofs_share_one_fixed_compilation_timeout_budget() {

@@ -47,6 +47,7 @@ const MAX_G1_FLAT_WORKGROUP_SIZE: u32 = 1024;
 const MAX_COMPILER_MODULE_GRAPH_FUNCTIONS: usize = 1_024;
 const MAX_COMPILER_MODULE_GRAPH_KERNELS: usize = 256;
 const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
+const MAX_INTERNAL_HELPER_RESULT_COMPONENTS_V1: usize = 256;
 /// Maximum textual LLVM bytes returned by compiler-module construction.
 pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
@@ -899,8 +900,9 @@ fn validate_semantic_anchor_identity_v1(
 /// order. All functions are preflighted before any output is returned.
 ///
 /// The current bounded feature slice supports void or single-result scalar/pointer helper ABIs.
-/// Slice ABIs remain kernel-entry-only. Calls to kernel entry functions and context-dependent
-/// operations in helpers are rejected. Helper wave modes are resolved through a bounded SCC call
+/// Internal definitions also accept immutable Global scalar slices as data/length pairs.
+/// Slice results and external slice ABIs remain unsupported. Calls to kernel entry functions and
+/// context-dependent operations in helpers are rejected. Helper wave modes use a bounded SCC call
 /// graph before lowering, and textual output is capacity-limited and returned atomically.
 ///
 /// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
@@ -1404,6 +1406,9 @@ fn validate_device_signature(
 ) -> Result<(), LoweringErrors> {
     let location = LoweringLocation::device_function(module, function);
     for (index, ty) in function.signature.parameters.iter().enumerate() {
+        if immutable_slice_helper_parameter_v1(function, ty, target) {
+            continue;
+        }
         validate_device_abi_type(ty, &location, target).map_err(|error| {
             LoweringErrors::one(
                 location.clone(),
@@ -1413,10 +1418,21 @@ fn validate_device_signature(
         })?;
     }
     if function.signature.results.len() > 1 {
+        if function.role == FunctionRole::InternalHelper
+            && function.body.is_some()
+            && function.signature.results.len() <= MAX_INTERNAL_HELPER_RESULT_COMPONENTS_V1
+            && function
+                .signature
+                .results
+                .iter()
+                .all(|ty| matches!(ty, Type::Scalar(scalar) if supported_scalar(*scalar, target)))
+        {
+            return Ok(());
+        }
         return Err(LoweringErrors::one(
             location,
             LoweringDiagnosticCode::UnsupportedResults,
-            "device functions may return at most one scalar or pointer value",
+            "multiple device results require a defined internal helper with at most 256 supported scalar components",
         ));
     }
     if let Some(result) = function.signature.results.first() {
@@ -1429,6 +1445,19 @@ fn validate_device_signature(
         })?;
     }
     Ok(())
+}
+
+fn immutable_slice_helper_parameter_v1(
+    function: &Function,
+    ty: &Type,
+    target: LoweringTarget,
+) -> bool {
+    function.role == FunctionRole::InternalHelper
+        && function.body.is_some()
+        && matches!(ty, Type::Slice(slice)
+            if slice.address_space == KernelAddressSpace::Global
+                && slice.access == AccessMode::ReadOnly
+                && supported_memory_type(&slice.element, target))
 }
 
 fn validate_device_abi_type(
@@ -2575,6 +2604,19 @@ fn emit_compiler_module(
         writeln!(output).unwrap();
     }
 
+    for lowerer in helpers {
+        if lowerer.function.signature.results.len() > 1 {
+            write!(output, "{} = type {{ ", llvm_result_type(lowerer.function)).unwrap();
+            for (index, ty) in lowerer.function.signature.results.iter().enumerate() {
+                if index != 0 {
+                    write!(output, ", ").unwrap();
+                }
+                write!(output, "{}", llvm_type(ty)).unwrap();
+            }
+            writeln!(output, " }}").unwrap();
+        }
+    }
+
     if has_semantic_anchors {
         writeln!(output, "declare void @llvm.pseudoprobe(i64, i64, i32, i64)").unwrap();
     }
@@ -2617,7 +2659,7 @@ fn emit_compiler_module(
         writeln!(
             output,
             "declare {} @{}({})",
-            llvm_result_type(&function.signature),
+            llvm_result_type(function),
             function.id,
             llvm_parameter_types(&function.signature).join(", ")
         )
@@ -3124,12 +3166,22 @@ fn llvm_parameter_types(signature: &Signature) -> Vec<&'static str> {
     signature.parameters.iter().map(llvm_type).collect()
 }
 
-fn llvm_result_type(signature: &Signature) -> &'static str {
-    match signature.results.as_slice() {
-        [] => "void",
-        [result] => llvm_type(result),
-        _ => unreachable!("compiler-module preflight rejected multi-value returns"),
+struct LlvmDeviceResultTypeV1<'a>(&'a Function);
+
+impl fmt::Display for LlvmDeviceResultTypeV1<'_> {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.signature.results.as_slice() {
+            [] => output.write_str("void"),
+            [result] => output.write_str(llvm_type(result)),
+            // Preflight requires a unique safe symbol and a defined scalar-only helper.
+            // LLVM type names are disjoint from the generated value/global namespaces.
+            _ => write!(output, "%fe2o3.helper.result.{}", self.0.id),
+        }
     }
+}
+
+fn llvm_result_type(function: &Function) -> LlvmDeviceResultTypeV1<'_> {
+    LlvmDeviceResultTypeV1(function)
 }
 
 fn is_safe_symbol(symbol: &str) -> bool {
@@ -4262,9 +4314,10 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
                 Type::Slice(slice)
-                    if self.kernel.is_some()
+                    if (self.kernel.is_some()
                         && slice.address_space == KernelAddressSpace::Global
-                        && supported_memory_type(&slice.element, self.target) =>
+                        && supported_memory_type(&slice.element, self.target))
+                        || immutable_slice_helper_parameter_v1(self.function, ty, self.target) =>
                 {
                     self.bindings.insert(
                         value,
@@ -4321,9 +4374,14 @@ impl<'a> FunctionLowerer<'a> {
                         );
                     }
                     Type::Slice(slice)
-                        if self.kernel.is_some()
+                        if (self.kernel.is_some()
                             && slice.address_space == KernelAddressSpace::Global
-                            && supported_memory_type(&slice.element, self.target) =>
+                            && supported_memory_type(&slice.element, self.target))
+                            || immutable_slice_helper_parameter_v1(
+                                self.function,
+                                &parameter.ty,
+                                self.target,
+                            ) =>
                     {
                         self.bindings.insert(
                             parameter.id,
@@ -5719,7 +5777,7 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
         } else {
-            let result = llvm_result_type(&self.function.signature);
+            let result = llvm_result_type(self.function);
             let wave_attribute = self
                 .wave_width
                 .map_or("", |width| self.target.wave_target_feature(width));
@@ -6689,8 +6747,22 @@ impl<'a> FunctionLowerer<'a> {
                 let arguments = arguments
                     .iter()
                     .map(|argument| {
-                        let (name, ty) = self.value(*argument);
-                        format!("{} {name}", llvm_type(ty))
+                        match self
+                            .bindings
+                            .get(argument)
+                            .expect("validated call argument")
+                        {
+                            ValueBinding::Value { llvm_name, ty } => {
+                                format!("{} {llvm_name}", llvm_type(ty))
+                            }
+                            ValueBinding::Slice {
+                                data_name,
+                                length_name,
+                                ..
+                            } => {
+                                format!("ptr addrspace(1) {data_name}, i64 {length_name}")
+                            }
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -6703,7 +6775,25 @@ impl<'a> FunctionLowerer<'a> {
                         llvm_type(result)
                     )
                     .unwrap(),
-                    _ => unreachable!("compiler-module preflight rejected multi-value returns"),
+                    _ => {
+                        let result_type = llvm_result_type(callee_function);
+                        writeln!(
+                            output,
+                            "  %helper.call.{}.{} = call {result_type} @{symbol}({arguments})",
+                            block.0, operation_index,
+                        )
+                        .unwrap();
+                        for (index, result) in operation.results.iter().enumerate() {
+                            writeln!(
+                                output,
+                                "  {} = extractvalue {result_type} %helper.call.{}.{}, {index}",
+                                self.value(result.id).0,
+                                block.0,
+                                operation_index,
+                            )
+                            .unwrap();
+                        }
+                    }
                 }
             }
             OperationKind::Atomic(atomic) => {
@@ -8620,7 +8710,32 @@ impl<'a> FunctionLowerer<'a> {
                     let (name, ty) = self.value(*value);
                     writeln!(output, "  ret {} {name}", llvm_type(ty)).unwrap();
                 }
-                _ => unreachable!("compiler-module preflight rejected multi-value returns"),
+                _ => {
+                    let result_type = llvm_result_type(self.function);
+                    for (index, value) in values.iter().enumerate() {
+                        let (name, ty) = self.value(*value);
+                        write!(
+                            output,
+                            "  %helper.return.{}.{index} = insertvalue {result_type} ",
+                            predecessor.0,
+                        )
+                        .unwrap();
+                        if index == 0 {
+                            write!(output, "poison").unwrap();
+                        } else {
+                            write!(output, "%helper.return.{}.{}", predecessor.0, index - 1)
+                                .unwrap();
+                        }
+                        writeln!(output, ", {} {name}, {index}", llvm_type(ty)).unwrap();
+                    }
+                    writeln!(
+                        output,
+                        "  ret {result_type} %helper.return.{}.{}",
+                        predecessor.0,
+                        values.len() - 1,
+                    )
+                    .unwrap();
+                }
             },
             Terminator::Unreachable => writeln!(output, "  unreachable").unwrap(),
         }

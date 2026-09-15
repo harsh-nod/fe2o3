@@ -13,8 +13,9 @@ publish = false
 
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host = { path = "../../crates/fe2o3-host" }
-fe2o3-kernel-ir = { path = "../../crates/fe2o3-kernel-ir" }
 quote = "1"
 sha2 = { version = "0.11", default-features = false }
 syn = { version = "2", features = ["full"] }

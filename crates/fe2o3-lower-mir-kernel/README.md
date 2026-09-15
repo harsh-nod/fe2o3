@@ -61,9 +61,11 @@ the originating contracts and bind the aggregate semantic identity, not treat
 a copied row as authentication of another module.
 
 This factoring removes launch-layout computation from ranked construction.
-The backend does not yet move executable KIR materialization before ranked
-verification or replace ranked analyses with views of the optimized graph; those remain
-part of [issue #271](https://github.com/harsh-nod/fe2o3/issues/271).
+The backend now materializes the legacy executable before ranked verification,
+then borrows that same graph for canonical assertion facts and attaches checked
+ranked custody without lowering it again. Replacing ranked analyses with views
+of an optimized graph remains part of
+[issue #271](https://github.com/harsh-nod/fe2o3/issues/271).
 
 The `production_semantic_kir_v1` integration target covers source launch
 agreement without ranked IR, including sparse roots with reachable helpers,
@@ -105,11 +107,33 @@ only after the consumed source owner is dropped, including on failure. This
 legacy path performs no new capture and promises neither full-memory accounting
 nor unwind cleanup. Existing origin capacity-growth/top-up rules are retained.
 
-This is a closed library materialize/query/attach component, not activation of
-the rustc backend's pre-ranked route. It adds no NativeSource/native contract
-emission, native scalar bindings, optimizer, target or host route. Origin custody
-and connected structural admission do not grant source equivalence, formal
-Complete, artifact or launch authority.
+The default rustc production transaction and its existing simulation/verification
+entries now use this materialize/query/attach component. They retain the same
+authenticated source/launch/reference bindings and all later checks. Canonical
+assertion analysis has its own phase-local inventory/sparse ledger with G+A
+reserved; source/projector work remains separately limited and excluded. Earlier
+materialization failures can now precede ranked diagnostics that were formerly
+reported first. This adds no NativeSource/native contract emission, native scalar
+bindings, optimizer, or alternative target/host route.
+Origin custody and connected structural admission do not grant source equivalence,
+formal Complete, artifact or launch authority.
+
+The default ranked producer and roster receipt recheck derive existing V2 `u32`
+induction facts for the exact selected body using that source owner's retained
+SSA plan. Unreachable source statements do not participate in those facts. The
+receipt compares the complete rederived report, including producer-only SSA
+scope work; source-only canonical evidence replay remains separate. This does
+not make an absent assertion true, relax final effect correspondence, or add
+authority. Existing analysis limits and non-induction proof checks are unchanged.
+
+Codegen introduces a private fixed policy for these two separate canonical phases:
+18,014,398,509,481,984 logical work units and 2,147,483,648 logical storage bytes
+per fresh phase budget. These are new codegen phase-policy constants, not an
+inherited optimizer policy or a serialized V4 API. They preserve the exact values
+selected for this transaction; work conversion to the host ledger remains checked.
+Library callers still supply their own budgets. The limits neither measure
+allocator overhead/RSS nor bound all compiler work or memory, and do not activate
+an optimizer.
 
 ## Same-Type Slice Reborrows
 
@@ -146,6 +170,22 @@ later correspondence gates remain in force. The new predicate and projection
 branch add no emitted operations or retained owner rows, and make no whole-work
 or whole-memory accounting claim.
 
+## Issued LDS Scope Reborrows
+
+An already authenticated workgroup LDS scope binding also survives an exact
+thin Reference Dereference in address space zero with 64-bit pointer width and
+the same nominal pointee registered as WorkgroupLdsScope. Shared and mutable
+references preserve the original scope binding without issuing another scope,
+loading memory, or changing its SSA transport. Raw input pointers, raw-address
+results, different pointees and other capability classes are not admitted by
+this rule. The existing wave-lane checks and diagnostics are preserved.
+
+The admitted-source regression uses the published PreRanked materializer and
+an actual PipelineCreate consumer, with same-block and successor-block
+reborrows. It does not require NativeSource or backend activation and does not
+relax source admission, capability consumption, allocation geometry, resource
+limits, or later ranked/formal/launch checks.
+
 ## Fixed Retained Arrays
 
 Existing storage-observable locals may use counted private storage for nonempty
@@ -163,3 +203,195 @@ or symbolic guard inference. Element admission uses the existing analysis extent
 limit; each whole-array gather or scatter separately checks its three-operations-
 per-element expansion against the existing total and per-block operation limits
 before reserving a gather buffer. No limits are raised or whole-memory bound added.
+
+## Private Array Correspondence
+
+Materialization records actual retained-array counted allocations and indexed
+ordinary memory effects with their source roles, original index definitions and
+physical operation coordinates. A fixed borrowed PreRanked query uses the same
+owner's sealed selected-body and SSA plans. It returns false only for a supported
+proven-unretained occurrence; missing required rows and unsupported index evidence
+are errors. Codegen preserves private source rows only after this query succeeds.
+
+The exact translation and retained-check discharge consumers compare the original
+constant index, counted
+allocation, element layout/access and GEP with the actual ranked private view and
+index. The initial final rule covers ordinary constant-index writes only. Matched
+writes remain subject to duplicate, order and control checks, and every correlated
+retained-array source row must be consumed. This is address/effect correspondence,
+not stored-value equivalence or a census of unrelated unsourced private operations.
+Read/mixed owners, initialization scatter, whole-value gather/scatter, dynamic or
+lossy index transport, atomics and volatile accesses gain no final proof here.
+
+The recorder activates only for selected retained arrays and shares a new monotone
+checked R*M proof-work phase, where R is selected root count and M the existing
+operation limit. Its subset census counts actual operations of array-bearing
+function instances before shared-helper deduplication; it does not impose S<=M.
+Failed or rolled-back proof work remains charged. New typed occupied/capacity
+admissions and fallible geometric buffers are separate from G+A; inherited trace
+payload, allocator capacity, relocation and RSS remain outside that receipt.
+Queries use the caller's canonical ledger with the same owner's G+A reserved,
+and final attachment retains its independent 64*M correlation phase. New proof-work
+exhaustion is explicit; no configured limits, Native gates, formal or launch
+authority change.
+
+## Checked Output Memory Analysis
+
+`analyze_checked_output_formal_memory_v1` derives fresh memory obligations from
+the actual fixed-rule checked V12 output and returns a report borrowing that
+owner. Every actual kernel must have complete extraction and no inter-invocation
+conflict under the existing structural witness: exact static extents, extent two
+for dynamic active axes, and 64-bit indices. No old ranked or compiler discharge
+is accepted, and the executable is not copied.
+
+This is an analysis prerequisite, not final source/ranked admission. The formal
+engine does not model Private accesses, its witness does not authenticate runtime
+launches, and memory completeness does not exclude assertion traps. Its work,
+scratch and obligation payload retain the existing formal-analysis allocation
+policy and are not included in the canonical optimizer ledger or receipt.
+Source-qualified output occurrence transport, final ranked/formal consumers,
+and explicit V12 lineage/evidence migration remain required before activation.
+Existing final owners, wire formats and authority gates are unchanged.
+
+## Source-Qualified Checked Output Occurrences
+
+The library checks complete V12 executable-coordinate preservation across the
+exact existing AMD target-binding metadata delta, then reconnects sealed source
+N to actual admitted B and independently checked optimizer O. It retains numeric
+source block/control aliases and transported assertion outcomes; fresh sparse
+facts are computed on O. Failure selection is not successful assertion discharge,
+and physical unreachable placement is distinct from checked omission.
+
+This B0 connection does not activate a backend or admit a final executable. Its
+private codegen assertion entry explicitly refuses transformed private-memory
+queries until checked operand/allocation transport is connected. Native pipeline
+catalog transport, final ranked/formal correlation, and serialized final evidence
+remain separate obligations; old N-only assertion transport keeps its pointer
+contract unchanged. Canonical equality of separately admitted B owners is checked
+using complete bytes, never a digest alone.
+
+New indexes, queries, and temporary payloads share the caller canonical ledger.
+The caller retains N graph/source rows, B, checked O/history, and transfer receipts;
+the constructor checks only the stated N-plus-O floor lower bound. Source replay
+uses its inherited source limits outside that ledger. Row receipts describe
+logical requested payload under the existing allocation convention, not portable
+allocator capacity, RSS, or a whole-compiler memory bound.
+
+## Source-Qualified Pipeline Catalogs
+
+The B1 library extension constructs pipeline contracts from the actual sealed
+source declarations and replay-checked create-call spans. It binds the resulting
+catalog to the same admitted B inventory, transports it through the independently
+checked B/O transition, and checks the fresh catalog against actual O. Exact
+source coverage comes from the preceding full source replay, not from a catalog
+digest or the isolated graph catalog checker.
+
+The catalog covers pipeline allocation layout/geometry and, when actual graph
+markers exist, their contract, storage alias and epoch type. Ordinary pre-ranked
+materialization emits the pipeline allocation and Wait barrier, but no V12 event
+markers. Its source-qualified catalog therefore has zero marker placements;
+this is not complete source-event transport. The isolated graph checker may
+accept missing bindings when no actual markers require them; source catalog
+completeness instead relies on the sealed constructor and full source replay.
+The catalog does not establish lifecycle safety, payload
+Load/Store value correspondence, ordinary Global parameter ancestry, generated
+scalar/enum-storage exemptions, call timing, final ranked/formal admission, or
+NativeSource authority. Those remain separate consumers; no backend is activated.
+
+Source scratch, input catalog/check, transported output catalog/audit and retained
+view share the same caller canonical ledger. Existing catalog logical row,
+comparison and swap charges are preserved; borrowed getters charge one dispatch
+and do not prepay caller traversal. Receipts describe requested typed payload,
+not allocator capacity or RSS. The source tests cover six actual event calls,
+the ordinary allocation/barrier/no-marker census before and after real target
+binding and checked optimization on both AMD profiles, hostile allocation
+catalogs, graph-only limitations, nonauthority and an isolated four/three getter
+boundary. A separate structurally admitted V12 graph component preserves all six
+physical marker placements and missing-binding rejection through the actual
+checked optimizer. That component has no semantic source owner and is not
+NativeSource admission. Neither scope establishes a whole-constructor resource
+bound or completed source-to-final proof.
+
+### Checked Output Private-Array Writes
+
+The source/output occurrence view can retain the five checked operand uses for
+an ordinary retained-array write: allocation count, GEP base/offset, and Store
+pointer/value. Original source type, role, unsigned index definition, whole-value
+initialization policy, and N allocation/span correlation remain checked at N by
+the unchanged source query. Output checks use actual checked O coordinates and
+use-specific definition ancestry, not N ordinals or an invented N-shaped graph.
+The original unsigned source definition may have no O descendant.
+
+Required missing output uses refuse; a checked-unreachable omitted write is
+distinct from a proven-unretained source access. A physically retained write
+also carries independent reachability. The private projector adapter refuses
+either non-executable outcome instead of converting it into a live index hint.
+Other retained memory forms remain unsupported. These inert queries do not
+activate the backend or establish final ranked/formal, lifecycle, artifact, or
+launch authority.
+
+All additional capture, sort, lookup and physical checks use the same caller
+canonical ledger. One fixed-size numeric row is fallibly reserved per original
+effect while the B/O inventories and checked control index are still live. Its
+payload and the added view headers remain reserved with the existing view;
+failure drops temporary rows before the enclosing constructor restores its
+incoming storage floor. Legacy N query and 64*M correlation allowances do not
+pay for added O work. Existing source replay/trace and allocator/RSS exclusions
+are unchanged; fresh-vector requested payload is a logical storage receipt,
+not a whole-process memory guarantee.
+
+### Checked Output Ordinary Global Accesses
+
+The unactivated source/output view can retain ordinary nonvolatile Global
+Load/Store occurrences from an exact kernel-entry source span. Each row keeps
+its source root, body, statement and original access ordinal separately from
+the actual checked O operation, pointer/value uses and Load result. The actual
+O function-argument definition must descend from the original N parameter;
+only that original parameter value enters N's existing source/component lookup.
+The checked B/O operand and definition relations preserve intermediate pointer
+ancestry. No O value is installed in N tables and no O span is guessed.
+
+Mixed private/global spans, other memory effects, source/generated calls,
+non-entry bodies and unsupported allocation ancestry return explicit refusal
+states. Unreachable omission is distinct from physical retention and is not a
+proof discharge. These gaps must be closed before an all-kernel consumer can be
+activated. This library query grants no ranked/formal, lifecycle or launch
+authority and changes no default backend route.
+
+The existing external-allocation pointer worklist is shared through two narrow
+adapters. Its SliceData/GEP/Cast/Select and incoming-block-argument rules and
+traversal order are unchanged. Legacy correlation retains its original visited
+set and one charge per nonempty pop; its source ordinals and private-storage
+exemptions are untouched. New capture uses the caller canonical ledger, not
+that old allowance, and prepays every new traversal and buffer.
+
+For D original definitions and E incoming edge arguments, new scratch is built
+once lazily per view constructor: 2D+E numeric cells and a 2D+E+1 value worklist.
+Generation marks avoid whole-definition resets between accesses, while direct
+incoming links avoid rescanning all edges at each phi. Per-access pointer traversal is
+bounded by O((D+E) log D); source-binding scans and checked descendant-range
+binary searches are additional charged work. Source aliases use the existing
+sorted origin index. Two borrowed passes count only eligible Global effects,
+so private-only and memory-free kernels reserve no Global effect-row buffer.
+Source-span sorting and binary queries remain separately charged. Both retained
+Global Vec headers are prepaid before their buffers become live and subtracted
+from the later full view-header reservation; cached storage includes the full
+retained payload. Existing enclosing cleanup restores the entry storage floor
+after failure without refunding work/history. Receipts count requested typed
+payload, not allocator capacity, a hard RSS bound or source replay allocations.
+
+### Checked Source Successor Selection
+
+The inert source/output view can map an independently checked Boolean input
+edge to the exact replayed source successor occurrence. It checks the actual
+N conditional branch, Boolean source type, singleton explicit 0/1 target and
+both source target identities. Explicit/otherwise ordinals remain distinct
+even when their target block IDs are equal. No checked selection means no
+selection fact, not proof that every source edge is executable.
+
+Selected assertions, generated splits and other unsupported shapes are refused;
+assertions retain their separate success/failure transport and proof rules.
+The query reuses existing source/control rows, allocates no storage and charges
+every lookup plus fixed mapping work on the caller ledger. This prerequisite
+does not skip source effects, prune source CFG edges, change the real root
+projector, or grant effect/assertion/final-executable authority.

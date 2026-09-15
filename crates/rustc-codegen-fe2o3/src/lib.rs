@@ -24,6 +24,7 @@ mod kernel_ir_codegen;
 mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
+mod production_canonical_phase_policy_v1;
 mod production_geometry_v1;
 mod production_mir_pliron_verus_join_v1;
 mod production_pipeline;
@@ -72,7 +73,7 @@ mod trusted_device_items;
 /// use rustc_codegen_fe2o3::ProductionRankedSemanticProjectionRosterReceiptV1;
 /// fn dismantle(receipt: ProductionRankedSemanticProjectionRosterReceiptV1) {
 ///     let ProductionRankedSemanticProjectionRosterReceiptV1 {
-///         semantic_owner: _,
+///         materialized: _,
 ///         source_order_roots: _,
 ///         canonical_kernel_order: _,
 ///         canonical_roster_identity: _,

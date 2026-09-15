@@ -60,6 +60,7 @@
             &types,
             &function,
             0,
+            0,
             &[],
             &semantic_statement,
             &[None; 4],
@@ -71,6 +72,7 @@
             &mut sources,
             &mut next_value,
             &mut ranked_ir,
+            &mut ComponentDynamicAssertionFactsV1,
         )
         .unwrap_err();
         assert!(matches!(

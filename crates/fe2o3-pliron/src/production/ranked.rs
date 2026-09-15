@@ -1893,6 +1893,13 @@ impl ProductionRankedBlockV1 {
         &self.operations
     }
 
+    /// Edits this unverified block builder without resizing its operation list.
+    /// Constructed kernels expose only immutable blocks; edited builders must
+    /// pass kernel construction and all subsequent admission checks again.
+    pub fn operations_mut(&mut self) -> &mut [ProductionRankedOperationV1] {
+        &mut self.operations
+    }
+
     pub const fn terminator(&self) -> &ProductionRankedTerminatorV1 {
         &self.terminator
     }
@@ -2334,6 +2341,10 @@ fn validate_tensor_refinement_resource_counts_v1(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "ranked/block_builder_operations_v1_tests.rs"]
+mod block_builder_operations_v1_tests;
 
 #[cfg(test)]
 mod tensor_refinement_resource_tests {

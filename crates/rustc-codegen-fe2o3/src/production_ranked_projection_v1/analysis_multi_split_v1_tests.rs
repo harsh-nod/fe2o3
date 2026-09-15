@@ -85,6 +85,7 @@ fn multiway_analysis_split_expansion_enforces_the_ranked_block_limit() {
         (0..exact.blocks().len())
             .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
             .collect(),
+        &mut ComponentDynamicAssertionFactsV1,
     )
     .unwrap();
     assert_eq!(blocks.len(), MAX_RANKED_BOUNDS_BLOCKS);
@@ -102,6 +103,7 @@ fn multiway_analysis_split_expansion_enforces_the_ranked_block_limit() {
             (0..oversized.blocks().len())
                 .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
                 .collect(),
+            &mut ComponentDynamicAssertionFactsV1,
         ),
         Err(ProductionRankedProjectionErrorV1::Unsupported(
             "semantic CFG projection exceeds the ranked block limit"
@@ -113,7 +115,15 @@ fn multiway_analysis_split_expansion_enforces_the_ranked_block_limit() {
 fn unresolved_switch_fanout_is_bounded_before_analysis_allocation() {
     let function = explicit_multi_switch(MAX_RANKED_BOUNDS_BLOCKS + 1);
     assert!(matches!(
-        projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],),
+        projected_cfg_terminator(
+            &function,
+            0,
+            &[],
+            false,
+            &mut ComponentDynamicAssertionFactsV1,
+            &[const { None }; 2],
+            &[],
+        ),
         Err(ProductionRankedProjectionErrorV1::Unsupported(
             "analysis switch successor count exceeds the ranked block limit"
         ))

@@ -19,24 +19,12 @@
                 recipe_identities.push(recipe);
 
                 let ProductionRankedSemanticProgramV1 {
-                    semantic_ssa_owner,
+                    materialized,
                     roots,
                 } = program;
-                let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
                 let root = roots.into_vec().into_iter().next().unwrap();
-                let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-                    semantic_owner,
-                    root.lowering,
-                    root.ranked_ir,
-                    root.access_sources,
-                    root.executable_effect_sources,
-                )
-                .unwrap();
-                let _ = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-                    receipt,
-                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                    1,
-                )
+                let receipt = materialized_ranked_fixture_receipt_v1(materialized, root);
+                let _ = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
                 .expect("the exact scan projection and generated KIR recipe must validate");
             }
         }
@@ -53,10 +41,9 @@
         let exclusive_recipe = exclusive.roots[0].executable_effect_sources[0].recipe_identity();
         let inclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Inclusive, 65);
         let ProductionRankedSemanticProgramV1 {
-            semantic_ssa_owner,
+            materialized,
             roots,
         } = inclusive;
-        let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources = root
             .executable_effect_sources
@@ -72,69 +59,42 @@
                 )
             })
             .collect();
-        let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-            semantic_owner,
-            root.lowering,
-            root.ranked_ir,
-            root.access_sources,
-            root.executable_effect_sources,
-        )
-        .unwrap();
+        let receipt = materialized_ranked_fixture_receipt_v1(materialized, root);
         assert_neutral_mutated_projection_rejected_v1(receipt);
 
         let ProductionRankedSemanticProgramV1 {
-            semantic_ssa_owner,
+            materialized,
             roots,
         } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive, 255);
-        let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources
             .pop()
             .expect("scan projection has a final barrier effect");
-        let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-            semantic_owner,
-            root.lowering,
-            root.ranked_ir,
-            root.access_sources,
-            root.executable_effect_sources,
-        )
-        .unwrap();
+        let receipt = materialized_ranked_fixture_receipt_v1(materialized, root);
         assert_neutral_mutated_projection_rejected_v1(receipt);
     }
 
     fn neutral_mutated_projection_receipt_v1(
         mutate: impl FnOnce(&mut Vec<ProductionRankedExecutableEffectSourceV1>),
-    ) -> ProductionRankedSemanticProjectionReceiptV1 {
+    ) -> ProductionMaterializedRankedModuleReceiptV1 {
         let ProductionRankedSemanticProgramV1 {
-            semantic_ssa_owner,
+            materialized,
             roots,
         } = neutral_ranked_program_v1();
-        let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
         let mut root = roots
             .into_vec()
             .into_iter()
             .next()
             .expect("neutral fixture has one projected root");
         mutate(&mut root.executable_effect_sources);
-        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-            semantic_owner,
-            root.lowering,
-            root.ranked_ir,
-            root.access_sources,
-            root.executable_effect_sources,
-        )
-        .expect("the hostile relation remains structurally inert")
+        materialized_ranked_fixture_receipt_v1(materialized, root)
     }
 
     fn assert_neutral_mutated_projection_rejected_v1(
-        receipt: ProductionRankedSemanticProjectionReceiptV1,
+        receipt: ProductionMaterializedRankedModuleReceiptV1,
     ) {
         assert!(matches!(
-            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-                receipt,
-                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                1,
-            ),
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt),
             Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::MirPlironTranslation(
                 fe2o3_lower_mir_kernel::ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch { .. }
             ))

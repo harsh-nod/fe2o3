@@ -213,12 +213,21 @@ impl SemanticFunctionLoweringV1<'_> {
         if place.ty() != array.element || projection.result_type() != array.element {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
+        let mut private_original_index = None;
         let offset = match projection.kind() {
             SemanticProjectionKindV1::ConstantIndex {
                 offset,
                 minimum_length,
                 from_end,
             } => {
+                if self.private_arrays.frame.is_some() {
+                    self.private_arrays.work.charge_private_array_work(1)?;
+                    private_original_index = Some(PrivateArrayIndexV1::ConstantIndex {
+                        offset,
+                        min_length: minimum_length,
+                        from_end,
+                    });
+                }
                 let index = if from_end {
                     array.length.checked_sub(offset)
                 } else {
@@ -274,6 +283,20 @@ impl SemanticFunctionLoweringV1<'_> {
                             "retained array index is not a modeled unsigned integer",
                         )
                     })?;
+                if self.private_arrays.frame.is_some() {
+                    let direct_definition = self
+                        .private_arrays
+                        .direct_definition(index, scalar)?
+                        .map(|row| row.location);
+                    self.private_arrays.work.charge_private_array_work(1)?;
+                    private_original_index = Some(PrivateArrayIndexV1::Local {
+                        local: local.index(),
+                        semantic_type: index_type,
+                        original: index,
+                        physical_type: scalar,
+                        direct_definition,
+                    });
+                }
                 if let Some(constant) = self.emitted_unsigned_constants.get(&index).copied() {
                     if constant >= array.length {
                         return Err(unsupported(
@@ -313,7 +336,25 @@ impl SemanticFunctionLoweringV1<'_> {
                 ));
             }
         };
+        let gep_operation = operations.len();
         let pointer = self.emit_retained_array_pointer_v1(&slot, offset, operations)?;
+        if let Some(original_index) = private_original_index {
+            let offset_location = self
+                .private_arrays
+                .direct_definition(offset, ScalarType::Index)?
+                .map(|row| row.location);
+            self.private_arrays.work.charge_private_array_work(1)?;
+            if self.private_arrays.pending.is_some() {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            self.private_arrays.pending = Some(PrivateArrayPendingAddressV1 {
+                original_index,
+                offset_location,
+                gep_location: self.private_arrays.location(gep_operation)?,
+                offset,
+                gep: pointer,
+            });
+        }
         Ok((pointer, slot))
     }
 
@@ -331,11 +372,23 @@ impl SemanticFunctionLoweringV1<'_> {
                 self.retained_array_element_pointer_v1(block, statement, place, operations)?;
             let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
-            return self.emit(
+            self.private_arrays
+                .prepare_effect(self.emitted_operations)?;
+            let operation = operations.len();
+            let value = self.emit(
                 operations,
                 slot.kernel_type,
                 OperationKind::Load { pointer, access },
-            );
+            )?;
+            self.private_arrays.commit_effect(
+                self.correspondence_owner,
+                self.semantic_function,
+                place,
+                PrivateArrayAccessV1::Read,
+                operation,
+                self.emitted_operations,
+            )?;
+            return Ok(value);
         }
         if volatility == SemanticVolatilityV1::Volatile {
             return Err(unsupported(
@@ -406,7 +459,18 @@ impl SemanticFunctionLoweringV1<'_> {
             }
             let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
+            self.private_arrays
+                .prepare_effect(self.emitted_operations)?;
+            let operation = operations.len();
             self.push_memory_store_v1(operations, pointer, value, access, None)?;
+            self.private_arrays.commit_effect(
+                self.correspondence_owner,
+                self.semantic_function,
+                place,
+                PrivateArrayAccessV1::Write,
+                operation,
+                self.emitted_operations,
+            )?;
             // An element write cannot establish initialization of the entire slot.
             return Ok(());
         }

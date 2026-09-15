@@ -15,6 +15,7 @@ use pliron::{
     irbuild::{
         IRStatus,
         listener::DummyListener,
+        observer::RewriteObserver,
         rewriter::{IRRewriter, Rewriter},
     },
     linked_list::ContainsLinkedList,
@@ -54,8 +55,26 @@ impl Pass for LocalPureCsePassV1 {
 
 /// Eliminates exact duplicate total expressions within individual blocks.
 pub fn local_pure_cse_v1(root: Ptr<Operation>, context: &mut Context) -> IRStatus {
+    local_pure_cse_impl(root, context, None)
+}
+
+/// The same closed local CSE algorithm with independent mutation observations.
+pub fn local_pure_cse_with_observer_v12(
+    root: Ptr<Operation>,
+    context: &mut Context,
+    observer: Box<dyn RewriteObserver>,
+) -> IRStatus {
+    local_pure_cse_impl(root, context, Some(observer))
+}
+
+fn local_pure_cse_impl(
+    root: Ptr<Operation>,
+    context: &mut Context,
+    observer: Option<Box<dyn RewriteObserver>>,
+) -> IRStatus {
     let mut pending_containers = vec![root];
     let mut rewriter = IRRewriter::<DummyListener>::default();
+    rewriter.set_observer(observer);
     rewriter.get_config_mut().set_name_on_value_replacement = false;
 
     while let Some(container) = pending_containers.pop() {

@@ -1,0 +1,13 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-BOUNDS-001]
+// CHECK: required: 8 < 8
+// A private memory space never exempts an access from ranked bounds checks.
+builtin.func @private_write_one_past_end: builtin.function <() -> ()>
+{
+  ^entry():
+    view = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Private]: <() -> (kernel.ranked_view <32,true,[8]>)>;
+    index = kernel.index_constant () [] [kernel_index_value: kernel.index_value 8]: <() -> (kernel.index)>;
+    kernel.access (view, index) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[8]>, kernel.index) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

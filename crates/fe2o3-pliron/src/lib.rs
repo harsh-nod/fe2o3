@@ -4,14 +4,21 @@
 mod canonical_analysis_scope_v1;
 mod graph_analysis_v1;
 mod kir_bridge_v1;
+mod kir_optimization_map_v12;
 mod optimization_v1;
+mod optimization_v12;
 mod production;
 mod production_analysis;
 
 pub use canonical_analysis_scope_v1::*;
 pub use graph_analysis_v1::*;
 pub use kir_bridge_v1::*;
+pub use kir_optimization_map_v12::{
+    KirOptimizationDispositionV12, KirOptimizationEndpointV12, KirOptimizationMapErrorV12,
+    KirOptimizationMapV12, KirOptimizationRelationV12,
+};
 pub use optimization_v1::*;
+pub use optimization_v12::*;
 pub use production_analysis::*;
 
 // Neutral models are private imports for the session-owned analysis implementation.
@@ -1925,3 +1932,13 @@ mod owner_handle_tests {
         assert!(session.operations.is_empty());
     }
 }
+
+mod kir_occurrence_capture_v1;
+mod neutral_optimization_v1;
+pub use kir_occurrence_capture_v1::KirNeutralOccurrenceRowsV1;
+pub use neutral_optimization_v1::{
+    CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
+    KirCheckedNeutralOptimizationStorageV1, KirNeutralOptimizationErrorV1,
+    KirNeutralOptimizationLeaseV1, KirNeutralOptimizationOutputV1, KirNeutralOptimizationStorageV1,
+    KirNeutralOwnedOriginStorageV1, optimize_native_neutral_kernel_ir_v1,
+};

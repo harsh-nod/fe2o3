@@ -34,6 +34,10 @@ mod pre_ranked_materialization_v1;
 mod pre_ranked_multiroot_v1;
 #[path = "production_semantic_kir_v1/retained_array_v1.rs"]
 mod retained_array_v1;
+#[path = "production_semantic_kir_v1/shared_slice_helper_v1.rs"]
+mod shared_slice_helper_v1;
+#[path = "production_semantic_kir_v1/slice_indexed_store_v1.rs"]
+mod slice_indexed_store_v1;
 #[path = "production_semantic_kir_v1/slice_reborrow_v1.rs"]
 mod slice_reborrow_v1;
 #[path = "production_semantic_kir_v1/source_launch_roster_v1.rs"]
@@ -43,6 +47,9 @@ mod wave_lane_reference_v1;
 
 #[path = "production_semantic_kir_v1/projected_call_destination_v1.rs"]
 mod projected_call_destination_v1;
+
+#[path = "production_semantic_kir_v1/enum_edge_loop_v1.rs"]
+mod enum_edge_loop_v1;
 
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
@@ -3059,16 +3066,19 @@ fn promoted_enum_payload_extraction_before_the_variant_edge_fails_closed() {
         promoted_enum_payload_owner(true, false, 1),
         ProductionSemanticKirLimitsV1::default(),
     );
-    assert!(matches!(
-        result,
-        Err(ProductionSemanticKirErrorV1::EnumPayloadUnavailable {
-            block: 3,
-            local: 1,
-            variant: 0,
-            field: 0,
-            ..
-        })
-    ));
+    assert!(
+        matches!(
+            &result,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: Some(3),
+                statement: Some(0),
+                detail: "enum downcast lacks an authenticated variant",
+            })
+        ),
+        "unexpected lowering result: {:?}",
+        result.as_ref().err(),
+    );
 }
 
 #[test]

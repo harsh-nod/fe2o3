@@ -278,7 +278,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     let exact = exact_source_cpu_content_identities_v2();
     assert_eq!(
         encode_hex(&exact.attributed_source_sha256),
-        "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4"
+        "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d"
     );
     assert_eq!(
         encode_hex(&exact.cpu_oracle_sha256),
@@ -286,7 +286,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     );
     assert_eq!(
         encode_hex(&exact.correspondence_sha256),
-        "d1c8630a5e534fe559db0b669ca55a6f9dda5454a50d57feb67eb3b969941e87"
+        "9d009122b179b15a2aab987404f1589611b171742bc1b3f1e98163245a53f48e"
     );
     assert_eq!(
         verus_digest("attributed_source_identity_v2"),
@@ -404,4 +404,28 @@ fn current_outer_commit_process_check_contains_the_three_exact_files() {
     )
     .unwrap();
     assert_eq!(receipt.binding().outer_commit, parse_commit(head));
+}
+
+#[test]
+fn retired_trap_return_spelling_and_its_source_identity_are_rejected() {
+    let old = replace_once(
+        SOURCE,
+        "        fe2o3_device::trap();\n",
+        "        fe2o3_device::trap();\n        return;\n",
+    );
+    let old_digest: [u8; 32] = Sha256::digest(old.as_bytes()).into();
+    assert_eq!(
+        encode_hex(&old_digest),
+        "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4"
+    );
+    assert_eq!(
+        collect_reviewed_source_algorithm_v2(&old),
+        Err(SourceStructureErrorV2::NonCanonicalSyntaxTree)
+    );
+    let mut binding = bind_source_cpu_content_to_outer_commit_v2(parse_commit(PUBLIC_BASE));
+    binding.content.attributed_source_sha256 = old_digest;
+    assert_eq!(
+        verify_reviewed_source_to_cpu_correspondence_v2(&corpus(), u64::MAX, binding),
+        Err(SourceCpuCorrespondenceErrorV2::IdentityBinding)
+    );
 }

@@ -1,0 +1,11 @@
+// Owner-backed expectation, run by the existing codegen unit-test crate.
+// RUN: cargo test -p rustc-codegen-fe2o3 --lib private_array_reassignment_textual_expectation_uses_actual_owner
+KIR alloca=1 element=U32 space=Private access=ReadWrite align=4 count=8
+KIR store=6 gep=5 index=7 space=Private align=4 volatile=false
+KIR store=11 gep=10 index=0 space=Private align=4 volatile=false
+KIR loads=0 stores=2
+QUERY source=0/1/Destination index=7
+QUERY source=0/3/Destination index=0
+RANKED source=0/1/0 Write Private width=32 shape=8 index=7
+RANKED source=0/3/0 Write Private width=32 shape=8 index=0
+ATTACH same-graph=true same-canonical=true authority=false

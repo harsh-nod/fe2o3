@@ -168,6 +168,7 @@
             SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(102));
         let enum_variable = fe2o3_mir_model::SsaVariableIdV1::new(1);
         let mut plan = SemanticControlFlowSsaPlanV1 {
+            has_retained_arrays: false,
             compiler_issued_bindings: BTreeMap::new(),
             implicit_entry_locals: BTreeSet::new(),
             ssa_value_locals: BTreeSet::from([1, 2]),
@@ -238,3 +239,5 @@
             }) if actual == minimum_storage && limit + 1 == minimum_storage
         ));
     }
+
+    include!("semantic_ssa_enum_edge_transfer_v1_tests.rs");

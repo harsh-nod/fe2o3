@@ -66,6 +66,36 @@ cache. Callbacks must not release live analysis floors. Stack-only scope framing
 unrelated caller allocations, and panic recovery are outside this contract.
 This API is not a pass, a preservation proof, or production-pipeline activation.
 
+## Checked Occurrence Execution
+
+The additive connected V12 bridge borrows an already admitted canonical owner.
+Its one-shot neutral execution lease observes the existing literal seven-pass
+scalar/CFG roster and extracts the actual successor with complete operand,
+successor, edge-argument, block-chain, and value-descendant candidate rows.
+The independent kernel-analysis checker must accept those rows against both
+actual graph inventories before consuming checked-output custody is returned.
+The old value map and optimizer report are not semantic rule oracles.
+
+These checks establish only the named input-to-final local rewrite rules.
+They do not seal every intermediate pass, supply a general equivalence theorem,
+verify source/ranked memory, or grant artifact or launch authority. The checked
+owner retains one executable output and historical input bytes. Optional owned
+origin callbacks cannot replace either checked graph or bypass the checker.
+
+Input, session growth, observed output, inventories, rows, and returned owners
+have distinct logical storage transfers on the shared work/storage ledger.
+Drop restores the appropriate floor without refunding accepted work or failure
+history. Capture, rule, resource, extraction, or panic failures discard the
+candidate; there is no fallback to an unchecked map or source graph. The native
+bridge profile bounds structural/signature work and is not NativeSource compiler
+proof admission. Allocator overhead and upstream primitive execution costs are
+not claimed as exact measurements.
+
+This library surface does not activate default backend optimization or change
+the existing target optimizer's pass/report policy. Source-origin transport,
+final optimized-graph mandatory checks, and compiler publication remain separate
+integration obligations.
+
 ## Boundary
 
 This crate does not define fe2o3 dialect operations, select a production

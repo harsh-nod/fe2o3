@@ -1,0 +1,20 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: promoted [v0]
+// CHECK: event 0 def v0=d0
+// CHECK: event 1 use v0=d0
+// CHECK: event 2 retained v1
+// CHECK: event 3 def v0=d1
+// CHECK: event 4 use v0=d1
+// CHECK: event 5 retained v1
+// These are generic event definitions, not constant-value provenance.
+
+entry b0
+variables v0 !v1
+block b0
+def v0
+use v0
+def v1
+def v0
+use v0
+def v1

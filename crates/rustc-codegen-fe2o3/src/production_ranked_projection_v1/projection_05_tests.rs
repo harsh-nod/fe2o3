@@ -704,6 +704,7 @@
     #[test]
     fn compatible_atomic_effect_does_not_require_an_invocation_derived_coordinate() {
         let effect_source = ProjectedEffectSourceV1 {
+            private_array_role: None,
             access: AccessKindAttr::AtomicReadModifyWrite,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
@@ -721,7 +722,7 @@
                 source: Some(effect_source),
             }],
         };
-        assert!(!atomic.requires_invocation_index());
+        assert!(!atomic.requires_execution_domain());
 
         let ordinary = ProjectedSemanticBlockV1 {
             items: vec![ProjectedBlockItemV1::Effect {
@@ -736,7 +737,7 @@
                 }),
             }],
         };
-        assert!(ordinary.requires_invocation_index());
+        assert!(ordinary.requires_execution_domain());
     }
 
     #[test]
