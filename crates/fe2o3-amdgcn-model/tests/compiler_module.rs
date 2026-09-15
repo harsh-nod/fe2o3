@@ -930,3 +930,6 @@ fn gfx1151_object_symbols_and_effective_wave_helpers_are_physical() {
 
 #[path = "compiler_module/shared_slice_helpers_v1.rs"]
 mod shared_slice_helpers_v1;
+
+#[path = "compiler_module/ordinary_helper_results_v1.rs"]
+mod ordinary_helper_results_v1;

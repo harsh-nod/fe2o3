@@ -305,8 +305,13 @@ fn slice_helper_abi_keeps_result_and_call_validation_closed() {
                 .unwrap_err()
                 .contains(LoweringDiagnosticCode::UnsupportedResults)
         );
-        let mut multiple = isolated_helper(Type::INDEX);
-        multiple.functions[1].signature.results = vec![Type::INDEX, Type::INDEX];
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let mut multiple = isolated_helper(pointer.clone());
+        multiple.functions[1].signature.results = vec![pointer.clone(), pointer];
         multiple.functions[1].body.as_mut().unwrap().blocks[0].terminator =
             Some(Terminator::Return {
                 values: vec![ValueId(0), ValueId(0)],

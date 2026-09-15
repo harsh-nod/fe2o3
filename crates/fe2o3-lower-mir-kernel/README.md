@@ -139,9 +139,27 @@ are unchanged. Mutable or non-Global slices, foreign/declaration-only slice
 parameters, and slice results remain outside this helper ABI.
 
 This does not widen source helper effect admission. Helpers that read or write
-element data still need independently admitted call summaries; aggregate and
-capability-bearing results require separate transport support. LLVM assembly
-checks establish IR validity, not source refinement or hardware execution.
+element data still need independently admitted call summaries. Source aggregate
+and capability-bearing results need their own semantic transport and effect
+authorization; scalar KIR result vectors do not supply it. LLVM assembly checks
+establish IR validity, not source refinement or hardware execution.
+
+## Internal Scalar Result LLVM ABI
+
+Defined `InternalHelper` functions can return 2 through 256 ordered, supported
+scalar KIR results. One named LLVM struct per validated unique helper symbol is
+shared by the definition, calls and returns; each component is extracted or
+inserted in KIR signature order. The gfx942 and gfx950 model paths use this same
+internal convention without changing existing void or single-scalar/pointer
+results. Foreign exports and external declarations cannot use multiple results;
+pointers, slices, Unit, vectors and capability-bearing aggregates are not admitted
+as multi-result components.
+
+This is an internal KIR-to-LLVM transport, not an external Rust FnABI or general
+Rust aggregate support. It does not scatter retained aggregate destinations to
+memory, widen helper purity or read/write admission, or establish source
+correspondence, hardware execution or tutorial compile coverage. Those require
+separate source and effect checks.
 
 ## Issued Wave Lane Reborrows
 

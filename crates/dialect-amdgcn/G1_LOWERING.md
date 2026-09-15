@@ -100,12 +100,23 @@ declare an exact mode before that mode can propagate to its callees. The
 effective mode is attached to helper definitions, so LLVM lowers their
 branches, phi nodes, and control masks under the same wave contract as callers.
 
-This slice supports calls between ordinary device functions and external
-declarations with void or one scalar/global-or-workgroup-pointer result. Kernel
-slice ABIs remain supported only at kernel entries. Calls to kernel entries,
-multi-result and slice helper ABIs, duplicate output symbols, multiple exports
-of one entry definition, and kernel-context intrinsics, LDS, barriers, or wave
-operations in shared helpers fail closed.
+This slice preserves existing void and single-scalar/pointer device results.
+Defined `InternalHelper` functions can also return 2 through 256 supported scalar
+KIR values in signature order. One named LLVM struct per validated unique helper
+symbol carries those values; calls extract each result and returns insert each
+component in the same order. Foreign exports and external declarations still
+reject multiple results, as do result vectors containing pointers, slices, Unit
+or vectors. Internal immutable Global scalar-slice parameters use the existing
+data-pointer/length pair; mutable, non-Global and foreign slice helper parameters
+remain unsupported. Calls to kernel entries, duplicate output symbols, multiple
+exports of one entry definition, and kernel-context intrinsics, LDS, barriers, or
+wave operations in shared helpers fail closed.
+
+The multi-result convention is an internal KIR-to-LLVM ABI, not an external Rust
+FnABI or general source-aggregate qualification. It does not transport retained
+aggregate memory, authorize source helper reads or writes, or relax capability
+and call-summary checks. Source correspondence and effect authorization remain
+separate prerequisites.
 
 The result is textual LLVM IR only. Emission uses a private 16 MiB
 capacity-limited writer; crossing the limit returns an error and exposes no
