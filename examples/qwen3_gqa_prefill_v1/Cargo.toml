@@ -1,0 +1,20 @@
+[package]
+name = "fe2o3-qwen3-gqa-prefill-v1"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+rust-version = "1.94"
+publish = false
+
+# This host/model foundation is intentionally independent of compiler,
+# artifact, runtime, and GPU crates.
+[workspace]
+resolver = "3"
+
+[dependencies]
+sha2 = "0.10"
+
+[lib]
+name = "fe2o3_qwen3_gqa_prefill_v1"
+path = "src/lib.rs"
