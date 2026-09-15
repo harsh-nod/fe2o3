@@ -110,17 +110,17 @@ cat "$positive_log"
 
 refinement_log="$tmp_dir/source-kir-refinement-positive.log"
 if ! run_verus "$refinement_proof" >"$refinement_log" 2>&1; then
-    printf 'FAIL: positive Wave64 source-model-to-Kernel-IR proof did not verify\n' >&2
+    printf 'FAIL: historical Wave64 source/KIR abstract-model proof did not verify\n' >&2
     cat "$refinement_log" >&2
     exit 1
 fi
 if ! grep -Fq 'verification results:: 10 verified, 0 errors' "$refinement_log"; then
-    printf 'FAIL: source-model-to-Kernel-IR proof emitted an unexpected verification summary\n' >&2
+    printf 'FAIL: historical source/KIR abstract-model proof emitted an unexpected verification summary\n' >&2
     cat "$refinement_log" >&2
     exit 1
 fi
 cat "$refinement_log"
-printf 'PASS: identity-bound Wave64 source-model-to-Kernel-IR refinement verified\n'
+printf 'PASS: historical Wave64 source/KIR abstract-model theorem verified; current source-to-KIR qualification remains unsupported\n'
 
 source_cpu_log="$tmp_dir/attributed-source-cpu-positive.log"
 if ! run_verus "$source_cpu_proof" >"$source_cpu_log" 2>&1; then

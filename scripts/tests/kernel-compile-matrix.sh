@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly REPO_ROOT
+python3 "${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
+
 readonly MATRIX_SCRIPT="${REPO_ROOT}/scripts/kernel-compile-matrix.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-kernel-compile-matrix-test.XXXXXXXX")"
 readonly TEST_ROOT
@@ -521,23 +523,32 @@ grep -F -- 'gfx950 OCML input digest mismatch: ocml.bc' \
   <<<"${bad_digest_output}" >/dev/null
 
 success_output="${TEST_ROOT}/success.out"
+# Parent settings must not replace the manifest's per-case selections.
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
 ROCM_PATH="${FAKE_ROCM}" \
+FE2O3_EXAMPLE_CARGO_ARGS=--no-default-features \
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
 TMPDIR="${TEST_ROOT}/tmp" \
 KERNEL_MATRIX_TEST_LOG="${LOG}" \
 KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   bash "${MATRIX_SCRIPT}" >"${success_output}" 2>&1
 
 grep -F -- \
-  'kernel compile matrix: target=gfx942 mode=compile-only kernels=5 hardware_observed=false' \
+  'kernel compile matrix: target=gfx942 mode=compile-only kernels=11 hardware_observed=false' \
   "${success_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx942 compiled=5 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx942 compiled=11 hardware_executed=0 artifacts=temporary' \
   "${success_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION gfx950 requires its separate exact ROCm 7.2.1 or 7.2.4 matrix; source-model-only, proof-only, and basic Cargo examples are not covered' \
   "${success_output}" >/dev/null
 for name in \
+  fill \
+  typed-vecadd \
+  moe-top2 \
+  wave64-collectives \
+  workgroup-collectives \
+  scalar-gemm \
   tiled-gemm \
   row-softmax \
   flash-attention \
@@ -546,8 +557,12 @@ for name in \
   [[ "$(grep -Fc -- "CASE ${name} target=gfx942 status=PASS hardware_observed=false" \
     "${success_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 5 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 11 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
+[[ "$(grep -Fc -- '--no-default-features' "${LOG}")" -eq 1 ]]
+[[ "$(grep -Fc -- '--features' "${LOG}")" -eq 1 ]]
+[[ "$(grep -Fc -- '--no-default-features --features lds-kernel' "${LOG}")" -eq 1 ]]
+grep -F -- 'MATRIX CONTRACT expected-source-inputs-only qualified=false' "${success_output}" >/dev/null
 if grep -F -- ' cargo run ' "${LOG}" >/dev/null; then
   printf '%s\n' 'compile-only matrix unexpectedly executed a host runner' >&2
   exit 1
@@ -560,6 +575,8 @@ PATH="${FAKE_BIN}:/usr/bin:/bin" \
 CARGO=cargo \
 ROCM_PATH="${FAKE_ROCM}" \
 FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST_724}" \
+FE2O3_EXAMPLE_CARGO_ARGS=--no-default-features \
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
 TMPDIR="${TEST_ROOT}/tmp" \
 KERNEL_MATRIX_TEST_LOG="${LOG}" \
 KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
@@ -624,6 +641,16 @@ done
 [[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 37 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 for features in \
+  kernel-moe-route \
+  kernel-moe-expert-rank \
+  kernel-combine-expert-ranks \
+  kernel-speculative-transaction \
+  kernel-qwen-ngram-gather \
+  kernel-stage-gradient-shard \
+  kernel-muon-update; do
+  [[ "$(grep -Fc -- "--features ${features} --lib" "${LOG}")" -eq 1 ]]
+done
+for features in \
   'kernel-moe-expert-rank\,ablation-expert-serial' \
   'kernel-speculative-transaction\,ablation-speculative-recompute-prefix' \
   'kernel-qwen-ngram-gather\,ablation-ngram-reverse-probe' \
@@ -636,6 +663,7 @@ if grep -F -- ' cargo test ' "${LOG}" >/dev/null; then
 fi
 [[ -z "$(find "${TEST_ROOT}/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]]
 
+: >"${LOG}"
 set +e
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
 CARGO=cargo \
@@ -650,6 +678,8 @@ set -e
 [[ ${gfx950_prerequisite_status} -eq 1 ]]
 grep -F -- 'gfx950 OCML manifest is not a regular non-symlink file' \
   "${TEST_ROOT}/gfx950-prerequisite.out" >/dev/null
+[[ ! -s "${LOG}" ]]
+[[ -z "$(find "${TEST_ROOT}/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]]
 if grep -F -- 'MATRIX PASS target=gfx950' \
   "${TEST_ROOT}/gfx950-prerequisite.out" >/dev/null; then
   printf '%s\n' 'gfx950 matrix ignored its exact ROCm closure prerequisite' >&2
@@ -672,6 +702,41 @@ for invocation in \
   grep -F -- 'FE2O3_EXAMPLE_COMPILE_ONLY must be 0 or 1' \
     "${TEST_ROOT}/invalid-compile-only.out" >/dev/null
 done
+
+# New ordinary-source runners cannot imply a hardware adapter.
+for package in fill vecadd moe_top2_v1 wave64_collectives_v1 workgroup_sync_v1 scalar_gemm_v1; do
+  set +e
+  FE2O3_EXAMPLE_COMPILE_ONLY=0 bash "${REPO_ROOT}/examples/$package/run-gfx942.sh" \
+    >"$TEST_ROOT/compile-only-required.out" 2>&1
+  compile_only_status=$?
+  set -e
+  [[ $compile_only_status -eq 2 ]]
+  grep -F -- 'this runner requires FE2O3_EXAMPLE_COMPILE_ONLY=1' \
+    "$TEST_ROOT/compile-only-required.out" >/dev/null
+done
+
+# A failed validator must stop before extractor Cargo or any example runner.
+mkdir -p -- "$TEST_ROOT/invalid-contract-bin"
+cat >"$TEST_ROOT/invalid-contract-bin/python3" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'rejected source-contract fixture' >&2
+exit 23
+EOF
+chmod 700 "$TEST_ROOT/invalid-contract-bin/python3"
+: >"$LOG"
+set +e
+PATH="$TEST_ROOT/invalid-contract-bin:$FAKE_BIN:/usr/bin:/bin" \
+KERNEL_MATRIX_TEST_LOG="$LOG" \
+  bash "$MATRIX_SCRIPT" gfx942 >"$TEST_ROOT/invalid-contract.out" 2>&1
+invalid_contract_status=$?
+set -e
+[[ $invalid_contract_status -eq 23 ]]
+[[ ! -s $LOG ]]
+grep -F -- 'rejected source-contract fixture' "$TEST_ROOT/invalid-contract.out" >/dev/null
+if grep -F -- 'MATRIX PASS' "$TEST_ROOT/invalid-contract.out" >/dev/null; then
+  printf '%s\n' 'matrix accepted a rejected source contract' >&2
+  exit 1
+fi
 
 set +e
 PATH="${FAKE_BIN}:/usr/bin:/bin" bash "${MATRIX_SCRIPT}" gfx000 \

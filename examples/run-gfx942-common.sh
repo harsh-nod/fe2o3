@@ -16,6 +16,11 @@ fe2o3_run_gfx942() {
         return 2
     fi
 
+    local -a example_cargo_args=()
+    if declare -p FE2O3_EXAMPLE_CARGO_ARGS &>/dev/null; then
+        example_cargo_args=("${FE2O3_EXAMPLE_CARGO_ARGS[@]}")
+    fi
+
     local repo_root toolchain root_target output_dir rocm_dir sysroot extractor
     local llvm_ir linked_ir object hsaco amd_target binding_path binding compiler_input
     repo_root=$(cd -- "$FE2O3_EXAMPLE_DIR/../.." && pwd)
@@ -60,7 +65,8 @@ fe2o3_run_gfx942() {
         CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS='-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32' \
         LD_LIBRARY_PATH="$root_target/debug/deps:$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         rustup run "$toolchain" cargo check --release --locked -Zbuild-std=core \
-            --target amdgcn-amd-amdhsa --target-dir "$amd_target" --lib
+            --target amdgcn-amd-amdhsa --target-dir "$amd_target" --lib \
+            "${example_cargo_args[@]}"
     )
 
     if [[ ! -f "$binding_path" || -L "$binding_path" ]]; then

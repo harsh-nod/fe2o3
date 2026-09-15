@@ -12,59 +12,13 @@ if (($# > 1)); then
   exit 2
 fi
 readonly TARGET="${1:-gfx942}"
-readonly -a GFX942_CASES=(
-  "tiled-gemm|examples/tiled_gemm_general_v1/run-gfx942.sh|tiled_gemm_general_v1.hsaco"
-  "row-softmax|examples/row_softmax_general_v1/run-gfx942.sh|row_softmax_general_v1.hsaco"
-  "flash-attention|examples/flash_attention_general_v1/run-gfx942.sh|flash_attention_general_v1.hsaco"
-  "grouped-expert-moe|examples/moe_grouped_expert_general_v1/run-gfx942.sh|moe_grouped_expert_general_v1.hsaco"
-  "gemm-autoresearch|examples/gemm_autoresearch_v1/run-gfx942.sh|gemm_autoresearch_v1.hsaco"
-)
-readonly -a GFX950_CASES=(
-  "fp4-gemm|examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh|gfx950-fp4-gemm.hsaco"
-  "fp8-gemm|examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh|gfx950-fp8-gemm.hsaco"
-  "fp4-attention|examples/gfx950_low_precision/run-fp4-attention-gfx950.sh|gfx950-fp4-attention.hsaco"
-  "fp8-attention|examples/gfx950_low_precision/run-fp8-attention-gfx950.sh|gfx950-fp8-attention.hsaco"
-  "kda-decode|examples/gfx950_advanced_attention/run-kda-decode-gfx950.sh|kernel-kda-decode.hsaco"
-  "kda-decode-baseline|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-kda-decode-baseline-v1.hsaco|kernel-kda-decode-baseline-v1"
-  "kda-prefill|examples/gfx950_advanced_attention/run-kda-chunkwise-prefill-gfx950.sh|kernel-kda-prefill.hsaco"
-  "kda-prefill-baseline|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-kda-prefill-baseline-v1.hsaco|kernel-kda-prefill-baseline-v1"
-  "content-sparse-attention|examples/gfx950_advanced_attention/run-content-sparse-attention-gfx950.sh|kernel-content-sparse-attention.hsaco"
-  "content-sparse-attention-reciprocal-reuse|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-content-sparse-attention-reciprocal-reuse-v1.hsaco|kernel-content-sparse-attention-reciprocal-reuse-v1"
-  "deepseek-sparse-attention|examples/gfx950_advanced_attention/run-deepseek-sparse-attention-gfx950.sh|kernel-deepseek-sparse-attention.hsaco"
-  "compressed-hybrid-attention|examples/gfx950_advanced_attention/run-compressed-hybrid-attention-gfx950.sh|kernel-compressed-hybrid-attention.hsaco"
-  "compressed-hybrid-attention-division-baseline|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-compressed-hybrid-attention-division-baseline-v1.hsaco|kernel-compressed-hybrid-attention-division-baseline-v1"
-  "attnres-aggregate|examples/gfx950_advanced_attention/run-attnres-aggregate-gfx950.sh|kernel-attnres-aggregate.hsaco"
-  "attnres-aggregate-explicit-reuse|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-attnres-aggregate-explicit-reuse-v1.hsaco|kernel-attnres-aggregate-explicit-reuse-v1"
-  "four-branch-residual|examples/gfx950_advanced_attention/run-four-branch-residual-gfx950.sh|kernel-four-branch-residual.hsaco"
-  "four-branch-residual-explicit|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-four-branch-residual-explicit-v1.hsaco|kernel-four-branch-residual-explicit-v1"
-  "mhc-sinkhorn-mix|examples/gfx950_advanced_attention/run-mhc-sinkhorn-mix-gfx950.sh|kernel-mhc-sinkhorn-mix.hsaco"
-  "mhc-sinkhorn-mix-scalar|examples/gfx950_advanced_attention/run-gfx950.sh|kernel-mhc-sinkhorn-mix-scalar-v1.hsaco|kernel-mhc-sinkhorn-mix-scalar-v1"
-  "moe-route|examples/gfx950_advanced_systems/run-moe-route-gfx950.sh|kernel-moe-route.hsaco"
-  "moe-expert-rank|examples/gfx950_advanced_systems/run-moe-expert-rank-gfx950.sh|kernel-moe-expert-rank.hsaco"
-  "moe-expert-rank-expert-serial|examples/gfx950_advanced_systems/run-moe-expert-rank-gfx950.sh|kernel-moe-expert-rank.hsaco||expert-serial"
-  "combine-expert-ranks|examples/gfx950_advanced_systems/run-combine-expert-ranks-gfx950.sh|kernel-combine-expert-ranks.hsaco"
-  "speculative-transaction|examples/gfx950_advanced_systems/run-speculative-transaction-gfx950.sh|kernel-speculative-transaction.hsaco"
-  "speculative-transaction-recompute-prefix|examples/gfx950_advanced_systems/run-speculative-transaction-gfx950.sh|kernel-speculative-transaction.hsaco||speculative-recompute-prefix"
-  "qwen-ngram-gather|examples/gfx950_advanced_systems/run-qwen-ngram-gather-gfx950.sh|kernel-qwen-ngram-gather.hsaco"
-  "qwen-ngram-gather-reverse-probe|examples/gfx950_advanced_systems/run-qwen-ngram-gather-gfx950.sh|kernel-qwen-ngram-gather.hsaco||ngram-reverse-probe"
-  "stage-gradient-shard|examples/gfx950_advanced_systems/run-stage-gradient-shard-gfx950.sh|kernel-stage-gradient-shard.hsaco"
-  "muon-update|examples/gfx950_advanced_systems/run-muon-update-gfx950.sh|kernel-muon-update.hsaco"
-  "muon-update-broadcast16|examples/gfx950_advanced_systems/run-muon-update-gfx950.sh|kernel-muon-update.hsaco||muon-broadcast16"
-  "gpt-oss-decode|examples/gfx950_gpt_oss_decode/run-gfx950.sh|kernel-gpt-oss-decode.hsaco"
-  "gpt-oss-serial-router|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-decode-router-serial.hsaco|serial-router"
-  "gpt-oss-held-fragments|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-decode-held-fragments.hsaco|held-fragments"
-  "gpt-oss-interleaved-stores|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-decode-interleaved-stores.hsaco|interleaved-stores"
-  "gpt-oss-materialized-router|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-router-component.hsaco|materialized-router"
-  "gpt-oss-materialized-attention|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-attention-component.hsaco|materialized-attention"
-  "gpt-oss-materialized-expert|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-expert-component.hsaco|materialized-expert"
-)
 declare -a CASES=()
 
 usage() {
   cat <<'EOF'
 Usage: scripts/kernel-compile-matrix.sh [gfx942|gfx950]
 
-Compile a fixed fe2o3-kernels production-source matrix through the
+Compile the manifest-enumerated ordinary-source matrix through the
 fe2o3 extractor and ROCm finalizer without executing any kernel.
 
 The gfx950 matrix defaults to the exact manifest-pinned ROCm 7.2.1 Clang, LLD,
@@ -79,11 +33,8 @@ case "${TARGET}" in
     usage
     exit 0
     ;;
-  gfx942)
-    CASES=("${GFX942_CASES[@]}")
-    ;;
-  gfx950)
-    CASES=("${GFX950_CASES[@]}")
+  gfx942 | gfx950)
+    :
     ;;
   *)
     printf 'kernel compile matrix: unsupported target: %s\n' "${TARGET}" >&2
@@ -92,11 +43,30 @@ case "${TARGET}" in
     ;;
 esac
 
+# Capture status directly: process substitution would hide validator failure.
+matrix_records=$(python3 "${REPO_ROOT}/scripts/validate-tutorial-kernel-manifest.py" \
+  --repo-root "${REPO_ROOT}" --emit-matrix "${TARGET}")
+mapfile -t CASES <<<"$matrix_records"
+if ((${#CASES[@]} == 0)) || [[ -z ${CASES[0]} ]]; then
+  printf '%s\n' 'kernel compile matrix: validated matrix is empty' >&2
+  exit 1
+fi
+printf '%s\n' 'MATRIX CONTRACT expected-source-inputs-only qualified=false policy_verification=pending semantic_oracles=pending'
+
 printf 'kernel compile matrix: target=%s mode=compile-only kernels=%d hardware_observed=false\n' \
   "${TARGET}" "${#CASES[@]}"
 if [[ ${TARGET} == gfx950 ]]; then
   printf '%s\n' \
     'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required'
+  # Check the shared prerequisite before building, independent of case order.
+  (
+    CLANG=${CLANG:-${ROCM_PATH:-/opt/rocm}/llvm/bin/clang}
+    LD_LLD=${LD_LLD:-${ROCM_PATH:-/opt/rocm}/llvm/bin/ld.lld}
+    SHA256SUM=${SHA256SUM:-sha256sum}
+    FE2O3_GFX950_OCML_MANIFEST=${FE2O3_GFX950_OCML_MANIFEST:-$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest}
+    source "$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-closure.sh"
+    validate_gfx950_ocml_closure
+  )
 fi
 
 MATRIX_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-kernel-compile-matrix.XXXXXXXX")"
@@ -123,7 +93,7 @@ fi
 
 passed=0
 for record in "${CASES[@]}"; do
-  IFS='|' read -r name runner artifact runner_arg systems_variant <<<"${record}"
+  IFS='|' read -r name runner artifact runner_arg systems_variant fixture_id <<<"${record}"
   runner_args=()
   if [[ -n ${runner_arg} ]]; then
     runner_args=("${runner_arg}")
@@ -143,8 +113,10 @@ for record in "${CASES[@]}"; do
     exit 1
   fi
 
-  printf 'CASE %s target=%s status=RUNNING\n' "${name}" "${TARGET}"
+  printf 'CASE %s target=%s status=RUNNING fixture=%s\n' "${name}" "${TARGET}" "${fixture_id}"
   env \
+    -u FE2O3_EXAMPLE_CARGO_ARGS \
+    -u FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT \
     CARGO_TARGET_DIR="${BUILD_TARGET}" \
     FE2O3_EXAMPLE_COMPILE_ONLY=1 \
     FE2O3_ROOT_TARGET_DIR="${BUILD_TARGET}" \

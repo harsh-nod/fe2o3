@@ -845,7 +845,6 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-device",
  "fe2o3-host",
- "fe2o3-kernel-ir",
  "quote",
  "sha2 0.11.0",
  "syn 2.0.119",
