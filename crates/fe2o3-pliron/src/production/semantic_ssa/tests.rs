@@ -7,6 +7,9 @@ mod partial_move_dynamic_destination_tests;
 #[path = "transparent_borrow_occurrence_tests.rs"]
 mod transparent_borrow_occurrence_tests;
 
+#[path = "streaming_replay_tests.rs"]
+mod streaming_replay_tests;
+
 use crate::ProductionSemanticMirLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, InertSemanticMirRequestV1, SemanticAbiIdentityV1,

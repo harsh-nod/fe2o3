@@ -195,29 +195,51 @@ pub(super) fn derive_semantic_ssa_identity_v1(
     plans: &[ProductionSemanticSsaFunctionPlanV1],
     summary: ProductionSemanticSsaSummaryV1,
 ) -> ProductionSemanticSsaIdentityV1 {
+    let mut digest = begin_semantic_ssa_identity_v1(source_semantic_sha256, plans.len());
+    for function in plans {
+        hash_semantic_ssa_function_plan_v1(&mut digest, function);
+    }
+    finish_semantic_ssa_identity_v1(digest, summary)
+}
+
+pub(super) fn begin_semantic_ssa_identity_v1(
+    source_semantic_sha256: &[u8; 32],
+    function_count: usize,
+) -> Sha256 {
     let mut digest = Sha256::new();
     digest.update(PRODUCTION_SEMANTIC_SSA_IDENTITY_DOMAIN_V1);
     digest.update(source_semantic_sha256);
-    hash_usize_v1(&mut digest, plans.len());
-    for function in plans {
-        digest.update(function.function.index().to_le_bytes());
-        digest.update(function.function_identity.as_bytes());
-        digest.update(function.plan.identity().as_bytes());
-        hash_resource_report_v1(&mut digest, function.plan.resources());
-        hash_usize_v1(&mut digest, function.partial_moves.projected_moves());
-        hash_usize_v1(&mut digest, function.partial_moves.state_entries());
-        hash_usize_v1(&mut digest, function.partial_moves.work_units());
-        hash_usize_v1(&mut digest, function.auxiliary_resources.storage_words);
-        hash_usize_v1(&mut digest, function.auxiliary_resources.work_units);
-        hash_usize_v1(&mut digest, function.implicit_entry_variables.len());
-        for variable in &function.implicit_entry_variables {
-            digest.update(variable.get().to_le_bytes());
-        }
-        hash_usize_v1(&mut digest, function.retained_cross_edge_variables.len());
-        for variable in &function.retained_cross_edge_variables {
-            digest.update(variable.get().to_le_bytes());
-        }
+    hash_usize_v1(&mut digest, function_count);
+    digest
+}
+
+pub(super) fn hash_semantic_ssa_function_plan_v1(
+    digest: &mut Sha256,
+    function: &ProductionSemanticSsaFunctionPlanV1,
+) {
+    digest.update(function.function.index().to_le_bytes());
+    digest.update(function.function_identity.as_bytes());
+    digest.update(function.plan.identity().as_bytes());
+    hash_resource_report_v1(digest, function.plan.resources());
+    hash_usize_v1(digest, function.partial_moves.projected_moves());
+    hash_usize_v1(digest, function.partial_moves.state_entries());
+    hash_usize_v1(digest, function.partial_moves.work_units());
+    hash_usize_v1(digest, function.auxiliary_resources.storage_words);
+    hash_usize_v1(digest, function.auxiliary_resources.work_units);
+    hash_usize_v1(digest, function.implicit_entry_variables.len());
+    for variable in &function.implicit_entry_variables {
+        digest.update(variable.get().to_le_bytes());
     }
+    hash_usize_v1(digest, function.retained_cross_edge_variables.len());
+    for variable in &function.retained_cross_edge_variables {
+        digest.update(variable.get().to_le_bytes());
+    }
+}
+
+pub(super) fn finish_semantic_ssa_identity_v1(
+    mut digest: Sha256,
+    summary: ProductionSemanticSsaSummaryV1,
+) -> ProductionSemanticSsaIdentityV1 {
     hash_summary_v1(&mut digest, summary);
     ProductionSemanticSsaIdentityV1(digest.finalize().into())
 }

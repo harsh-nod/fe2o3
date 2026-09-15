@@ -553,9 +553,23 @@ impl ProductionSemanticSsaOwnerV1 {
         if self.source_semantic_sha256 != *self.source_semantic().semantic_sha256().as_bytes() {
             return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
         }
-        let (plans, summary, identity) =
-            construct_semantic_ssa_plans_v1(self.source_semantic(), self.limits)?;
-        if plans != self.plans || summary != self.summary || identity != self.identity {
+        let semantic = self.source_semantic();
+        let mut expected = self.plans.iter();
+        let mut plans_match = self.plans.len() == semantic.functions().len();
+        let mut digest = begin_semantic_ssa_identity_v1(
+            semantic.semantic_sha256().as_bytes(),
+            semantic.functions().len(),
+        );
+        // Keep construction/limit errors ahead of ReplayMismatch, but release
+        // each fresh function plan before constructing the next one.
+        let summary = walk_semantic_ssa_plans_v1(semantic, self.limits, |plan| {
+            hash_semantic_ssa_function_plan_v1(&mut digest, &plan);
+            if expected.next().is_none_or(|expected| expected != &plan) {
+                plans_match = false;
+            }
+        })?;
+        let identity = finish_semantic_ssa_identity_v1(digest, summary);
+        if !plans_match || summary != self.summary || identity != self.identity {
             return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
         }
         Ok(())
@@ -619,6 +633,18 @@ fn construct_semantic_ssa_plans_v1(
     ProductionSemanticSsaErrorV1,
 > {
     let mut plans = Vec::with_capacity(semantic.functions().len());
+    let summary = walk_semantic_ssa_plans_v1(semantic, limits, |plan| plans.push(plan))?;
+    let plans = plans.into_boxed_slice();
+    let identity =
+        derive_semantic_ssa_identity_v1(semantic.semantic_sha256().as_bytes(), &plans, summary);
+    Ok((plans, summary, identity))
+}
+
+fn walk_semantic_ssa_plans_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    limits: ProductionSemanticSsaLimitsV1,
+    mut visit: impl FnMut(ProductionSemanticSsaFunctionPlanV1),
+) -> Result<ProductionSemanticSsaSummaryV1, ProductionSemanticSsaErrorV1> {
     let mut summary = ProductionSemanticSsaSummaryV1 {
         function_count: semantic.functions().len(),
         ..ProductionSemanticSsaSummaryV1::default()
@@ -640,12 +666,9 @@ fn construct_semantic_ssa_plans_v1(
             function.locals().len(),
             limits,
         )?;
-        plans.push(function_plan);
+        visit(function_plan);
     }
-    let plans = plans.into_boxed_slice();
-    let identity =
-        derive_semantic_ssa_identity_v1(semantic.semantic_sha256().as_bytes(), &plans, summary);
-    Ok((plans, summary, identity))
+    Ok(summary)
 }
 
 /// Constructs the canonical bounded SSA plan for one admitted semantic function.
@@ -881,7 +904,9 @@ mod adapter;
 mod partial_moves;
 
 use accounting::{
-    accumulate_summary_v1, derive_semantic_ssa_identity_v1, retained_cross_edge_variables_v1,
+    accumulate_summary_v1, begin_semantic_ssa_identity_v1, derive_semantic_ssa_identity_v1,
+    finish_semantic_ssa_identity_v1, hash_semantic_ssa_function_plan_v1,
+    retained_cross_edge_variables_v1,
 };
 pub use adapter::authenticated_ambient_workgroup_lds_scope_zst_v1;
 use adapter::{
