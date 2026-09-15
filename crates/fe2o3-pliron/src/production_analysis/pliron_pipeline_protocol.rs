@@ -1232,6 +1232,10 @@ fn report(finding: PlironPipelineProtocolFindingV1) -> PlironPipelineProtocolRep
 
 include!("pliron_pipeline_protocol/resource_tests.rs");
 
+#[cfg(test)]
+#[path = "pliron_pipeline_protocol/dynamic_coordinate_order_v1_tests.rs"]
+mod dynamic_coordinate_order_v1_tests;
+
 include!("pliron_pipeline_protocol/concrete_cfg_v1_tests.rs");
 
 #[cfg(test)]

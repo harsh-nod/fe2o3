@@ -215,7 +215,7 @@ mod resource_upper_bound_tests {
         let mut context = Context::new();
         register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
         let value = IndexConstantOp::new(&mut context, 7).result(&context);
-        let left = HashSet::from([vec![value; ARITY]]);
+        let left = vec![vec![value; ARITY]];
         let right = left.clone();
         let mut exact_resources = EquivalenceResourceMeterV1::new(ARITY * 2, 0).unwrap();
         assert!(coordinate_sets_equivalent_v1(

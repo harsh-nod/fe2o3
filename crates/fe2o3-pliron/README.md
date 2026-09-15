@@ -232,6 +232,15 @@ source order, making resource-sensitive comparison order deterministic. The
 existing access-pair query bound covers this route; dynamic-loop matching and
 its separate rules are unchanged.
 
+Dynamic staging and consuming windows also retain coordinate occurrences in
+source order, so shared equivalence-memo warming and exhaustion are deterministic.
+Matching remains bidirectional set membership: duplicate access counts need not
+agree, but every coordinate must have an equivalent counterpart. Actual access
+counters and lifecycle/empty-window checks are unchanged, and the existing
+access-pair resource bound includes all occurrences without deduplication.
+Matching stops at shared equivalence-budget exhaustion; a later identical or
+memoized candidate cannot revive it, and the protocol report remains incomplete.
+
 Cross-block regressions also run through the closed public entry point:
 
 ```sh

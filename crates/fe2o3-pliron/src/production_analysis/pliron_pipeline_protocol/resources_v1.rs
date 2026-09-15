@@ -31,6 +31,10 @@ fn pipeline_equivalence_query_upper_bound_v1(
         checked_pipeline_product_v1(census.ranked_accesses, census.ranked_accesses)?;
     // Coordinate comparison is bidirectional for every create. Aliased
     // creations can each reuse the same access slice.
+    // Dynamic vectors retain all occurrences: a canonical window of C rows
+    // compares with windows totaling at most A rows, costing at most 2*C*A*M
+    // queries, where C<=A and M is the maximum arity. Deduplication is not a
+    // premise of this bound, including failed and memo-hit comparisons.
     // A concrete create instead compares each read with source-ordered writes
     // in the same epoch, using at most A^2*arity metered queries (including
     // failed matches). Concrete/dynamic routes are exclusive per create, so
