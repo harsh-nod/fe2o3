@@ -30,9 +30,6 @@ pub fn bf16_matrix_storage_fixture(
     }
     let invocation = thread::index_1d();
     let raw = invocation.get();
-    if raw >= 128 {
-        trap();
-    }
     let column_base = (raw / 64) * 16;
     let lane = WaveLane::<Wave64>::current();
     let Ok(left) = Bf16MfmaAMatrix::row_major(left, 0, 5, 32, 32) else {
