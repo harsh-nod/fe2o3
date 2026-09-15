@@ -1,0 +1,59 @@
+{
+  "accepted": false,
+  "scope": "R121 local CPU/test qualification collector; not native, formal, memory-bound or performance acceptance",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "collector": {
+    "name": "r121-development-qualification-collect-v5.js",
+    "sha256": "aa7db3e70084fcdf1e3824fb34f9264ab2a10059e464c74f7359ddf8613f8ef3",
+    "review": "V5 binds the narrowly corrected standalone lockfile parser and thirty exact calibration cases; independent delta review requested before collection."
+  },
+  "runner": {
+    "name": "r121-development-run-v1.js",
+    "sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1"
+  },
+  "inputs": {
+    "r121-development-mutations-v2.json": "bfbda6d05aac8905934b1a9b406d3e1a4f57fe2b8d3865c0b6a0808beb7ffe81",
+    "r121-development-gates-v2.json": "7db1c9671038939caf37860e43a81fd4ad864ba979babc370f71714c4518f28f",
+    "r121-development-musl-retry1-inputs-v1.json": "479bf5f21a311a29361ddcce17139d9e31187bdf568429a63e50a34f46a25aec",
+    "r121-development-gate-check-inputs-v3.json": "7d91d2ccaac155f081937d115e455aaa9bf23c0e8a3c289d8adc238e5eb91e2e",
+    "r121-development-gate-parser-inputs-v3.json": "f15355e6e883bca002dfc46eba35e8e397c21c0f5176dab8c10277c0f55f5553"
+  },
+  "run": "r121-development-qualification-collect-v5",
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r121-development-qualification-collect-v5.js"
+  ],
+  "predecessor": "r121-development-gate-check-all-v4.json",
+  "preserved_drafts": [
+    {
+      "name": "r121-development-qualification-collect-v1.js",
+      "sha256": "d4bad4119b8fea86a35e489470a82a2e3de8a80d05d4cb064941190c222cac92",
+      "status": "syntax-only; static review rejected gate-report trust, calibration roster, final panic location and inventory membership checks"
+    },
+    {
+      "name": "r121-development-qualification-collect-v2.js",
+      "sha256": "313eeec870f834b607d5414f74560d66b235b20175352a4ae8c5169f4e741c2f",
+      "status": "syntax-only; closes gate replay, calibration roster and inventory membership; superseded by v3 final panic location and abort checks"
+    },
+    {
+      "name": "r121-development-qualification-collect-v3.js",
+      "sha256": "75af03037c7803da921d2bbe917b14ac2dbeda1f5c262f6f98135fbe03c417ce",
+      "status": "Syntax-only with passing static review; no qualification invocation. Its original musl-v1 prerequisite timed out; v4 binds a separately declared retry without changing runtime acceptance criteria."
+    },
+    {
+      "name": "r121-development-qualification-collect-v4.js",
+      "sha256": "60684102949e89b14f6c69216a91c5e8f3277b18859434c7853200e34b5b2a69",
+      "status": "Syntax/static reviewed only, never collected. Superseded after standalone-lockfile transcript checker rejected an exact Cargo package-cache wait line from a normal passing command."
+    }
+  ],
+  "constraints": [
+    "Execute only after all 27 declared gates, exact helper calibrations and all 26 corrected negative/check/restoration sequences are closed.",
+    "Preserve all raw failures, interrupted runs and superseded drafts; history is not current-cohort qualification.",
+    "Runner output must close normally with unchanged source map and no live owned process-group members.",
+    "Qualification collector output and its closed run outputs require separate archive assembly and independent audit before publication."
+  ],
+  "rejected_musl_history": "r121-development-musl-all-v1 and its timeout note remain immutable rejected history; only a complete normal retry may supply the musl gate.",
+  "rejected_helper_history": "The closed r121-development-gate-check-standalone-v3-rejected record retains the original strict parser rejection. Its source gate passed normally; no raw transcript was modified or gate command repeated."
+}
+

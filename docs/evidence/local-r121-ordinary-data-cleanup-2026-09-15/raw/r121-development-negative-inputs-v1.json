@@ -1,0 +1,21 @@
+{
+  "accepted": false,
+  "scope": "Eight bounded development production mutations, not complete packet qualification or formal/native/performance evidence.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "19b8774019ea6c5f70aa90cfdaa5458282c389f31201a584d098156b9e2e7332",
+  "source_identities": 5696,
+  "inputs": {
+    "r121-development-mutations-v1.json": "a29ed2371ff07eaa205c61e70b88f5cdec6621aeac0882af9341ab0682c4dd74",
+    "r121-development-run-v1.js": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1",
+    "r121-development-check-v2.js": "e2903aeffc980438ebd017dcc94bfc9b97336f33d5bc8bfff1a728a697e33efa"
+  },
+  "derivation_only_input": {
+    "r119-integrated-mutation-core-v1.js": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583"
+  },
+  "baseline": "r121-development-kfd-all-v1.json",
+  "baseline_requirement": "Exact 1172-test pass, exit zero, unchanged full source map, closed child and empty owned process group, valid raw UTC/boot/monotonic record.",
+  "execution_policy": "Primary applies one declared mutation using apply_patch, executes the exact selected behavioral test through the pinned runner with the baseline predecessor, validates the closed child and intended final assertion, then restores only its owned mutation using apply_patch and checks the entire baseline map before the next case.",
+  "restoration_scope": "The checker restored mode proves source equality only. Primary must separately observe child/process-group closure before restoration; unknown or live child state does not authorize a source rewrite.",
+  "rejected_history": "Preserve any compile failure, unexpected oracle, timeout or failed restoration without accepting it as the intended behavioral negative. Do not overwrite run artifacts or either earlier checker version.",
+  "claims_excluded": ["continuous source immutability", "complete property coverage", "external proof toolchain authentication", "Linux/KFD hardware execution", "formal refinement", "aggregate retained-memory bound", "HIP/HSA performance parity"]
+}

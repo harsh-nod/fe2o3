@@ -1,0 +1,55 @@
+{
+  "accepted": false,
+  "run": "r121-development-musl-retry1",
+  "predecessor": "r121-development-musl-all-v1.json",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--no-fail-fast",
+    "-p",
+    "fe2o3-completion",
+    "-p",
+    "fe2o3-runtime-model",
+    "-p",
+    "fe2o3-resource-accounting",
+    "-p",
+    "fe2o3-kfd",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--all-targets",
+    "--target",
+    "x86_64-unknown-linux-musl"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map": "r121-development-corrected-format-v1-source.json",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "runner": "r121-development-run-v1.js",
+  "runner_sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1",
+  "deadline_ms": 1800000,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "rejected_attempt": {
+    "name": "r121-development-musl-all-v1",
+    "role": "chronology and rejected timeout history only; never a passing gate",
+    "record_sha256": "045f39549839fb8485845f7be86a2475cb4c635a3d1271d3dbf49afb497a0e98",
+    "log_sha256": "971b112efb4a2b0645c897d94b784b6b159cbf8bff85d3010ee36efe73240660",
+    "source_file_sha256": "c26991ea92c8373200ea11f47daeca3ef3a5c97f8bd408b506a9f0fb43bcfa54",
+    "source_after_file_sha256": "c26991ea92c8373200ea11f47daeca3ef3a5c97f8bd408b506a9f0fb43bcfa54",
+    "predecessor": "r121-development-corrected-restored-data-v1.json"
+  },
+  "requirements": [
+    "The failed attempt remains immutable and cannot provide passing evidence.",
+    "The retry uses the identical source cohort, command, environment and deadline.",
+    "Require the entire exact 49-target roster, 48 completed libtest harnesses, 2818 passed and 5 ignored, and the declared harnessless CSV target.",
+    "Require normal exit zero, unchanged endpoint source maps and no remaining live owned process-group members."
+  ]
+}

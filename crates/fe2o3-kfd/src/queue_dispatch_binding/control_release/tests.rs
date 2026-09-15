@@ -14,6 +14,9 @@ mod detached;
 #[path = "persistent_tests.rs"]
 mod persistent;
 
+#[path = "ordinary_tests.rs"]
+mod ordinary;
+
 #[derive(Debug, Eq, PartialEq)]
 struct HostFacts {
     gpu_va: u64,
@@ -534,7 +537,8 @@ fn assert_interrupted(r: &mut Root, before: &Snapshot, index: usize, owner: &str
             Some(match before.mode {
                 Mode::AfterRecycle => before.generation.returned_generation().unwrap(),
                 Mode::ReturningDestroy => before.generation.returning_destroy_generation().unwrap(),
-                Mode::DetachedPersistent { .. }
+                Mode::Ordinary
+                | Mode::DetachedPersistent { .. }
                 | Mode::PersistentBeforePublication
                 | Mode::PersistentAfterRecycle => unreachable!(),
             })

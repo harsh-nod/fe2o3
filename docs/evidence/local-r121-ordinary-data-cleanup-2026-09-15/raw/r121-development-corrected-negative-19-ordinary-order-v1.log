@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention' (2969918) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs:368:9:
+assertion `left == right` failed: exact data cleanup arguments and forward order
+  left: [UnmapGpu(3, 0), UnmapCpu(155648, 129316902038352, 4096), Free(3), ReleaseVa(155648, 4096), UnmapGpu(1, 0), UnmapCpu(131072, 129316902013568, 8192), Free(1), ReleaseVa(131072, 8192), UnmapGpu(2, 0), UnmapCpu(143360, 129316902027712, 8192), Free(2), ReleaseVa(143360, 8192), UnmapGpu(8, 0), UnmapCpu(196608, 129316902054992, 4096), Free(8), ReleaseVa(196608, 4096), UnmapGpu(7, 0), UnmapCpu(188416, 129316902047408, 4096), Free(7), ReleaseVa(188416, 4096), UnmapGpu(6, 0), Free(6), ReleaseVa(180224, 4096), UnmapGpu(5, 0), Free(5), ReleaseVa(172032, 4096), UnmapGpu(4, 0), Free(4), ReleaseVa(163840, 4096)]
+ right: [UnmapGpu(3, 0), UnmapCpu(155648, 129316902038352, 4096), Free(3), ReleaseVa(155648, 4096), UnmapGpu(1, 0), UnmapCpu(131072, 129316902013568, 8192), Free(1), ReleaseVa(131072, 8192), UnmapGpu(2, 0), UnmapCpu(143360, 129316902027712, 8192), Free(2), ReleaseVa(143360, 8192), UnmapGpu(4, 0), Free(4), ReleaseVa(163840, 4096), UnmapGpu(5, 0), Free(5), ReleaseVa(172032, 4096), UnmapGpu(6, 0), Free(6), ReleaseVa(180224, 4096), UnmapGpu(7, 0), UnmapCpu(188416, 129316902047408, 4096), Free(7), ReleaseVa(188416, 4096), UnmapGpu(8, 0), UnmapCpu(196608, 129316902054992, 4096), Free(8), ReleaseVa(196608, 4096)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1171 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

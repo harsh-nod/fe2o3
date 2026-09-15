@@ -1,0 +1,69 @@
+{
+  "accepted": false,
+  "scope": "Archive assembly of closed R121 local CPU/test qualification evidence, not native/formal/performance acceptance",
+  "assembler": {
+    "name": "r121-development-archive-v4.js",
+    "sha256": "bb22f0667a6261ec60112367883e872873abca0928d6637cdfc60f30e2d1a567",
+    "review": "V4 binds corrected collector-v6/QI-v4 and thirty calibrations; independent final binding review precedes assembly."
+  },
+  "qualification_inputs": {
+    "name": "r121-development-qualification-inputs-v4.json",
+    "sha256": "b73f84b689968e8a4fe494848e28ff6706f8e03a9552c521ce497a35b53bc7ea"
+  },
+  "collector": {
+    "name": "r121-development-qualification-collect-v6.js",
+    "sha256": "c5ac13fef52ea3e29d6428ba391db50216a5a4e0891661d717341320b8da1c66"
+  },
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r121-development-archive-v4.js"
+  ],
+  "destination": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15",
+  "invocation": "Direct node invocation after collector-v6's closed runner outputs; do not wrap assembly in a new evidence runner output family.",
+  "preserved_draft": {
+    "name": "r121-development-archive-v1.js",
+    "sha256": "623a6309d750fc8c09c69b74e93140772bebe672701b1204e6dda023ca907819",
+    "status": "Syntax-only; preserved after static review required external evidence namespace membership checks."
+  },
+  "policy": [
+    "Finalize assembler and its inputs before collecting; later added external evidence files must not silently disappear from the archive.",
+    "Require normal closed collector, exact read-only replay, input and output hash equality, exact namespace membership, unchanged source identities and no overwriting.",
+    "Generated archive metadata remains pending independent archive review and publication."
+  ],
+  "preserved_successors": [
+    {
+      "name": "r121-development-archive-v2.js",
+      "sha256": "f8b3cd63f73afc5ef568bc633a74fd76233e3f52fbd72efc33933c96be5008ec",
+      "status": "Syntax/static reviewed only, unexecuted; superseded after standalone-lockfile checker correction."
+    },
+    {
+      "name": "r121-development-archive-v3.js",
+      "sha256": "32e476ad2ce87a83ea6d630b17596d205e00a20c40f48662d8e4c695f585e90f",
+      "status": "Syntax-only, unexecuted; superseded after collector-v5 unique calibration count correction."
+    }
+  ],
+  "resume": {
+    "name": "r121-development-run-leaves-v2.js",
+    "sha256": "804222c3bb988bb6dc4501e6448f4678945c5b5480cdf0fc14001dd7bf205a5a",
+    "scope": "Revalidates first fifteen raw gate commands and runs only gates 16-25, preserving exact source and original gate plan."
+  },
+  "cache_wait_history": {
+    "raw_gate": {
+      "name": "r121-development-gate-standalone-lockfiles-v1.json",
+      "sha256": "bb275a8f5aed6298fcabc98679ad37ff93b3933247d98196c0b249e00130eb46"
+    },
+    "rejected_checker": {
+      "name": "r121-development-gate-check-standalone-v3-rejected.json",
+      "sha256": "9824fbab351c9b12f5fae144c3155ba78f6d64e25bae5e02f2e35f8de298d049"
+    },
+    "calibration": {
+      "name": "r121-development-gate-parser-calibration-v4.json",
+      "sha256": "47dc670694b30deebab387c8bc7dba0f0e4b70350021b83f24ec326c0f64d76c"
+    },
+    "corrected_checker": {
+      "name": "r121-development-gate-check-standalone-v4.json",
+      "sha256": "32c760434ca2afb75a9743c2105dffeb4fc05faea0a4e6d7fda4c80ee161cb6e"
+    }
+  }
+}
+

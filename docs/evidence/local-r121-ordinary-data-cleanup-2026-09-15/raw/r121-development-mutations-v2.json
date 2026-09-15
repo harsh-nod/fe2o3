@@ -1,0 +1,644 @@
+{
+  "accepted": false,
+  "scope": "Corrected-source local regression and 26 planned behavioral negative executions over 25 distinct production mutations; not full packet, formal, native or performance acceptance.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map": "r121-development-corrected-format-v1-source.json",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "runner": "r121-development-run-v1.js",
+  "runner_sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1",
+  "mutations": [
+    {
+      "id": "01-active-owner",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+      "oracle": [
+        "retained active ordinary data"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    pub(in crate::queue) fn release_ordinary_in_place(",
+          "end": "    fn release_control_phase("
+        },
+        "edits": [
+          [
+            "self.active_data = Some(DataCleanupCustodyV1::from_authority(data));\n            let active = self.active_data.as_mut().expect(\"rooted active data\");",
+            "let mut unrooted = DataCleanupCustodyV1::from_authority(data);\n            let active = &mut unrooted;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "c05fcd079b66f4cc8b932de104a30bea54af0d94e95ef8dce27da69da758fb53"
+    },
+    {
+      "id": "02-suffix-owner",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: []"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    pub(in crate::queue) fn release_ordinary_in_place(",
+          "end": "    fn release_control_phase("
+        },
+        "edits": [
+          [
+            "for data in self.remaining_data.by_ref() {",
+            "for data in core::mem::replace(&mut self.remaining_data, Vec::new().into_iter()) {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "abc86eea3307322e4aabe2da03d1a6f99c914781a138a65262cf3a791003c49f"
+    },
+    {
+      "id": "03-interrupted-receipt",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: \"Unmapped\"",
+        "right: \"NativeDisposed\""
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "edits": [
+          [
+            "// Disposal can finish before closing currentness/accounting returns or unwinds.\n    custody.retain_disposed_receipt();",
+            "// Disposal can finish before closing currentness/accounting returns or unwinds."
+          ]
+        ]
+      },
+      "expected_file_sha256": "3ec4ea324bb104578fd77e6400f335111c299a7f6f8e6075c5618fa77d00c9c7"
+    },
+    {
+      "id": "04-free-currentness-order",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: [(false, None), (false, None), (false, None)]",
+        "right: [(false, None), (true, Some(true)), (false, None)]"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+        "scope": {
+          "start": "    fn release_device_memory_inner(",
+          "end": "    fn index<P: GttProfileV1, S: GttAllocationStateV1>("
+        },
+        "edits": [
+          [
+            "progress.free.attempted = true;",
+            "self.check_currentness()?;\n        progress.free.attempted = true;"
+          ],
+          [
+            "self.device_memory[index].handle = None;\n        self.check_currentness()?;\n        let release_result = {",
+            "self.device_memory[index].handle = None;\n        let release_result = {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "60878df46e14c4894b829f3d76de1ef4d40d139777b800070623b79d5f295da7"
+    },
+    {
+      "id": "05-inflight-admission",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_roots_owner_before_poison_or_inflight_rejection",
+      "oracle": [
+        "ordinary cleanup unexpectedly succeeded"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "edits": [
+          [
+            "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_prepared()?;",
+            "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_not_poisoned()?;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "52d602f67f90147b560dae60dd8c5947520991d289cc000bbca339bfadd97945"
+    },
+    {
+      "id": "06-ordinary-success",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention",
+      "oracle": [
+        "called `Result::unwrap()` on an `Err` value: ResourcePhase"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "pub(super) fn release_ordinary_with_v1(",
+          "end": "pub(super) fn release_returning_with_v1("
+        },
+        "edits": [
+          [
+            "Ok(Ok(())) => Ok(()),",
+            "Ok(Ok(())) => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),"
+          ]
+        ]
+      },
+      "expected_file_sha256": "aeaa3a0f88203bfe377a1f59ea12b5492419c417389872cdff1dca6cf69896fa"
+    },
+    {
+      "id": "07-typed-success",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_consuming_wrapper_returns_success_without_retention",
+      "oracle": [
+        "called `Result::unwrap()` on an `Err` value: InvalidAllocationAuthority"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "pub(super) fn release_owned_with_v1(",
+          "end": "#[cfg(test)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct DataCleanupObservationV1"
+        },
+        "edits": [
+          [
+            "Ok(Ok(())) => Ok(()),",
+            "Ok(Ok(())) => Err(MemorySessionError::InvalidAllocationAuthority),"
+          ]
+        ]
+      },
+      "expected_file_sha256": "5ab17a0a00fdf4cbe56eebd86b76310b850ae4c485a290e40d252326f9a407fe"
+    },
+    {
+      "id": "08-receipt-identity",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once",
+      "oracle": [
+        "assertion `left == right` failed: exact retained device token or receipt"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "impl DeviceReceiptV1 {",
+          "end": "enum OwnerV1 {"
+        },
+        "edits": [
+          [
+            "identity: lease.storage_identity(),",
+            "identity: Gfx942DeviceMemoryIdentityV1 {\n                generation: lease.storage_identity().generation.wrapping_add(1),\n                ..lease.storage_identity()\n            },"
+          ]
+        ]
+      },
+      "expected_file_sha256": "d09deb21e1f9f544f0c766b86de773875e794595e07e1fdd7976309268b7e1c8"
+    },
+    {
+      "id": "09-cold-ordinary-mode",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes",
+      "oracle": [
+        "assertion failed:",
+        "root.release_in_place(&mut memory)",
+        "Gfx942DispatchBindingErrorV1::ResourcePhase"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    pub(in crate::queue) fn release_in_place(",
+          "end": "    pub(in crate::queue) fn release_ordinary_in_place("
+        },
+        "edits": [
+          [
+            "        if self.mode == ReturningControlModeV1::Ordinary {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n",
+            ""
+          ]
+        ]
+      },
+      "expected_file_sha256": "76616b7ee0585f7e29f6fa5d0c11c96dc884e3ae9ada71b830b46aa19e1482e0"
+    },
+    {
+      "id": "10-initialized-content",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once",
+      "oracle": [
+        "assertion `left == right` failed",
+        "left: None",
+        "right: Some(Gfx942DeviceContentDescriptorV1"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "    fn metadata(&self) -> DataCleanupMetadataV1 {",
+          "end": "\n}\n\n// Consumes the lease without retaining any operation that can revive authority."
+        },
+        "edits": [
+          [
+            "                initialized_content: data.initialized_content(),",
+            "                initialized_content: None,"
+          ]
+        ]
+      },
+      "expected_file_sha256": "9c5ba90c5dc524540b0f6d47a2c604c166e2ce181d17c67b73fcc1a30edc719e"
+    },
+    {
+      "id": "11-ordinary-incomplete",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes",
+      "oracle": [
+        "ordinary cleanup unexpectedly succeeded"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    pub(in crate::queue) fn release_ordinary_in_place(",
+          "end": "    fn release_control_phase("
+        },
+        "edits": [
+          [
+            "            if !active.is_complete() {\n                return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n            }\n",
+            ""
+          ]
+        ]
+      },
+      "expected_file_sha256": "55453e9dcf80ebc3aea0cd5b6d7f5d258809f8f88bfb2040e67dee8d723ac8eb"
+    },
+    {
+      "id": "12-typed-incomplete",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks",
+      "oracle": [
+        "assertion failed:",
+        "data_cleanup::release_owned_with_v1(root, &mut Incomplete,",
+        "is_err()"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "pub(super) fn release_owned_with_v1(",
+          "end": "#[cfg(test)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct DataCleanupObservationV1"
+        },
+        "edits": [
+          [
+            "        if !custody.is_complete() {\n            return Err(MemorySessionError::InvalidAllocationAuthority);\n        }\n",
+            ""
+          ]
+        ]
+      },
+      "expected_file_sha256": "963101684eb8fbb021fe7a8537ed87509288d9844e52ff092267a134de41f89a"
+    },
+    {
+      "id": "13-typed-retry",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once",
+      "oracle": [
+        "assertion failed:",
+        "memory.release_data(root)",
+        "MemorySessionError::InvalidAllocationAuthority"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "pub(super) fn release_v1<B: MemoryBackend>(",
+          "end": "pub(super) fn release_owned_with_v1("
+        },
+        "edits": [
+          [
+            "    if custody.started {\n        return Err(MemorySessionError::InvalidAllocationAuthority);\n    }",
+            "    if custody.started {\n        return Ok(());\n    }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "03c43c436266c75e32f8af5f7dfaad8df9c2525c092af36efc4733e654b6d7d6"
+    },
+    {
+      "id": "14-ordinary-retry",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_preserves_vacant_generation_policy_without_output_allocation",
+      "oracle": [
+        "assertion failed:",
+        "root.release_ordinary_in_place(memory)",
+        "Gfx942DispatchBindingErrorV1::ResourcePhase"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    fn release_control_phase(",
+          "end": "    fn release_controls("
+        },
+        "edits": [
+          [
+            "        if self.started {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }",
+            "        if self.started {\n            return Ok(());\n        }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "de6777973d3fae5bc4f7e7e204eac08c29a7fe89d6d114fb132317ad67abbe62"
+    },
+    {
+      "id": "15-device-pre-effect",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_rejection_keeps_healthy_receiving_session_unchanged",
+      "oracle": [
+        "assertion `left == right` failed",
+        "phase: Quarantined"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "pub(super) fn release_v1<B: MemoryBackend>(",
+          "end": "pub(super) fn release_owned_with_v1("
+        },
+        "edits": [
+          [
+            "            if custody.unmap.attempted {\n                engine.quarantine(error)\n            } else {\n                Err(error)\n            }",
+            "            engine.quarantine(error)"
+          ]
+        ]
+      },
+      "expected_file_sha256": "f9794fecf6019b65d6a3d29324576f0cb7392851a2be5830f65ffcb103136008"
+    },
+    {
+      "id": "16-host-pre-effect",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_rejection_keeps_healthy_receiving_session_unchanged",
+      "oracle": [
+        "assertion `left == right` failed",
+        "phase: Quarantined"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs",
+        "edits": [
+          [
+            "            if matches!(custody.token, Some(ControlTokenV1::MappedHostData(_)))\n                && !custody.unmap.attempted\n            {\n                Err(error)\n            } else {\n                engine.quarantine(error)\n            }",
+            "            engine.quarantine(error)"
+          ]
+        ]
+      },
+      "expected_file_sha256": "86777e1fba1f79a6edaf8a9085789b2c14a896552042d52d4087f1490cc0a559"
+    },
+    {
+      "id": "17-device-unmap-prefix",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_partial_unmap_results",
+      "oracle": [
+        "called `Result::unwrap_err()` on an `Ok` value: ()"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+        "scope": {
+          "start": "    fn unmap_device_memory_inner(",
+          "end": "    fn release_device_memory("
+        },
+        "edits": [
+          [
+            "if outcome.value != 1 {",
+            "if false {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "b82727f2f5c2584c8484192be506e46f1bb7c875eaa6c42cffc7900192a09fd2"
+    },
+    {
+      "id": "18-device-accounting",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_terminal_receipt_on_accounting_underflow",
+      "oracle": [
+        "called `Result::unwrap_err()` on an `Ok` value: ()"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+        "scope": {
+          "start": "    fn release_device_memory_inner(",
+          "end": "    fn index<P: GttProfileV1, S: GttAllocationStateV1>("
+        },
+        "edits": [
+          [
+            ".checked_sub(lease.layout.backing_bytes)",
+            ".checked_sub(0)"
+          ]
+        ]
+      },
+      "expected_file_sha256": "f06f8b15c2d3f202068f454d1b58d3b5f6a016b899b29f3c34a24082be4edbf7"
+    },
+    {
+      "id": "19-ordinary-order",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention",
+      "oracle": [
+        "assertion `left == right` failed: exact data cleanup arguments and forward order"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    pub(in crate::queue) fn release_ordinary_in_place(",
+          "end": "    fn release_control_phase("
+        },
+        "edits": [
+          [
+            "for data in self.remaining_data.by_ref() {",
+            "for data in self.remaining_data.by_ref().rev() {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "3ae554afa517b54f6446678ef789a2de7c38801695c756d9d430014adaf573da"
+    },
+    {
+      "id": "20-ordinary-output-allocation",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_preserves_vacant_generation_policy_without_output_allocation",
+      "oracle": [
+        "assertion `left == right` failed",
+        "right: 0"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    fn release_control_phase(",
+          "end": "    fn release_controls("
+        },
+        "edits": [
+          [
+            "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_prepared()?;\n                None\n            }",
+            "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_prepared()?;\n                Some(0)\n            }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "60cdf90fe349ed924b57c1c5a047dbdd97bb5c7274a6dab223d2ed61aac87694"
+    },
+    {
+      "id": "21-ordinary-premise-policy",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_preserves_zero_data_and_mismatched_premise_behavior",
+      "oracle": [
+        "called `Result::unwrap()` on an `Err` value: InvalidData",
+        "retained data/premise cardinality"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    fn release_control_phase(",
+          "end": "    fn release_controls("
+        },
+        "edits": [
+          [
+            "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_prepared()?;\n                None\n            }",
+            "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_prepared()?;\n                Some(0)\n            }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "60cdf90fe349ed924b57c1c5a047dbdd97bb5c7274a6dab223d2ed61aac87694"
+    },
+    {
+      "id": "22-ordinary-wrong-mode",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes",
+      "oracle": [
+        "ordinary cleanup unexpectedly succeeded"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    pub(in crate::queue) fn release_ordinary_in_place(",
+          "end": "    fn release_control_phase("
+        },
+        "edits": [
+          [
+            "        if self.mode != ReturningControlModeV1::Ordinary {\n            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);\n        }\n",
+            ""
+          ]
+        ]
+      },
+      "expected_file_sha256": "2888f993d7c75b9689199876d227ebc14cba54aeeae298ba63aaa06263941bde"
+    },
+    {
+      "id": "23-ordinary-error-retention",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+      "oracle": [
+        "ordinary cleanup lost its owner"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "pub(super) fn release_ordinary_with_v1(",
+          "end": "pub(super) fn release_returning_with_v1("
+        },
+        "edits": [
+          [
+            "        Ok(Err(error)) => {\n            retain(root);\n            Err(error)\n        }",
+            "        Ok(Err(error)) => {\n            Err(error)\n        }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "5cb66d8eb4bf3c0e98fd52562cc34fafab394b0a24bb768af39e6d39e65adffa"
+    },
+    {
+      "id": "24-ordinary-panic-retention",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+      "oracle": [
+        "ordinary cleanup lost its owner"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "pub(super) fn release_ordinary_with_v1(",
+          "end": "pub(super) fn release_returning_with_v1("
+        },
+        "edits": [
+          [
+            "        Err(payload) => {\n            retain(root);\n            resume_unwind(payload)\n        }",
+            "        Err(payload) => {\n            resume_unwind(payload)\n        }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "43902e3cbe44dd3ec9a0bbbdc0ff0d9bcfc901aa67be75c1aa0836a77b47f586"
+    },
+    {
+      "id": "25-typed-error-retention",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks",
+      "oracle": [
+        "called `Option::unwrap()` on a `None` value"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "pub(super) fn release_owned_with_v1(",
+          "end": "#[cfg(test)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct DataCleanupObservationV1"
+        },
+        "edits": [
+          [
+            "        Ok(Err(error)) => {\n            retain(custody);\n            Err(error)\n        }",
+            "        Ok(Err(error)) => {\n            Err(error)\n        }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "e935da3ac3771d18aed10214f21208108f9fb77317ea02ddbffc535b2b6a6e62"
+    },
+    {
+      "id": "26-typed-panic-retention",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks",
+      "oracle": [
+        "called `Option::unwrap()` on a `None` value"
+      ],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {
+          "start": "pub(super) fn release_owned_with_v1(",
+          "end": "#[cfg(test)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct DataCleanupObservationV1"
+        },
+        "edits": [
+          [
+            "        Err(payload) => {\n            retain(custody);\n            resume_unwind(payload)\n        }",
+            "        Err(payload) => {\n            resume_unwind(payload)\n        }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "b42781461602f26205bb858acb6cdd0ffacff37f3de0bda81c1e3628a47342ae"
+    }
+  ],
+  "new_tests": [
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_preserves_nonempty_prepared_metadata_through_late_failure",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_preserves_vacant_generation_policy_without_output_allocation",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_preserves_zero_data_and_mismatched_premise_behavior",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_complete_owner_at_all_control_currentness_boundaries",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_controls_and_all_data_on_control_failures",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_data_at_every_closing_currentness_boundary",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_partial_unmap_and_host_commit_failures",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_roots_owner_before_poison_or_inflight_rejection",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_entry_roots_owner_before_validation_or_effects",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_mode_cannot_enter_any_returning_wrapper",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::public_typed_disposal_bridges_route_through_retained_cleanup",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_partial_unmap_results",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_native_error_and_panic_prefixes",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_terminal_receipt_on_accounting_underflow",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_consuming_wrapper_returns_success_without_retention",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_rejection_keeps_healthy_receiving_session_unchanged",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_host_cleanup_retains_projection_and_actual_commit_failures"
+  ],
+  "baseline": {
+    "name": "r121-development-gnu-all-v2",
+    "predecessor": "r121-development-corrected-metadata-v1.json",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets"
+    ]
+  },
+  "test_command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib"
+  ],
+  "accepted_baseline": {
+    "path": "docs/evidence/local-r119-persistent-returned-data-cleanup-2026-09-15/raw/r119-integrated-gnu-all.log",
+    "sha256": "90444dd9e0491f7d1d169241baad778d1ee3c75ab34cd2caeec35b304b1f0368",
+    "commit": "be50052c74a7956ba0a50df0e2efe8d9568de78a"
+  },
+  "parser_inputs": {
+    "r119-integrated-qualification-evidence-v1.js": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2",
+    "r119-integrated-qualification-plan-v1.js": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7",
+    "r119-integrated-mutation-core-v1.js": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583",
+    "r119-persistent-mutations-v1.js": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad",
+    "r119-persistent-mutations-v2.js": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a"
+  },
+  "source_guards": [
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_entry_roots_owner_before_validation_or_effects",
+    "shared_memory::tests::pristine_abort::cleanup_tests::data::public_typed_disposal_bridges_route_through_retained_cleanup"
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "accepted": false,
+  "classification": "rejected full-suite timeout; not a passing prerequisite",
+  "run": "r121-development-musl-all-v1",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "source_identities": 5696,
+  "raw_artifacts": {
+    "r121-development-musl-all-v1.json": "045f39549839fb8485845f7be86a2475cb4c635a3d1271d3dbf49afb497a0e98",
+    "r121-development-musl-all-v1.log": "971b112efb4a2b0645c897d94b784b6b159cbf8bff85d3010ee36efe73240660"
+  },
+  "outcome": {
+    "returncode": 124,
+    "timed_out": true,
+    "signal": "SIGKILL",
+    "child_closed": true,
+    "spawn_error": null,
+    "elapsed_seconds": 1800.03658217,
+    "deadline_ms": 1800000,
+    "source_unchanged": true,
+    "owned_process_group": 3063730,
+    "live_group_members": []
+  },
+  "partial_observations": {
+    "completed_libtest_harnesses": 47,
+    "completed_summary_passed": 2055,
+    "completed_summary_ignored": 3,
+    "completed_summary_failed": 0,
+    "completed_harnessless_csv": 1,
+    "kfd_passed": 1172,
+    "runtime_passed": 733,
+    "incomplete_final_harness": "fe2o3-runtime-model",
+    "incomplete_harness_named_passes": 761,
+    "incomplete_harness_ignored_rows": 2,
+    "total_named_pass_rows": 2816,
+    "total_ignored_rows": 5,
+    "failed_rows": 0,
+    "missing_named_passes_vs_gnu": [
+      "r56_two_native_sdma_mux_tests::exact_lane_domain_and_all_request_counts_are_admitted",
+      "context_version_journal::tests::indexed_work_is_constant_and_storage_does_not_grow"
+    ]
+  },
+  "review": "Independent read-only timeout audit confirmed raw clocks, predecessor, both complete endpoint maps, closed group and partial transcript counts; no passing full-suite acceptance.",
+  "next_run_requirements": [
+    "Preserve the timeout record, log and endpoint maps unchanged.",
+    "Declare a new run name and predecessor before any retry; do not overwrite existing artifacts.",
+    "Use the same source cohort, command, deadline and environment for a retry.",
+    "Supersede gate plan v1 and downstream pinned checker/calibration/collector inputs as needed to name the retry explicitly.",
+    "Do not execute the existing complete-packet collector as if timed-out musl v1 were a passing prerequisite."
+  ],
+  "retry_started": false,
+  "gpu_used": false
+}

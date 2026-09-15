@@ -3,6 +3,7 @@
 mod allocation;
 mod coherent_initialization;
 mod control_cleanup;
+mod data_cleanup;
 mod device_allocation;
 mod device_initialization;
 mod dispatch_retention;
@@ -11,6 +12,9 @@ mod transitions;
 pub(crate) use control_cleanup::ControlCleanupCustodyV1;
 #[cfg(test)]
 pub(crate) use control_cleanup::{CleanupStageV1, ControlCleanupObservationV1};
+pub(crate) use data_cleanup::{DataCleanupCustodyV1, DispatchDataReleaseV1};
+#[cfg(test)]
+pub(crate) use data_cleanup::{DataCleanupMetadataV1, DataCleanupObservationV1};
 
 pub(crate) use dispatch_retention::{RetainedDispatchDataRosterV1, RetainedDispatchDataV1};
 
@@ -919,6 +923,7 @@ impl GpuMappedGttStateV1 for GttGpuAccessibleExecutableV1 {
 /// themselves. The containing non-Clone capability retains the allocation
 /// token required for later queue ownership and eventual explicit teardown.
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SharedGttMappedResourceFactsV1 {
     gpu_va: u64,
     logical_bytes: usize,
@@ -2380,20 +2385,35 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
-        self.with_device_backing_unwind_quarantine(|engine| engine.unmap_device_memory_inner(lease))
+        self.unmap_device_memory_borrowed(&lease, &mut Default::default())?;
+        Ok(lease.retag())
+    }
+
+    fn unmap_device_memory_borrowed(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.unmap_device_memory_inner(lease, progress)
+        })
     }
 
     fn unmap_device_memory_inner(
         &mut self,
-        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
-    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
-        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Mapped)?;
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
         self.check_currentness()?;
         let handle = self.device_memory[index]
             .handle
             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        progress.attempted = true;
         let outcome = self.backend.unmap_gpu(handle, 0);
+        progress.returned_map_prefix = Some(outcome.value);
+        progress.returned_success = Some(outcome.result.is_ok());
         if outcome.value > 1 {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "device-memory UNMAP_MEMORY_FROM_GPU cumulative n_success",
@@ -2409,23 +2429,32 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
         self.check_currentness()?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Unmapped;
-        Ok(lease.retag())
+        Ok(())
     }
 
     fn release_device_memory(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
     ) -> Result<(), MemorySessionError> {
+        self.release_device_memory_borrowed(&lease, &mut Default::default())
+    }
+
+    fn release_device_memory_borrowed(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        progress: &mut control_cleanup::NativeDisposalProgressV1,
+    ) -> Result<(), MemorySessionError> {
         self.with_device_backing_unwind_quarantine(|engine| {
-            engine.release_device_memory_inner(lease)
+            engine.release_device_memory_inner(lease, progress)
         })
     }
 
     fn release_device_memory_inner(
         &mut self,
-        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        progress: &mut control_cleanup::NativeDisposalProgressV1,
     ) -> Result<(), MemorySessionError> {
-        let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Unmapped)?;
         if let Some(account) = &self.device_backing_account {
             let Some(charge) = &self.device_memory[index].backing_charge else {
                 return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
@@ -2456,7 +2485,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
         self.device_memory[index].free_attempted = true;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
-        if let Err(error) = self.backend.free(handle) {
+        progress.free.attempted = true;
+        let result = self.backend.free(handle);
+        progress.free.returned_success = Some(result.is_ok());
+        if let Err(error) = result {
             return self.quarantine(error);
         }
         self.device_memory[index].handle = None;
@@ -2467,11 +2499,15 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 .reservation
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
-            backend.release_va_reservation(reservation)
+            progress.va_release.attempted = true;
+            let result = backend.release_va_reservation(reservation);
+            progress.va_release.returned_success = Some(result.is_ok());
+            result
         };
         if let Err(error) = release_result {
             return self.quarantine(error);
         }
+        progress.native_disposed = true;
         self.device_memory[index].reservation = None;
         self.check_currentness()?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Released;
@@ -5393,9 +5429,7 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         initialized: Gfx942InitializedDeviceMemoryV1,
     ) -> Result<(), MemorySessionError> {
-        let (lease, _) = initialized.into_parts();
-        let lease = self.engine.unmap_device_memory(lease)?;
-        self.engine.release_device_memory(lease)
+        self.release_fixed_dispatch_data(crate::Gfx942FixedDispatchDataV1::initialized(initialized))
     }
 
     /// Unmaps and releases one addressless fixed-dispatch data authority.
@@ -5406,17 +5440,11 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         data: crate::Gfx942FixedDispatchDataV1,
     ) -> Result<(), MemorySessionError> {
-        let parts = data.into_parts();
-        match parts.storage {
-            crate::queue::dispatch_binding::DispatchDataInputStorageV1::Device(lease) => {
-                let lease = self.engine.unmap_device_memory(lease)?;
-                self.engine.release_device_memory(lease)
-            }
-            crate::queue::dispatch_binding::DispatchDataInputStorageV1::HostVisible(token) => {
-                let token = self.unmap_from_gpu(token)?;
-                self.release(token)
-            }
-        }
+        data_cleanup::release_owned_with_v1(
+            DataCleanupCustodyV1::new(data),
+            self,
+            core::mem::forget,
+        )
     }
 
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {

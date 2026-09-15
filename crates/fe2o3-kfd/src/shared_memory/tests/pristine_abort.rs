@@ -33,6 +33,14 @@ pub(crate) struct PristineAbortMemoryFixtureV1 {
         transitions::ProjectionFaultV1,
     )>,
     process_poisoned: usize,
+    data_ordinal: usize,
+    data_failure: Option<(usize, &'static str, bool)>,
+    data_unmap: Option<(usize, u32, bool)>,
+    data_projection_fault: Option<(
+        usize,
+        control_cleanup::CleanupStageV1,
+        transitions::ProjectionFaultV1,
+    )>,
 }
 
 impl PristineAbortMemoryFixtureV1 {
@@ -61,6 +69,10 @@ impl PristineAbortMemoryFixtureV1 {
             control_unmap: None,
             projection_fault: None,
             process_poisoned: 0,
+            data_ordinal: 0,
+            data_failure: None,
+            data_unmap: None,
+            data_projection_fault: None,
         }
     }
 

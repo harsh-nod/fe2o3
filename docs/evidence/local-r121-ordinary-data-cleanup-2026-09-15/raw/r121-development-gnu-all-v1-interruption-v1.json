@@ -1,0 +1,24 @@
+{
+  "accepted": false,
+  "classification": "intentional_interruption_for_known_test_oracle_gaps",
+  "record": "r121-development-gnu-all-v1.json",
+  "record_sha256": "cc93526a61fdc0c602ba922cf620ed67dbc0364b58b29a2dffb9089cda86898c",
+  "source_map_sha256": "19b8774019ea6c5f70aa90cfdaa5458282c389f31201a584d098156b9e2e7332",
+  "reason": "Read-only review identified a missing cold Ordinary control-only rejection assertion and a typed metadata expectation derived through the same production function under test. Stop this integrated attempt before correcting those assertions and freezing a new source cohort.",
+  "signal_sent": "SIGTERM",
+  "verified_owned_child_pid": 2845364,
+  "verified_owned_child_pgid": 2845364,
+  "verified_wrapper_pid": 2845323,
+  "raw_result": {
+    "returncode": 127,
+    "child_returncode": null,
+    "signal": "SIGTERM",
+    "child_closed": true,
+    "spawn_error": null,
+    "timed_out": false,
+    "source_unchanged": true,
+    "cleanup_live_members": []
+  },
+  "interpretation": "Interrupted, not a timeout, spawn failure, test failure or passing qualification. The runner maps a null child exit code to 127; preserve signal and child_returncode when interpreting the outcome.",
+  "preservation": "Original record, log and endpoint source maps remain unchanged. Earlier development passes and negatives apply only to their recorded source cohort."
+}

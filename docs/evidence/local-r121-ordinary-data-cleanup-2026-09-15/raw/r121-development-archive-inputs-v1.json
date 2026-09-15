@@ -1,0 +1,33 @@
+{
+  "accepted": false,
+  "scope": "Archive assembly of closed R121 local CPU/test qualification evidence, not native/formal/performance acceptance",
+  "assembler": {
+    "name": "r121-development-archive-v2.js",
+    "sha256": "f8b3cd63f73afc5ef568bc633a74fd76233e3f52fbd72efc33933c96be5008ec",
+    "review": "Independent static v2 delta PASS; assembly execution pending"
+  },
+  "qualification_inputs": {
+    "name": "r121-development-qualification-inputs-v2.json",
+    "sha256": "13a11676fe2ca6d2bf7ac8bf12ec848dcc6b5aa80be78df7c140268c86ff06a1"
+  },
+  "collector": {
+    "name": "r121-development-qualification-collect-v4.js",
+    "sha256": "60684102949e89b14f6c69216a91c5e8f3277b18859434c7853200e34b5b2a69"
+  },
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r121-development-archive-v2.js"
+  ],
+  "destination": "docs/evidence/local-r121-ordinary-data-cleanup-2026-09-15",
+  "invocation": "Direct node invocation after collector-v4's closed runner outputs; do not wrap assembly in a new evidence runner output family.",
+  "preserved_draft": {
+    "name": "r121-development-archive-v1.js",
+    "sha256": "623a6309d750fc8c09c69b74e93140772bebe672701b1204e6dda023ca907819",
+    "status": "Syntax-only; preserved after static review required external evidence namespace membership checks."
+  },
+  "policy": [
+    "Finalize assembler and its inputs before collecting; later added external evidence files must not silently disappear from the archive.",
+    "Require normal closed collector, exact read-only replay, input and output hash equality, exact namespace membership, unchanged source identities and no overwriting.",
+    "Generated archive metadata remains pending independent archive review and publication."
+  ]
+}

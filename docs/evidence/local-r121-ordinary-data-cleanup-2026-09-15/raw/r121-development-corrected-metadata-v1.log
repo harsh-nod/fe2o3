@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1171 filtered out; finished in 0.01s
+

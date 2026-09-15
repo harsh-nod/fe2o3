@@ -1,0 +1,67 @@
+{
+  "accepted": false,
+  "scope": "Pinned read-only checker for the declared R121 GNU/musl, source and auxiliary gates. No packet, native, formal, total-memory or performance acceptance.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "source_identities": 5696,
+  "checker": {
+    "name": "r121-development-gate-check-v3.js",
+    "sha256": "e0652f1c76bfff0afef5401616670e786bcb73841dc4ab6af44272e55f630762"
+  },
+  "gate_plan": {
+    "name": "r121-development-gates-v2.json",
+    "sha256": "7db1c9671038939caf37860e43a81fd4ad864ba979babc370f71714c4518f28f"
+  },
+  "mutation_plan": {
+    "name": "r121-development-mutations-v2.json",
+    "sha256": "bfbda6d05aac8905934b1a9b406d3e1a4f57fe2b8d3865c0b6a0808beb7ffe81"
+  },
+  "runner": {
+    "name": "r121-development-run-v1.js",
+    "sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1"
+  },
+  "parser_inputs": {
+    "r119-integrated-qualification-evidence-v1.js": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2",
+    "r119-integrated-qualification-plan-v1.js": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7",
+    "r119-integrated-mutation-core-v1.js": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583",
+    "r119-persistent-mutations-v1.js": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad",
+    "r119-persistent-mutations-v2.js": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a"
+  },
+  "prior_draft": {
+    "name": "r121-development-gate-check-v1.js",
+    "sha256": "fd08160420b2a66ba531a8854aea9996b5f1940f22e8c77b095bc3f996e5a461",
+    "executed": "Syntax check only; no acceptance invocation. Preserved after static review found four gaps corrected in v2."
+  },
+  "review": "Independent read-only v3 delta PASS: exact rejected timeout pins and restored-data -> timeout -> retry chronology; retry independently requires unchanged normal-record and full-roster checks. No v3 execution yet.",
+  "commands": {
+    "gnu": [
+      "node",
+      "/home/harsh/.codex-tmp/r121-development-gate-check-v3.js",
+      "full",
+      "gnu"
+    ],
+    "musl": [
+      "node",
+      "/home/harsh/.codex-tmp/r121-development-gate-check-v3.js",
+      "full",
+      "musl"
+    ],
+    "all": [
+      "node",
+      "/home/harsh/.codex-tmp/r121-development-gate-check-v3.js",
+      "all"
+    ]
+  },
+  "historical_interruption": "Corrected fmt uses the pinned interrupted GNU-v1 record for chronology only. It is not a passing prerequisite.",
+  "policy": "Preserve all attempts and helper versions. Execute only on restored source. Full packet acceptance additionally requires separate complete mutation and archive reviews.",
+  "retry_declaration": {
+    "name": "r121-development-musl-retry1-inputs-v1.json",
+    "sha256": "479bf5f21a311a29361ddcce17139d9e31187bdf568429a63e50a34f46a25aec"
+  },
+  "superseded_checker": {
+    "name": "r121-development-gate-check-v2.js",
+    "sha256": "b3bda3a365e8dcae9d600535c05a05599d5bcbae11b8a93593669d0bbf4e3ac8",
+    "status": "Actual full GNU check passed; musl/full-packet checks did not execute. Preserved with original timed-out musl declaration."
+  },
+  "historical_timeout": "Musl-all-v1 is pinned rejected timeout history only, never a passing gate. The declared retry keeps source, argv, environment and deadline unchanged."
+}

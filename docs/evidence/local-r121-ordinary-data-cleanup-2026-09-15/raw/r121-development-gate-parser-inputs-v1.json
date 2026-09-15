@@ -1,0 +1,30 @@
+{
+  "accepted": false,
+  "scope": "Twenty read-only synthetic transcript parser calibrations. These are neither compiled runtime mutations nor native/formal evidence.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "checker": {
+    "name": "r121-development-gate-check-v2.js",
+    "sha256": "b3bda3a365e8dcae9d600535c05a05599d5bcbae11b8a93593669d0bbf4e3ac8"
+  },
+  "harness": {
+    "name": "r121-development-gate-parser-tests-v2.js",
+    "sha256": "260621cef33503fe803e6561215d26e8f1813a86867ac1cdeab94b6ca8996c5a"
+  },
+  "prior_harness": {
+    "name": "r121-development-gate-parser-tests-v1.js",
+    "sha256": "6b8c4f5fd7083547d0db0bea8476f41ab3feeaf5a2b794472b7789cce5519d9f",
+    "status": "Syntax-checked only; preserved after review found an incidental assertion could count as rejection."
+  },
+  "expected_cases": 20,
+  "runtime_mutations": 0,
+  "run": "r121-development-gate-parser-calibration-v2",
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r121-development-gate-parser-tests-v2.js"
+  ],
+  "predecessor": "r121-development-musl-all-v1.json",
+  "review": "Independent read-only delta review confirms replacement cardinality throws plain Error, outside the accepted ERR_ASSERTION class. No evidence-writing path.",
+  "execution_policy": "Execute only after the live musl runner has closed; preserve any failure rather than editing executed bytes."
+}
+

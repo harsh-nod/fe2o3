@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.28s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once ... FAILED
+
+failures:
+
+---- shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once stdout ----
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once' (2920698) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs:442:13:
+assertion `left == right` failed
+  left: None
+ right: Some(Gfx942DeviceContentDescriptorV1 { role: Gfx942DeviceContentRoleV1 { identity: [81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81], ordinal: 7 }, byte_len: 17, sha256: [16, 39, 151, 114, 152, 43, 116, 40, 145, 122, 230, 178, 162, 183, 103, 150, 78, 104, 255, 190, 240, 143, 87, 192, 207, 173, 163, 175, 131, 94, 206, 148], identity: [39, 167, 123, 6, 248, 25, 116, 77, 203, 30, 92, 88, 197, 186, 108, 231, 230, 126, 205, 180, 68, 170, 36, 239, 185, 160, 224, 187, 201, 23, 224, 1] })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1171 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,4 +1,4 @@
-//! One-shot borrowed cleanup of an unpublished dispatch control.
+//! One-shot borrowed cleanup of dispatch controls and coherent data.
 
 use super::*;
 use transitions::{NativeTransitionProgressV1, TerminalTokenV1};
@@ -37,6 +37,8 @@ enum ControlTokenV1 {
     UnmappedKernarg(SharedGttAllocationV1<KernargGttV1, GttCpuWritableV1>),
     MappedCode(SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>),
     UnmappedCode(SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>),
+    MappedHostData(SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>),
+    UnmappedHostData(SharedGttAllocationV1<HostVisibleCoherentGttV1, GttCpuWritableV1>),
     Disposed { _receipt: TerminalTokenV1 },
 }
 
@@ -62,6 +64,12 @@ impl ControlCleanupCustodyV1 {
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
     ) -> Self {
         Self::new(ControlTokenV1::MappedCode(token))
+    }
+
+    pub(super) fn host_data(
+        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Self {
+        Self::new(ControlTokenV1::MappedHostData(token))
     }
 
     fn new(token: ControlTokenV1) -> Self {
@@ -90,6 +98,8 @@ impl ControlCleanupCustodyV1 {
             Some(ControlTokenV1::UnmappedKernarg(token)) => engine.evidence(token)?,
             Some(ControlTokenV1::MappedCode(token)) => engine.evidence(token)?,
             Some(ControlTokenV1::UnmappedCode(token)) => engine.evidence(token)?,
+            Some(ControlTokenV1::MappedHostData(token)) => engine.evidence(token)?,
+            Some(ControlTokenV1::UnmappedHostData(token)) => engine.evidence(token)?,
             _ => return Err(MemorySessionError::InvalidAllocationAuthority),
         };
         Ok((id, generation))
@@ -106,11 +116,17 @@ impl ControlCleanupCustodyV1 {
             Some(ControlTokenV1::MappedCode(token)) => {
                 engine.unmap_executable_borrowed(token, &mut self.unmap)?;
             }
+            Some(ControlTokenV1::MappedHostData(token)) => {
+                engine.unmap_mutable_borrowed(token, &mut self.unmap)?;
+            }
             _ => return Err(MemorySessionError::InvalidAllocationAuthority),
         }
         self.token = Some(match self.token.take().expect("retained mapped control") {
             ControlTokenV1::MappedKernarg(token) => ControlTokenV1::UnmappedKernarg(token.retag()),
             ControlTokenV1::MappedCode(token) => ControlTokenV1::UnmappedCode(token.retag()),
+            ControlTokenV1::MappedHostData(token) => {
+                ControlTokenV1::UnmappedHostData(token.retag())
+            }
             _ => unreachable!("successful unmap retains its original token"),
         });
         Ok(())
@@ -131,6 +147,11 @@ impl ControlCleanupCustodyV1 {
                 SharedAllocationPhaseV1::ExecutableImmutable,
                 &mut self.disposal,
             ),
+            Some(ControlTokenV1::UnmappedHostData(token)) => engine.release_borrowed(
+                token,
+                SharedAllocationPhaseV1::CpuWritable,
+                &mut self.disposal,
+            ),
             _ => Err(MemorySessionError::InvalidAllocationAuthority),
         }
     }
@@ -144,6 +165,7 @@ impl ControlCleanupCustodyV1 {
         let receipt = match self.token.take().expect("retained disposal input") {
             ControlTokenV1::UnmappedKernarg(token) => TerminalTokenV1::from_token(token),
             ControlTokenV1::UnmappedCode(token) => TerminalTokenV1::from_token(token),
+            ControlTokenV1::UnmappedHostData(token) => TerminalTokenV1::from_token(token),
             _ => unreachable!("only an unmapped control can finish native disposal"),
         };
         self.token = Some(ControlTokenV1::Disposed { _receipt: receipt });
@@ -190,6 +212,8 @@ impl ControlCleanupCustodyV1 {
                 ControlTokenV1::MappedCode(t) => ("Mapped", token(t)),
                 ControlTokenV1::UnmappedKernarg(t) => ("Unmapped", token(t)),
                 ControlTokenV1::UnmappedCode(t) => ("Unmapped", token(t)),
+                ControlTokenV1::MappedHostData(t) => ("Mapped", token(t)),
+                ControlTokenV1::UnmappedHostData(t) => ("Unmapped", token(t)),
                 ControlTokenV1::Disposed { _receipt: t } => (
                     "NativeDisposed",
                     (
@@ -341,7 +365,13 @@ pub(super) fn release_v1<B: MemoryBackend>(
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => {
             custody.failed = true;
-            engine.quarantine(error)
+            if matches!(custody.token, Some(ControlTokenV1::MappedHostData(_)))
+                && !custody.unmap.attempted
+            {
+                Err(error)
+            } else {
+                engine.quarantine(error)
+            }
         }
         Err(payload) => {
             custody.failed = true;

@@ -1,7 +1,7 @@
-//! Returning and detached dispatch controls retain their complete owner through cleanup.
+//! Dispatch cleanup retains its complete owner through every destructive prefix.
 
 use super::*;
-use crate::shared_memory::ControlCleanupCustodyV1;
+use crate::shared_memory::{ControlCleanupCustodyV1, DataCleanupCustodyV1, DispatchDataReleaseV1};
 use pristine_abort::PristineControlReleaseV1;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -11,6 +11,7 @@ mod tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::queue) enum ReturningControlModeV1 {
+    Ordinary,
     AfterRecycle,
     ReturningDestroy,
     DetachedPersistent { expected_generation: u64 },
@@ -39,6 +40,8 @@ pub(in crate::queue) struct ReturningControlCleanupCustodyV1 {
     generation: DispatchGenerationOwnerV1,
     persistent_control: PersistentFixedDispatchControlStateV1,
     active_control: Option<ControlCleanupCustodyV1>,
+    remaining_data: std::vec::IntoIter<DispatchDataAuthorityV1>,
+    active_data: Option<DataCleanupCustodyV1>,
     returned: Vec<ReturnedDispatchDataLeaseV1>,
     returned_generation: Option<u64>,
     persistent_returned: Vec<Gfx942FixedDispatchDataV1>,
@@ -65,6 +68,8 @@ impl ReturningControlCleanupCustodyV1 {
             generation: owner.generation,
             persistent_control: owner.persistent_control,
             active_control: None,
+            remaining_data: Vec::new().into_iter(),
+            active_data: None,
             returned: Vec::new(),
             returned_generation: None,
             persistent_returned: Vec::new(),
@@ -80,11 +85,49 @@ impl ReturningControlCleanupCustodyV1 {
         &mut self,
         memory: &mut impl PristineControlReleaseV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if self.mode == ReturningControlModeV1::Ordinary {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        self.release_control_phase(memory)?;
+        self.complete = true;
+        Ok(())
+    }
+
+    pub(in crate::queue) fn release_ordinary_in_place(
+        &mut self,
+        memory: &mut (impl PristineControlReleaseV1 + DispatchDataReleaseV1),
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if self.mode != ReturningControlModeV1::Ordinary {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        self.release_control_phase(memory)?;
+        self.remaining_data = core::mem::take(&mut self.data).into_iter();
+        for data in self.remaining_data.by_ref() {
+            self.active_data = Some(DataCleanupCustodyV1::from_authority(data));
+            let active = self.active_data.as_mut().expect("rooted active data");
+            memory.release_data(active)?;
+            if !active.is_complete() {
+                return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+            }
+            self.active_data = None;
+        }
+        self.complete = true;
+        Ok(())
+    }
+
+    fn release_control_phase(
+        &mut self,
+        memory: &mut impl PristineControlReleaseV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
         if self.started {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
         }
         self.started = true;
         let generation = match self.mode {
+            ReturningControlModeV1::Ordinary => {
+                self.generation.ensure_prepared()?;
+                None
+            }
             ReturningControlModeV1::AfterRecycle
             | ReturningControlModeV1::PersistentAfterRecycle => {
                 Some(self.generation.returned_generation()?)
@@ -163,7 +206,6 @@ impl ReturningControlCleanupCustodyV1 {
                     .push(ReturnedDispatchDataLeaseV1 { authority, premise });
             }
         }
-        self.complete = true;
         Ok(())
     }
 
@@ -242,6 +284,25 @@ impl ReturningControlCleanupCustodyV1 {
                 ));
         }
         Ok((generation, core::mem::take(&mut self.persistent_returned)))
+    }
+}
+
+pub(super) fn release_ordinary_with_v1(
+    mut root: ReturningControlCleanupCustodyV1,
+    memory: &mut (impl PristineControlReleaseV1 + DispatchDataReleaseV1),
+    retain: impl FnOnce(ReturningControlCleanupCustodyV1),
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let result = catch_unwind(AssertUnwindSafe(|| root.release_ordinary_in_place(memory)));
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => {
+            retain(root);
+            Err(error)
+        }
+        Err(payload) => {
+            retain(root);
+            resume_unwind(payload)
+        }
     }
 }
 

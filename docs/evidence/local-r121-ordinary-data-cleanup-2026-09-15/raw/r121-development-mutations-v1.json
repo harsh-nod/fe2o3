@@ -1,0 +1,89 @@
+{
+  "accepted": false,
+  "scope": "Eight development production negatives; no full packet, formal, native or performance acceptance.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map": "r121-development-kfd-all-v1-source.json",
+  "source_map_sha256": "19b8774019ea6c5f70aa90cfdaa5458282c389f31201a584d098156b9e2e7332",
+  "runner": "r121-development-run-v1.js",
+  "runner_sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1",
+  "mutations": [
+    {
+      "id": "01-active-owner",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+      "oracle": ["retained active ordinary data"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {"start": "    pub(in crate::queue) fn release_ordinary_in_place(", "end": "    fn release_control_phase("},
+        "edits": [["self.active_data = Some(DataCleanupCustodyV1::from_authority(data));\n            let active = self.active_data.as_mut().expect(\"rooted active data\");", "let mut unrooted = DataCleanupCustodyV1::from_authority(data);\n            let active = &mut unrooted;"]]
+      }
+    },
+    {
+      "id": "02-suffix-owner",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+      "oracle": ["assertion `left == right` failed", "left: []"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {"start": "    pub(in crate::queue) fn release_ordinary_in_place(", "end": "    fn release_control_phase("},
+        "edits": [["for data in self.remaining_data.by_ref() {", "for data in core::mem::replace(&mut self.remaining_data, Vec::new().into_iter()) {"]]
+      }
+    },
+    {
+      "id": "03-interrupted-receipt",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts",
+      "oracle": ["assertion `left == right` failed", "left: \"Unmapped\"", "right: \"NativeDisposed\""],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "edits": [["// Disposal can finish before closing currentness/accounting returns or unwinds.\n    custody.retain_disposed_receipt();", "// Disposal can finish before closing currentness/accounting returns or unwinds."]]
+      }
+    },
+    {
+      "id": "04-free-currentness-order",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts",
+      "oracle": ["assertion `left == right` failed", "left: [(false, None), (false, None), (false, None)]", "right: [(false, None), (true, Some(true)), (false, None)]"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory.rs",
+        "scope": {"start": "    fn release_device_memory_inner(", "end": "    fn index<P: GttProfileV1, S: GttAllocationStateV1>("},
+        "edits": [["progress.free.attempted = true;", "self.check_currentness()?;\n        progress.free.attempted = true;"], ["self.device_memory[index].handle = None;\n        self.check_currentness()?;\n        let release_result = {", "self.device_memory[index].handle = None;\n        let release_result = {"]]
+      }
+    },
+    {
+      "id": "05-inflight-admission",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_roots_owner_before_poison_or_inflight_rejection",
+      "oracle": ["ordinary cleanup unexpectedly succeeded"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "edits": [["ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_prepared()?;", "ReturningControlModeV1::Ordinary => {\n                self.generation.ensure_not_poisoned()?;"]]
+      }
+    },
+    {
+      "id": "06-ordinary-success",
+      "test": "queue::dispatch_binding::control_release::tests::ordinary::ordinary_consuming_wrapper_returns_success_without_retention",
+      "oracle": ["called `Result::unwrap()` on an `Err` value: ResourcePhase"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {"start": "pub(super) fn release_ordinary_with_v1(", "end": "pub(super) fn release_returning_with_v1("},
+        "edits": [["Ok(Ok(())) => Ok(()),", "Ok(Ok(())) => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),"]]
+      }
+    },
+    {
+      "id": "07-typed-success",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_consuming_wrapper_returns_success_without_retention",
+      "oracle": ["called `Result::unwrap()` on an `Err` value: InvalidAllocationAuthority"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {"start": "pub(super) fn release_owned_with_v1(", "end": "#[cfg(test)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct DataCleanupObservationV1"},
+        "edits": [["Ok(Ok(())) => Ok(()),", "Ok(Ok(())) => Err(MemorySessionError::InvalidAllocationAuthority),"]]
+      }
+    },
+    {
+      "id": "08-receipt-identity",
+      "test": "shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once",
+      "oracle": ["assertion `left == right` failed: exact retained device token or receipt"],
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs",
+        "scope": {"start": "impl DeviceReceiptV1 {", "end": "enum OwnerV1 {"},
+        "edits": [["identity: lease.storage_identity(),", "identity: Gfx942DeviceMemoryIdentityV1 {\n                generation: lease.storage_identity().generation.wrapping_add(1),\n                ..lease.storage_identity()\n            },"]]
+      }
+    }
+  ]
+}

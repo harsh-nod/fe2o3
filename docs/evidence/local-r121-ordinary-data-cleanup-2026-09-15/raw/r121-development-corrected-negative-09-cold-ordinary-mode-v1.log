@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.35s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes stdout ----
+
+thread 'queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes' (2916416) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/ordinary_tests.rs:642:5:
+assertion failed: matches!(root.release_in_place(&mut memory),
+    Err(Gfx942DispatchBindingErrorV1::ResourcePhase))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_rejects_incomplete_data_callback_and_wrong_modes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1171 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

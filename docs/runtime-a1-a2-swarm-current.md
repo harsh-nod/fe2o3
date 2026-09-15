@@ -3,12 +3,23 @@
 <a id="renewed-swarm-dispatch"></a>
 
 The latest [post-R114 dispatch](runtime-swarm-dispatch-r114.md) records the
-current three-lane handoffs: Native's ordinary mixed cleanup and typed-data disposal,
+current three-lane handoffs: Native's live cleanup and runtime outer-roster retention,
 Admission's generated ISSUE/COMPLETE handoff after accepted R118B C1/C2/C3, and
 Resources' V4-J1 proof handoff above the locally accepted
 [V3 settlement model](runtime-context-version-settlement-v1.md).
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
+
+Current accepted Native checkpoint: [R121 ordinary and typed-data cleanup](runtime-ordinary-data-cleanup-v1.md),
+with [665 raw artifacts](evidence/local-r121-ordinary-data-cleanup-2026-09-15/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,818 tests with
+five ignored; all seventeen source gates, ten auxiliary checks, restored 59/17
+suites, 26 compiled negatives across 25 maps and thirty parser calibrations pass.
+All 5,696 source identities match. The musl timeout and reproduced strict-parser
+rejection remain separate history. This accepts lower cleanup at its local
+CPU/test boundary, not live/queue composition, native execution, formal
+correspondence, aggregate memory or performance parity. Native next takes N4-L
+and the runtime's outer data-roster retention; A1/A2 remain incomplete.
 
 Current accepted Resources checkpoint: [R116/V3 settlement](runtime-context-version-settlement-v1.md#integrated-candidate),
 with [378 retained artifacts](evidence/local-r116-context-version-settlement-2026-09-14/README.md).
@@ -34,7 +45,7 @@ pass. Nine runner, 31 freeze and 117 qualification-contract tests pass. All
 reviews pass. Isolated failures retain their original maps. Acceptance covers
 scripted lower detached controls only; persistent-data bridges, live/queue
 composition, N5, native, formal, memory and performance remain open.
-Current accepted Native checkpoint:
+Preceding accepted Native checkpoint:
 [R119 persistent returned-data cleanup](runtime-persistent-returned-data-cleanup-v1.md),
 integrated above published R118B, with
 [464 raw artifacts](evidence/local-r119-persistent-returned-data-cleanup-2026-09-15/README.md)
@@ -49,8 +60,8 @@ provenance. The first integrated musl timeout remains rejected history; only the
 completed retry under the unchanged deadline and environment supplies acceptance.
 This accepts scripted persistent returned-data/control cleanup, not ordinary
 mixed cleanup, data disposal, live/queue composition, N5, native execution,
-formal correspondence, aggregate memory bounds or performance parity. Native
-next implements ordinary cleanup and typed-data disposal together.
+formal correspondence, aggregate memory bounds or performance parity. R121
+subsequently accepts the lower ordinary cleanup and typed-data disposal boundary.
 
 Current accepted Admission checkpoint:
 [R118B C1/C2/C3 qualification](runtime-admission-lifecycle-qualification-r118.md),
@@ -787,7 +798,7 @@ open.
 | Locally accepted Native packets | Primary + Native review | Replacement inputs, ordinary and pristine rebind | R103/R104/R105 retain their named CPU/shared-sequence acceptance; no original-engine or hardware qualification |
 | Locally accepted initializers | Primary + Native/Resources review | R106/N3-C coherent and R107/N3-D device initialization custody | Named CPU/shared-sequence acceptance only; reuse the accepted lower helpers, not a duplicate initializer |
 | Locally accepted live insertion | Primary + Native/Resources review | R109/N3-L1 initialized-device, R110/N3-L2 initialized coherent, R111/N3-L3-C uninitialized coherent and R112/N3-L3-D uninitialized device insertion | Named CPU/shared-sequencer and concrete public missing-engine boundaries: R109/R110 facades versus R111/R112 direct APIs. No native success or formal refinement claim |
-| Next Native packets | Native | Ordinary mixed cleanup and typed-data disposal together; applicable live/queue cleanup, then N5 DATA-ADOPT | R114 pristine, R115 returning, R117 detached controls and R119 persistent returned data are accepted at their CPU boundaries. Live paths retain custody through settlement; confirmed disposal alone does not permit slot reuse |
+| Next Native packets | Native | N4-L live cleanup and runtime outer-roster retention; applicable queue cleanup, then N5 DATA-ADOPT | R114 pristine, R115 returning, R117 detached controls, R119 persistent returned data and R121 ordinary/typed-data cleanup are accepted at their CPU boundaries. Live paths must retain custody through settlement; confirmed disposal alone does not permit slot reuse |
 | Locally accepted Admission packets | Admission | R118B C1 Context identity, C2 descriptor identity and C3 reply/custody tests | Eighteen added tests, full GNU/musl and 78 compiled negatives; existing validators and lifecycle machinery, with no native/formal/performance acceptance |
 | Next Admission packets | Admission | Joint I2 ISSUE, C4 COMPLETE, then C5 typed output and C6 GRAPH/DRAIN | N5 adoption, exact publication/completion custody and retained R118B regressions; no invented completion adapter |
 | First Resources packets | Resources | V4-J1 issuance proofs, then membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models; actual solver results and Rust/model correspondence remain pending |

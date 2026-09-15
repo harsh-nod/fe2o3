@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 17 tests
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_actual_commit_rejection_keeps_unmapped_or_disposed_custody ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_success_commits_original_model_and_exact_native_control_order ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::public_typed_disposal_bridges_route_through_retained_cleanup ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_native_failure_retains_typed_control_and_exact_destructive_prefix ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_projection_failures_keep_native_disposal_distinct_from_model_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_partial_unmap_results ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_terminal_receipt_on_accounting_underflow ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_consuming_wrapper_returns_success_without_retention ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_rejection_keeps_healthy_receiving_session_unchanged ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_host_cleanup_retains_projection_and_actual_commit_failures ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_native_error_and_panic_prefixes ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1155 filtered out; finished in 0.12s
+

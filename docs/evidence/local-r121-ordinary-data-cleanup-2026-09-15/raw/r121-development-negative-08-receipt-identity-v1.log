@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.03s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once ... FAILED
+
+failures:
+
+---- shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once stdout ----
+
+thread 'shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once' (2828978) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs:203:17:
+assertion `left == right` failed: exact retained device token or receipt
+  left: Some((Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 2, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }, Gfx942DeviceMemoryLayoutV1 { requested_bytes: 17, backing_bytes: 4096, alignment: 4, uapi_flags: 2147483649 }))
+ right: Some((Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(101), generation: DeviceGenerationV1(1) }, id: VmIdV1(1) } }, Gfx942DeviceMemoryLayoutV1 { requested_bytes: 17, backing_bytes: 4096, alignment: 4, uapi_flags: 2147483649 }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1171 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

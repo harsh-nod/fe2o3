@@ -1,0 +1,41 @@
+{
+  "accepted": false,
+  "scope": "Corrected-source integrated GNU regression and 26 planned behavioral negative executions over 25 production variants; not complete packet qualification.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map": "r121-development-corrected-format-v1-source.json",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "source_identities": 5696,
+  "inputs": {
+    "r121-development-mutations-v2.json": "bfbda6d05aac8905934b1a9b406d3e1a4f57fe2b8d3865c0b6a0808beb7ffe81",
+    "r121-development-run-v1.js": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1",
+    "r121-development-check-v3.js": "acbfa7e6af92817da758f5febc449f908ee9d4a4e41d9aa0dd6bc0d78bcc4cdf"
+  },
+  "parser_and_derivation_inputs": "All five transitive parser input hashes are pinned in mutations-v2 and checked before import. Only pure roster parsers are reused; no R119 runner, collector or parent-bound acceptance function is invoked.",
+  "baseline": "r121-development-gnu-all-v2.json",
+  "baseline_requirement": "Normal zero exit, unchanged corrected map, closed child and empty owned group, valid raw clocks, and exact accepted R119 executable/test roster plus 23 declared KFD additions: 2818 passed, 5 ignored, 48 libtest harnesses and one unchanged harnessless CSV benchmark. KFD has 1172 passing tests; runtime has 733.",
+  "execution_policy": "Primary applies one declared mutation using apply_patch after compiler/test closure, executes its exact behavioral test with the GNU baseline as predecessor, checks the intended final assertion and closed process group, restores only its owned mutation using apply_patch, then verifies all corrected-source identities before the next case. The cold-mode and content cases may execute first.",
+  "restoration_scope": "The checker restored mode proves source equality only. Primary must separately observe child/process-group closure before restoration. Unknown or live child state never permits source edits.",
+  "historical_cohort": {
+    "checkpoint": "r121-development-checkpoint-v1.json",
+    "checkpoint_sha256": "2a705d9175ff6138c37003ae5264475cd361e3980b8eeb1ef6bf623eb6c19451",
+    "source_map_sha256": "19b8774019ea6c5f70aa90cfdaa5458282c389f31201a584d098156b9e2e7332",
+    "qualification_for_corrected_source": false
+  },
+  "interrupted_history": {
+    "record": "r121-development-gnu-all-v1.json",
+    "record_sha256": "cc93526a61fdc0c602ba922cf620ed67dbc0364b58b29a2dffb9089cda86898c",
+    "note": "r121-development-gnu-all-v1-interruption-v1.json",
+    "classification": "Intentional SIGTERM for known test-oracle gaps; null child exit code, wrapper 127, not timed out, not a spawn failure or passing qualification."
+  },
+  "review": "Two bounded read-only reviews found no descriptor/checker defects before execution. This is static review, not a claim that planned tests passed.",
+  "rejected_history": "Preserve compile failures, unexpected assertions, timeouts and failed restorations. Never overwrite a run artifact or executed helper; use a new version when correcting an executed helper.",
+  "claims_excluded": [
+    "continuous source immutability",
+    "complete property coverage",
+    "external proof-toolchain authentication",
+    "Linux/KFD hardware execution",
+    "formal refinement",
+    "aggregate retained-memory bounds",
+    "HIP/HSA performance parity"
+  ]
+}

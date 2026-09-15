@@ -1,0 +1,17 @@
+{
+  "accepted": false,
+  "scope": "Development execution records for ordinary mixed cleanup and typed-data disposal; not full packet, native, formal, memory-bound or performance qualification.",
+  "source_parent": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "runner": {
+    "path": "/home/harsh/.codex-tmp/r121-development-run-v1.js",
+    "sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1"
+  },
+  "derived_from": {
+    "path": "/home/harsh/.codex-tmp/r119-integrated-run-v1.js",
+    "sha256": "0da05bbcbcd6ead667a63ccfbd4e2479e7231c3fa25bc4d81f1fe81a56adb694"
+  },
+  "changes": ["r119-integrated namespace becomes r121-development", "source parent becomes published R119", "one final newline"],
+  "clock_contract": "r121-development-raw-utc-boot-monotonic-v1",
+  "command_deadline_ms": 1800000,
+  "source_policy": "Record all non-document identities before and after each command; do not claim continuous immutability or authenticate external proof inputs from that map."
+}

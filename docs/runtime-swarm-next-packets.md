@@ -1,5 +1,15 @@
 # Runtime Swarm: Remaining Packets
 
+Current Native checkpoint: [R121 ordinary and typed-data cleanup](runtime-ordinary-data-cleanup-v1.md),
+above R119 `be50052c74a7956ba0a50df0e2efe8d9568de78a`. GNU/musl each
+pass 2,818 tests with five ignored. All seventeen source gates, ten auxiliary
+checks, restored 59/17 suites, 26 compiled negatives across 25 maps and thirty
+parser calibrations pass. Two independent reviews verify all 5,696 source
+identities and [665 raw artifacts](evidence/local-r121-ordinary-data-cleanup-2026-09-15/README.md).
+This accepts lower ordinary/typed-data cleanup at the local CPU/test boundary,
+not live composition, native execution, formal correspondence, total memory or
+performance parity. Native next takes N4-L and the runtime's outer data roster.
+
 The [current dispatch](runtime-swarm-dispatch-r114.md) gives the latest
 three-lane assignments and explicit exits. R116 locally accepts the executable
 [Context journal settlement model](runtime-context-version-settlement-v1.md):
@@ -30,7 +40,7 @@ pass. Nine runner, 31 freeze and 117 qualification-contract tests pass. The
 closed collector and both independent reviews verify all 5,689 source identities
 and [372 raw artifacts](evidence/local-r117-detached-persistent-control-cleanup-2026-09-14/README.md).
 The isolated cohort's two preliminary failures retain their original maps.
-Current accepted Native checkpoint:
+Preceding accepted Native checkpoint:
 [R119 persistent returned-data cleanup](runtime-persistent-returned-data-cleanup-v1.md),
 integrated above published R118B, with
 [464 raw artifacts](evidence/local-r119-persistent-returned-data-cleanup-2026-09-15/README.md)
@@ -73,7 +83,8 @@ independent reviews verify all 5,683 source identities and
 [254 raw artifacts](evidence/local-r114-pristine-control-cleanup-2026-09-13/README.md).
 This adds CPU/test acceptance only, not native, formal or performance evidence.
 
-Reviewed through R119, above published R118B
+Reviewed through R121, above published R119
+`be50052c74a7956ba0a50df0e2efe8d9568de78a`, R118B
 `8e2c8532cb60918de523c6cab1b861bcd61fc319` and accepted R117
 `a07ec44309e214f2a8ef0e687e610c8e60a36224`. Historical R114
 `9eaf19141e8af6ade490feba3062c8b49d9b38ca` and its later planning parent
@@ -133,15 +144,15 @@ negatives, exact restoration and independent archive review. Refreshed read-only
 handoffs established C1 and V2 as independent packets. With V2 locally accepted
 as R113, N4-R1 as R114, lower returning controls as R115,
 [V3 settlement](runtime-context-version-settlement-v1.md) as R116,
-detached persistent controls as R117, and persistent returned data as R119,
-Native takes ordinary mixed cleanup and typed-data disposal together. Admission
+detached persistent controls as R117, persistent returned data as R119,
+and ordinary/typed-data cleanup as R121, Native takes live cleanup composition. Admission
 prepares I2/C4 after accepted R118B C1/C2/C3, and Resources takes the V4-J1
 issuance-proof handoff.
 Primary integrates one reviewed packet at a time.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | Ordinary mixed cleanup and typed-data disposal together | Extend the [accepted custody foundation](runtime-persistent-returned-data-cleanup-v1.md#subsequent-production-joins); preserve ordinary validation, forward order, typed active/suffix ownership and exact disposal accounting |
+| Native: `native_replacement_handoff` | N4-L live data/control cleanup and the runtime outer data roster | Compose [R121 lower cleanup](runtime-ordinary-data-cleanup-v1.md#subsequent-integration) across model loan/retake and ledger commit; restore auxiliary lanes before terminal-parent transport; retain active data and untouched suffix |
 | Admission: `submission_identity_handoff` | Joint I2 ISSUE and C4 COMPLETE handoff | Retain accepted R118B identity/lifecycle oracles; production integration needs N5 adoption and real publication/completion custody |
 | Resources: `r102_evidence_review` | V4-J1 issuance proofs, then membership/settlement proofs | Existing journal semantics; actual positive/negative solver evidence and separate Rust/model correspondence |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |
@@ -160,7 +171,7 @@ not a completed implementation packet.
 
 | Wave | Native | Admission | Resources | Primary And Exit |
 | --- | --- | --- | --- | --- |
-| 0: independent starts after R119 | Ordinary mixed cleanup plus typed-data disposal | C1 identity matrix locally accepted as R118B; prepare joint I2/C4 | V4-J1 issuance-proof handoff | Qualify one reviewed packet at a time; preserve each isolated candidate's original base |
+| 0: independent starts after R121 | N4-L live cleanup plus runtime outer data-roster retention | C1 identity matrix locally accepted as R118B; prepare joint I2/C4 | V4-J1 issuance-proof handoff | Qualify one reviewed packet at a time; preserve each isolated candidate's original base |
 | 1: cleanup, lifecycle and proofs | Applicable N4-L and N4-Q paths after their lower cleanup prerequisites | C2 descriptor identity and C3 retained-owner lifecycle locally accepted as R118B; retain these regressions | Membership/settlement proofs and M1/M2/M3 contracts can advance independently | Serialize shared-file edits and builds; require exact ownership, failure-atomicity and negative-test evidence per packet |
 | 2: generated execution | N5 DATA-ADOPT, then joint I2 actual ISSUE | I2, C4 COMPLETE, C5 typed output and C6 GRAPH/DRAIN | Approve mutation-hook policy; integrate V5/V6 for journal-enabled paths | Join actual production ownership paths; fixtures do not supply external Worker/compiler authority |
 | 3: reuse and resource closure | Integrate compound backing/control/slot admission and native residency | Exercise reused generated graphs and bounded retained replies | V7 complete writers/recovery, V8 input leases; integrate M1-M4 total retained-memory limits | Cross-run reuse requires complete mutation coverage and exclusive graph reservation; kernel reuse also needs admitted effects |
@@ -197,7 +208,7 @@ performance. Their detailed owners remain in the later-milestone table below.
 | N4-R2 returning subset / R115 | Locally accepted: lower consuming returning-control cleanup | Full-owner custody precedes validation and return-capacity reservation precedes disposal. Exact forward order, returned data and interrupted receipts pass the [bounded qualification](runtime-returning-control-cleanup-v1.md). Live/queue composition remains open. |
 | N4-R2 detached subset / R117 | Locally accepted: detached persistent-control cleanup | Full-owner custody, exact generation/state precedence, separate detached-data ownership and zero output allocation/conversion pass the [bounded qualification](runtime-detached-persistent-control-cleanup-v1.md). Live/queue composition remains open. |
 | N4-R2 persistent returned-data / R119 | Locally accepted: both persistent returned-data bridges | Full-owner custody, pre-effect capacity, explicit one-shot readiness and exact normal-error/panic ownership split pass the [bounded qualification](runtime-persistent-returned-data-cleanup-v1.md). Data disposal and outer composition remain open. |
-| N4-R2 ordinary + data extension | Ordinary full-owner release and typed-data disposal together | Reuse common control cleanup and borrowed host/device disposal cores. Preserve ordinary poison/vacant-slot validation and forward order; no persistent-only checks or output allocation. Cover all five data representations, active receipt and untouched suffix, exact records/charges and every failed destructive prefix; no repeated free or duplicate refund. |
+| N4-R2 ordinary + data / R121 | Locally accepted: ordinary full-owner release and typed-data disposal | All five data representations, active receipt, untouched suffix and disposal accounting pass the [bounded qualification](runtime-ordinary-data-cleanup-v1.md). Existing ordinary validation and forward order remain intact, with no persistent-only checks or output allocation. Live composition remains open. |
 | N4-L | Live detach and data/control release | Each route needs its applicable lower cleanup contract. Retain input, returned owners and disposed receipts outside the model loan through retake/commit. Failed settlement cannot commit a reusable hole or reconstruct disposed authority. |
 | N4-QA | Auxiliary destruction | Needs applicable lower/live cleanup contracts. Keep the taken lane and parent through every queue/event/doorbell/resource/signal teardown prefix. Failed destruction cannot expose a reusable slot. |
 | N4-QP | Full and returning destruction | Needs applicable lower/live cleanup contracts; QA-first is scheduling. Cover Release, ReturnAttached, ReturnDetached, callbacks and optional SDMA owners. Return data and earlier disposal receipts survive later failures without repeated cleanup. |
@@ -411,8 +422,8 @@ obligation, followed by membership and settlement proof packets.
 
 ## Qualification And Integration Order
 
-1. Implement ordinary mixed cleanup and typed-data disposal together above
-   accepted R119, retaining R118B C1/C2/C3 regressions; advance V4-J1 proofs independently.
+1. Compose live cleanup and runtime outer-roster retention above accepted R121,
+   retaining R118B C1/C2/C3 regressions; advance V4-J1 proofs independently.
    M1/M2/M3 design work need not wait for those packets. Primary
    serializes shared edits and builds, preserving each isolated candidate's
    preliminary evidence and the accepted V1/V2/V3 evidence.

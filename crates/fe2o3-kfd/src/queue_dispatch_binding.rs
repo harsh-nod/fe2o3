@@ -366,6 +366,13 @@ impl Gfx942FixedDispatchDataV1 {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn initialized_after_dispatch_for_test(
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Self {
+        Self::initialized_after_dispatch(lease)
+    }
+
     pub fn host_visible_uninitialized(
         token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
     ) -> Self {
@@ -2644,26 +2651,14 @@ impl DispatchResourceOwnerV1 {
         self,
         memory: &mut SharedGttMemorySessionV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.require_prepared()?;
-        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
-        memory.release(kernarg)?;
-        for code in self.code {
-            let code = memory.unmap_executable_from_gpu(code.into_token())?;
-            memory.release_executable(code)?;
-        }
-        for data in self.data {
-            match data {
-                DispatchDataAuthorityV1::Device(authority) => {
-                    let lease = memory.unmap_gfx942_device_memory(authority.into_lease())?;
-                    memory.release_gfx942_device_memory(lease)?;
-                }
-                DispatchDataAuthorityV1::HostVisible(authority) => {
-                    let token = memory.unmap_from_gpu(authority.into_token())?;
-                    memory.release(token)?;
-                }
-            }
-        }
-        Ok(())
+        control_release::release_ordinary_with_v1(
+            control_release::ReturningControlCleanupCustodyV1::new(
+                self,
+                control_release::ReturningControlModeV1::Ordinary,
+            ),
+            memory,
+            core::mem::forget,
+        )
     }
 
     /// Releases code and kernarg while returning the exact mapped C3 set.

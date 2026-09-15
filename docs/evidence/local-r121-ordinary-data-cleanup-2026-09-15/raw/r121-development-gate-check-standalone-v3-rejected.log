@@ -1,0 +1,105 @@
+node:assert:150
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: standalone-lockfiles exact deterministic log
++ actual - expected
+
+  'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-device/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/typed-invalid/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock\n' +
++   '    Blocking waiting for file lock on package cache\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/g2-semantics/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-dependency-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-equivalent-manifest/Cargo.lock\n' +
+
+    at leaf (/home/harsh/.codex-tmp/r121-development-gate-check-v3.js:179:17)
+    at Object.<anonymous> (/home/harsh/.codex-tmp/r121-development-gate-check-v3.js:283:7)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-device/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/typed-invalid/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock\n' +
+    '    Blocking waiting for file lock on package cache\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/g2-semantics/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-dependency-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-equivalent-manifest/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-semantic-frontend/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: examples/device-link-ffi/Cargo.lock\n' +
+    'checking standalone lockfile: examples/flash_attention_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/flash_attention_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gemm_autoresearch_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_advanced_attention/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_advanced_systems/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_gpt_oss_decode/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_low_precision/Cargo.lock\n' +
+    'checking standalone lockfile: examples/moe_expert_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/moe_grouped_expert_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/moe_top2_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/row_softmax_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/row_softmax_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/tiled_gemm_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/wave64_collectives_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/workgroup_sync_v1/Cargo.lock\n' +
+    'checking standalone lockfile: tests/fixtures/device-link/rust-device/Cargo.lock\n' +
+    'standalone lockfiles: OK (32 checked)\n',
+  expected: 'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-device/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.lock\n' +
+    'checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/typed-invalid/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/g2-semantics/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-dependency-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-equivalent-manifest/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-semantic-frontend/Cargo.lock\n' +
+    'checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/Cargo.lock\n' +
+    'checking standalone lockfile: examples/device-link-ffi/Cargo.lock\n' +
+    'checking standalone lockfile: examples/flash_attention_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/flash_attention_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gemm_autoresearch_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_advanced_attention/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_advanced_systems/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_gpt_oss_decode/Cargo.lock\n' +
+    'checking standalone lockfile: examples/gfx950_low_precision/Cargo.lock\n' +
+    'checking standalone lockfile: examples/moe_expert_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/moe_grouped_expert_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/moe_top2_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/row_softmax_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/row_softmax_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/tiled_gemm_general_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/wave64_collectives_v1/Cargo.lock\n' +
+    'checking standalone lockfile: examples/workgroup_sync_v1/Cargo.lock\n' +
+    'checking standalone lockfile: tests/fixtures/device-link/rust-device/Cargo.lock\n' +
+    'standalone lockfiles: OK (32 checked)\n',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

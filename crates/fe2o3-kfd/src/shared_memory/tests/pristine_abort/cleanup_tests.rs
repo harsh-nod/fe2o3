@@ -3,6 +3,9 @@ use control_cleanup::{CleanupStageV1 as Stage, ControlCleanupObservationV1};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use transitions::ProjectionFaultV1 as Fault;
 
+#[path = "data_tests.rs"]
+mod data;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MappingSnapshot {
     address: u64,
@@ -153,7 +156,7 @@ impl PristineControlRecordSnapshotV1 {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct DeviceSnapshot {
     identity: Gfx942DeviceMemoryIdentityV1,
     layout: Gfx942DeviceMemoryLayoutV1,
@@ -202,6 +205,7 @@ pub(crate) struct Snapshot {
     devices: Vec<DeviceSnapshot>,
     phase: SharedMemorySessionPhaseV1,
     retained_va: u64,
+    retained_device_bytes: u64,
     usage: (
         Option<Gfx942HostVisibleBackingUsageV1>,
         Option<Gfx942DeviceBackingUsageV1>,
@@ -226,6 +230,7 @@ impl PristineAbortMemoryFixtureV1 {
             devices: device_records(e),
             phase: e.phase,
             retained_va: e.retained_gpu_va_bytes,
+            retained_device_bytes: e.retained_device_memory_bytes,
             usage: (
                 e.host_backing_account.as_ref().map(|a| a.usage()),
                 f.usage(),

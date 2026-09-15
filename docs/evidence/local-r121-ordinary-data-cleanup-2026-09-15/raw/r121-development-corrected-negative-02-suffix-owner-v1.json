@@ -1,0 +1,91 @@
+{
+  "source_head": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "3fbaf921e5764e0ed3a4c949f4be76337a7ea64157cf459d633735c37fb5bfcf",
+  "started_at": "2026-09-15T08:33:25.346Z",
+  "finished_at": "2026-09-15T08:34:15.757Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::dispatch_binding::control_release::tests::ordinary::ordinary_cleanup_retains_active_data_suffix_and_exact_native_prefix",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r121-development-corrected-negative-02-suffix-owner-v1.log",
+  "source": "/home/harsh/.codex-tmp/r121-development-corrected-negative-02-suffix-owner-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r121-development-corrected-negative-02-suffix-owner-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r121-development-run-v1.js",
+    "sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 3021996,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789461255763,
+        "monotonic_ns": "57964419917563",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 50.411081658,
+  "verification_elapsed_seconds": 0.294284174,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r121-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r121-development-gnu-all-v2.json",
+      "sha256": "c1e233743695319659c4ec78ac3b5b611a6780fa5e1a6fe2a737f22ca546973b",
+      "observation": {
+        "utc_ms": 1789459107822,
+        "monotonic_ns": "55816478765002",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789461205346,
+      "monotonic_ns": "57914002710449",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789461255757,
+      "monotonic_ns": "57964413792107",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789461256051,
+      "monotonic_ns": "57964708076281",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

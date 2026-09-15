@@ -1,5 +1,14 @@
 # Runtime Swarm Dispatch After R114
 
+Current Native checkpoint: [R121 ordinary and typed-data cleanup is locally accepted](runtime-ordinary-data-cleanup-v1.md),
+with [665 raw artifacts](evidence/local-r121-ordinary-data-cleanup-2026-09-15/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,818 tests with
+five ignored; seventeen source gates, ten auxiliary checks, restored 59/17
+suites, 26 compiled negatives across 25 maps and thirty parser calibrations pass.
+All 5,696 source identities match. This is lower-cleanup CPU/test acceptance,
+not live composition, native, formal, aggregate-memory or performance acceptance.
+Native next integrates N4-L and the runtime's outer data-roster retention.
+
 Current Resources checkpoint: [R116/V3 settlement is locally accepted](runtime-context-version-settlement-v1.md#integrated-candidate)
 with [378 retained artifacts](evidence/local-r116-context-version-settlement-2026-09-14/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,746 tests with
@@ -21,7 +30,7 @@ This accepts only scripted lower detached-control cleanup, not persistent-data
 bridges, live/queue composition, native, formal, memory-bound or performance
 qualification.
 
-Current Native checkpoint:
+Preceding Native checkpoint:
 [R119 persistent returned-data cleanup is locally accepted](runtime-persistent-returned-data-cleanup-v1.md)
 above published R118B, with
 [464 raw artifacts](evidence/local-r119-persistent-returned-data-cleanup-2026-09-15/README.md)
@@ -72,7 +81,7 @@ A1/A2 and full HIP/HSA parity are not complete.
 
 The original work breakdown was refreshed against accepted source
 `9eaf19141e8af6ade490feba3062c8b49d9b38ca` and the open issues on 2026-09-13.
-The R115/R116/R117/R118B/R119 progressions above update the current assignments; the original
+The R115/R116/R117/R118B/R119/R121 progressions above update the current assignments; the original
 R114 boundary and handoff details remain historical evidence.
 
 ## Historical R114 Boundary
@@ -99,7 +108,7 @@ serialized builds, proof/hardware scheduling and signed dual-remote publication.
 
 | Owner | Immediate Packet | Following Queue |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | Implement ordinary mixed cleanup and typed-data disposal together above accepted R119 | Applicable live/queue teardown, then N5 DATA-ADOPT |
+| Native: `native_replacement_handoff` | Integrate N4-L live cleanup and runtime outer data-roster retention above R121 | Applicable queue teardown, then N5 DATA-ADOPT |
 | Admission: `submission_identity_handoff` | Prepare joint I2/C4 after locally accepted R118B C1/C2/C3; production integration needs N5 | Actual ISSUE, COMPLETE, C5 typed future/join, C6 generated GRAPH/DRAIN |
 | Resources: `r102_evidence_review` | V4-J1 issuance proofs above accepted executable V1/V2/V3 models | Membership/settlement proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
 | Primary | Integrate one reviewed packet at a time; own Q1/Q2/Q3 and release gate #277 | Coordinate A3-A7 and publish only the evidence actually obtained |
@@ -113,7 +122,7 @@ Native's tests, and Resources supplies settlement/accounting contracts.
 
 | Lane | Independent Start | Does Not Yet Close |
 | --- | --- | --- |
-| Native | Ordinary full-owner release plus typed host/device data disposal | Live retake, queue teardown, N5 adoption |
+| Native | Compose accepted R121 cleanup across live retake/commit and outer data-roster ownership | Queue teardown, N5 adoption and native qualification |
 | Admission | Retain accepted R118B identity/lifecycle regressions; prepare the joint I2/C4 handoff | Actual generated ISSUE, COMPLETE, typed output or graph execution |
 | Resources | Implement V4-J1's reviewed issuance-proof handoff; M1-M3 design remains independently ready | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
 | Primary | Specify Q1/Q2/Q3 evidence contracts and #277's missing feature-enabled release audit | New proof, hardware, release-policy or performance acceptance |
@@ -134,15 +143,15 @@ solver or hardware jobs running unattended.
    result needs no returned-data allocation or extraction. R115 already
    accepts the lower `release_non_data_after_recycle` and
    `release_non_data_for_returning_destroy` paths.
-2. **Persistent returned data, accepted R119; ordinary mixed cleanup next:** The
+2. **Persistent returned data, accepted R119; ordinary/data cleanup, accepted R121:** The
    [qualified persistent contract](runtime-persistent-returned-data-cleanup-v1.md)
    preserves exact returned-data-on-error behavior and one-shot extraction.
-   Next combine ordinary full-owner release with typed data disposal, preserving
-   existing ordinary validation and forward order without return allocation.
-   Cover every supported host/device and initialized/uninitialized variant,
-   retained charges, active owner/receipt, untouched suffix and completed prefix.
-   Reuse native device accounting, not coherent-host model keys. No repeated
-   disposal or duplicate refund.
+   [R121](runtime-ordinary-data-cleanup-v1.md) combines ordinary full-owner release
+   with typed disposal while preserving ordinary validation and forward order
+   without return allocation. All five data representations, retained charges,
+   active receipt, untouched suffix and completed prefix pass local tests.
+   Native device accounting remains distinct from coherent-host model keys.
+   These lower routines now require live and queue composition.
 3. **N4-L/N4-Q:** Retain original parents and taken lanes across model retake,
    commit and every teardown prefix. A failed disposal cannot expose a reusable
    allocation hole or queue slot. Each route consumes its applicable lower

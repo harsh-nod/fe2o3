@@ -1,0 +1,82 @@
+{
+  "source_head": "be50052c74a7956ba0a50df0e2efe8d9568de78a",
+  "source_map_sha256": "5fe28e8a3accfc845c4c20182b702c1e96961e542c02405b3841a91b4be62f04",
+  "started_at": "2026-09-15T08:45:01.878Z",
+  "finished_at": "2026-09-15T08:45:02.150Z",
+  "command": [
+    "node",
+    "-e",
+    "const fs=require('fs'),assert=require('assert'),crypto=require('crypto');\nconst root='/home/harsh/.codex-tmp/',repo=root+'fe2o3-r61-execution';\nconst b=n=>fs.readFileSync(root+n),j=n=>JSON.parse(b(n)),h=x=>crypto.createHash('sha256').update(x).digest('hex');\nassert.strictEqual(h(b('r121-development-mutations-v2.json')),'bfbda6d05aac8905934b1a9b406d3e1a4f57fe2b8d3865c0b6a0808beb7ffe81');\nconst p=j('r121-development-mutations-v2.json');\nfor(const [name,sha] of Object.entries(p.parser_inputs))assert.strictEqual(h(b(name)),sha);\nassert.strictEqual(h(b(p.runner)),p.runner_sha256);\nconst e=require(root+'r119-integrated-qualification-evidence-v1.js'),map=j(p.source_map);\nassert.strictEqual(h(JSON.stringify(map)),p.source_map_sha256);\nconst all=e.passing(b(p.baseline.name+'.log').toString()),out=[];\nfor(const [suffix,filter,count,prior] of [\n ['controls','queue::dispatch_binding::control_release::',59,'r121-development-corrected-restored-08-v3.json'],\n ['data','shared_memory::tests::pristine_abort::',17,'r121-development-corrected-restored-controls-v1.json']]){\n const name='r121-development-corrected-restored-'+suffix+'-v1',r=j(name+'.json'),log=b(name+'.log').toString();\n e.checkRecord(r,name,[...p.test_command,filter],map,prior,0,{read:j,bytes:b},{head:p.source_parent,cwd:repo,contract:'r121-development-raw-utc-boot-monotonic-v1',runner:p.runner,after:map});\n assert.deepStrictEqual(e.liveGroupMembers(r.process_group_cleanup.close.pgid),[]);\n const wanted=all.filter(n=>n.includes(filter));assert.strictEqual(wanted.length,count);\n assert.deepStrictEqual(e.passing(log),wanted);assert.deepStrictEqual(e.ignored(log),[]);e.assertPassing(log);\n assert.deepStrictEqual(e.totals(log),{harnesses:1,passed:count,failed:0,ignored:0});\n assert(log.includes('0 measured; '+(1172-count)+' filtered out;'));\n out.push({name,passed:count,record_sha256:h(b(name+'.json')),log_sha256:h(b(name+'.log'))});\n}\nconsole.log(JSON.stringify({development_only:true,source_map_sha256:p.source_map_sha256,restored_suites:out}));"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r121-development-corrected-restored-check-v1.log",
+  "source": "/home/harsh/.codex-tmp/r121-development-corrected-restored-check-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r121-development-corrected-restored-check-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r121-development-run-v1.js",
+    "sha256": "306ec7ec615307045391dc86a2c2709a1f087b0a38aae094e395388e817e66a1"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 3062529,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789461902166,
+        "monotonic_ns": "58610822675595",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 0.27229476,
+  "verification_elapsed_seconds": 0.436074305,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r121-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r121-development-corrected-restored-data-v1.json",
+      "sha256": "1aded93576e015d6867634a6049e79b7d9c19a0b07e8a8f2fa33814d7d4a2099",
+      "observation": {
+        "utc_ms": 1789461870476,
+        "monotonic_ns": "58579132407002",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789461901878,
+      "monotonic_ns": "58610534140952",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789461902150,
+      "monotonic_ns": "58610806435712",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789461902586,
+      "monotonic_ns": "58611242510017",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}
