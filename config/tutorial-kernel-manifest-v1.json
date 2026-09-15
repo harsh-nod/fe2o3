@@ -1799,7 +1799,7 @@
         "sourcePaths": [
           "examples/moe_top2_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "f5c531622ae7a2cc849eeb45c42dfb5a3ce95e05d7c7fb9e279fe99cfc13a93a",
+        "sourceClosureSha256": "ece35e03f231a824428abf8f757cdd45dfac6f1b23c67b313c086dc67b6b7403",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_moe_top2_v1",
@@ -1812,7 +1812,7 @@
         ],
         "cargoLockPath": "examples/moe_top2_v1/Cargo.lock",
         "cargoLockSha256": "058bac24ee972a9ac9bcd2820787391ba37b240b6a4159a70cc7cd30203e8bc6",
-        "contractSha256": "0a3aab20fb161f9ebd9982c26361cac2d4fef00306fd855bdc2cdb29053da41f"
+        "contractSha256": "9cb3f406335f9f312af4576f450a3a484f7fef6b7033a1c373ca1fd992e514e0"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-moe-top2.request.json",
