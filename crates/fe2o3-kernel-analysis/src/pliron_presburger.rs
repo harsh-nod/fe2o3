@@ -1040,6 +1040,7 @@ impl PlironPresburgerAnalysisV1 {
                 })
             }
             SparseIndexFactV1::Unknown
+            | SparseIndexFactV1::Quotient { .. }
             | SparseIndexFactV1::CheckedTiled2D(_)
             | SparseIndexFactV1::CheckedRowStriped2D(_) => Err(PresburgerFailureV1::Unsupported {
                 detail: "index fact is outside the affine/remainder Presburger fragment",

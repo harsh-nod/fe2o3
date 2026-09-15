@@ -7,6 +7,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
+#[path = "rustc_semantic_plan_v1/lds_type_dependencies_v1.rs"]
+pub(crate) mod lds_type_dependencies_v1;
+#[path = "rustc_semantic_plan_v1/reusable_phase_dependencies_v26.rs"]
+mod reusable_phase_dependencies_v26;
+
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiIdentityV1, SemanticAxisV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
     SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalIdV1,
@@ -31,7 +36,8 @@ use rustc_target::callconv::FnAbi;
 use crate::collector::CollectedFunctionRole;
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 use crate::production_rustc_intrinsic_v1::{
-    ProductionRustcIntrinsicOperationV1, atomic_ordering_tag_v1, atomic_scope_tag_v1,
+    ProductionMirV1, ProductionRustcIntrinsicOperationV1, atomic_ordering_tag_v1,
+    atomic_scope_tag_v1, production_mir_v1,
 };
 use crate::production_semantic_terminal_v1::{
     ProductionSemanticTerminalRuleV1, ProductionTerminalExpansionV1,
@@ -95,7 +101,9 @@ enum TerminalIdentitySchemaV1 {
     CombinedV2,
     #[cfg_attr(not(test), allow(dead_code))]
     CombinedV3,
+    #[cfg_attr(not(test), allow(dead_code))]
     CombinedV4,
+    CombinedV5,
 }
 
 #[derive(Clone, Debug)]
@@ -378,6 +386,7 @@ pub(crate) struct NormalizedRustcIntrinsicRecipeV1<'tcx> {
 pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
+    mir: Box<[ProductionMirV1<'tcx>]>,
     function_abis: Box<[RetainedSemanticFunctionAbiProducerV1<'tcx>]>,
     terminals: Box<[RetainedSemanticTerminalProducerV1<'tcx>]>,
     bodies: Box<[RetainedSemanticBodyProducerV1]>,
@@ -398,6 +407,13 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
 
     pub(crate) fn function_producers(&self) -> &[RetainedSemanticFunctionProducerV1<'tcx>] {
         &self.functions
+    }
+
+    /// The exact proof-bound body inspected by both preflight passes.
+    pub(crate) fn function_mir(&self, function: SemanticFunctionIdV1) -> Option<&Body<'tcx>> {
+        let index = function.index() as usize;
+        let mir = self.mir.get(index)?;
+        (mir.instance() == self.functions.get(index)?.instance).then(|| mir.body())
     }
 
     pub(crate) fn function_abi_producers(&self) -> &[RetainedSemanticFunctionAbiProducerV1<'tcx>] {
@@ -673,6 +689,11 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     counts.charge(SemanticMirResourceV1::Functions, functions.len(), limits)?;
     counts.charge(SemanticMirResourceV1::Roots, roots.len(), limits)?;
 
+    let mir = functions
+        .iter()
+        .map(|function| production_mir_v1(tcx, function.instance))
+        .collect::<Box<[_]>>();
+
     let function_ids = functions
         .iter()
         .enumerate()
@@ -687,8 +708,8 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     // Structural cardinalities are charged before pass one traverses their
     // contents. Call discovery is therefore bounded by the same limits as
     // later canonical construction.
-    for function in &functions {
-        let body = tcx.instance_mir(function.instance.def);
+    for selection in &mir {
+        let body = selection.body();
         counts.charge(
             SemanticMirResourceV1::Locals,
             body.local_decls.len(),
@@ -722,7 +743,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     let mut first_rejection = None;
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
-        let body = tcx.instance_mir(function.instance.def);
+        let body = mir[index].body();
         for (block, data) in body.basic_blocks.iter_enumerated() {
             let Some(terminator) = &data.terminator else {
                 remember_rejection(
@@ -907,7 +928,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     let mut debug_capture_gap = None;
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
-        let body = tcx.instance_mir(function.instance.def);
+        let body = mir[index].body();
         let sources = capture_body_sources_v1(
             tcx,
             function_id,
@@ -970,6 +991,9 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                 ));
             }
         }
+        if let Err(rejection) = reusable_phase_dependencies_v26::retain(&mut preflight, abi_site) {
+            return Err(materialize_rejection_v1(tcx, &functions, &roots, &edges, rejection));
+        }
     }
 
     for terminal in &terminals {
@@ -980,7 +1004,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         let caller = functions
             .get(recipe.caller.index() as usize)
             .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-        let body = tcx.instance_mir(caller.instance.def);
+        let body = mir[recipe.caller.index() as usize].body();
         let mut preflight = BodyPreflightV1 {
             tcx,
             instance: caller.instance,
@@ -1024,13 +1048,16 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                 ));
             }
         }
+        if let Err(rejection) = lds_type_dependencies_v1::retain(&mut preflight, terminal, site) {
+            return Err(materialize_rejection_v1(tcx, &functions, &roots, &edges, rejection));
+        }
     }
 
     let CanonicalProducerTablesV1 {
         types,
         source_files,
         bodies,
-    } = build_canonical_producer_tables_v1(tcx, target, &functions, source_producers, types)?;
+    } = build_canonical_producer_tables_v1(tcx, target, &functions, &mir, source_producers, types)?;
     let debug_capture_gap = bodies.iter().find_map(|body| body.debug_capture_gap);
 
     let direct_calls = direct_calls.into_iter().collect::<Box<[_]>>();
@@ -1056,6 +1083,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     Ok(ProductionSemanticPreflightPlanV1 {
         types,
         functions,
+        mir,
         function_abis,
         terminals,
         bodies,
@@ -1241,6 +1269,10 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 operand,
                 _,
             ) => self.inspect_operand(operand, site),
+            Rvalue::Cast(rustc_middle::mir::CastKind::PointerCoercion(..), operand, _)
+                if crate::production_semantic_body_v1::array_reference_unsize_length_v1(
+                    self.tcx, self.instance, self.body, value,
+                ).is_some() => self.inspect_operand(operand, site),
             Rvalue::Cast(rustc_middle::mir::CastKind::PointerCoercion(..), ..) => {
                 Err(reject("unsupported PointerCoercion Cast rvalue", site))
             }
@@ -2455,10 +2487,11 @@ fn build_canonical_producer_tables_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
+    mir: &[ProductionMirV1<'tcx>],
     source_producers: Vec<RetainedRawBodySourceProducerV1>,
     types: BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
 ) -> Result<CanonicalProducerTablesV1<'tcx>, ProductionSemanticPreflightErrorV1> {
-    if source_producers.len() != functions.len() {
+    if source_producers.len() != functions.len() || mir.len() != functions.len() {
         return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
     }
     let mut type_ids = BTreeMap::new();
@@ -2494,13 +2527,28 @@ fn build_canonical_producer_tables_v1<'tcx>(
                 .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
         );
         let function_identity = function.identities.function();
-        let body = tcx.instance_mir(function.instance.def);
+        let selection = &mir[function_index];
+        if selection.instance() != function.instance {
+            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        }
+        let body = selection.body();
         if raw_sources.locals.len() != body.local_decls.len()
             || raw_sources.blocks.len() != body.basic_blocks.len()
         {
             return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
         }
-        let mir_body_sha256 = rustc_mir_body_sha256_v1(tcx, function.instance);
+        let original_mir_sha256 = rustc_mir_body_sha256_v1(tcx, function.instance);
+        let mir_body_sha256 = match selection.expansion_fingerprint(tcx) {
+            None => original_mir_sha256,
+            Some(expansion) => {
+                let mut digest = SemanticIdentityDigestV1::new(
+                    b"fe2o3/semantic-mir/proved-core-source-expansion/v1",
+                );
+                digest.field(&original_mir_sha256);
+                digest.field(&expansion);
+                digest.finish()
+            }
+        };
 
         let mut locals = Vec::with_capacity(body.local_decls.len());
         for (raw_local, declaration) in body.local_decls.iter_enumerated() {
@@ -3295,7 +3343,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(terminal.identities.const_generic_arguments().as_bytes())?;
         section.field(&[terminal_expansion_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV4,
+            TerminalIdentitySchemaV1::CombinedV5,
         )])?;
         section.field(&terminal.abi.rustc_source_signature_sha256)?;
         section.field(&terminal.abi.rustc_fn_abi_sha256)?;
@@ -3386,7 +3434,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(&recipe.block.to_le_bytes())?;
         section.field(&[terminal_expansion_tag_for_schema_v1(
             recipe.expansion,
-            TerminalIdentitySchemaV1::CombinedV4,
+            TerminalIdentitySchemaV1::CombinedV5,
         )])?;
         section.field(&recipe.arguments.to_le_bytes())?;
         section.field(recipe.identities.function().as_bytes())?;
@@ -3555,7 +3603,14 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite => 122,
         ProductionTerminalExpansionV1::CapabilityGlobalLoad => 123,
         ProductionTerminalExpansionV1::CapabilityGlobalStore => 124,
-        ProductionTerminalExpansionV1::Execution(terminal) => 125 + terminal.identity_tag(),
+        ProductionTerminalExpansionV1::Execution(terminal) => {
+            let tag = terminal.identity_tag();
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV5) && tag >= 42 {
+                126 + tag
+            } else {
+                125 + tag
+            }
+        }
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X) => 13,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y) => 14,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z) => 15,
@@ -3593,12 +3648,18 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => 35,
         ProductionTerminalExpansionV1::MathContextCurrent => 36,
         ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
+        ProductionTerminalExpansionV1::PolicyMathF32(function) => match function {
+            fe2o3_kernel_ir::F32MathFunction::Abs => 193,
+            function => 180 + f32_math_tag_v1(function),
+        },
         ProductionTerminalExpansionV1::ColdPath => 50,
         ProductionTerminalExpansionV1::WaveLaneCurrent => 51,
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor => 52,
         ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => 53,
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => 54,
         ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => 55,
+        ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled => 194,
+        ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled => 195,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
         ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
@@ -3646,12 +3707,14 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
-            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 111,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4
+            | TerminalIdentitySchemaV1::CombinedV5 => 111,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
-            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4
+            | TerminalIdentitySchemaV1::CombinedV5 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
@@ -3659,13 +3722,13 @@ const fn terminal_expansion_tag_for_schema_v1(
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 113,
             TerminalIdentitySchemaV1::CombinedV3 => 113,
-            TerminalIdentitySchemaV1::CombinedV4 => 116,
+            TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 116,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
-            TerminalIdentitySchemaV1::CombinedV4 => 117,
+            TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 117,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
@@ -3675,7 +3738,8 @@ const fn terminal_expansion_tag_for_schema_v1(
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
-                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 100,
+                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4
+                | TerminalIdentitySchemaV1::CombinedV5 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,

@@ -6,9 +6,20 @@
 
 use std::collections::BTreeSet;
 
+mod subgroup_partition;
+mod borrowed_subgroup;
+mod borrowed_lds;
+mod numerical_policy_math;
+mod source_occurrence;
+mod reusable_lds;
+pub use reusable_lds::ReusableLdsConversionV1;
+pub use source_occurrence::ExecutionCapabilitySourceOccurrenceV1;
+pub use numerical_policy_math::{NumericalPolicyMathBindingV1, NumericalPolicyMathOperationV1};
+pub use subgroup_partition::{SubgroupPartitionOperationV1, MAX_SUBGROUP_PARTITION_PHYSICAL_WIDTH_V1, valid_subgroup_partition_widths_v1};
+
 use crate::{
     AccessMode, AddressSpace, AsyncCopyCompletionV1, AtomicKind, CollectiveCapabilityOperationV1,
-    ExecutionCapabilityRequirementV1, FunctionId, MemoryEffect, MemoryOrdering,
+    ExecutionCapabilityRequirementV1, FunctionId, MemoryEffect, MemoryOrdering, NumericalModeV1,
     ResourceCapabilityRequirementV1, ScalarType, SynchronizationScope, TargetCapability, ValueId,
 };
 
@@ -301,6 +312,21 @@ impl ExecutionAtomicKindV1 {
 /// Logical SSA role. This is deliberately richer than the physical ABI.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ExecutionCapabilityRoleV1 {
+    ReusableWorkgroup,
+    ReusablePhaseCompletion,
+    ReusableLds { element: ExecutionTypeIdentityV1, layout: ExecutionElementLayoutV1, elements: u64 },
+    BorrowedSubgroup {
+        workgroup_reference: ExecutionTypeIdentityV1,
+        workgroup: ExecutionTypeIdentityV1,
+        width: u32,
+    },
+    NumericalPolicyMathSource(NumericalPolicyMathBindingV1),
+    NumericalPolicyMathBound(NumericalPolicyMathBindingV1),
+    SubgroupPartition { width: u32, partition_width: u32 },
+    NumericalPolicy {
+        policy: ExecutionTypeIdentityV1,
+        mode: NumericalModeV1,
+    },
     KernelAuthority,
     Workgroup,
     Subgroup {
@@ -344,6 +370,15 @@ pub enum ExecutionCapabilityRoleV1 {
 impl ExecutionCapabilityRoleV1 {
     pub fn is_complete(&self) -> bool {
         match self {
+            Self::ReusableLds { element, layout, elements } => element.is_complete()
+                && layout.checked_footprint(*elements).is_some_and(|bytes| bytes != 0),
+            Self::NumericalPolicyMathSource(binding) | Self::NumericalPolicyMathBound(binding) => binding.is_complete(),
+            Self::SubgroupPartition { width, partition_width } => valid_subgroup_partition_widths_v1(*width, *partition_width),
+            Self::NumericalPolicy { policy, mode } => {
+                policy.is_complete() && *mode == NumericalModeV1::StrictIeee
+            }
+            Self::BorrowedSubgroup { workgroup_reference, workgroup, width } =>
+                borrowed_subgroup::valid_pair(*workgroup_reference, *workgroup, *width),
             Self::Subgroup { width } => *width != 0 && width.is_power_of_two(),
             Self::Lds {
                 element,
@@ -383,7 +418,9 @@ impl ExecutionCapabilityRoleV1 {
                 subgroup_brand,
                 width,
             } => *subgroup_brand != [0; 32] && *width != 0 && width.is_power_of_two(),
-            Self::KernelAuthority
+            Self::ReusableWorkgroup
+            | Self::ReusablePhaseCompletion
+            | Self::KernelAuthority
             | Self::Workgroup
             | Self::WorkgroupMemoryIndex
             | Self::EpochTransition
@@ -406,6 +443,22 @@ impl ExecutionCapabilityTypeV1 {
         self.source_type.is_complete()
             && self.provenance.is_complete()
             && self.role.is_complete()
+            && match self.role {
+                ExecutionCapabilityRoleV1::ReusableWorkgroup | ExecutionCapabilityRoleV1::ReusablePhaseCompletion => self.workgroup_brand.is_some() && self.epoch.is_some(),
+                ExecutionCapabilityRoleV1::ReusableLds { .. } => self.workgroup_brand.is_some() && self.epoch.is_some(),
+                ExecutionCapabilityRoleV1::NumericalPolicyMathSource(binding) => self.source_type == binding.math && self.workgroup_brand.is_none() && self.epoch.is_none(),
+                ExecutionCapabilityRoleV1::NumericalPolicyMathBound(binding) => self.source_type == binding.bound && self.workgroup_brand.is_none() && self.epoch.is_none(),
+                ExecutionCapabilityRoleV1::BorrowedSubgroup { workgroup_reference, workgroup, .. } =>
+                    self.workgroup_brand.is_some() && self.epoch.is_some()
+                        && self.source_type != workgroup_reference && self.source_type != workgroup,
+                ExecutionCapabilityRoleV1::SubgroupPartition { .. } => self.workgroup_brand.is_some() && self.epoch.is_some(),
+                ExecutionCapabilityRoleV1::NumericalPolicy { policy, .. } => {
+                    self.source_type != policy
+                        && self.workgroup_brand.is_none()
+                        && self.epoch.is_none()
+                }
+                _ => true,
+            }
             && self.workgroup_brand.is_some() == self.epoch.is_some()
             && self
                 .workgroup_brand
@@ -418,6 +471,22 @@ impl ExecutionCapabilityTypeV1 {
 /// never table ordinals from Semantic MIR.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ExecutionCapabilityOperationV1 {
+    ReusableLdsConversion(ReusableLdsConversionV1),
+    SubgroupDeriveBorrowed {
+        workgroup_reference: ExecutionTypeIdentityV1,
+        workgroup: ExecutionTypeIdentityV1,
+        subgroup: ExecutionTypeIdentityV1,
+        width: u32,
+    },
+    NumericalPolicyMath(NumericalPolicyMathOperationV1),
+    SubgroupPartition(SubgroupPartitionOperationV1),
+    /// Strict IEEE policy ownership; all numerical proof obligations remain open.
+    NumericalPolicyIssue {
+        context: ExecutionTypeIdentityV1,
+        capability: ExecutionTypeIdentityV1,
+        policy: ExecutionTypeIdentityV1,
+        mode: NumericalModeV1,
+    },
     WorkgroupDerive {
         context: ExecutionTypeIdentityV1,
         workgroup: ExecutionTypeIdentityV1,
@@ -426,6 +495,15 @@ pub enum ExecutionCapabilityOperationV1 {
         workgroup: ExecutionTypeIdentityV1,
         subgroup: ExecutionTypeIdentityV1,
         width: u32,
+    },
+    /// Source ABI uses a shared reference; the operand is its exact owned issuer.
+    LdsAllocateBorrowed {
+        workgroup_reference: ExecutionTypeIdentityV1,
+        workgroup: ExecutionTypeIdentityV1,
+        lds: ExecutionTypeIdentityV1,
+        element: ExecutionTypeIdentityV1,
+        layout: ExecutionElementLayoutV1,
+        elements: u64,
     },
     LdsAllocate {
         workgroup: ExecutionTypeIdentityV1,
@@ -572,6 +650,16 @@ pub enum ExecutionCapabilityOperationV1 {
         workgroup: ExecutionTypeIdentityV1,
         witness: ExecutionTypeIdentityV1,
     },
+    WorkgroupMemoryIndexV2 {
+        workgroup_reference: ExecutionTypeIdentityV1,
+        workgroup: ExecutionTypeIdentityV1,
+        option: ExecutionTypeIdentityV1,
+        witness: ExecutionTypeIdentityV1,
+    },
+    WorkgroupMemoryIndexIntoDisjoint {
+        input_witness: ExecutionTypeIdentityV1,
+        output_witness: ExecutionTypeIdentityV1,
+    },
     WorkgroupMemoryAllocate {
         workgroup: ExecutionTypeIdentityV1,
         view: ExecutionTypeIdentityV1,
@@ -614,6 +702,14 @@ impl ExecutionCapabilityOperationV1 {
     pub fn type_references(&self) -> Vec<ExecutionTypeIdentityV1> {
         use ExecutionCapabilityOperationV1 as Op;
         match self {
+            Op::ReusableLdsConversion(value) => value.type_references(),
+            Op::NumericalPolicyMath(math) => math.type_references(),
+            Op::SubgroupPartition(partition) => partition.type_references(),
+            Op::NumericalPolicyIssue { context, capability, policy, .. } => vec![*context, *capability, *policy],
+            Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, .. } =>
+                vec![*workgroup_reference, *workgroup, *subgroup],
+            Op::LdsAllocateBorrowed { workgroup_reference, workgroup, lds, element, .. } =>
+                vec![*workgroup_reference, *workgroup, *lds, *element],
             Op::WorkgroupDerive { context, workgroup } => vec![*context, *workgroup],
             Op::SubgroupDerive {
                 workgroup,
@@ -774,6 +870,8 @@ impl ExecutionCapabilityOperationV1 {
                 ..
             } => vec![*context, *view, *element],
             Op::WorkgroupMemoryIndex { workgroup, witness } => vec![*workgroup, *witness],
+            Op::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => vec![*workgroup_reference, *workgroup, *option, *witness],
+            Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => vec![*input_witness, *output_witness],
             Op::WorkgroupMemoryAllocate {
                 workgroup,
                 view,
@@ -825,7 +923,8 @@ impl ExecutionCapabilityOperationV1 {
     pub const fn is_kernel_scoped(&self) -> bool {
         matches!(
             self,
-            Self::Atomic {
+            Self::NumericalPolicyMath(_) | Self::NumericalPolicyIssue { .. }
+            | Self::Atomic {
                 kind: ExecutionAtomicKindV1::BindGlobalView,
                 ..
             } | Self::RawMemoryBind {
@@ -860,6 +959,20 @@ impl ExecutionCapabilityOperationV1 {
         use ExecutionMemoryOrderingV1 as Ordering;
         use ExecutionMemoryScopeV1 as Scope;
         match self {
+            Self::LdsAllocateBorrowed { workgroup_reference, workgroup, lds, element, layout, elements } =>
+                borrowed_lds::valid(*workgroup_reference, *workgroup, *lds, *element, *layout, *elements),
+            Self::ReusableLdsConversion(value) => value.is_complete(),
+            Self::NumericalPolicyMath(math) => math.is_well_formed(),
+            Self::SubgroupPartition(partition) => partition.is_well_formed(),
+            Self::NumericalPolicyIssue { context, capability, policy, mode } => {
+                context != capability
+                    && context != policy
+                    && capability != policy
+                    && *mode == NumericalModeV1::StrictIeee
+            }
+            Self::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } =>
+                borrowed_subgroup::valid_pair(*workgroup_reference, *workgroup, *width)
+                    && subgroup != workgroup_reference && subgroup != workgroup,
             Self::WorkgroupDerive { .. } => true,
             Self::SubgroupDerive { width, .. } | Self::SubgroupCollective { width, .. } => {
                 matches!(width, 32 | 64)
@@ -1014,6 +1127,11 @@ impl ExecutionCapabilityOperationV1 {
                 elements, layout, ..
             } => layout.is_complete() && layout.checked_footprint(*elements).is_some(),
             Self::WorkgroupMemoryIndex { .. } => true,
+            Self::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
+                let ids = [workgroup_reference, workgroup, option, witness];
+                ids.iter().enumerate().all(|(i, id)| !ids[..i].contains(id))
+            }
+            Self::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => input_witness != output_witness,
             Self::WorkgroupMemoryPublish { layout, .. } => layout.is_complete(),
             Self::MemoryLoad {
                 workgroup,
@@ -1055,12 +1173,19 @@ impl ExecutionCapabilityOperationV1 {
             signature.arguments().eq(arguments.iter().copied()) && signature.output() == output
         };
         match self {
+            Self::NumericalPolicyMath(math) => math.signature_matches(signature),
+            Self::SubgroupPartition(partition) => partition.signature_matches(signature),
+            Self::NumericalPolicyIssue { context, capability, .. } => matches(&[*context], *capability),
+            Self::SubgroupDeriveBorrowed { workgroup_reference, subgroup, .. } =>
+                matches(&[*workgroup_reference], *subgroup),
             Self::WorkgroupDerive { context, workgroup } => matches(&[*context], *workgroup),
             Self::SubgroupDerive {
                 workgroup,
                 subgroup,
                 ..
             } => matches(&[*workgroup], *subgroup),
+            Self::ReusableLdsConversion(value) => value.signature_matches(signature),
+            Self::LdsAllocateBorrowed { workgroup_reference, lds, .. } => matches(&[*workgroup_reference], *lds),
             Self::LdsAllocate { workgroup, lds, .. } => matches(&[*workgroup], *lds),
             Self::LdsInitializeByInvocation {
                 input_lds,
@@ -1177,6 +1302,8 @@ impl ExecutionCapabilityOperationV1 {
             } => matches(&[*authority, *pointer, *length, *unsafe_obligation], *view),
             Self::PrivateMemoryAllocate { context, view, .. } => matches(&[*context], *view),
             Self::WorkgroupMemoryIndex { workgroup, witness } => matches(&[*workgroup], *witness),
+            Self::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => matches(&[*workgroup_reference], *option),
+            Self::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => matches(&[*input_witness], *output_witness),
             Self::WorkgroupMemoryAllocate {
                 workgroup, view, ..
             } => matches(&[*workgroup], *view),
@@ -1212,7 +1339,8 @@ impl ExecutionCapabilityOperationV1 {
 
     pub fn memory_effects(&self) -> Vec<MemoryEffect> {
         match self {
-            Self::LdsAllocate { .. } | Self::WorkgroupMemoryAllocate { .. } => {
+            Self::ReusableLdsConversion(_) => Vec::new(),
+            Self::LdsAllocateBorrowed { .. } | Self::LdsAllocate { .. } | Self::WorkgroupMemoryAllocate { .. } => {
                 vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
             }
             Self::PrivateMemoryAllocate { .. } => {
@@ -1263,19 +1391,26 @@ impl ExecutionCapabilityOperationV1 {
                 MemoryEffect::Read(AddressSpace::Workgroup),
                 MemoryEffect::Write(AddressSpace::Workgroup),
             ],
-            Self::WorkgroupDerive { .. }
+            Self::NumericalPolicyMath(_) | Self::SubgroupPartition(_) | Self::NumericalPolicyIssue { .. }
+            | Self::WorkgroupDerive { .. }
+            | Self::SubgroupDeriveBorrowed { .. }
             | Self::SubgroupDerive { .. }
             | Self::SubgroupCollective { .. }
             | Self::MatrixAccess { .. }
             | Self::AsyncWait { .. }
             | Self::RawMemoryBind { .. }
-            | Self::WorkgroupMemoryIndex { .. } => Vec::new(),
+            | Self::WorkgroupMemoryIndex { .. }
+            | Self::WorkgroupMemoryIndexV2 { .. }
+            | Self::WorkgroupMemoryIndexIntoDisjoint { .. } => Vec::new(),
         }
     }
 
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        if let Self::NumericalPolicyMath(math) = self { return math.required_capabilities(); }
+        if let Self::SubgroupPartition(partition) = self { return partition.required_capabilities(); }
         let mut required = BTreeSet::new();
-        if let Self::SubgroupDerive { width, .. }
+        if let Self::SubgroupDeriveBorrowed { width, .. }
+        | Self::SubgroupDerive { width, .. }
         | Self::SubgroupBarrier { width, .. }
         | Self::SubgroupFence { width, .. }
         | Self::SubgroupCollective { width, .. }
@@ -1293,10 +1428,12 @@ impl ExecutionCapabilityOperationV1 {
             ));
         };
         match self {
-            Self::SubgroupDerive { .. } => {}
+            Self::SubgroupDeriveBorrowed { .. } | Self::NumericalPolicyMath(_) | Self::SubgroupDerive { .. } | Self::SubgroupPartition(_) => {}
             Self::LdsAllocate {
                 layout, elements, ..
             }
+            | Self::LdsAllocateBorrowed { layout, elements, .. }
+            | Self::ReusableLdsConversion(ReusableLdsConversionV1 { layout, elements, .. })
             | Self::LdsInitializeByInvocation {
                 layout, elements, ..
             }
@@ -1435,12 +1572,15 @@ impl ExecutionCapabilityOperationV1 {
             | Self::MemoryStore { space, access, .. } => {
                 address(space.address_space(), access.access_mode())
             }
-            Self::WorkgroupDerive { .. }
+            Self::NumericalPolicyIssue { .. }
+            | Self::WorkgroupDerive { .. }
             | Self::WorkgroupFence { .. }
             | Self::SubgroupFence { .. }
             | Self::MatrixAccess { .. }
             | Self::WorkgroupMemoryPublish { .. }
-            | Self::WorkgroupMemoryIndex { .. } => {}
+            | Self::WorkgroupMemoryIndex { .. }
+            | Self::WorkgroupMemoryIndexV2 { .. }
+            | Self::WorkgroupMemoryIndexIntoDisjoint { .. } => {}
         }
         required
     }
@@ -1508,40 +1648,43 @@ pub struct ExecutionCapabilitySourceV1 {
     pub function: [u8; 32],
     pub operation: [u8; 32],
     pub block: u32,
+    pub occurrence: Option<ExecutionCapabilitySourceOccurrenceV1>,
 }
 
 impl ExecutionCapabilitySourceV1 {
     pub fn is_complete(self) -> bool {
         self.function != [0; 32] && self.operation != [0; 32]
+            && self.occurrence.is_none_or(ExecutionCapabilitySourceOccurrenceV1::is_complete)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ExecutionSafetyObligationsV1(u16);
+pub struct ExecutionSafetyObligationsV1(u32);
 
 impl ExecutionSafetyObligationsV1 {
-    pub const TARGET_SUPPORT: u16 = 1 << 0;
-    pub const DYNAMIC_WORKGROUP_IDENTITY: u16 = 1 << 1;
-    pub const WORKGROUP_CONVERGENCE: u16 = 1 << 2;
-    pub const SUBGROUP_CONVERGENCE: u16 = 1 << 3;
-    pub const BOUNDS: u16 = 1 << 4;
-    pub const DISJOINT_LDS_ALLOCATION: u16 = 1 << 5;
-    pub const INITIALIZATION: u16 = 1 << 6;
-    pub const RACE_FREEDOM: u16 = 1 << 7;
-    pub const EXACT_PARTICIPATION: u16 = 1 << 8;
-    pub const ASYNC_COMPLETION: u16 = 1 << 9;
-    pub const MEMORY_MODEL: u16 = 1 << 10;
-    pub const MATRIX_LEGALITY: u16 = 1 << 11;
-    pub const RAW_POINTER_VALIDITY: u16 = 1 << 12;
-    pub const LIFETIME_VALIDITY: u16 = 1 << 13;
-    pub const ADDRESS_SPACE_VALIDITY: u16 = 1 << 14;
-    pub const ALIASING_VALIDITY: u16 = 1 << 15;
+    pub const NUMERICAL_POLICY: u32 = 1 << 16;
+    pub const TARGET_SUPPORT: u32 = 1 << 0;
+    pub const DYNAMIC_WORKGROUP_IDENTITY: u32 = 1 << 1;
+    pub const WORKGROUP_CONVERGENCE: u32 = 1 << 2;
+    pub const SUBGROUP_CONVERGENCE: u32 = 1 << 3;
+    pub const BOUNDS: u32 = 1 << 4;
+    pub const DISJOINT_LDS_ALLOCATION: u32 = 1 << 5;
+    pub const INITIALIZATION: u32 = 1 << 6;
+    pub const RACE_FREEDOM: u32 = 1 << 7;
+    pub const EXACT_PARTICIPATION: u32 = 1 << 8;
+    pub const ASYNC_COMPLETION: u32 = 1 << 9;
+    pub const MEMORY_MODEL: u32 = 1 << 10;
+    pub const MATRIX_LEGALITY: u32 = 1 << 11;
+    pub const RAW_POINTER_VALIDITY: u32 = 1 << 12;
+    pub const LIFETIME_VALIDITY: u32 = 1 << 13;
+    pub const ADDRESS_SPACE_VALIDITY: u32 = 1 << 14;
+    pub const ALIASING_VALIDITY: u32 = 1 << 15;
 
-    pub const fn from_bits(bits: u16) -> Self {
+    pub const fn from_bits(bits: u32) -> Self {
         Self(bits)
     }
 
-    pub const fn bits(self) -> u16 {
+    pub const fn bits(self) -> u32 {
         self.0
     }
 }
@@ -1588,6 +1731,18 @@ impl ExecutionCapabilityOpV1 {
                 .is_none_or(|identity| identity != [0; 32] && Some(identity) != self.epoch_before)
             && self.obligations.bits() == required_execution_obligations_v1(&self.operation)
             && match &self.operation {
+                ExecutionCapabilityOperationV1::ReusableLdsConversion(value) => self.operands.len() == 1
+                    && self.source.operation == value.defined_function
+                    && self.source.occurrence.is_some(),
+                ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. }
+                | ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => self.operands.len() == 1,
+                ExecutionCapabilityOperationV1::LdsAllocateBorrowed { .. }
+                | ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. } => self.operands.len() == 1,
+                ExecutionCapabilityOperationV1::NumericalPolicyMath(math) => self.operands.len() == math.operand_count(),
+                ExecutionCapabilityOperationV1::SubgroupPartition(partition) => self.operands.len() == partition.operand_count(),
+                ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } => {
+                    self.operands.len() == 1
+                }
                 ExecutionCapabilityOperationV1::RawMemoryBind { extent, .. } => {
                     usize::from(extent.operand) < self.operands.len()
                         && usize::from(extent.bound_check_operand) < self.operands.len()
@@ -1605,10 +1760,18 @@ impl ExecutionCapabilityOpV1 {
     }
 }
 
-pub const fn required_execution_obligations_v1(operation: &ExecutionCapabilityOperationV1) -> u16 {
+pub const fn required_execution_obligations_v1(operation: &ExecutionCapabilityOperationV1) -> u32 {
     let kernel = ExecutionSafetyObligationsV1::TARGET_SUPPORT;
     let base = kernel | ExecutionSafetyObligationsV1::DYNAMIC_WORKGROUP_IDENTITY;
     match operation {
+        ExecutionCapabilityOperationV1::LdsAllocateBorrowed { .. } => borrowed_lds::obligations(),
+        ExecutionCapabilityOperationV1::ReusableLdsConversion(_) => reusable_lds::obligations(),
+        ExecutionCapabilityOperationV1::NumericalPolicyMath(math) => math.obligations(),
+        ExecutionCapabilityOperationV1::SubgroupPartition(partition) => partition.obligations(),
+        ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } => {
+            kernel | ExecutionSafetyObligationsV1::NUMERICAL_POLICY
+        }
+        ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. } => borrowed_subgroup::obligations(),
         ExecutionCapabilityOperationV1::WorkgroupDerive { .. }
         | ExecutionCapabilityOperationV1::SubgroupDerive { .. } => base,
         ExecutionCapabilityOperationV1::LdsAllocate { .. } => {
@@ -1706,6 +1869,14 @@ pub const fn required_execution_obligations_v1(operation: &ExecutionCapabilityOp
             base | ExecutionSafetyObligationsV1::BOUNDS
                 | ExecutionSafetyObligationsV1::EXACT_PARTICIPATION
         }
+        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => {
+            base | ExecutionSafetyObligationsV1::BOUNDS
+                | ExecutionSafetyObligationsV1::EXACT_PARTICIPATION
+                | ExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+        }
+        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => {
+            base | ExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+        }
         ExecutionCapabilityOperationV1::WorkgroupMemoryAllocate { .. } => {
             base | ExecutionSafetyObligationsV1::BOUNDS
                 | ExecutionSafetyObligationsV1::DISJOINT_LDS_ALLOCATION
@@ -1758,7 +1929,9 @@ pub fn encode_execution_capability_contract_v1(
         return None;
     }
     let mut writer = ContractWriter::default();
-    writer.u8(1);
+    let base_revision = borrowed_subgroup::contract_revision(&contract.operation);
+    let revision = if base_revision == 6 { 6 } else if contract.source.occurrence.is_some() { 5 } else { base_revision };
+    writer.u8(revision);
     encode_execution_operation(&mut writer, &contract.operation);
     let arguments = contract.signature.arguments().collect::<Vec<_>>();
     writer.u8(u8::try_from(arguments.len()).ok()?);
@@ -1770,10 +1943,17 @@ pub fn encode_execution_capability_contract_v1(
     writer.optional_digest(contract.workgroup_brand);
     writer.optional_digest(contract.epoch_before);
     writer.optional_digest(contract.epoch_after);
-    writer.u16(contract.obligations.bits());
+    if revision != 1 {
+        writer.u32(contract.obligations.bits());
+    } else {
+        writer.u16(u16::try_from(contract.obligations.bits()).ok()?);
+    }
     writer.digest(contract.source.function);
     writer.digest(contract.source.operation);
     writer.u32(contract.source.block);
+    if let Some(occurrence) = contract.source.occurrence {
+        occurrence.encode(&mut writer);
+    }
     (writer.bytes.len() <= MAX_EXECUTION_CAPABILITY_CONTRACT_BYTES_V1).then_some(writer.bytes)
 }
 
@@ -1785,8 +1965,11 @@ pub fn decode_execution_capability_contract_v1(
         return None;
     }
     let mut reader = ContractReader::new(bytes);
-    (reader.u8()? == 1).then_some(())?;
+    let revision = reader.u8()?;
+    matches!(revision, 1 | 2 | 3 | 4 | 5 | 6).then_some(())?;
     let operation = decode_execution_operation(&mut reader)?;
+    let base_revision = borrowed_subgroup::contract_revision(&operation);
+    (revision == base_revision || (revision == 5 && base_revision < 5)).then_some(())?;
     let count = usize::from(reader.u8()?);
     (count <= MAX_EXECUTION_CAPABILITY_ARGUMENTS_V1).then_some(())?;
     let mut arguments = Vec::with_capacity(count);
@@ -1798,11 +1981,12 @@ pub fn decode_execution_capability_contract_v1(
     let workgroup_brand = reader.optional_digest()?;
     let epoch_before = reader.optional_digest()?;
     let epoch_after = reader.optional_digest()?;
-    let obligations = ExecutionSafetyObligationsV1::from_bits(reader.u16()?);
+    let obligations = ExecutionSafetyObligationsV1::from_bits(if revision != 1 { reader.u32()? } else { u32::from(reader.u16()?) });
     let source = ExecutionCapabilitySourceV1 {
         function: reader.digest()?,
         operation: reader.digest()?,
         block: reader.u32()?,
+        occurrence: if revision == 5 || revision == 6 { Some(ExecutionCapabilitySourceOccurrenceV1::decode(&mut reader)?) } else { None },
     };
     reader.finished().then_some(())?;
     let contract = ExecutionCapabilityOpV1 {
@@ -1822,11 +2006,11 @@ pub fn decode_execution_capability_contract_v1(
 pub fn encode_execution_capability_type_v1(
     capability: &ExecutionCapabilityTypeV1,
 ) -> Option<Vec<u8>> {
-    if !capability.is_complete() {
+    if !capability.is_complete() || matches!(capability.role, ExecutionCapabilityRoleV1::ReusableWorkgroup | ExecutionCapabilityRoleV1::ReusablePhaseCompletion) {
         return None;
     }
     let mut writer = ContractWriter::default();
-    writer.u8(1);
+    writer.u8(borrowed_subgroup::type_revision(&capability.role));
     writer.identity(capability.source_type);
     encode_execution_provenance(&mut writer, &capability.provenance)?;
     writer.optional_digest(capability.workgroup_brand);
@@ -1840,7 +2024,8 @@ pub fn decode_execution_capability_type_v1(bytes: &[u8]) -> Option<ExecutionCapa
         return None;
     }
     let mut reader = ContractReader::new(bytes);
-    (reader.u8()? == 1).then_some(())?;
+    let revision = reader.u8()?;
+    matches!(revision, 1 | 2 | 3 | 4 | 6).then_some(())?;
     let capability = ExecutionCapabilityTypeV1 {
         source_type: reader.identity()?,
         provenance: decode_execution_provenance(&mut reader)?,
@@ -1848,7 +2033,9 @@ pub fn decode_execution_capability_type_v1(bytes: &[u8]) -> Option<ExecutionCapa
         epoch: reader.optional_digest()?,
         role: decode_execution_role(&mut reader)?,
     };
-    (reader.finished() && capability.is_complete()).then_some(capability)
+    (reader.finished() && capability.is_complete()
+        && revision == borrowed_subgroup::type_revision(&capability.role))
+        .then_some(capability)
 }
 
 #[derive(Default)]
@@ -1891,6 +2078,8 @@ impl ContractWriter {
         }
     }
 }
+
+pub(crate) mod reusable_phase_wire_v14;
 
 struct ContractReader<'a> {
     bytes: &'a [u8],
@@ -1984,8 +2173,33 @@ fn decode_execution_provenance(
     provenance.is_complete().then_some(provenance)
 }
 
+const fn numerical_policy_mode_tag(mode: NumericalModeV1) -> u8 {
+    match mode {
+        NumericalModeV1::StrictIeee => 1,
+        NumericalModeV1::AllowContraction => 2,
+        NumericalModeV1::AllowApproximation => 3,
+    }
+}
+
+fn decode_numerical_policy_mode(tag: u8) -> Option<NumericalModeV1> {
+    (tag == 1).then_some(NumericalModeV1::StrictIeee)
+}
+
 fn encode_execution_role(writer: &mut ContractWriter, role: &ExecutionCapabilityRoleV1) {
     match role {
+        ExecutionCapabilityRoleV1::ReusableLds { element, layout, elements } => reusable_lds::encode_role(writer, *element, *layout, *elements),
+        ExecutionCapabilityRoleV1::BorrowedSubgroup { workgroup_reference, workgroup, width } =>
+            borrowed_subgroup::encode_role(writer, *workgroup_reference, *workgroup, *width),
+        ExecutionCapabilityRoleV1::NumericalPolicyMathSource(binding) => { writer.u8(13); binding.encode(writer); }
+        ExecutionCapabilityRoleV1::NumericalPolicyMathBound(binding) => { writer.u8(14); binding.encode(writer); }
+        ExecutionCapabilityRoleV1::SubgroupPartition { width, partition_width } => {
+            writer.u8(12); writer.u32(*width); writer.u32(*partition_width);
+        }
+        ExecutionCapabilityRoleV1::NumericalPolicy { policy, mode } => {
+            writer.u8(11);
+            writer.identity(*policy);
+            writer.u8(numerical_policy_mode_tag(*mode));
+        }
         ExecutionCapabilityRoleV1::KernelAuthority => writer.u8(0),
         ExecutionCapabilityRoleV1::Workgroup => writer.u8(1),
         ExecutionCapabilityRoleV1::Subgroup { width } => {
@@ -2062,6 +2276,7 @@ fn encode_execution_role(writer: &mut ContractWriter, role: &ExecutionCapability
             put_optional_scope(writer, *atomic_scope);
         }
         ExecutionCapabilityRoleV1::WorkgroupMemoryIndex => writer.u8(8),
+        ExecutionCapabilityRoleV1::ReusableWorkgroup | ExecutionCapabilityRoleV1::ReusablePhaseCompletion => unreachable!("new phase roles require the versioned V14 codec"),
         ExecutionCapabilityRoleV1::EpochTransition => writer.u8(9),
         ExecutionCapabilityRoleV1::UnsafeRawMemoryObligation => writer.u8(10),
     }
@@ -2069,6 +2284,15 @@ fn encode_execution_role(writer: &mut ContractWriter, role: &ExecutionCapability
 
 fn decode_execution_role(reader: &mut ContractReader<'_>) -> Option<ExecutionCapabilityRoleV1> {
     Some(match reader.u8()? {
+        13 => ExecutionCapabilityRoleV1::NumericalPolicyMathSource(NumericalPolicyMathBindingV1::decode(reader)?),
+        14 => ExecutionCapabilityRoleV1::NumericalPolicyMathBound(NumericalPolicyMathBindingV1::decode(reader)?),
+        15 => borrowed_subgroup::decode_role(reader)?,
+        16 => reusable_lds::decode_role(reader)?,
+        12 => ExecutionCapabilityRoleV1::SubgroupPartition { width: reader.u32()?, partition_width: reader.u32()? },
+        11 => ExecutionCapabilityRoleV1::NumericalPolicy {
+            policy: reader.identity()?,
+            mode: decode_numerical_policy_mode(reader.u8()?)?,
+        },
         0 => ExecutionCapabilityRoleV1::KernelAuthority,
         1 => ExecutionCapabilityRoleV1::Workgroup,
         2 => ExecutionCapabilityRoleV1::Subgroup {
@@ -2121,10 +2345,26 @@ fn encode_execution_operation(
 ) {
     use ExecutionCapabilityOperationV1 as Op;
     match operation {
+        Op::NumericalPolicyMath(math) => { writer.u8(26); math.encode(writer); }
+        ExecutionCapabilityOperationV1::SubgroupPartition(partition) => { writer.u8(24); partition.encode(writer); }
+        Op::NumericalPolicyIssue { context, capability, policy, mode } => {
+            writer.u8(23);
+            writer.identity(*context);
+            writer.identity(*capability);
+            writer.identity(*policy);
+            writer.u8(numerical_policy_mode_tag(*mode));
+        }
         Op::WorkgroupDerive { context, workgroup } => {
             writer.u8(0);
             writer.identity(*context);
             writer.identity(*workgroup);
+        }
+        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => {
+            writer.u8(25);
+            writer.identity(*workgroup_reference);
+            writer.identity(*workgroup);
+            writer.identity(*subgroup);
+            writer.u32(*width);
         }
         Op::SubgroupDerive {
             workgroup,
@@ -2136,6 +2376,8 @@ fn encode_execution_operation(
             writer.identity(*subgroup);
             writer.u32(*width);
         }
+        Op::LdsAllocateBorrowed { .. } => borrowed_lds::encode(writer, operation),
+        Op::ReusableLdsConversion(value) => value.encode(writer),
         Op::LdsAllocate {
             workgroup,
             lds,
@@ -2423,6 +2665,18 @@ fn encode_execution_operation(
             writer.identity(*workgroup);
             writer.identity(*witness);
         }
+        Op::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
+            writer.u8(27);
+            writer.identity(*workgroup_reference);
+            writer.identity(*workgroup);
+            writer.identity(*option);
+            writer.identity(*witness);
+        }
+        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+            writer.u8(28);
+            writer.identity(*input_witness);
+            writer.identity(*output_witness);
+        }
         Op::WorkgroupMemoryAllocate {
             workgroup,
             view,
@@ -2498,20 +2752,40 @@ fn encode_execution_operation(
     }
 }
 
+#[cfg(test)]
+#[path = "execution_capability_v1/workgroup_memory_index_v2_tests.rs"]
+mod workgroup_memory_index_v2_tests;
+
 fn decode_execution_operation(
     reader: &mut ContractReader<'_>,
 ) -> Option<ExecutionCapabilityOperationV1> {
     use ExecutionCapabilityOperationV1 as Op;
     Some(match reader.u8()? {
+        26 => Op::NumericalPolicyMath(NumericalPolicyMathOperationV1::decode(reader)?),
+        24 => Op::SubgroupPartition(SubgroupPartitionOperationV1::decode(reader)?),
+        23 => Op::NumericalPolicyIssue {
+            context: reader.identity()?,
+            capability: reader.identity()?,
+            policy: reader.identity()?,
+            mode: decode_numerical_policy_mode(reader.u8()?)?,
+        },
         0 => Op::WorkgroupDerive {
             context: reader.identity()?,
             workgroup: reader.identity()?,
+        },
+        25 => Op::SubgroupDeriveBorrowed {
+            workgroup_reference: reader.identity()?,
+            workgroup: reader.identity()?,
+            subgroup: reader.identity()?,
+            width: reader.u32()?,
         },
         1 => Op::SubgroupDerive {
             workgroup: reader.identity()?,
             subgroup: reader.identity()?,
             width: reader.u32()?,
         },
+        30 => borrowed_lds::decode(reader)?,
+        29 => Op::ReusableLdsConversion(ReusableLdsConversionV1::decode(reader)?),
         2 => Op::LdsAllocate {
             workgroup: reader.identity()?,
             lds: reader.identity()?,
@@ -2656,6 +2930,16 @@ fn decode_execution_operation(
         18 => Op::WorkgroupMemoryIndex {
             workgroup: reader.identity()?,
             witness: reader.identity()?,
+        },
+        27 => Op::WorkgroupMemoryIndexV2 {
+            workgroup_reference: reader.identity()?,
+            workgroup: reader.identity()?,
+            option: reader.identity()?,
+            witness: reader.identity()?,
+        },
+        28 => Op::WorkgroupMemoryIndexIntoDisjoint {
+            input_witness: reader.identity()?,
+            output_witness: reader.identity()?,
         },
         19 => Op::WorkgroupMemoryAllocate {
             workgroup: reader.identity()?,

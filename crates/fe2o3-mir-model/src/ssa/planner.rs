@@ -1,15 +1,34 @@
 //! Bounded SSA construction algorithms.
 
 use std::collections::VecDeque;
+use std::num::NonZeroU32;
 
 use super::support::*;
 use super::*;
+
+#[path = "planner/definition_rows_v1.rs"]
+mod definition_rows_v1;
+use definition_rows_v1::DefinitionRows;
+#[path = "planner/scoped_change_v1.rs"]
+mod scoped_change_v1;
+use scoped_change_v1::ScopedChange;
+#[path = "planner/incoming_edge_v1.rs"]
+mod incoming_edge_v1;
+use incoming_edge_v1::IncomingEdge;
+
+#[cfg(test)]
+#[path = "planner/incoming_edge_v1_tests.rs"]
+mod incoming_edge_v1_tests;
+
+#[cfg(test)]
+#[path = "planner/frontier_indices_v1_tests.rs"]
+pub(super) mod frontier_indices_v1_tests;
 
 pub(super) struct Planner<'a> {
     input: &'a SsaConstructionInputV1,
     limits: SsaPlannerLimitsV1,
     promotable_variables: Vec<SsaVariableIdV1>,
-    promotable_indices: Vec<Option<usize>>,
+    promotable_indices: Vec<Option<NonZeroU32>>,
     variable_words: usize,
     reachable: Vec<bool>,
     reverse_postorder: Vec<usize>,
@@ -17,8 +36,7 @@ pub(super) struct Planner<'a> {
     incoming_edges: Vec<usize>,
     definition_blocks_by_variable: Vec<Vec<usize>>,
     edge_definition_targets: Vec<Vec<usize>>,
-    block_definitions: BitMatrix,
-    block_uses: BitMatrix,
+    block_definitions: DefinitionRows,
     live_in: BitMatrix,
     work: WorkBudget,
     storage_words: usize,
@@ -68,12 +86,22 @@ impl<'a> Planner<'a> {
             )?;
         }
 
+        let promotable_count = input
+            .promotable
+            .iter()
+            .filter(|promotable| **promotable)
+            .count();
+        let variable_words = promotable_count.div_ceil(u64::BITS as usize);
+
         let mut input_edges = 0_usize;
         let mut input_events = 0_usize;
         let mut input_edge_definitions = 0_usize;
         let mut promotable_definition_events = 0_usize;
+        let mut definition_window_upper = 0_usize;
         for (block_index, block) in input.blocks.iter().enumerate() {
             work.charge(1)?;
+            let mut first_definition = None::<usize>;
+            let mut last_definition = 0_usize;
             input_events = checked_add_resource(
                 SsaPlannerResourceV1::Events,
                 input_events,
@@ -96,7 +124,20 @@ impl<'a> Planner<'a> {
                     promotable_definition_events = promotable_definition_events
                         .checked_add(1)
                         .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
+                    let variable = event.variable().get() as usize;
+                    first_definition =
+                        Some(first_definition.map_or(variable, |first| first.min(variable)));
+                    last_definition = last_definition.max(variable);
                 }
+            }
+            if let Some(first) = first_definition {
+                definition_window_upper = definition_window_upper
+                    .checked_add(definition_rows_v1::word_span_upper(
+                        first,
+                        last_definition,
+                        variable_words,
+                    ))
+                    .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
             }
             input_edges = checked_add_resource(
                 SsaPlannerResourceV1::Edges,
@@ -140,15 +181,11 @@ impl<'a> Planner<'a> {
             }
         }
 
-        let promotable_count = input
-            .promotable
-            .iter()
-            .filter(|promotable| **promotable)
-            .count();
-        let variable_words = promotable_count.div_ceil(u64::BITS as usize);
+        let (windowed_definitions, definition_words) =
+            DefinitionRows::layout(block_count, variable_words, definition_window_upper)?;
         let base_matrix_words = block_count
             .checked_mul(variable_words)
-            .and_then(|words| words.checked_mul(3))
+            .and_then(|words| words.checked_add(definition_words))
             .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
         let mut storage_words = base_matrix_words;
 
@@ -202,7 +239,7 @@ impl<'a> Planner<'a> {
             twice_blocks,
             limits.max_storage_words,
         )?;
-        charge_storage_items::<Option<usize>>(
+        charge_storage_items::<Option<NonZeroU32>>(
             &mut storage_words,
             variable_count,
             limits.max_storage_words,
@@ -216,7 +253,7 @@ impl<'a> Planner<'a> {
         // Persistent per-block plan rows.
         charge_storage_items::<Vec<SsaVariableIdV1>>(
             &mut storage_words,
-            checked_scale(block_count, 3)?,
+            checked_scale(block_count, 2)?,
             limits.max_storage_words,
         )?;
         charge_storage_items::<Vec<(u32, SsaResolvedEventV1)>>(
@@ -284,13 +321,20 @@ impl<'a> Planner<'a> {
             .collect::<Vec<_>>();
         let mut promotable_indices = vec![None; variable_count];
         for (index, variable) in promotable_variables.iter().copied().enumerate() {
-            promotable_indices[variable.get() as usize] = Some(index);
+            promotable_indices[variable.get() as usize] = Some(
+                u32::try_from(index)
+                    .ok()
+                    .and_then(|index| index.checked_add(1))
+                    .and_then(NonZeroU32::new)
+                    .ok_or(SsaPlannerErrorV1::IdentityOverflow)?,
+            );
         }
         let mut definition_blocks_by_variable = vec![Vec::new(); promotable_count];
         work.charge(input.entry_definitions.len())?;
         for variable in input.entry_definitions.iter().copied() {
             if let Some(index) = promotable_indices[variable.get() as usize] {
-                definition_blocks_by_variable[index].push(input.entry.get() as usize);
+                definition_blocks_by_variable[index.get() as usize - 1]
+                    .push(input.entry.get() as usize);
             }
         }
 
@@ -306,8 +350,11 @@ impl<'a> Planner<'a> {
             incoming_edges: vec![0; block_count],
             definition_blocks_by_variable,
             edge_definition_targets: vec![Vec::new(); promotable_count],
-            block_definitions: BitMatrix::try_new(block_count, variable_words)?,
-            block_uses: BitMatrix::try_new(block_count, variable_words)?,
+            block_definitions: DefinitionRows::try_new(
+                block_count,
+                variable_words,
+                windowed_definitions,
+            )?,
             live_in: BitMatrix::try_new(block_count, variable_words)?,
             work,
             storage_words,
@@ -324,7 +371,11 @@ impl<'a> Planner<'a> {
         let immediate_dominators = self.compute_immediate_dominators()?;
         let frontiers = self.compute_dominance_frontiers(&immediate_dominators)?;
         let merge_variables = self.compute_merge_variables(&frontiers)?;
-        let transport_variables = self.compute_transport_variables(&merge_variables)?;
+        // Current transport rows are exactly the merge rows. Preserve this
+        // phase's work charge and both identity streams, but allocate them once.
+        for variables in &merge_variables {
+            self.work.charge(1 + variables.len())?;
+        }
         let (
             entry_definitions,
             entry_arguments,
@@ -333,7 +384,7 @@ impl<'a> Planner<'a> {
             edge_arguments,
             generated_definitions,
             output_items,
-        ) = self.resolve_values(&immediate_dominators, &transport_variables)?;
+        ) = self.resolve_values(&immediate_dominators, &merge_variables)?;
 
         let live_in = self.live_in_variables()?;
         let promoted_variables = self.promotable_variables.clone();
@@ -347,7 +398,7 @@ impl<'a> Planner<'a> {
             &self.reachable,
             &live_in,
             &merge_variables,
-            &transport_variables,
+            &merge_variables,
             &entry_definitions,
             &entry_arguments,
             &resolved_events,
@@ -379,7 +430,6 @@ impl<'a> Planner<'a> {
             promoted_variables,
             live_in,
             merge_variables,
-            transport_variables,
             entry_definitions,
             entry_arguments,
             resolved_events,
@@ -444,6 +494,8 @@ impl<'a> Planner<'a> {
                 continue;
             }
             let mut defined = vec![0_u64; self.variable_words];
+            let mut first_definition_word = None::<usize>;
+            let mut last_definition_word = 0_usize;
             for event in block.events.iter().copied() {
                 self.work.charge(1)?;
                 let Some(variable) = self.promotable_index(event.variable()) else {
@@ -451,11 +503,15 @@ impl<'a> Planner<'a> {
                 };
                 match event {
                     SsaEventV1::Use(_) if !bit_contains(&defined, variable) => {
-                        self.block_uses.insert(block_index, variable);
+                        self.live_in.insert(block_index, variable);
                     }
                     SsaEventV1::Define(_) | SsaEventV1::Kill(_) => {
                         bit_insert(&mut defined, variable);
-                        self.block_definitions.insert(block_index, variable);
+                        self.block_definitions.insert_dense(block_index, variable);
+                        let word = variable / u64::BITS as usize;
+                        first_definition_word =
+                            Some(first_definition_word.map_or(word, |first| first.min(word)));
+                        last_definition_word = last_definition_word.max(word);
                         if self.definition_blocks_by_variable[variable].last().copied()
                             != Some(block_index)
                         {
@@ -465,6 +521,13 @@ impl<'a> Planner<'a> {
                     SsaEventV1::Use(_) => {}
                 }
             }
+            self.block_definitions.finish_window(
+                block_index,
+                &defined,
+                first_definition_word.map(|first| first..last_definition_word + 1),
+                &mut self.storage_words,
+                self.limits.max_storage_words,
+            )?;
             for edge in &block.edges {
                 let target = edge.target.get() as usize;
                 for variable in edge.definitions.iter().copied() {
@@ -479,6 +542,9 @@ impl<'a> Planner<'a> {
     }
 
     fn solve_liveness(&mut self) -> Result<(), SsaPlannerErrorV1> {
+        // live_in starts with upward-exposed uses. With fixed block/edge kills,
+        // transfer only grows, so retaining prior bits yields the same least
+        // fixed point without a separate block_uses matrix.
         let mut queued = self.reachable.clone();
         let mut pending = self
             .reverse_postorder
@@ -513,7 +579,7 @@ impl<'a> Planner<'a> {
             }
             let mut changed = false;
             for (word, live_out_word) in live_out.iter().copied().enumerate() {
-                let next = self.block_uses.word(block, word)
+                let next = self.live_in.word(block, word)
                     | (live_out_word & !self.block_definitions.word(block, word));
                 changed |= self.live_in.set_word(block, word, next);
             }
@@ -577,9 +643,9 @@ impl<'a> Planner<'a> {
     fn compute_dominance_frontiers(
         &mut self,
         immediate: &[Option<usize>],
-    ) -> Result<Vec<Vec<usize>>, SsaPlannerErrorV1> {
+    ) -> Result<Vec<Vec<SsaBlockIdV1>>, SsaPlannerErrorV1> {
         let block_count = self.input.blocks.len();
-        let mut frontiers = vec![Vec::new(); block_count];
+        let mut frontiers = vec![Vec::<SsaBlockIdV1>::new(); block_count];
         let entry = self.input.entry.get() as usize;
         let mut children = vec![Vec::new(); block_count];
         for (block, parent) in immediate.iter().copied().enumerate() {
@@ -607,20 +673,20 @@ impl<'a> Planner<'a> {
                     .checked_add(frontiers[*child].len())
                     .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
             }
-            self.charge_storage_items::<usize>(candidate_count)?;
+            self.charge_storage_items::<SsaBlockIdV1>(candidate_count)?;
             let mut block_frontier = Vec::with_capacity(candidate_count);
             for edge in &self.input.blocks[block].edges {
                 self.work.charge(1)?;
                 let successor = edge.target.get() as usize;
                 if self.reachable[successor] && immediate[successor] != Some(block) {
-                    block_frontier.push(successor);
+                    block_frontier.push(edge.target);
                 }
             }
             for child in &children[block] {
                 self.work.charge(frontiers[*child].len())?;
                 for candidate in frontiers[*child].iter().copied() {
                     self.work.charge(1)?;
-                    if immediate[candidate] != Some(block) {
+                    if immediate[candidate.get() as usize] != Some(block) {
                         block_frontier.push(candidate);
                     }
                 }
@@ -635,7 +701,7 @@ impl<'a> Planner<'a> {
 
     fn compute_merge_variables(
         &mut self,
-        frontiers: &[Vec<usize>],
+        frontiers: &[Vec<SsaBlockIdV1>],
     ) -> Result<Vec<Vec<SsaVariableIdV1>>, SsaPlannerErrorV1> {
         let block_count = self.input.blocks.len();
         let mut merges = vec![Vec::new(); block_count];
@@ -701,6 +767,7 @@ impl<'a> Planner<'a> {
                 self.work.charge(1 + frontiers[block].len())?;
                 for frontier in frontiers[block].iter().copied() {
                     self.work.charge(1)?;
+                    let frontier = frontier.get() as usize;
                     if !self.live_in.contains(frontier, variable)
                         || idf_generation[frontier] == generation
                     {
@@ -719,19 +786,6 @@ impl<'a> Planner<'a> {
             }
         }
         Ok(merges)
-    }
-
-    fn compute_transport_variables(
-        &mut self,
-        merge_variables: &[Vec<SsaVariableIdV1>],
-    ) -> Result<Vec<Vec<SsaVariableIdV1>>, SsaPlannerErrorV1> {
-        let mut transport = Vec::with_capacity(merge_variables.len());
-        for variables in merge_variables {
-            self.work.charge(1 + variables.len())?;
-            self.charge_storage(variables.len())?;
-            transport.push(variables.clone());
-        }
-        Ok(transport)
     }
 
     #[allow(clippy::type_complexity)]
@@ -927,7 +981,7 @@ impl<'a> Planner<'a> {
         self.charge_storage_items::<Vec<usize>>(block_count)?;
         self.charge_storage_items::<usize>(block_count.saturating_sub(1))?;
 
-        let mut unique_incoming_edges = vec![None; block_count];
+        let mut unique_incoming_edges = vec![None::<IncomingEdge>; block_count];
         for (source, block) in self.input.blocks.iter().enumerate() {
             if !self.reachable[source] {
                 continue;
@@ -935,11 +989,11 @@ impl<'a> Planner<'a> {
             for (edge_index, edge) in block.edges.iter().enumerate() {
                 let target = edge.target.get() as usize;
                 if self.reachable[target] && self.incoming_edges[target] == 1 {
-                    unique_incoming_edges[target] = Some((source, edge_index));
+                    unique_incoming_edges[target] = Some(IncomingEdge::new(source, edge_index)?);
                 }
             }
         }
-        self.charge_storage_items::<Option<(usize, usize)>>(block_count)?;
+        self.charge_storage_items::<Option<IncomingEdge>>(block_count)?;
 
         let mut current_values = entry_values.clone();
         self.work.charge(transport_variables.len())?;
@@ -955,16 +1009,16 @@ impl<'a> Planner<'a> {
             .checked_add(promoted_edge_definitions)
             .and_then(|count| count.checked_add(transport_changes))
             .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
-        self.charge_storage_items::<(usize, Option<SsaValueV1>)>(scoped_change_capacity)?;
+        self.charge_storage_items::<ScopedChange>(scoped_change_capacity)?;
         let mut scoped_changes = Vec::with_capacity(scoped_change_capacity);
         let mut pending = vec![(entry, None)];
         while let Some((block_index, restore_to)) = pending.pop() {
             if let Some(restore_to) = restore_to {
                 while scoped_changes.len() > restore_to {
-                    let (variable, previous) = scoped_changes
+                    let change: ScopedChange = scoped_changes
                         .pop()
                         .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
-                    current_values[variable] = previous;
+                    current_values[change.variable as usize] = change.previous;
                 }
                 continue;
             }
@@ -973,8 +1027,9 @@ impl<'a> Planner<'a> {
             pending.push((block_index, Some(restore_to)));
 
             if block_index != entry
-                && let Some((source, edge_index)) = unique_incoming_edges[block_index]
+                && let Some(incoming) = unique_incoming_edges[block_index]
             {
+                let (source, edge_index) = incoming.indices();
                 let edge = &self.input.blocks[source].edges[edge_index];
                 let mut next = edge_definition_bases[source][edge_index];
                 for variable in edge.definitions.iter().copied() {
@@ -982,7 +1037,10 @@ impl<'a> Planner<'a> {
                         continue;
                     };
                     let value = take_definition_value(&mut next)?;
-                    scoped_changes.push((variable_index, current_values[variable_index]));
+                    scoped_changes.push(ScopedChange::new(
+                        variable_index,
+                        current_values[variable_index],
+                    )?);
                     current_values[variable_index] = Some(value);
                 }
             }
@@ -991,7 +1049,10 @@ impl<'a> Planner<'a> {
                 let variable_index = self
                     .promotable_index(variable)
                     .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
-                scoped_changes.push((variable_index, current_values[variable_index]));
+                scoped_changes.push(ScopedChange::new(
+                    variable_index,
+                    current_values[variable_index],
+                )?);
                 current_values[variable_index] = Some(SsaValueV1::BlockArgument {
                     block: SsaBlockIdV1::new(block_index as u32),
                     variable,
@@ -1032,13 +1093,16 @@ impl<'a> Planner<'a> {
                     },
                     SsaEventV1::Define(_) => {
                         let value = take_definition_value(&mut next_event_definition)?;
-                        scoped_changes.push((variable_index, current_values[variable_index]));
+                        scoped_changes.push(ScopedChange::new(
+                            variable_index,
+                            current_values[variable_index],
+                        )?);
                         current_values[variable_index] = Some(value);
                         SsaResolvedEventV1::Define { variable, value }
                     }
                     SsaEventV1::Kill(_) => {
                         let previous = current_values[variable_index];
-                        scoped_changes.push((variable_index, previous));
+                        scoped_changes.push(ScopedChange::new(variable_index, previous)?);
                         current_values[variable_index] = None;
                         SsaResolvedEventV1::Kill { variable, previous }
                     }
@@ -1150,7 +1214,7 @@ impl<'a> Planner<'a> {
     }
 
     fn promotable_index(&self, variable: SsaVariableIdV1) -> Option<usize> {
-        self.promotable_indices[variable.get() as usize]
+        self.promotable_indices[variable.get() as usize].map(|index| index.get() as usize - 1)
     }
 
     fn charge_storage_items<T>(&mut self, count: usize) -> Result<(), SsaPlannerErrorV1> {

@@ -8,6 +8,10 @@
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod control_flow;
+#[cfg(feature = "pliron-analysis")]
+mod canonical_ranked_view_v1;
+#[cfg(feature = "pliron-analysis")]
+pub use canonical_ranked_view_v1::*;
 mod execution_capability_atomic_scope;
 mod execution_capability_semantics;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -70,6 +74,14 @@ mod pliron_ranked_bounds;
 mod pliron_report_validation;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_semantic_refinement;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_semantic_memory_v1;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_semantic_memory_v1::*;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_semantic_load_binding_v1;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_semantic_load_binding_v1::*;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_simt_protocol;
 #[cfg(feature = "pliron-analysis")]

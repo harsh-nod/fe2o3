@@ -1,6 +1,15 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::str;
+use crate::execution_capability_v1::reusable_phase_wire_v14 as phase_wire;
+
+#[path = "wire/canonical_digest.rs"]
+mod canonical_digest;
+pub use canonical_digest::{
+    CanonicalModuleDigestV1, KERNEL_IR_DIGEST_WORKSPACE_BYTES_V1,
+    canonical_module_digest_v1,
+};
+use canonical_digest::Output;
 
 use crate::{
     AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperand,
@@ -26,8 +35,8 @@ use crate::{
     TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp, ValueDef, ValueId,
     WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
     WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, decode_execution_capability_contract_v1,
-    decode_execution_capability_type_v1, decode_semantic_operation_instance_id,
-    encode_execution_capability_contract_v1, encode_execution_capability_type_v1,
+    decode_semantic_operation_instance_id,
+    encode_execution_capability_contract_v1,
     encode_semantic_operation_instance_id,
 };
 
@@ -59,6 +68,8 @@ pub const KERNEL_IR_VERSION_V11: u16 = 11;
 pub const KERNEL_IR_VERSION_V12: u16 = 12;
 /// Kernel IR V13 adds the complete target-neutral execution-capability graph.
 pub const KERNEL_IR_VERSION_V13: u16 = 13;
+/// Kernel IR V14 adds explicit linear reusable-phase contracts and tokens.
+pub const KERNEL_IR_VERSION_V14: u16 = 14;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
@@ -319,32 +330,46 @@ pub fn encode_module_v13(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V13)
 }
 
+/// Encodes V14 through the same bounded canonical writer as V1-V13.
+pub fn encode_module_v14(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V14)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
-    writer.bytes(&KERNEL_IR_MAGIC_V1)?;
-    writer.u16(version)?;
-    writer.u16(0)?;
-    writer.u32(0)?;
-    writer.u32(0)?;
-
-    writer.text("module ID", module.id.as_str())?;
-    writer.count("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
-    writer.count("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
-    validate_legacy_function_roles(module, version)?;
-    encode_capabilities(&mut writer, &module.required_capabilities)?;
-    for function in &module.functions {
-        encode_function(&mut writer, function)?;
-    }
-    for kernel in &module.kernels {
-        encode_kernel(&mut writer, kernel)?;
-    }
-
+    encode_module_into(&mut writer, module, 0)?;
     let mut bytes = writer.finish();
     let length = u32::try_from(bytes.len()).map_err(|_| KernelIrEncodeError::Overflow {
         field: "module length",
     })?;
     bytes[12..16].copy_from_slice(&length.to_le_bytes());
     Ok(bytes)
+}
+
+fn encode_module_into(
+    writer: &mut Writer,
+    module: &Module,
+    length: u32,
+) -> Result<(), KernelIrEncodeError> {
+    writer.bytes(&KERNEL_IR_MAGIC_V1)?;
+    writer.u16(writer.version)?;
+    writer.u16(0)?;
+    writer.u32(length)?;
+    writer.u32(0)?;
+
+    writer.text("module ID", module.id.as_str())?;
+    writer.count("module functions", module.functions.len(), MAX_FUNCTIONS_V1)?;
+    writer.count("module kernels", module.kernels.len(), MAX_KERNELS_V1)?;
+    writer.charge_role_validation(module)?;
+    validate_legacy_function_roles(module, writer.version)?;
+    encode_capabilities(writer, &module.required_capabilities)?;
+    for function in &module.functions {
+        encode_function(writer, function)?;
+    }
+    for kernel in &module.kernels {
+        encode_kernel(writer, kernel)?;
+    }
+    Ok(())
 }
 
 /// Decodes one bounded canonical kernel IR V1 module.
@@ -418,6 +443,11 @@ pub fn decode_module_v12(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V13 bytes using the latest bounded reader.
 pub fn decode_module_v13(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V13, true)
+}
+
+/// Decodes an exact V14 envelope. This is wire validation, not source authority.
+pub fn decode_module_v14(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V14, false)
 }
 
 fn decode_module(
@@ -939,6 +969,14 @@ fn encode_operation_kind(
                 }
             }
         }
+        OperationKind::ReusablePhase(operation) => {
+            require_v14(writer, "linear reusable phase operation")?;
+            writer.u8(31)?;
+            encode_values(writer, "phase operands", &operation.operands, MAX_EXECUTION_CAPABILITY_OPERANDS_V1)?;
+            let bytes = phase_wire::encode_contract(operation).ok_or(KernelIrEncodeError::NonCanonical { field: "phase contract" })?;
+            writer.count("phase contract", bytes.len(), MAX_EXECUTION_CAPABILITY_CONTRACT_BYTES_V1)?;
+            writer.bytes(&bytes)?;
+        }
         OperationKind::ExecutionCapability(operation) => {
             require_v13(writer, "target-neutral execution capability operation")?;
             writer.u8(30)?;
@@ -1090,6 +1128,12 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
                     None
                 },
             })
+        }
+        31 if reader.version >= KERNEL_IR_VERSION_V14 => {
+            let operands = decode_values(reader, "phase operands", MAX_EXECUTION_CAPABILITY_OPERANDS_V1)?;
+            let length = reader.count("phase contract", MAX_EXECUTION_CAPABILITY_CONTRACT_BYTES_V1)?;
+            OperationKind::ReusablePhase(phase_wire::decode_contract(reader.take(length)?, operands)
+                .ok_or(KernelIrDecodeError::NonCanonical)?)
         }
         30 if reader.version >= KERNEL_IR_VERSION_V13 => {
             let operands = decode_values(
@@ -1442,10 +1486,17 @@ fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), Kerne
                 GlobalCapabilityRoleV1::ExclusiveReadWrite => writer.u8(3)?,
             }
         }
+        Type::ReusablePhaseToken(token) => {
+            require_v14(writer, "linear reusable phase token")?;
+            writer.u8(8)?;
+            let bytes = phase_wire::encode_token(token).ok_or(KernelIrEncodeError::NonCanonical { field: "phase token" })?;
+            writer.count("phase token", bytes.len(), MAX_EXECUTION_CAPABILITY_TYPE_BYTES_V1)?;
+            writer.bytes(&bytes)?;
+        }
         Type::ExecutionCapability(capability) => {
             require_v13(writer, "target-neutral execution capability type")?;
             writer.u8(7)?;
-            let contract = encode_execution_capability_type_v1(capability).ok_or(
+            let contract = phase_wire::encode_capability(capability, writer.version).ok_or(
                 KernelIrEncodeError::NonCanonical {
                     field: "execution capability type",
                 },
@@ -1520,9 +1571,14 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
                 MAX_EXECUTION_CAPABILITY_TYPE_BYTES_V1,
             )?;
             Type::ExecutionCapability(
-                decode_execution_capability_type_v1(reader.take(length)?)
+                phase_wire::decode_capability(reader.take(length)?, reader.version)
                     .ok_or(KernelIrDecodeError::NonCanonical)?,
             )
+        }
+        8 if reader.version >= KERNEL_IR_VERSION_V14 => {
+            let length = reader.count("phase token", MAX_EXECUTION_CAPABILITY_TYPE_BYTES_V1)?;
+            Type::ReusablePhaseToken(phase_wire::decode_token(reader.take(length)?)
+                .ok_or(KernelIrDecodeError::NonCanonical)?)
         }
         tag => return Err(KernelIrDecodeError::UnknownTag { kind: "type", tag }),
     })
@@ -3722,37 +3778,55 @@ fn require_v13(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnc
     }
 }
 
+fn require_v14(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V14 { Ok(()) } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion { version: writer.version, feature })
+    }
+}
+
 struct Writer {
-    bytes: Vec<u8>,
+    output: Output,
+    length: usize,
+    byte_limit: usize,
+    work: Option<canonical_digest::Work>,
     version: u16,
 }
 
 impl Writer {
     fn new(version: u16) -> Self {
         Self {
-            bytes: Vec::new(),
+            output: Output::Bytes(Vec::new()),
+            length: 0,
+            byte_limit: MAX_MODULE_BYTES_V1,
+            work: None,
             version,
         }
     }
 
     fn finish(self) -> Vec<u8> {
-        self.bytes
+        match self.output {
+            Output::Bytes(bytes) => bytes,
+            _ => unreachable!("only the collecting writer returns bytes"),
+        }
     }
 
     fn bytes(&mut self, value: &[u8]) -> Result<(), KernelIrEncodeError> {
         let next =
-            self.bytes
-                .len()
+            self.length
                 .checked_add(value.len())
                 .ok_or(KernelIrEncodeError::Overflow {
                     field: "module length",
                 })?;
-        if next > MAX_MODULE_BYTES_V1 {
+        if next > self.byte_limit {
             return Err(KernelIrEncodeError::TooLarge {
-                max: MAX_MODULE_BYTES_V1,
+                max: self.byte_limit,
             });
         }
-        self.bytes.extend_from_slice(value);
+        self.charge(value.len().checked_add(1).ok_or(KernelIrEncodeError::Overflow {
+            field: "canonical digest work",
+        })?)?;
+        self.output.write(value);
+        self.length = next;
         Ok(())
     }
 

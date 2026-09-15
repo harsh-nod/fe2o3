@@ -277,7 +277,7 @@ fn rust_call_local_roles_require_the_source_tuple_not_flattened_fields() {
 }
 
 #[test]
-fn source_argument_ownership_is_canonical_and_length_checked() {
+fn source_argument_ownership_is_canonical_length_and_type_checked() {
     let u32_id = SemanticTypeIdV1::from_index(0);
     let u64_id = SemanticTypeIdV1::from_index(1);
     let base = rust_call_abi(vec![
@@ -299,7 +299,7 @@ fn source_argument_ownership_is_canonical_and_length_checked() {
     let owned = base
         .clone()
         .with_source_argument_ownership(vec![
-            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ByValue,
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
         ])
         .unwrap();
@@ -319,7 +319,7 @@ fn source_argument_ownership_is_canonical_and_length_checked() {
     assert_eq!(
         decoded.functions()[0].abi().source_argument_ownership(),
         [
-            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ByValue,
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
         ]
     );
@@ -341,13 +341,26 @@ fn source_argument_ownership_is_canonical_and_length_checked() {
         .expect("V4 ownership record insertion");
     assert_eq!(
         &normalized_v4[insertion..insertion + 6],
-        &[2, 0, 0, 0, 2, 4]
+        &[2, 0, 0, 0, 1, 4]
     );
     assert_eq!(
         &normalized_v4[insertion + 6..],
         &legacy_v3.canonical_encoding()[insertion..]
     );
 
+    // The first source parameter is u32, not a reference or raw pointer.
+    for tag in [2, 3, 5] {
+        let mut incompatible = admitted_owned.canonical_encoding().to_vec();
+        incompatible[insertion + 4] = tag;
+        assert_eq!(
+            AdmittedInertSemanticMirV1::decode_exact_v4_canonical(
+                &incompatible,
+                SemanticMirLimitsV1::default(),
+            )
+            .unwrap_err(),
+            SemanticMirDecodeErrorV1::Validation(SemanticMirErrorV1::InvalidFunctionAbi),
+        );
+    }
     let mut invalid_tag = admitted_owned.canonical_encoding().to_vec();
     invalid_tag[insertion + 4] = 6;
     assert!(matches!(
@@ -382,7 +395,7 @@ fn source_argument_ownership_is_canonical_and_length_checked() {
 
     let owned_v3_error = request(
         base.with_source_argument_ownership(vec![
-            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ByValue,
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
         ])
         .unwrap(),

@@ -159,6 +159,14 @@ pub enum ReductionProfileErrorV1 {
     },
 }
 
+impl core::fmt::Display for ReductionProfileErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "invalid LDS reduction profile: {self:?}")
+    }
+}
+
+impl core::error::Error for ReductionProfileErrorV1 {}
+
 /// Output mismatch for the LDS reduction profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReductionComparisonErrorV1 {
@@ -377,6 +385,14 @@ pub enum AtomicProfileErrorV1 {
         provided: usize,
     },
 }
+
+impl core::fmt::Display for AtomicProfileErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "invalid scoped atomic profile: {self:?}")
+    }
+}
+
+impl core::error::Error for AtomicProfileErrorV1 {}
 
 /// Output mismatch for the scoped atomic profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

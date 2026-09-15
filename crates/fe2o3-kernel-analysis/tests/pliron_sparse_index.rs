@@ -19,6 +19,9 @@ use pliron::{
     value::Value,
 };
 
+#[path = "pliron_sparse_index/layout_tests.rs"]
+mod layout_tests;
+
 fn setup() -> Context {
     let mut context = Context::new();
     register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();

@@ -3,6 +3,7 @@
 use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_kernel_analysis::{
+    CanonicalRankedViewErrorV1, CheckedCanonicalRankedViewV1,
     ExecutionCapabilityAtomicScopeErrorV1, ExecutionCapabilityAtomicScopeReportV1,
     KernelCapabilityPreservationAnalysisV1, KernelCheckStatusV1,
     PRODUCTION_CAPABILITY_ANALYSIS_SCHEDULE_V1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
@@ -31,6 +32,8 @@ use crate::{
     KirBridgeErrorV1, KirBridgeExecutionCapabilityWitnessV1, KirBridgeRoundTripReportV1,
     KirPlironGraphV1, PlironSession, ShellLimits, kir_v13_execution_capability_witness_v1,
 };
+
+mod ranked_views;
 
 pub const PRODUCTION_FINAL_GRAPH_VERIFICATION_VERSION_V1: u16 = 1;
 
@@ -317,6 +320,7 @@ pub struct ProductionFinalGraphOwnerV1 {
     session: PlironSession,
     graph: KirPlironGraphV1,
     bridge: KirBridgeRoundTripReportV1,
+    ranked_views: Vec<Option<CheckedCanonicalRankedViewV1>>,
 }
 
 impl ProductionFinalGraphOwnerV1 {
@@ -352,6 +356,7 @@ impl ProductionFinalGraphOwnerV1 {
         if replayed.identity() != canonical.identity() || !bridge.is_exact() {
             return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
         }
+        let ranked_views = ranked_views::materialize(&canonical, final_epoch, &module, &mut session)?;
         Ok(Self {
             canonical,
             module,
@@ -360,6 +365,7 @@ impl ProductionFinalGraphOwnerV1 {
             session,
             graph,
             bridge,
+            ranked_views,
         })
     }
 
@@ -418,9 +424,11 @@ impl ProductionFinalGraphOwnerV1 {
                 functions
                     .iter()
                     .zip(function_ids)
-                    .map(|(function, function_id)| {
+                    .zip(&self.ranked_views)
+                    .map(|((function, function_id), ranked_view)| {
+                        let analysis = ranked_view.as_ref().map_or(function, |view| view.pliron());
                         let checks =
-                            require_production_pliron_checks_before_lowering_v2(context, function)
+                            require_production_pliron_checks_before_lowering_v2(context, analysis)
                                 .map_err(|source| {
                                     ProductionFinalGraphVerificationErrorV1::FunctionCheck {
                                         function: function_id.clone(),
@@ -473,7 +481,18 @@ impl ProductionFinalGraphOwnerV1 {
         {
             return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
         }
+        self.require_exact_ranked_views()?;
         Ok(())
+    }
+
+    fn require_exact_ranked_views(&self) -> Result<(), ProductionFinalGraphVerificationErrorV1> {
+        ranked_views::revalidate(
+            &self.ranked_views,
+            &self.session.context,
+            &self.canonical,
+            self.final_epoch,
+            &self.module,
+        )
     }
 }
 
@@ -487,6 +506,10 @@ pub struct ProductionVerifiedFinalGraphV1 {
 impl ProductionVerifiedFinalGraphV1 {
     pub const fn report(&self) -> &ProductionFinalGraphVerificationReportV1 {
         &self.report
+    }
+
+    pub const fn target_contract(&self) -> &ProductionFinalGraphTargetContractV1 {
+        &self.owner.target
     }
 
     pub const fn canonical(&self) -> &VerifiedCanonicalKernelIrV13 {
@@ -560,6 +583,7 @@ impl ProductionVerifiedFinalGraphV1 {
         if &atomic_scope != self.report.atomic_scope() {
             return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
         }
+        self.owner.require_exact_ranked_views()?;
         Ok(())
     }
 
@@ -592,7 +616,11 @@ impl ProductionVerifiedFinalGraphV1 {
                 let live = functions
                     .iter()
                     .zip(&function_ids)
-                    .map(|(function, id)| ProductionW4LiveFunctionV1::new(id, function))
+                    .zip(&self.owner.ranked_views)
+                    .map(|((function, id), ranked_view)| match ranked_view {
+                        Some(view) => ProductionW4LiveFunctionV1::with_ranked_view(id, function, view),
+                        None => ProductionW4LiveFunctionV1::new(id, function),
+                    })
                     .collect::<Vec<_>>();
                 let execution = execute_production_w4_final_graph_capability_witness_v1(
                     canonical,
@@ -638,66 +666,8 @@ impl ProductionVerifiedFinalGraphV1 {
         ),
         ProductionFinalGraphVerificationErrorV1,
     > {
-        let before = self
-            .owner
-            .session
-            .context
-            .ir_mutation_attempt_epoch()
-            .map_err(|_| ProductionFinalGraphVerificationErrorV1::MutationEpochUnavailable)?
-            .value();
-        if before != self.verification_mutation_epoch {
-            return Err(
-                ProductionFinalGraphVerificationErrorV1::MutationAfterVerification {
-                    expected_epoch: self.verification_mutation_epoch,
-                    observed_epoch: before,
-                },
-            );
-        }
-        let (canonical, bridge) = self
-            .owner
-            .session
-            .extract_canonical_kir_v13_o0(&self.owner.graph)
-            .map_err(ProductionFinalGraphVerificationErrorV1::Bridge)?;
-        let after = self
-            .owner
-            .session
-            .context
-            .ir_mutation_attempt_epoch()
-            .map_err(|_| ProductionFinalGraphVerificationErrorV1::MutationEpochUnavailable)?
-            .value();
-        if after != self.verification_mutation_epoch {
-            return Err(
-                ProductionFinalGraphVerificationErrorV1::MutationAfterVerification {
-                    expected_epoch: self.verification_mutation_epoch,
-                    observed_epoch: after,
-                },
-            );
-        }
-        if canonical.identity() != self.owner.canonical.identity()
-            || !bridge.is_exact()
-            || bridge.input() != self.owner.bridge.input()
-            || bridge.output() != self.owner.bridge.output()
-        {
-            return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
-        }
-        let execution_graph = kir_v13_execution_capability_witness_v1(&canonical)
-            .map_err(ProductionFinalGraphVerificationErrorV1::Bridge)?;
-        if &execution_graph != self.report.execution_graph() {
-            return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
-        }
-        let module = decode_module_v13(canonical.canonical_bytes())
-            .map_err(|_| ProductionFinalGraphVerificationErrorV1::CanonicalDecode)?;
-        if module != self.owner.module {
-            return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
-        }
-        let atomic_scope =
-            analyze_execution_capability_atomic_scope_v1(&module).map_err(|error| {
-                ProductionFinalGraphVerificationErrorV1::AtomicScope(Box::new(error))
-            })?;
-        if &atomic_scope != self.report.atomic_scope() {
-            return Err(ProductionFinalGraphVerificationErrorV1::GraphSubjectMismatch);
-        }
-        Ok((canonical, module, self.report))
+        self.revalidate_live()?;
+        Ok((self.owner.canonical, self.owner.module, self.report))
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -727,6 +697,7 @@ pub enum ProductionFinalGraphVerificationErrorV1 {
     DialectRegistration,
     Session(crate::ContextBuildError),
     Bridge(KirBridgeErrorV1),
+    AnalysisProjection(Box<CanonicalRankedViewErrorV1>),
     TargetSubjectMismatch,
     ScheduleLength {
         expected: usize,
@@ -773,6 +744,7 @@ impl ProductionFinalGraphVerificationErrorV1 {
             Self::NoDefinedFunctions
             | Self::AtomicScope(_)
             | Self::FunctionCheck { .. }
+            | Self::AnalysisProjection(_)
             | Self::IncompleteFunctionReport { .. }
             | Self::W4Execution(_)
             | Self::W4Handoff(_) => "FE2O3-W4-FINAL-005",
@@ -797,6 +769,7 @@ impl fmt::Display for ProductionFinalGraphVerificationErrorV1 {
             }
             Self::Session(_) => formatter.write_str("closed PLIRON session construction failed"),
             Self::Bridge(_) => formatter.write_str("typed final-graph PLIRON bridge failed"),
+            Self::AnalysisProjection(source) => write!(formatter, "final-graph analysis projection failed: {source}"),
             Self::TargetSubjectMismatch => formatter
                 .write_str("W5 target contract does not name the exact final graph and epoch"),
             Self::ScheduleLength { expected, observed } => write!(
@@ -820,9 +793,9 @@ impl fmt::Display for ProductionFinalGraphVerificationErrorV1 {
                 formatter.write_str("final KIR graph has no defined function to verify")
             }
             Self::AtomicScope(source) => write!(formatter, "{source}"),
-            Self::FunctionCheck { function, .. } => write!(
+            Self::FunctionCheck { function, source } => write!(
                 formatter,
-                "mandatory PLIRON checks rejected final function {function}"
+                "mandatory PLIRON checks rejected final function {function}: {source}"
             ),
             Self::IncompleteFunctionReport { function } => write!(
                 formatter,
@@ -852,6 +825,7 @@ impl Error for ProductionFinalGraphVerificationErrorV1 {
         match self {
             Self::Canonical(error) => Some(error),
             Self::Bridge(error) => Some(error),
+            Self::AnalysisProjection(error) => Some(&**error),
             Self::AtomicScope(error) => Some(&**error),
             Self::FunctionCheck { source, .. } => Some(&**source),
             Self::W4Execution(error) => Some(&**error),
@@ -1023,6 +997,7 @@ fn expected_resources(
 
 #[cfg(test)]
 mod tests {
+    mod ranked_view_tests;
     use dialect_gpu::{CanonicalKirOperationAttr, IntrinsicOp};
     use dialect_kernel::CanonicalIdentityAttr;
     use fe2o3_kernel_ir::{
@@ -1042,6 +1017,22 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn function_failure_retains_the_inner_diagnostic_and_repair() {
+        let source = ProductionPlironPreloweringErrorV2::ReportValidation(
+            fe2o3_kernel_analysis::ProductionAnalysisReportValidationErrorV1::PreservationManifestInconsistent,
+        );
+        let detail = source.to_string();
+        let error = ProductionFinalGraphVerificationErrorV1::FunctionCheck {
+            function: FunctionId::new("diagnostic_root"),
+            source: Box::new(source),
+        };
+        let rendered = error.to_string();
+        assert!(rendered.contains("diagnostic_root"));
+        assert!(rendered.contains(&detail));
+        assert_eq!(error.code(), "FE2O3-W4-FINAL-005");
+    }
 
     #[derive(Clone, Copy)]
     struct SyntheticTarget(TargetCapabilityModelIdentityV1);

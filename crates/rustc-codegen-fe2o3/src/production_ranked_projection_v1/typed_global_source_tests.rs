@@ -1,3 +1,56 @@
+#[test]
+fn semantic_scalar_read_mode_preserves_explicit_volatility() {
+    use fe2o3_pliron::ProductionSemanticReadModeV2 as Mode;
+    let place = typed_place(0, U64_TYPE);
+    assert_eq!(
+        semantic_scalar_read_mode_v2(&SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+            place.clone(),
+        )))
+        .unwrap(),
+        Mode::UnorderedNonVolatile,
+    );
+    for (volatility, expected) in [
+        (
+            SemanticVolatilityV1::NonVolatile,
+            Mode::UnorderedNonVolatile,
+        ),
+        (SemanticVolatilityV1::Volatile, Mode::UnorderedVolatile),
+    ] {
+        let value =
+            SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(place.clone(), volatility, None));
+        assert_eq!(semantic_scalar_read_mode_v2(&value).unwrap(), expected);
+    }
+}
+
+#[test]
+fn semantic_scalar_read_mode_never_reclassifies_an_atomic_read() {
+    for volatility in [
+        SemanticVolatilityV1::NonVolatile,
+        SemanticVolatilityV1::Volatile,
+    ] {
+        for ordering in [
+            SemanticAtomicOrderingV1::Relaxed,
+            SemanticAtomicOrderingV1::Acquire,
+            SemanticAtomicOrderingV1::SequentiallyConsistent,
+        ] {
+            let value = SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                typed_place(0, U64_TYPE),
+                volatility,
+                Some(SemanticAtomicAccessV1::new(
+                    ordering,
+                    SemanticAtomicScopeV1::Agent,
+                )),
+            ));
+            assert!(matches!(
+                semantic_scalar_read_mode_v2(&value),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "atomic scalar load requires an exact ordered read contract"
+                ))
+            ));
+        }
+    }
+}
+
 fn typed_global_source_fixture_v1() -> (
     Vec<SemanticTypeDeclV1>,
     Vec<SemanticCallableDeclV1>,
@@ -367,6 +420,337 @@ fn typed_global_exclusive_source_fixture_v1(
     (types, callables, function)
 }
 
+fn audit_typed_global_statement_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    projection: &IntrinsicProjectionV1,
+    block: usize,
+    statement: &SemanticStatementV1,
+) -> Result<AuditOutput, ProductionRankedProjectionErrorV1> {
+    let mut operations = Vec::new();
+    let mut sources = Vec::new();
+    let mut guarded = Vec::new();
+    let mut ir = String::new();
+    project_statement_accesses(
+        types,
+        function,
+        block,
+        &[],
+        statement,
+        &projection.global_uses,
+        None,
+        &constant_locals(function)?,
+        &projection.local_contracts,
+        &projection.guarded_accesses,
+        &mut guarded,
+        &mut vec![None; function.locals().len()],
+        &mut operations,
+        &mut sources,
+        &mut 0,
+        &mut ir,
+    )?;
+    assert!(
+        guarded.is_empty(),
+        "metadata must not create guarded accesses"
+    );
+    Ok((operations, sources, ir))
+}
+
+fn typed_global_exclusive_metadata_snapshot_fixture_v1() -> (
+    Vec<SemanticTypeDeclV1>,
+    Vec<SemanticCallableDeclV1>,
+    SemanticFunctionDeclV1,
+) {
+    let (mut types, callables, function) = typed_global_exclusive_source_fixture_v1(true);
+    let physical = function.locals()[31].ty();
+    let SemanticTypeShapeV1::Pointer(pointer) = types[physical.index() as usize].shape() else {
+        unreachable!();
+    };
+    let slice = pointer.pointee();
+    let shared = SemanticTypeIdV1::from_index(types.len() as u32);
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(240)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(240)),
+        SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                slice,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::SliceLength,
+            )
+            .unwrap(),
+        ),
+    ));
+    let mut locals = function.locals().to_vec();
+    assert_eq!(locals.len(), 34);
+    locals.push(local(240, shared, SemanticLocalRoleV1::Temporary));
+    let mut blocks = function.blocks().to_vec();
+    let original = &blocks[9];
+    let mut statements = original.statements()[..4].to_vec();
+    // Pinned rustc -Copt-level=0 -Zinline-mir=no: copy &mut [T],
+    // reborrow &[T], then PtrMetadata(move shared).
+    statements.push(typed_assignment(
+        34,
+        shared,
+        SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Shared,
+            place: SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(31),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, slice)
+                        .unwrap(),
+                ],
+                slice,
+            )
+            .unwrap(),
+        },
+    ));
+    statements.push(typed_assignment(
+        32,
+        U64_TYPE,
+        SemanticRvalueKindV1::Unary {
+            operation: SemanticUnaryOpV1::PointerMetadata,
+            operand: SemanticOperandV1::Move(typed_place(34, shared)),
+        },
+    ));
+    statements.extend_from_slice(&original.statements()[5..]);
+    blocks[9] = SemanticBasicBlockV1::new(
+        original.identity(),
+        original.source(),
+        statements,
+        original.terminator().clone(),
+    )
+    .unwrap();
+    (
+        types,
+        callables,
+        typed_global_fixture_with_body_v1(&function, locals, blocks),
+    )
+}
+
+#[test]
+fn typed_global_metadata_statement_scan_preserves_indexed_effects() {
+    for fixture in 0..3 {
+        let (types, callables, function) = match fixture {
+            0 => typed_global_source_fixture_v1(),
+            1 => typed_global_exclusive_source_fixture_v1(false),
+            _ => typed_global_exclusive_metadata_snapshot_fixture_v1(),
+        };
+        let (projection, blocks, sources) =
+            typed_global_ranked_source_fixture_v1(&types, &callables, &function);
+        assert!(!projection.global_uses.metadata_assignments.is_empty());
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            for statement in block.statements() {
+                let (operations, sources, ir) = audit_typed_global_statement_v1(
+                    &types,
+                    &function,
+                    &projection,
+                    block_index,
+                    statement,
+                )
+                .unwrap();
+                assert!(operations.is_empty() && sources.is_empty() && ir.is_empty());
+            }
+        }
+        // Only the source load and store touch elements. Their guards still
+        // use separate dynamic extents from the two physical ABI allocations.
+        assert_eq!(sources.len(), 2);
+        let read = projection.direct_read_effects[6].as_ref().unwrap();
+        let write = projection.direct_write_effects[11].as_ref().unwrap();
+        assert_eq!(read.indices, write.indices);
+        assert_eq!(read.comparisons.len(), 1);
+        assert_eq!(write.comparisons.len(), 1);
+        assert_ne!(read.comparisons[0].1, write.comparisons[0].1);
+        assert!(matches!(
+            read.comparisons[0].1,
+            ProductionRankedValueV1::Argument(_)
+        ));
+        assert!(matches!(
+            write.comparisons[0].1,
+            ProductionRankedValueV1::Argument(_)
+        ));
+        assert_eq!(
+            projected_reference_gpu_writes_v2(
+                &types,
+                &callables,
+                &function,
+                &projection,
+                &blocks,
+                &sources,
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn typed_global_mutable_metadata_snapshot_rejects_uses_outside_the_sequence() {
+    for snapshot_local in [31, 34] {
+        let (types, callables, function) = typed_global_exclusive_metadata_snapshot_fixture_v1();
+        let mut blocks = function.blocks().to_vec();
+        let original = &blocks[9];
+        let mut statements = original.statements().to_vec();
+        let ty = function.locals()[snapshot_local].ty();
+        statements.push(typed_assignment(
+            snapshot_local as u32,
+            ty,
+            SemanticRvalueKindV1::Use(typed_operand(snapshot_local as u32, ty)),
+        ));
+        blocks[9] = SemanticBasicBlockV1::new(
+            original.identity(),
+            original.source(),
+            statements,
+            original.terminator().clone(),
+        )
+        .unwrap();
+        let function =
+            typed_global_fixture_with_body_v1(&function, function.locals().to_vec(), blocks);
+        let (projection, _) =
+            project_capability_index_fixture(&types, &callables, &function).unwrap();
+        assert!(
+            audit_typed_global_statement_v1(
+                &types,
+                &function,
+                &projection,
+                9,
+                &function.blocks()[9].statements()[3],
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn typed_global_mutable_metadata_snapshot_obeys_the_existing_work_limit() {
+    let (types, callables, function) = typed_global_exclusive_metadata_snapshot_fixture_v1();
+    let (projection, _) = project_capability_index_fixture(&types, &callables, &function).unwrap();
+    let origin = Some(ProjectedCapabilityValueV1::Known(
+        ProjectedCapabilityOriginV1::GlobalPhysical {
+            view: projection.global_views[6].unwrap(),
+            ty: function.locals()[31].ty(),
+            borrowed: false,
+        },
+    ));
+    assert!(global_mutable_metadata_snapshot_v1(&types, &function, 9, 3, origin.clone(), &mut 0,).unwrap());
+    let mut work = MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1;
+    assert!(
+        global_mutable_metadata_snapshot_v1(&types, &function, 9, 3, origin, &mut work,).is_err()
+    );
+}
+
+#[test]
+fn typed_global_metadata_custody_does_not_authorize_another_assignment() {
+    let (types, callables, function) = typed_global_source_fixture_v1();
+    let (projection, _) = project_capability_index_fixture(&types, &callables, &function).unwrap();
+    let original = &function.blocks()[9].statements()[3];
+    audit_typed_global_statement_v1(&types, &function, &projection, 9, original).unwrap();
+    let substituted = original.clone();
+    let error = audit_typed_global_statement_v1(&types, &function, &projection, 9, &substituted)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedProjectionErrorV1::UnrankedDereference(_)
+    ));
+}
+
+#[test]
+fn typed_global_metadata_never_authorizes_an_unchecked_element_read() {
+    let (types, callables, function) = typed_global_source_fixture_v1();
+    let physical = function.locals()[31].ty();
+    let SemanticTypeShapeV1::Pointer(pointer) = types[physical.index() as usize].shape() else {
+        unreachable!();
+    };
+    let mut blocks = function.blocks().to_vec();
+    let original = &blocks[9];
+    let mut statements = original.statements().to_vec();
+    statements.push(typed_assignment(
+        33,
+        U64_TYPE,
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(31),
+                vec![
+                    SemanticProjectionV1::new(
+                        SemanticProjectionKindV1::Dereference,
+                        pointer.pointee(),
+                    )
+                    .unwrap(),
+                    SemanticProjectionV1::new(
+                        SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(6)),
+                        U64_TYPE,
+                    )
+                    .unwrap(),
+                ],
+                U64_TYPE,
+            )
+            .unwrap(),
+        )),
+    ));
+    blocks[9] = SemanticBasicBlockV1::new(
+        original.identity(),
+        original.source(),
+        statements,
+        original.terminator().clone(),
+    )
+    .unwrap();
+    let function = typed_global_fixture_with_body_v1(&function, function.locals().to_vec(), blocks);
+    let (projection, _) = project_capability_index_fixture(&types, &callables, &function).unwrap();
+    let element_read = function.blocks()[9].statements().last().unwrap();
+    let error = audit_typed_global_statement_v1(&types, &function, &projection, 9, element_read)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedProjectionErrorV1::Incomplete(
+            "a dynamic slice access without its exact Rust bounds-check predecessor"
+        )
+    ));
+}
+
+#[test]
+fn typed_global_metadata_rejects_mutable_and_raw_handle_copies() {
+    for kind in [SemanticPointerKindV1::Reference, SemanticPointerKindV1::Raw] {
+        let (mut types, callables, function) = typed_global_exclusive_source_fixture_v1(true);
+        let physical = function.locals()[31].ty();
+        if kind == SemanticPointerKindV1::Raw {
+            let original = &types[physical.index() as usize];
+            let SemanticTypeShapeV1::Pointer(pointer) = original.shape() else {
+                unreachable!();
+            };
+            types[physical.index() as usize] = SemanticTypeDeclV1::new(
+                original.identity(),
+                original.layout_identity(),
+                original.layout().clone(),
+                SemanticTypeShapeV1::Pointer(
+                    SemanticPointerTypeV1::new_with_kind(
+                        pointer.pointee(),
+                        kind,
+                        SemanticMutabilityV1::Mutable,
+                        pointer.address_space(),
+                        64,
+                        SemanticPointerMetadataV1::SliceLength,
+                    )
+                    .unwrap(),
+                ),
+            );
+        }
+        let projection = project_capability_index_fixture(&types, &callables, &function);
+        // A raw ABI substitution may reject even before the statement pass.
+        if kind == SemanticPointerKindV1::Raw && projection.is_err() {
+            continue;
+        }
+        let (projection, _) = projection.unwrap();
+        let statement = &function.blocks()[9].statements()[3];
+        assert!(
+            audit_typed_global_statement_v1(&types, &function, &projection, 9, statement).is_err()
+        );
+    }
+}
+
 #[test]
 fn typed_global_exclusive_source_preserves_extents_and_initial_memory_versions() {
     for exclusive_input in [false, true] {
@@ -411,6 +795,10 @@ fn typed_global_exclusive_source_preserves_extents_and_initial_memory_versions()
         let ProductionSemanticExpressionV2::Load(load) = lhs.as_ref() else {
             panic!("missing source load");
         };
+        assert_eq!(
+            load.read_mode,
+            fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedVolatile
+        );
         let source = sources
             .iter()
             .find(|source| source.access == AccessKindAttr::Read)
@@ -559,6 +947,10 @@ fn typed_global_source_preserves_helper_extent_and_load_store_sites() {
     let ProductionSemanticExpressionV2::Load(load) = lhs.as_ref() else {
         panic!("source load was not retained");
     };
+    assert_eq!(
+        load.read_mode,
+        fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedVolatile
+    );
     let read_source = sources
         .iter()
         .find(|source| source.access == AccessKindAttr::Read)
@@ -876,6 +1268,18 @@ fn typed_global_source_rebound_physical_slice_cannot_retain_allocation_extent() 
             );
             assert_eq!(
                 projection.global_uses.comparisons.contains_key(&(10, 2)),
+                !mutate
+            );
+            let SemanticStatementKindV1::Assign(metadata) =
+                changed.blocks()[9].statements().last().unwrap().kind()
+            else {
+                unreachable!();
+            };
+            assert_eq!(
+                projection
+                    .global_uses
+                    .metadata_assignments
+                    .contains(&(metadata as *const _)),
                 !mutate
             );
         }

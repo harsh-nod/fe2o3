@@ -20,7 +20,7 @@
       "status": "not-applicable"
     }
   },
-  "compilerInputContractSha256": "9ffdd363ad670e3e9e20c3a977d48bb2f97b09f80fdbae69825995ee8634bd95",
+  "compilerInputContractSha256": "a9a24787bfa834933fc6f386771e1223738ae9892bd4ede66b7b81546fc3c456",
   "expectedArguments": [
     {
       "bytes": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
@@ -135,9 +135,9 @@
   },
   "productionExport": {
     "coordinates": null,
-    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
-    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
-    "diagnosticIdentitySha256": "417eddbdf71bdcd6e5e1223605a90ae9ea5b8374a6ac2afdc30b060a1d5c71b2",
+    "diagnostic": "FE2O3-TUTORIAL-TXN-007: protected cargo-fe2o3 fixture build failed with exit status: 1: cargo fe2o3 authority release: cannot admit the fixed compiler-execution client profile: trusted client-profile directory \"profile root\" has invalid descriptor, type, owner, mode, or link state",
+    "diagnosticCode": "FE2O3-TUTORIAL-TXN-007",
+    "diagnosticIdentitySha256": "7d3af5344bd2925a587b95bda08902d50b1519e5f706cda7f8f79b59b1a479b6",
     "identityContract": {
       "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
       "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
@@ -148,7 +148,7 @@
       ],
       "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
     },
-    "stage": "exporter-build",
+    "stage": "protected-completion",
     "status": "blocked"
   },
   "request": {
@@ -224,6 +224,6 @@
     ]
   },
   "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
-  "sourceClosureSha256": "668eab3c4f14d6df81af242622387b0d82268293a1936590c8de6b679756f5a7",
+  "sourceClosureSha256": "520b04123402162e3e399359ff8c869921bcee0f3bd3c44af5b2690c646a23d2",
   "target": "gfx950"
 }

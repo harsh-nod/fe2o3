@@ -1,5 +1,75 @@
 //! Sole consuming boundary from production rustc collection to semantic MIR.
 
+mod numerical_policy_v1;
+mod gfx950_transpose_v1;
+mod transpose_owned_source_v1;
+mod reusable_lds_v1;
+mod guarded_grid_leader_v26;
+pub(crate) mod reusable_phase_v26;
+mod kernel_context_ranked_v1;
+mod index_witness_mapping_v1;
+mod global_bf16_matrix_v1;
+mod kernel_context_bf16_inputs_v1;
+pub(crate) use kernel_context_bf16_inputs_v1::{GuardedBf16SourceEventsV1, RootBf16PhysicalInputV1};
+mod subgroup_partition_v1;
+mod execution_brand_v1;
+mod typed_matrix_terminal_v1;
+
+use execution_brand_v1::rust_execution_brand_v1;
+
+#[path = "production_importer_v1/numerical_policy_v1/defined_body_v1/current.rs"]
+mod math_current_v1;
+
+#[cfg(test)]
+mod typed_global_carriage_v1_tests;
+
+#[cfg(test)]
+mod caller_location_literal_v1_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_wrapping_v1/compiler_tests.rs"]
+mod core_wrapping_shift_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_wrapping_v1/general_compiler_tests.rs"]
+mod core_wrapping_general_compiler_tests;
+
+#[cfg(test)]
+#[path = "../production_ranked_projection_v1/helper_result_ranges_v1/compiler_tests.rs"]
+mod helper_result_ranges_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_primitive_value_v1/compiler_tests.rs"]
+mod core_primitive_cast_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_option_compare_v1/compiler_tests.rs"]
+mod core_option_compare_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_option_zip_v1/compiler_tests.rs"]
+mod core_option_zip_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_option_zip_v1/import_tests.rs"]
+mod core_option_zip_import_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_option_compare_v1/promoted/compiler_tests.rs"]
+mod promoted_option_compare_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_bool_v1/compiler_tests.rs"]
+mod core_bool_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_result_map_v1/compiler_tests.rs"]
+mod core_result_map_compiler_tests;
+
+#[cfg(test)]
+#[path = "../trusted_device_items/core_checked_mul_v1/checked_div/import_tests.rs"]
+mod core_checked_div_import_tests;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
@@ -83,8 +153,11 @@ const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2: &[u8] =
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v3";
+#[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v4";
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v5";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminalIdentitySchemaV1 {
@@ -94,7 +167,9 @@ enum TerminalIdentitySchemaV1 {
     CombinedV2,
     #[cfg_attr(not(test), allow(dead_code))]
     CombinedV3,
+    #[cfg_attr(not(test), allow(dead_code))]
     CombinedV4,
+    CombinedV5,
 }
 
 #[derive(Debug)]
@@ -109,6 +184,11 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     FunctionIdentityCollision,
     RootIdentityMismatch,
     KernelContextBinding(&'static str),
+    TerminalAbiMismatch {
+        terminal: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+        source: String,
+        signature: String,
+    },
     CapabilityTerminalRejected {
         root: String,
         span: String,
@@ -121,6 +201,7 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     FunctionAbiConstruction(Box<ProductionSemanticFnAbiErrorV1>),
     BodyConstruction(Box<ProductionSemanticBodyErrorV1>),
     SemanticSchema(SemanticMirErrorV1),
+    TransposeOwnedSource(Box<transpose_owned_source_v1::PlanError>),
     LineageTranscriptTooLarge {
         field: &'static str,
         actual: usize,
@@ -159,6 +240,10 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::KernelContextBinding(detail) => {
                 write!(formatter, "semantic importer rejected kernel-context custody: {detail}")
             }
+            Self::TerminalAbiMismatch { terminal, source, signature } => write!(
+                formatter,
+                "semantic importer rejected terminal callable ABI: terminal={terminal:?} source={source} signature={signature}",
+            ),
             Self::CapabilityTerminalRejected {
                 root,
                 span,
@@ -183,6 +268,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::SemanticSchema(error) => {
                 write!(formatter, "semantic importer rejected complete semantic MIR: {error}")
             }
+            Self::TransposeOwnedSource(error) => write!(formatter, "semantic importer {error}"),
             Self::LineageTranscriptTooLarge {
                 field,
                 actual,
@@ -217,12 +303,14 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             Self::FunctionAbiConstruction(error) => Some(error.as_ref()),
             Self::BodyConstruction(error) => Some(error.as_ref()),
             Self::SemanticSchema(error) => Some(error),
+            Self::TransposeOwnedSource(error) => Some(error.as_ref()),
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
             | Self::LineageTranscriptTooLarge { .. }
             | Self::FunctionIdentityCollision
             | Self::RootIdentityMismatch
             | Self::KernelContextBinding(_)
+            | Self::TerminalAbiMismatch { .. }
             | Self::CapabilityTerminalRejected { .. } => None,
             Self::TargetNeutralLoweringPending { .. } => None,
         }
@@ -299,10 +387,11 @@ const KERNEL_CONTEXT_FRONTEND_UNIT_DOMAIN_V1: &[u8] =
     b"fe2o3/production/kernel-context/frontend-unit/v1";
 const KERNEL_CONTEXT_TARGET_DOMAIN_V1: &[u8] = b"fe2o3/production/kernel-context/target-brand/v1";
 const KERNEL_CONTEXT_LAUNCH_DOMAIN_V1: &[u8] = b"fe2o3/production/kernel-context/launch-brand/v1";
-const KERNEL_CONTEXT_CUSTODY_DOMAIN_V1: &[u8] = b"fe2o3/production/kernel-context/custody/v1";
+const KERNEL_CONTEXT_CUSTODY_DOMAIN_V2: &[u8] = b"fe2o3/production/kernel-context/custody/v2";
 
 struct CollectedKernelContextV1 {
     root_function_identity: [u8; 32],
+    logical_helper_identity: [u8; 32],
     kernel_binding: [u8; 32],
     kernel_marker_identity: [u8; 32],
     launch_brand_identity: [u8; 32],
@@ -315,12 +404,14 @@ struct CollectedKernelContextV1 {
 struct AuthenticatedProductionKernelContextRootV1 {
     selected_root: SemanticFunctionIdV1,
     root_function_identity: [u8; 32],
+    logical_helper_identity: [u8; 32],
     kernel_binding: [u8; 32],
     kernel_marker_identity: [u8; 32],
     launch_brand_identity: [u8; 32],
     issuance_identity: [u8; 32],
     physical_argument_count: u32,
     logical_argument_count: u32,
+    entry_transfer: Option<fe2o3_lower_mir_kernel::ProductionKernelContextEntryTransferV1>,
 }
 
 struct ProductionKernelContextRootObservationV1 {
@@ -338,6 +429,12 @@ pub(crate) struct AuthenticatedProductionKernelContextsV1 {
     expected_roots: Box<[SemanticFunctionIdV1]>,
     roots: Box<[AuthenticatedProductionKernelContextRootV1]>,
     custody_identity: [u8; 32],
+    transpose_source: Option<transpose_owned_source_v1::SourceSeal>,
+    reusable_phase_source: Option<reusable_phase_v26::production::SourceStatus>,
+    // Independently subject-bound native source records, not Context issuance.
+    global_bf16_constructors: Option<
+        numerical_policy_v1::defined_body_v1::matrix::ConstructorRosterV1,
+    >,
 }
 
 fn kernel_context_frontend_unit_identity_v1(
@@ -440,6 +537,7 @@ fn collect_authenticated_kernel_contexts_v1<'tcx>(
         )?;
         contexts.push(CollectedKernelContextV1 {
             root_function_identity: source.root_function_identity(),
+            logical_helper_identity: source.logical_helper_identity(),
             kernel_binding: kernel_binding.as_bytes(),
             kernel_marker_identity: source.kernel_marker_identity(),
             launch_brand_identity: kernel_context_launch_brand_identity_v1(&launch),
@@ -476,12 +574,14 @@ fn bind_authenticated_kernel_contexts_v1(
         roots.push(AuthenticatedProductionKernelContextRootV1 {
             selected_root,
             root_function_identity: context.root_function_identity,
+            logical_helper_identity: context.logical_helper_identity,
             kernel_binding: context.kernel_binding,
             kernel_marker_identity: context.kernel_marker_identity,
             launch_brand_identity: context.launch_brand_identity,
             issuance_identity: context.issuance_identity,
             physical_argument_count: context.physical_argument_count,
             logical_argument_count: context.logical_argument_count,
+            entry_transfer: None,
         });
     }
     roots.sort_unstable_by_key(|root| root.selected_root);
@@ -510,6 +610,9 @@ fn bind_authenticated_kernel_contexts_v1(
         expected_roots,
         roots: roots.into_boxed_slice(),
         custody_identity,
+        transpose_source: None,
+        reusable_phase_source: None,
+        global_bf16_constructors: None,
     })
 }
 
@@ -519,7 +622,7 @@ fn kernel_context_custody_identity_v1(
     expected_roots: &[SemanticFunctionIdV1],
     roots: &[AuthenticatedProductionKernelContextRootV1],
 ) -> [u8; 32] {
-    let mut digest = SemanticIdentityDigestV1::new(KERNEL_CONTEXT_CUSTODY_DOMAIN_V1);
+    let mut digest = SemanticIdentityDigestV1::new(KERNEL_CONTEXT_CUSTODY_DOMAIN_V2);
     digest.field(&frontend_unit_identity);
     digest.field(&target_brand_identity);
     for root in expected_roots {
@@ -528,12 +631,17 @@ fn kernel_context_custody_identity_v1(
     for root in roots {
         digest.field(&root.selected_root.index().to_le_bytes());
         digest.field(&root.root_function_identity);
+        digest.field(&root.logical_helper_identity);
         digest.field(&root.kernel_binding);
         digest.field(&root.kernel_marker_identity);
         digest.field(&root.launch_brand_identity);
         digest.field(&root.issuance_identity);
         digest.field(&root.physical_argument_count.to_le_bytes());
         digest.field(&root.logical_argument_count.to_le_bytes());
+        if let Some(transfer) = root.entry_transfer {
+            digest.field(b"source-entry-transfer/v1");
+            digest.field(&transfer.commitment_bytes());
+        }
     }
     digest.finish()
 }
@@ -585,6 +693,7 @@ impl AuthenticatedProductionKernelContextsV1 {
             if [
                 self.frontend_unit_identity,
                 self.target_brand_identity,
+                root.logical_helper_identity,
                 root.kernel_marker_identity,
                 root.launch_brand_identity,
                 root.issuance_identity,
@@ -671,7 +780,7 @@ impl AuthenticatedProductionKernelContextsV1 {
 
         let mut inputs = Vec::with_capacity(self.roots.len());
         for root in self.roots {
-            inputs.push(
+            let mut input =
                 fe2o3_lower_mir_kernel::ProductionKernelContextLoweringInputV1::new(
                     root.selected_root,
                     self.frontend_unit_identity,
@@ -679,8 +788,11 @@ impl AuthenticatedProductionKernelContextsV1 {
                     self.target_brand_identity,
                     root.launch_brand_identity,
                     root.issuance_identity,
-                ),
-            );
+                );
+            if let Some(transfer) = root.entry_transfer {
+                input = input.with_entry_transfer(transfer);
+            }
+            inputs.push(input);
         }
         Ok(inputs)
     }
@@ -723,6 +835,14 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     if !exact_ordered_axes_match(retained_roots, independently_observed_roots) {
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
+    for function in &collection.functions {
+        numerical_policy_v1::validate_policy_bind_source_v1(tcx, function.instance)?;
+        numerical_policy_v1::defined_body_v1::matrix::validate_source(tcx, function.instance)?;
+    }
+    super::exclusive_reference_v1::validate_collected_bindings_v1(tcx, &collection.functions)
+        .map_err(|_| ProductionSemanticImportErrorV1::KernelContextBinding(
+            "exclusive reference binding no longer matches its authenticated root/role/carrier source",
+        ))?;
     let collected_kernel_contexts = collect_authenticated_kernel_contexts_v1(tcx, &mut collection)?;
     let reference_effect_bindings =
         crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(
@@ -755,7 +875,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         sha256: rustc_identity_inventory_sha256,
         canonical_transcript: rustc_identity_inventory_transcript,
     };
-    let kernel_contexts = bind_authenticated_kernel_contexts_v1(
+    let mut kernel_contexts = bind_authenticated_kernel_contexts_v1(
         collected_kernel_contexts,
         &functions,
         &roots,
@@ -821,6 +941,21 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
+    let semantic_mir = transpose_owned_source_v1::attach(
+        tcx, &plan, &mut kernel_contexts, semantic_mir,
+    ).map_err(|error| ProductionSemanticImportErrorV1::TransposeOwnedSource(Box::new(error)))?;
+    subgroup_partition_v1::workgroup_source_v1::attach_context_entry_transfers_v1(
+        tcx,
+        &plan,
+        &semantic_mir,
+        &mut kernel_contexts,
+    )?;
+    kernel_contexts.global_bf16_constructors = Some(
+        numerical_policy_v1::defined_body_v1::matrix::capture_bf16_constructors(
+            tcx, &plan, &kernel_contexts, &semantic_mir,
+        )?,
+    );
+    reusable_phase_v26::production::attach(tcx, &plan, &mut kernel_contexts, &semantic_mir)?;
     let (
         rustc_preflight_plan_sha256,
         rustc_preflight_plan_transcript,
@@ -976,6 +1111,9 @@ fn capability_terminal_site_v1(
     )
 }
 
+#[path = "production_importer_v1/source_body_v1.rs"]
+mod source_body_v1;
+
 fn construct_complete_request_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
@@ -1032,6 +1170,7 @@ fn construct_complete_request_v1<'tcx>(
         let terminal_index = u32::try_from(index)
             .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?;
         let capability_root = capability_memory_root_for_terminal_v1(
+            tcx,
             plan,
             kernel_contexts,
             terminal_index,
@@ -1041,6 +1180,7 @@ fn construct_complete_request_v1<'tcx>(
             if matches!(
                 terminal.expansion,
                 crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Execution(_)
+                    | crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::PolicyMathF32(_)
             ) {
                 capability_terminal_rejection_v1(
                     tcx,
@@ -1068,6 +1208,7 @@ fn construct_complete_request_v1<'tcx>(
             if matches!(
                 terminal.expansion,
                 crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Execution(_)
+                    | crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::PolicyMathF32(_)
             ) {
                 capability_terminal_rejection_v1(
                     tcx,
@@ -1081,12 +1222,12 @@ fn construct_complete_request_v1<'tcx>(
                 error
             }
         })?;
-        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4);
+        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V5);
         digest.field(terminal.identities.function().as_bytes());
         digest.field(abi.identity().as_bytes());
         digest.field(&[terminal_operation_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV4,
+            TerminalIdentitySchemaV1::CombinedV5,
         )]);
         digest.field(
             &u32::try_from(index)
@@ -1116,7 +1257,7 @@ fn construct_complete_request_v1<'tcx>(
             actual: u64::try_from(plan.function_producers().len()).unwrap_or(u64::MAX),
             maximum: HARD_MAX_FUNCTIONS_V1,
         })?;
-    for (index, ((function, body), abi)) in plan
+    for (index, ((_function, body), abi)) in plan
         .function_producers()
         .iter()
         .zip(plan.body_producers())
@@ -1130,118 +1271,38 @@ fn construct_complete_request_v1<'tcx>(
         if body.function != function_id {
             return Err(body_owner_table_mismatch_v1("function body owner ordering"));
         }
-        let local_bindings = body
-            .locals
-            .iter()
-            .enumerate()
-            .map(|(semantic, local)| {
-                Ok(ProductionSemanticLocalBindingV1::new(
-                    local.rustc_local,
-                    fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
-                        u32::try_from(semantic)
-                            .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
-                    ),
-                    local.identity,
-                    local.source.provenance,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let block_bindings = body
-            .blocks
-            .iter()
-            .enumerate()
-            .map(|(semantic, block)| {
-                Ok(ProductionSemanticBlockBindingV1::new(
-                    block.rustc_block,
-                    fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1::from_index(
-                        u32::try_from(semantic)
-                            .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
-                    ),
-                    block.identity,
-                    block.source.provenance,
-                    block
-                        .statements
-                        .iter()
-                        .map(|source| source.provenance)
-                        .collect(),
-                    block.terminator.provenance,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let direct_calls = plan
-            .direct_call_producers()
-            .iter()
-            .filter(|call| call.caller == function_id)
-            .map(|call| {
-                let callee = plan
-                    .function_producers()
-                    .get(call.callee.index() as usize)
-                    .ok_or(ProductionSemanticImportErrorV1::RootIdentityMismatch)?;
-                Ok(ProductionSemanticDirectCallBindingV1::new(
-                    call.caller,
-                    call.block,
-                    callee.instance,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let terminal_expansions = plan
-            .terminal_expansion_producers()
-            .iter()
-            .filter(|recipe| recipe.caller == function_id)
-            .map(|recipe| {
-                Ok(ProductionSemanticTerminalExpansionRecipeV1::new(
-                    recipe.caller,
-                    recipe.block,
-                    recipe.instance,
-                    recipe.expansion,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let normalized_intrinsics = plan
-            .normalized_intrinsic_producers()
-            .iter()
-            .filter(|recipe| recipe.caller == function_id)
-            .map(|recipe| {
-                ProductionSemanticNormalizedRustcIntrinsicRecipeV1::new(
-                    recipe.caller,
-                    recipe.block,
-                    recipe.instance,
-                    recipe.element_type,
-                    recipe.operation,
-                )
-            })
-            .collect::<Vec<_>>();
-        functions.push(
-            construct_production_semantic_body_v1(
-                ProductionSemanticBodyInputV1 {
-                    tcx,
-                    instance: function.instance,
-                    body: tcx.instance_mir(function.instance.def),
-                    function: function_id,
-                    identities: ProductionSemanticFunctionIdentitiesV1::new(
-                        function.identities.function(),
-                        function.identities.item_definition(),
-                        function.identities.monomorphization(),
-                        function.identities.generic_type_arguments(),
-                        function.identities.const_generic_arguments(),
-                    ),
-                    role: semantic_function_role_v1(function.role),
-                    export: semantic_function_export_v1(function)?,
-                    source: body.source.provenance,
-                    abi,
-                    type_bindings: &type_bindings,
-                    local_bindings: &local_bindings,
-                    block_bindings: &block_bindings,
-                    entry: body.entry,
-                    direct_calls: &direct_calls,
-                    terminal_expansions: &terminal_expansions,
-                    normalized_intrinsics: &normalized_intrinsics,
-                },
-                &mut body_owner,
-            )
-            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?,
-        );
+        let epoch_source = subgroup_partition_v1::workgroup_source_v1::epoch_source_for_function_v1(
+            tcx,
+            plan,
+            function_id,
+            &abi,
+            &types,
+            kernel_contexts,
+        )?;
+        let function = source_body_v1::construct(
+            tcx, plan, function_id, abi, &type_bindings, &mut body_owner,
+        )?;
+        let function = match epoch_source {
+            Some(source) => subgroup_partition_v1::workgroup_source_v1::attach_epoch_projection_v1(
+                function_id, function, source,
+            )?,
+            None => function,
+        };
+        functions.push(function);
     }
+
+    numerical_policy_v1::defined_body_v1::attach_math_defined_contracts_v1(
+        tcx, plan, &types, &mut functions, &callables, kernel_contexts,
+    )?;
+    numerical_policy_v1::defined_body_v1::matrix_issuer::attach(
+        tcx, plan, &types, &mut functions, &callables, kernel_contexts,
+    )?;
+    numerical_policy_v1::defined_body_v1::matrix::attach(
+        tcx, plan, &types, &mut functions, &callables, kernel_contexts,
+    )?;
+    reusable_lds_v1::attach(tcx, plan, &types, &mut functions, &callables, kernel_contexts)?;
+    guarded_grid_leader_v26::attach(tcx, plan, &types, &mut functions, &callables, kernel_contexts)?;
+    reusable_phase_v26::attach(tcx, plan, &types, &mut functions, &callables, kernel_contexts)?;
 
     let semantic_mir = InertSemanticMirRequestV1::new_with_callables(
         target,
@@ -1253,25 +1314,87 @@ fn construct_complete_request_v1<'tcx>(
         callables,
         plan.roots().to_vec(),
     )
-    .and_then(|request| request.admit_current_production(SemanticMirLimitsV1::default()))
+    .and_then(|request| {
+        #[cfg(test)]
+        if plan.terminal_producers().iter().any(|terminal| matches!(terminal.expansion,
+            crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled
+                | crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled))
+        {
+            global_bf16_matrix_v1::layout_diagnostics::report(tcx, plan, &request);
+        }
+        request.admit_current_production(SemanticMirLimitsV1::default())
+    })
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
     validate_execution_terminal_carriage_v1(tcx, plan, kernel_contexts, &semantic_mir)?;
     Ok(semantic_mir)
 }
 
-fn validate_execution_terminal_carriage_v1(
-    tcx: TyCtxt<'_>,
-    plan: &ProductionSemanticPreflightPlanV1<'_>,
+fn validate_execution_terminal_carriage_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
     kernel_contexts: &AuthenticatedProductionKernelContextsV1,
     semantic_mir: &AdmittedInertSemanticMirV1,
 ) -> Result<(), ProductionSemanticImportErrorV1> {
+    global_bf16_matrix_v1::validate_carriage(tcx, plan, kernel_contexts, semantic_mir)?;
+    typed_matrix_terminal_v1::validate_carriage(tcx, plan, semantic_mir)?;
+    numerical_policy_v1::defined_body_v1::matrix_issuer::validate_carriage(
+        tcx, plan, kernel_contexts, semantic_mir,
+    )?;
+    numerical_policy_v1::defined_body_v1::matrix::validate_carriage(
+        tcx, plan, kernel_contexts, semantic_mir,
+    )?;
+    reusable_lds_v1::validate_carriage(tcx, plan, kernel_contexts, semantic_mir)?;
+    guarded_grid_leader_v26::validate_carriage(tcx, plan, kernel_contexts, semantic_mir)?;
+    reusable_phase_v26::validate_carriage(tcx, plan, kernel_contexts, semantic_mir)?;
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1 as Expansion;
 
+    let wire = semantic_mir.wire_version().as_u16();
     let function_count = plan.function_producers().len();
     let mut execution_records = 0_usize;
+    let mut policy_math_records = 0_usize;
     let mut roster_mask = 0_u64;
     for (terminal_index, terminal) in plan.terminal_producers().iter().enumerate() {
+        if let Expansion::PolicyMathF32(function) = terminal.expansion {
+            let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                binding,
+                operation: SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract },
+                ..
+            }) = semantic_mir.callables().get(function_count + terminal_index)
+            else {
+                return Err(body_owner_table_mismatch_v1("policy FP32 canonical callable carriage"));
+            };
+            let root = capability_memory_root_for_terminal_v1(
+                tcx,
+                plan, kernel_contexts,
+                u32::try_from(terminal_index).map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
+                terminal.expansion,
+            )?.ok_or_else(|| body_owner_table_mismatch_v1("policy FP32 root carriage"))?;
+            if wire < 19
+                || binding.identity() != terminal.identities.function()
+                || binding.abi().identity() != terminal.abi.identity
+            {
+                return Err(body_owner_table_mismatch_v1("policy FP32 identity or provenance carriage"));
+            }
+            let expected = numerical_policy_v1::policy_math_terminal_operation_v1(
+                tcx,
+                terminal.instance,
+                function,
+                binding.abi(),
+                semantic_mir.types(),
+                Some(root),
+                terminal.identities.function(),
+                kernel_contexts,
+            )?;
+            if expected != (SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract: *contract }) {
+                return Err(body_owner_table_mismatch_v1("policy FP32 complete source contract carriage"));
+            }
+            policy_math_records += 1;
+            continue;
+        }
         let Expansion::Execution(execution) = terminal.expansion else {
+            if terminal.expansion == Expansion::ThreadIndexIntoDisjoint {
+                index_witness_mapping_v1::validate_conversion_carriage_v1(tcx, plan, kernel_contexts, semantic_mir, terminal_index)?;
+            }
             continue;
         };
         let callable = semantic_mir
@@ -1280,43 +1403,73 @@ fn validate_execution_terminal_carriage_v1(
             .ok_or_else(|| body_owner_table_mismatch_v1("execution terminal callable index"))?;
         let SemanticCallableDeclV1::CompilerIntrinsic {
             binding,
-            operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract },
+            operation,
             ..
         } = callable
         else {
             return Err(body_owner_table_mismatch_v1(
-                "execution terminal must be a V17 ExecutionCapability callable",
+                "execution terminal must retain its compiler intrinsic callable",
             ));
         };
-        if semantic_mir.wire_version() != SemanticMirWireVersionV1::V17
+        if semantic_mir.wire_version() < SemanticMirWireVersionV1::V17
             || binding.identity() != terminal.identities.function()
             || binding.abi().identity() != terminal.abi.identity
-            || contract.source_identity() != terminal.identities.function()
         {
             return Err(body_owner_table_mismatch_v1(
-                "execution terminal V17 identity carriage",
+                "execution terminal V17-or-newer identity carriage",
             ));
         }
 
         execution_records += 1;
         roster_mask |= 1_u64 << execution.identity_tag();
-        if !crate::env_flag(crate::VERBOSE_ENV) {
-            continue;
-        }
-
         let terminal_index = u32::try_from(terminal_index)
             .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?;
         let root = capability_memory_root_for_terminal_v1(
+            tcx,
             plan,
             kernel_contexts,
             terminal_index,
             terminal.expansion,
         )?;
+        let expected = terminal_operation_v1(
+            tcx,
+            terminal.instance,
+            terminal.expansion,
+            binding.abi(),
+            semantic_mir.types(),
+            root,
+            terminal.identities.function(),
+            kernel_contexts,
+        )?;
+        if *operation != expected {
+            return Err(body_owner_table_mismatch_v1(
+                "execution terminal complete source contract carriage",
+            ));
+        }
+        // Typed-global terminals retain memory contracts, not execution-token
+        // contracts. Both must match the independently reconstructed source.
+        if execution.is_typed_global_memory() {
+            if crate::env_flag(crate::VERBOSE_ENV) {
+                eprintln!(
+                    "[FE2O3-CAP-AUDIT001] stage=semantic-mir-v{wire} terminal={execution:?} source={:?} operation={operation:?} trap=false",
+                    terminal.source.provenance,
+                );
+            }
+            continue;
+        }
+        let SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } = operation else {
+            return Err(body_owner_table_mismatch_v1(
+                "execution terminal must be a V17-or-newer ExecutionCapability callable",
+            ));
+        };
+        if !crate::env_flag(crate::VERBOSE_ENV) {
+            continue;
+        }
         let (root, span, helper_chain) =
             capability_terminal_site_v1(tcx, plan, terminal_index, root);
         let def_id = terminal.instance.def_id();
         eprintln!(
-            "[FE2O3-CAP-AUDIT001] root={root} span={span} helper_chain={helper_chain} stage=semantic-mir-v17 terminal={execution:?} diagnostic={:?} provider_crate={} provider={} provider_item_sha256={} monomorphization_sha256={} generic_types_sha256={} const_generics_sha256={} fn_abi_sha256={} source={:?} signature={:?} workgroup_brand={:?} epoch_before={:?} epoch_after={:?} obligations=0x{:04x} operation={:?} trap=false",
+            "[FE2O3-CAP-AUDIT001] root={root} span={span} helper_chain={helper_chain} stage=semantic-mir-v{wire} terminal={execution:?} diagnostic={:?} provider_crate={} provider={} provider_item_sha256={} monomorphization_sha256={} generic_types_sha256={} const_generics_sha256={} fn_abi_sha256={} source={:?} signature={:?} workgroup_brand={:?} epoch_before={:?} epoch_after={:?} obligations=0x{:04x} operation={:?} trap=false",
             execution.trusted_device_item(),
             tcx.crate_name(def_id.krate),
             tcx.def_path_str(def_id),
@@ -1336,8 +1489,7 @@ fn validate_execution_terminal_carriage_v1(
     }
     if crate::env_flag(crate::VERBOSE_ENV) {
         eprintln!(
-            "[FE2O3-CAP-AUDIT002] root=authenticated-set span=authenticated-set helper_chain=authenticated-closure stage=semantic-mir-v17 wire={} execution_records={execution_records} roster_mask=0x{roster_mask:010x} trap_records=0",
-            semantic_mir.wire_version().as_u16(),
+            "[FE2O3-CAP-AUDIT002] root=authenticated-set span=authenticated-set helper_chain=authenticated-closure stage=semantic-mir-v{wire} wire={wire} execution_records={execution_records} policy_math_records={policy_math_records} roster_mask=0x{roster_mask:010x} trap_records=0",
         );
     }
     Ok(())
@@ -1557,8 +1709,9 @@ fn semantic_kernel_source_contract_v1(
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
-fn capability_memory_root_for_terminal_v1<'a>(
-    plan: &ProductionSemanticPreflightPlanV1<'_>,
+fn capability_memory_root_for_terminal_v1<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
     contexts: &'a AuthenticatedProductionKernelContextsV1,
     terminal: u32,
     expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
@@ -1572,9 +1725,19 @@ fn capability_memory_root_for_terminal_v1<'a>(
             | Expansion::CapabilityGlobalLoad
             | Expansion::CapabilityGlobalStore
             | Expansion::Invocation3DIndex1D
+            | Expansion::PolicyMathF32(_)
+            | Expansion::GlobalBf16MatrixALoadZeroFilled
+            | Expansion::GlobalBf16MatrixBLoadZeroFilled
             | Expansion::Execution(_)
     );
-    if !is_capability_terminal {
+    let is_workgroup_conversion = if expansion == Expansion::ThreadIndexIntoDisjoint {
+        let producer = plan.terminal_producers().get(terminal as usize)
+            .ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint conversion owner"))?;
+        index_witness_mapping_v1::conversion_requires_root_v1(tcx, producer.instance)?
+    } else {
+        false
+    };
+    if !is_capability_terminal && !is_workgroup_conversion {
         return Ok(None);
     }
 
@@ -1913,7 +2076,7 @@ fn rust_workgroup_memory_brand_v1<'tcx>(
     };
     Some(RustWorkgroupMemoryBrandV1 {
         ty,
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2014,7 +2177,7 @@ fn rust_workgroup_capability_v1<'tcx>(
         return None;
     };
     Some(RustWorkgroupCapabilityV1 {
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2030,7 +2193,7 @@ fn rust_subgroup_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<RustSubgrou
     };
     Some(RustSubgroupV1 {
         width: rust_subgroup_width_v1(tcx, *width_ty)?,
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2061,7 +2224,7 @@ fn rust_workgroup_lds_v1<'tcx>(
         element: *element,
         elements,
         state: rust_execution_lds_state_v1(tcx, *state)?,
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2090,7 +2253,7 @@ fn rust_pending_async_copy_v1<'tcx>(
     Some(RustPendingAsyncCopyV1 {
         element: *element,
         elements,
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2106,7 +2269,7 @@ fn rust_workgroup_epoch_v1<'tcx>(
         return None;
     };
     Some(RustWorkgroupEpochV1 {
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2151,7 +2314,7 @@ fn rust_scoped_atomic_v1<'tcx>(
         element: *element,
         address_space,
         scope: *scope,
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -2180,7 +2343,7 @@ fn rust_matrix_capability_v1<'tcx>(
         ty,
         subgroup_brand: *subgroup_brand,
         width: rust_subgroup_width_v1(tcx, *width)?,
-        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        kernel_brand: rust_execution_brand_v1(tcx, *kernel_brand)?,
         epoch: *epoch,
     })
 }
@@ -3033,6 +3196,23 @@ fn execution_terminal_operation_v1<'tcx>(
     let type_id = |ty| semantic_type_for_rust_v1(tcx, types, ty);
 
     match terminal {
+        Terminal::Gfx950TransposeIssue | Terminal::Gfx950TransposeStageB4 | Terminal::Gfx950TransposeStageB8
+        | Terminal::Gfx950TransposePublish | Terminal::Gfx950TransposeReadB4 | Terminal::Gfx950TransposeReadB8 => {
+            gfx950_transpose_v1::operation(tcx, instance, terminal, abi, types, root, source_identity, kernel_contexts)
+        }
+        Terminal::SubgroupPartitionDerive
+        | Terminal::SubgroupPartitionReduceSumF32
+        | Terminal::SubgroupPartitionReduceMaxF32
+        | Terminal::SubgroupPartitionBroadcastF32 => {
+            subgroup_partition_v1::subgroup_partition_terminal_operation_v1(
+                tcx, instance, terminal, abi, types, Some(root), source_identity, kernel_contexts,
+            )
+        }
+        Terminal::NumericalPolicyIssue => {
+            numerical_policy_v1::numerical_policy_terminal_operation_v1(
+                tcx, instance, abi, types, Some(root), source_identity, kernel_contexts,
+            )
+        }
         Terminal::PrivateMemoryFromRawParts | Terminal::WorkgroupMemoryFromRawParts => {
             raw_memory_terminal_operation_v1(
                 tcx,
@@ -3124,9 +3304,11 @@ fn execution_terminal_operation_v1<'tcx>(
             execution_capability_operation_v1(
                 tcx,
                 abi,
-                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
-                    workgroup: abi.source_input_types()[0],
-                    witness: abi.source_output_type(),
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
+                    workgroup_reference: abi.source_input_types()[0],
+                    workgroup: pointer_pointee_v1(types, abi.source_input_types()[0])?,
+                    option: abi.source_output_type(),
+                    witness: option_payload_v1(types, abi.source_output_type())?,
                 },
                 root,
                 kernel_contexts,
@@ -3261,7 +3443,7 @@ fn execution_terminal_operation_v1<'tcx>(
                 .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view context"))?;
             let physical_element = rust_inputs
                 .get(1)
-                .and_then(|ty| rust_shared_slice_element_v1(*ty))
+                .and_then(|ty| rust_mutable_slice_element_v1(*ty))
                 .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view physical slice"))?;
             let view = rust_capability_memory_view_v1(tcx, rust_output)
                 .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view output"))?;
@@ -3339,34 +3521,13 @@ fn execution_terminal_operation_v1<'tcx>(
             )
         }
         Terminal::SubgroupDerive => {
-            let workgroup = rust_inputs
-                .first()
-                .and_then(|ty| rust_shared_reference_v1(*ty))
-                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
-                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup-derive workgroup"))?;
-            let subgroup = rust_subgroup_v1(tcx, rust_output)
-                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup-derive output"))?;
-            if !rust_same_kernel_brand_v1(workgroup.kernel_brand, subgroup.kernel_brand)
-                || workgroup.epoch != subgroup.epoch
-                || rust_execution_generic_width_v1(tcx, instance) != Some(subgroup.width)
-            {
-                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
-                    "subgroup derivation substituted width, workgroup brand, or epoch",
-                ));
-            }
-            execution_capability_operation_v1(
+            subgroup_partition_v1::workgroup_source_v1::subgroup_workgroup_reference_operation_v1(
                 tcx,
+                instance,
                 abi,
-                SemanticExecutionCapabilityOperationV1::SubgroupDerive {
-                    workgroup: abi.source_input_types()[0],
-                    subgroup: abi.source_output_type(),
-                    width: subgroup.width,
-                },
+                types,
                 root,
                 kernel_contexts,
-                workgroup.kernel_brand,
-                workgroup.epoch,
-                None,
                 source_identity,
             )
         }
@@ -4122,6 +4283,18 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled
+        | ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled => {
+            let role = if expansion == ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled {
+                SemanticMfmaOperandRoleV1::A
+            } else {
+                SemanticMfmaOperandRoleV1::B
+            };
+            global_bf16_matrix_v1::operation(
+                tcx, instance, role, abi, types, rust_inputs, rust_output,
+                capability_root, kernel_contexts, source_identity,
+            )
+        }
         ProductionTerminalExpansionV1::Execution(terminal)
             if !terminal.is_typed_global_memory() => execution_terminal_operation_v1(
             tcx,
@@ -4833,17 +5006,14 @@ fn terminal_operation_v1<'tcx>(
             Ok(SemanticCompilerIntrinsicOperationV1::ColdPath)
         }
         ProductionTerminalExpansionV1::MathContextCurrent
-            if inputs.is_empty()
-                && rust_inputs.is_empty()
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_output,
-                    TrustedDeviceItem::DeviceMath(
-                        dialect_amdgcn::DeviceMathDiagnosticItem::Context,
-                    ),
-                ) =>
+            if math_current_v1::matches_current(tcx, instance, abi, types) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::PolicyMathF32(function) => {
+            numerical_policy_v1::policy_math_terminal_operation_v1(
+                tcx, instance, function, abi, types, capability_root, source_identity, kernel_contexts,
+            )
         }
         ProductionTerminalExpansionV1::MathF32(function)
             if inputs.len() == function.arity() + 1
@@ -5210,16 +5380,8 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context: output })
         }
-        ProductionTerminalExpansionV1::WaveLaneCurrent
-            if inputs.is_empty()
-                && rust_inputs.is_empty()
-                && rust_wave_lane64_v1(tcx, rust_output) =>
-        {
-            Ok(SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent {
-                lane: output,
-                wave_width: 64,
-            })
-        }
+        ProductionTerminalExpansionV1::WaveLaneCurrent =>
+            typed_matrix_terminal_v1::operation(tcx, instance, expansion, abi, types),
         expansion @ (ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor)
             if inputs.len() == 5
@@ -5672,6 +5834,16 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
+        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero)
+            if numerical_policy_v1::defined_body_v1::matrix::abi::accumulator_zero::source_matches(
+                tcx, expansion, rust_inputs, rust_output,
+            ) =>
+        {
+            numerical_policy_v1::defined_body_v1::matrix::abi::accumulator_zero::operation(
+                tcx, instance, expansion, abi, types,
+            )
+        }
         ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
             if inputs.len() == 1
                 && rust_inputs.len() == 1
@@ -5704,193 +5876,18 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
-            if inputs.len() == 1
-                && rust_inputs.len() == 1
-                && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
-                && rust_f32_array_v1(tcx, rust_output, 4) =>
-        {
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
-                    fragment: inputs[0],
-                    values: output,
-                },
-            )
-        }
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues =>
+            typed_matrix_terminal_v1::operation(tcx, instance, expansion, abi, types),
         ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
-            if inputs.len() == 1
-                && rust_inputs.len() == 1
-                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
-                && rust_f32_array_v1(tcx, rust_output, 4) =>
-        {
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
-                    fragment: inputs[0],
-                    values: output,
-                },
-            )
-        }
-        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues
-            if inputs.len() == 1
-                && rust_inputs.len() == 1
-                && rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
-                && rust_f32_array_v1(tcx, rust_output, 4) =>
-        {
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
-                    fragment: inputs[0],
-                    values: output,
-                },
-            )
-        }
-        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
-            if inputs.len() == 4
-                && rust_inputs.len() == 4
-                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
-                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::DeviceMatrix)
-                })
-                && rust_mfma_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
-                && rust_mfma_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
-                && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
-                && rust_mfma_accumulator_contract_v1(tcx, rust_output).is_some() =>
-        {
-            let (Some(lhs), Some(rhs), Some(accumulator)) = (
-                rust_mfma_fragment_contract_v1(tcx, rust_inputs[1]),
-                rust_mfma_fragment_contract_v1(tcx, rust_inputs[2]),
-                rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]),
-            ) else {
-                return Err(body_owner_table_mismatch_v1("typed MFMA argument contract"));
-            };
-            if lhs.role != SemanticMfmaOperandRoleV1::A
-                || rhs.role != SemanticMfmaOperandRoleV1::B
-                || Some(accumulator) != rust_mfma_accumulator_contract_v1(tcx, rust_output)
-            {
-                return Err(body_owner_table_mismatch_v1("typed MFMA argument contract"));
-            }
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
-                    context: pointer_pointee_v1(types, inputs[0])?,
-                    lhs_fragment: inputs[1],
-                    rhs_fragment: inputs[2],
-                    accumulator_fragment: inputs[3],
-                    lhs,
-                    rhs,
-                    accumulator,
-                },
-            )
-        }
-        ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
-            if inputs.len() == 4
-                && rust_inputs.len() == 4
-                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
-                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
-                })
-                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
-                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
-                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
-                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output).is_some() =>
-        {
-            let (Some(lhs), Some(rhs), Some(accumulator)) = (
-                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]),
-                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[2]),
-                rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]),
-            ) else {
-                return Err(body_owner_table_mismatch_v1("gfx950 FP4 MFMA contract"));
-            };
-            if lhs.role != SemanticMfmaOperandRoleV1::A
-                || rhs.role != SemanticMfmaOperandRoleV1::B
-                || Some(accumulator) != rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output)
-            {
-                return Err(body_owner_table_mismatch_v1("gfx950 FP4 MFMA contract"));
-            }
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
-                    context: pointer_pointee_v1(types, inputs[0])?,
-                    lhs_fragment: inputs[1],
-                    rhs_fragment: inputs[2],
-                    accumulator_fragment: inputs[3],
-                    lhs,
-                    rhs,
-                    accumulator,
-                },
-            )
-        }
-        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
-            if inputs.len() == 4
-                && rust_inputs.len() == 4
-                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
-                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
-                })
-                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
-                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
-                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
-                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output).is_some() =>
-        {
-            let (Some(lhs), Some(rhs), Some(accumulator)) = (
-                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]),
-                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]),
-                rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]),
-            ) else {
-                return Err(body_owner_table_mismatch_v1(
-                    "gfx950 mixed FP4xFP8 MFMA contract",
-                ));
-            };
-            if lhs.role != SemanticMfmaOperandRoleV1::A
-                || rhs.role != SemanticMfmaOperandRoleV1::B
-                || Some(accumulator) != rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output)
-            {
-                return Err(body_owner_table_mismatch_v1(
-                    "gfx950 mixed FP4xFP8 MFMA contract",
-                ));
-            }
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
-                    context: pointer_pointee_v1(types, inputs[0])?,
-                    lhs_fragment: inputs[1],
-                    rhs_fragment: inputs[2],
-                    accumulator_fragment: inputs[3],
-                    lhs,
-                    rhs,
-                    accumulator,
-                },
-            )
-        }
-        ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
-            if inputs.len() == 4
-                && rust_inputs.len() == 4
-                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
-                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
-                })
-                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
-                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
-                && rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
-                && rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_output).is_some() =>
-        {
-            let (Some(lhs), Some(rhs), Some(accumulator)) = (
-                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[1]),
-                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]),
-                rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_inputs[3]),
-            ) else {
-                return Err(body_owner_table_mismatch_v1("gfx950 FP8 MFMA contract"));
-            };
-            if lhs.role != SemanticMfmaOperandRoleV1::A
-                || rhs.role != SemanticMfmaOperandRoleV1::B
-                || Some(accumulator) != rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_output)
-            {
-                return Err(body_owner_table_mismatch_v1("gfx950 FP8 MFMA contract"));
-            }
-            Ok(
-                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
-                    context: pointer_pointee_v1(types, inputs[0])?,
-                    lhs_fragment: inputs[1],
-                    rhs_fragment: inputs[2],
-                    accumulator_fragment: inputs[3],
-                    lhs,
-                    rhs,
-                    accumulator,
-                },
-            )
-        }
+        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues
+        | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate =>
+            numerical_policy_v1::defined_body_v1::matrix::abi::operation(
+                tcx, instance, expansion, abi, types,
+            ),
+        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate =>
+            typed_matrix_terminal_v1::operation(tcx, instance, expansion, abi, types),
         ProductionTerminalExpansionV1::ThreadIndex1d
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -5962,15 +5959,28 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
-            let (Some((input_space, input_brand)), Some((output_space, output_brand))) = (
-                rust_index_witness_contract_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex),
-                rust_index_witness_contract_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex),
-            ) else {
-                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            let contract = index_witness_mapping_v1::thread_into_disjoint_contract_v1(
+                tcx, rust_inputs[0], rust_output,
+            ).ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint mapping"))?;
+            let input_space = match contract.mapping {
+                index_witness_mapping_v1::RustIndexMappingV1::Invocation(space) => space,
+                index_witness_mapping_v1::RustIndexMappingV1::WorkgroupMemory(brand) => {
+                    let root = capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                        "workgroup index conversion lacks authenticated root custody",
+                    ))?;
+                    require_capability_memory_terminal_abi_v1(
+                        tcx, abi, types, rust_inputs, rust_output,
+                        &[SemanticSourceArgumentOwnershipV1::ByValue],
+                    )?;
+                    return execution_capability_operation_v1(
+                        tcx, abi,
+                        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
+                            input_witness: inputs[0], output_witness: output,
+                        },
+                        root, kernel_contexts, brand.kernel_brand, brand.epoch, None, source_identity,
+                    );
+                }
             };
-            if input_space != output_space || input_brand != output_brand {
-                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
-            }
             let raw_index = aggregate_field_v1(types, inputs[0], 0)?;
             Ok(
                 SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
@@ -6227,13 +6237,9 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::DisjointSliceGetMut
             if inputs.len() == 2 && rust_inputs.len() == 2 =>
         {
-            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
-                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
-            let rust_index =
-                rust_index_witness_space_v1(tcx, rust_inputs[1], TrustedDeviceItem::ThreadIndex);
-            if rust_slice.map(|(_, space)| space) != rust_index {
-                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
-            }
+            index_witness_mapping_v1::disjoint_slice_get_mut_contract_v1(
+                tcx, rust_inputs[0], rust_inputs[1],
+            ).ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint mapping"))?;
             let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
             let index_witness = inputs[1];
             let raw_index = aggregate_field_v1(types, index_witness, 0)?;
@@ -6461,7 +6467,6 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
-        | ProductionTerminalExpansionV1::WaveLaneCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
@@ -6482,24 +6487,17 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
-        | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
-        | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16
         | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
-        | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
-        | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
-        | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16
         | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero
-        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues
-        | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8
@@ -6511,7 +6509,11 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::ColdPath
         | ProductionTerminalExpansionV1::WorkgroupBarrier
         | ProductionTerminalExpansionV1::Execution(_) => {
-            Err(body_owner_table_mismatch_v1("terminal callable ABI"))
+            Err(ProductionSemanticImportErrorV1::TerminalAbiMismatch {
+                terminal: expansion,
+                source: tcx.def_path_str(instance.def_id()),
+                signature: format!("{signature:?}"),
+            })
         }
     }
 }
@@ -7866,12 +7868,18 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => 35,
         ProductionTerminalExpansionV1::MathContextCurrent => 36,
         ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
+        ProductionTerminalExpansionV1::PolicyMathF32(function) => match function {
+            fe2o3_kernel_ir::F32MathFunction::Abs => 193,
+            function => 180 + f32_math_tag_v1(function),
+        },
         ProductionTerminalExpansionV1::ColdPath => 50,
         ProductionTerminalExpansionV1::WaveLaneCurrent => 51,
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor => 52,
         ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => 53,
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => 54,
         ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => 55,
+        ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled => 194,
+        ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled => 195,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
         ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
@@ -7919,12 +7927,16 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
-            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 111,
+            TerminalIdentitySchemaV1::CombinedV3
+            | TerminalIdentitySchemaV1::CombinedV4
+            | TerminalIdentitySchemaV1::CombinedV5 => 111,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
-            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
+            TerminalIdentitySchemaV1::CombinedV3
+            | TerminalIdentitySchemaV1::CombinedV4
+            | TerminalIdentitySchemaV1::CombinedV5 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
@@ -7932,13 +7944,13 @@ const fn terminal_operation_tag_for_schema_v1(
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 106,
             TerminalIdentitySchemaV1::CombinedV3 => 113,
-            TerminalIdentitySchemaV1::CombinedV4 => 116,
+            TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 116,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 107,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
-            TerminalIdentitySchemaV1::CombinedV4 => 117,
+            TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 117,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
@@ -7948,7 +7960,9 @@ const fn terminal_operation_tag_for_schema_v1(
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
-                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 100,
+                TerminalIdentitySchemaV1::CombinedV3
+                | TerminalIdentitySchemaV1::CombinedV4
+                | TerminalIdentitySchemaV1::CombinedV5 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -7969,7 +7983,15 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite => 122,
         ProductionTerminalExpansionV1::CapabilityGlobalLoad => 123,
         ProductionTerminalExpansionV1::CapabilityGlobalStore => 124,
-        ProductionTerminalExpansionV1::Execution(terminal) => 125 + terminal.identity_tag(),
+        ProductionTerminalExpansionV1::Execution(terminal) => {
+            let tag = terminal.identity_tag();
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV5) && tag >= 42 {
+                // Tag 167 belongs to Invocation3DIndex1D in the published history.
+                126 + tag
+            } else {
+                125 + tag
+            }
+        }
     }
 }
 
@@ -8163,6 +8185,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn terminal_abi_rejection_identifies_operation_source_and_signature() {
+        let error = ProductionSemanticImportErrorV1::TerminalAbiMismatch {
+            terminal: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::MatrixMultiplyAccumulate,
+            source: "device::matrix::multiply_accumulate".to_owned(),
+            signature: "fn(&PolicyMatrixContext, A, B, C) -> C".to_owned(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "semantic importer rejected terminal callable ABI: terminal=MatrixMultiplyAccumulate source=device::matrix::multiply_accumulate signature=fn(&PolicyMatrixContext, A, B, C) -> C",
+        );
+    }
+
+    #[test]
     fn synthetic_backend_contract_produces_a_target_neutral_context_brand() {
         let contract = crate::production_backend_v1::ProductionBackendTargetContractV1::synthetic_test_contract_v1();
         let rustc_layout =
@@ -8194,12 +8229,14 @@ mod tests {
         AuthenticatedProductionKernelContextRootV1 {
             selected_root: SemanticFunctionIdV1::from_index(selected_root),
             root_function_identity: [root_identity; 32],
+            logical_helper_identity: [root_identity.wrapping_add(4); 32],
             kernel_binding: [root_identity.wrapping_add(1); 32],
             kernel_marker_identity: [root_identity.wrapping_add(2); 32],
             launch_brand_identity: [launch_identity; 32],
             issuance_identity: [root_identity.wrapping_add(3); 32],
             physical_argument_count,
             logical_argument_count,
+            entry_transfer: None,
         }
     }
 
@@ -8223,6 +8260,9 @@ mod tests {
             expected_roots: expected_roots.into_boxed_slice(),
             roots: roots.into_boxed_slice(),
             custody_identity,
+            transpose_source: None,
+            reusable_phase_source: None,
+            global_bf16_constructors: None,
         }
     }
 
@@ -8246,6 +8286,18 @@ mod tests {
             Err(ProductionSemanticImportErrorV1::KernelContextBinding(detail)) => detail,
             other => panic!("expected context custody rejection, found {other:?}"),
         }
+    }
+
+    #[test]
+    fn context_carriage_binds_the_authenticated_logical_helper() {
+        let root = SemanticFunctionIdV1::from_index(0);
+        let mut custody = context_custody(vec![root], vec![context_root(0, 10, 20, 3, 4)], 1, 2);
+        custody.validate_carriage([1; 32], [2; 32], &[context_observation(0, 10, 20)]).unwrap();
+        custody.roots[0].logical_helper_identity = [99; 32];
+        assert_eq!(
+            context_error(custody.validate_carriage([1; 32], [2; 32], &[context_observation(0, 10, 20)])),
+            "context custody identity is stale",
+        );
     }
 
     #[test]
@@ -8564,6 +8616,33 @@ mod tests {
                 "terminal disjoint-block component or output",
             );
         }
+    }
+
+    #[test]
+    fn terminal_identity_v5_separates_invocation_policy_and_partitions() {
+        use crate::production_semantic_terminal_v1::{
+            ProductionExecutionTerminalV1 as Terminal, ProductionTerminalExpansionV1 as Expansion,
+        };
+        let expansions = [
+            Expansion::Invocation3DIndex1D,
+            Expansion::Execution(Terminal::NumericalPolicyIssue),
+            Expansion::Execution(Terminal::SubgroupPartitionDerive),
+            Expansion::Execution(Terminal::SubgroupPartitionReduceSumF32),
+            Expansion::Execution(Terminal::SubgroupPartitionBroadcastF32),
+        ];
+        assert_eq!(
+            expansions.map(|op| terminal_operation_tag_for_schema_v1(op, TerminalIdentitySchemaV1::CombinedV4)),
+            [167, 167, 168, 169, 170],
+        );
+        let current = expansions.map(|op| terminal_operation_tag_for_schema_v1(op, TerminalIdentitySchemaV1::CombinedV5));
+        assert_eq!(current, [167, 168, 169, 170, 171]);
+        let maximum = terminal_operation_tag_for_schema_v1(
+            Expansion::Execution(Terminal::SubgroupPartitionReduceMaxF32), TerminalIdentitySchemaV1::CombinedV5,
+        );
+        assert_eq!(maximum, 172);
+        assert!(!current.contains(&maximum));
+        assert_eq!(current.into_iter().collect::<BTreeSet<_>>().len(), expansions.len());
+        assert_ne!(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4, PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V5);
     }
 
     #[test]

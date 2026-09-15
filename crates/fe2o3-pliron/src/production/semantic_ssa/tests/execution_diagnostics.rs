@@ -134,6 +134,12 @@ fn elided_ignored_nonunit_return_reports_exact_synthetic_transfer() {
     let rendered = error.to_string();
     assert!(rendered.contains("ReturnTransfer"));
     assert!(rendered.contains("execution-coordinate cause"));
+    assert!(rendered.contains("undefined-return detail:"));
+    assert!(rendered.contains("return_mode=Ignore"));
+    assert!(rendered.contains("shape=Aggregate(fields=0, prefix=[])"));
+    assert!(rendered.contains("source_bb0 statements=0 [ ] Return"));
+    assert!(rendered.contains("unwind=Unreachable"));
+    assert!(rendered.len() < 4096);
     assert!(std::error::Error::source(&error).is_some());
     let ProductionSemanticSsaErrorV1::ExpandedExecution {
         root,
@@ -142,6 +148,7 @@ fn elided_ignored_nonunit_return_reports_exact_synthetic_transfer() {
         source_statement: Some(SemanticExpandedStatementOriginV1::ReturnTransfer { callee }),
         source_terminator,
         source_local: Some(local),
+        return_transfer_diagnostic: Some(detail),
         error,
         ..
     } = error
@@ -156,6 +163,9 @@ fn elided_ignored_nonunit_return_reports_exact_synthetic_transfer() {
     assert_eq!(local.instance(), instance);
     assert_eq!(local.function(), function);
     assert_eq!(local.local(), SemanticLocalIdV1::from_index(0));
+    assert!(detail.contains("function=1 identity="));
+    assert!(detail.contains("local=0 role=Return source_output=1"));
+    assert!(detail.contains("dst_origin=Some("));
     assert!(source_terminator.is_none());
     let ProductionSemanticSsaErrorV1::Planner {
         error: SsaPlannerErrorV1::UndefinedAtUse {
@@ -260,7 +270,12 @@ fn unknown_execution_coordinates_never_acquire_source_origins() {
 fn event_origins_follow_actual_adapter_events_including_elided_borrows() {
     let (types, function, callables) = test_elided_grid_leader_case(0, true, false, false, false);
     let transparent = transparent_borrow_sites_v1(&function, &callables);
-    let mut origins = execution::ExecutionEventOriginsV1::default();
+    let mut origins = execution::ExecutionEventOriginsV1::for_function(
+        SemanticFunctionIdV1::from_index(0),
+        &function,
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
     let traced = adapter::semantic_function_ssa_input_with_event_origins_v1(
         &function,
         Some(&types),
@@ -335,7 +350,12 @@ fn event_origins_preserve_move_event_ranges_and_empty_statements() {
         ],
         SemanticTerminatorKindV1::Return,
     )]);
-    let mut origins = execution::ExecutionEventOriginsV1::default();
+    let mut origins = execution::ExecutionEventOriginsV1::for_function(
+        SemanticFunctionIdV1::from_index(0),
+        &function,
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
     let (input, _, _) = adapter::semantic_function_ssa_input_with_event_origins_v1(
         &function,
         None,

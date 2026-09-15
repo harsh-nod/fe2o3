@@ -1,0 +1,1018 @@
+--- a/crates/fe2o3-mir-model/src/semantic_mir_v1/subgroup_partition_v1.rs
++++ b/crates/fe2o3-mir-model/src/semantic_mir_v1/subgroup_partition_v1.rs
+@@ -29,6 +29,14 @@
+         width: u32,
+         partition_width: u32,
+     },
++    /// Ascending-XOR, stage-synchronous ordered comparison; equal/unordered keeps lhs bits.
++    ReduceMaxF32 {
++        partition_reference: SemanticTypeIdV1,
++        partition: SemanticTypeIdV1,
++        element: SemanticTypeIdV1,
++        width: u32,
++        partition_width: u32,
++    },
+ }
+ 
+ impl SemanticSubgroupPartitionOperationV1 {
+@@ -44,6 +52,11 @@
+                 partition_width,
+                 ..
+             }
++            | Self::ReduceMaxF32 {
++                width,
++                partition_width,
++                ..
++            }
+             | Self::BroadcastF32 {
+                 width,
+                 partition_width,
+@@ -75,6 +88,11 @@
+                 partition_reference,
+                 element,
+                 ..
++            }
++            | Self::ReduceMaxF32 {
++                partition_reference,
++                element,
++                ..
+             } => signature.matches(&[partition_reference, element], element),
+             Self::BroadcastF32 {
+                 partition_reference,
+@@ -105,6 +123,12 @@
+                 partition,
+                 element,
+                 ..
++            }
++            | Self::ReduceMaxF32 {
++                partition_reference,
++                partition,
++                element,
++                ..
+             } => [
+                 Some(partition_reference),
+                 Some(partition),
+@@ -133,7 +157,7 @@
+         let base = O::TARGET_SUPPORT | O::DYNAMIC_WORKGROUP_IDENTITY | O::LIFETIME_VALIDITY;
+         match self {
+             Self::Derive { .. } => base,
+-            Self::ReduceSumF32 { .. } => base | O::SUBGROUP_CONVERGENCE | O::EXACT_PARTICIPATION,
++            Self::ReduceSumF32 { .. } | Self::ReduceMaxF32 { .. } => base | O::SUBGROUP_CONVERGENCE | O::EXACT_PARTICIPATION,
+             Self::BroadcastF32 { .. } => {
+                 base | O::SUBGROUP_CONVERGENCE | O::EXACT_PARTICIPATION | O::BOUNDS
+             }
+@@ -145,6 +169,7 @@
+             Self::Derive { .. } => 0,
+             Self::ReduceSumF32 { .. } => 1,
+             Self::BroadcastF32 { .. } => 2,
++            Self::ReduceMaxF32 { .. } => 3,
+         };
+         writer.u8(tag)?;
+         for ty in self.type_references().into_iter().flatten() {
+--- a/crates/fe2o3-kernel-ir/src/execution_capability_v1/subgroup_partition.rs
++++ b/crates/fe2o3-kernel-ir/src/execution_capability_v1/subgroup_partition.rs
+@@ -5,6 +5,10 @@
+ #[cfg(test)]
+ mod tests;
+ 
++#[cfg(test)]
++#[path = "subgroup_partition/ordered_max_v1/tests.rs"]
++mod ordered_max_tests;
++
+ pub const MAX_SUBGROUP_PARTITION_PHYSICAL_WIDTH_V1: u32 = 64;
+ 
+ pub const fn valid_subgroup_partition_widths_v1(width: u32, partition: u32) -> bool {
+@@ -36,6 +40,14 @@
+         width: u32,
+         partition_width: u32,
+     },
++    /// Ascending-XOR, stage-synchronous ordered comparison; equal/unordered keeps lhs bits.
++    ReduceMaxF32 {
++        partition_reference: ExecutionTypeIdentityV1,
++        partition: ExecutionTypeIdentityV1,
++        element: ExecutionTypeIdentityV1,
++        width: u32,
++        partition_width: u32,
++    },
+ }
+ 
+ impl SubgroupPartitionOperationV1 {
+@@ -51,6 +63,11 @@
+                 partition_width,
+                 ..
+             }
++            | Self::ReduceMaxF32 {
++                width,
++                partition_width,
++                ..
++            }
+             | Self::BroadcastF32 {
+                 width,
+                 partition_width,
+@@ -78,6 +95,12 @@
+                 partition,
+                 element,
+                 ..
++            }
++            | Self::ReduceMaxF32 {
++                partition_reference,
++                partition,
++                element,
++                ..
+             } => vec![partition_reference, partition, element],
+             Self::BroadcastF32 {
+                 partition_reference,
+@@ -104,6 +127,11 @@
+                 partition_reference,
+                 element,
+                 ..
++            }
++            | Self::ReduceMaxF32 {
++                partition_reference,
++                element,
++                ..
+             } => matches(&[partition_reference, element], element),
+             Self::BroadcastF32 {
+                 partition_reference,
+@@ -116,7 +144,7 @@
+ 
+     pub const fn operand_count(self) -> usize {
+         match self {
+-            Self::Derive { .. } | Self::ReduceSumF32 { .. } => 2,
++            Self::Derive { .. } | Self::ReduceSumF32 { .. } | Self::ReduceMaxF32 { .. } => 2,
+             Self::BroadcastF32 { .. } => 3,
+         }
+     }
+@@ -126,7 +154,7 @@
+         let base = O::TARGET_SUPPORT | O::DYNAMIC_WORKGROUP_IDENTITY | O::LIFETIME_VALIDITY;
+         match self {
+             Self::Derive { .. } => base,
+-            Self::ReduceSumF32 { .. } => base | O::SUBGROUP_CONVERGENCE | O::EXACT_PARTICIPATION,
++            Self::ReduceSumF32 { .. } | Self::ReduceMaxF32 { .. } => base | O::SUBGROUP_CONVERGENCE | O::EXACT_PARTICIPATION,
+             Self::BroadcastF32 { .. } => {
+                 base | O::SUBGROUP_CONVERGENCE | O::EXACT_PARTICIPATION | O::BOUNDS
+             }
+@@ -156,6 +184,7 @@
+             Self::Derive { .. } => 0,
+             Self::ReduceSumF32 { .. } => 1,
+             Self::BroadcastF32 { .. } => 2,
++            Self::ReduceMaxF32 { .. } => 3,
+         });
+         for identity in self.type_references() {
+             writer.identity(identity);
+@@ -167,11 +196,11 @@
+ 
+     pub(super) fn decode(reader: &mut ContractReader<'_>) -> Option<Self> {
+         let tag = reader.u8()?;
+-        (tag <= 2).then_some(())?;
++        (tag <= 3).then_some(())?;
+         let receiver = reader.identity()?;
+         let receiver_type = reader.identity()?;
+         let third = reader.identity()?;
+-        let fourth = if tag == 1 {
++        let fourth = if matches!(tag, 1 | 3) {
+             None
+         } else {
+             Some(reader.identity()?)
+@@ -194,6 +223,13 @@
+                 width,
+                 partition_width,
+             },
++            3 => Self::ReduceMaxF32 {
++                partition_reference: receiver,
++                partition: receiver_type,
++                element: third,
++                width,
++                partition_width,
++            },
+             2 => Self::BroadcastF32 {
+                 partition_reference: receiver,
+                 partition: receiver_type,
+--- a/crates/fe2o3-mir-model/src/semantic_mir_v1.rs
++++ b/crates/fe2o3-mir-model/src/semantic_mir_v1.rs
+@@ -19320,7 +19320,8 @@
+     if request.callables.iter().any(|callable| matches!(callable,
+         SemanticCallableDeclV1::CompilerIntrinsic {
+             operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
+-        } if workgroup_memory_index_v1::is_scoped_index(contract.operation()))) {
++        } if workgroup_memory_index_v1::is_scoped_index(contract.operation())
++            || matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. })))) {
+         required = SemanticMirWireVersionV1::V22;
+     }
+     if request.callables.iter().any(|callable| matches!(callable,
+@@ -20739,7 +20740,8 @@
+             numerical_policy_math_v1::encode(writer, contract)
+         }
+         SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
+-            let required = if workgroup_memory_index_v1::is_scoped_index(contract.operation()) {
++            let required = if workgroup_memory_index_v1::is_scoped_index(contract.operation())
++                || matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. })) {
+                 SemanticMirWireVersionV1::V22
+             } else if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }) {
+                 SemanticMirWireVersionV1::V20
+--- a/crates/fe2o3-mir-model/src/semantic_mir_v1/canonical_decode.rs
++++ b/crates/fe2o3-mir-model/src/semantic_mir_v1/canonical_decode.rs
+@@ -2306,16 +2306,18 @@
+             },
+             24 => {
+                 use SemanticSubgroupPartitionOperationV1 as Partition;
+-                let tag = self.tagged("subgroup partition operation", 2)?;
++                let maximum = if self.wire_version >= SemanticMirWireVersionV1::V22 { 3 } else { 2 };
++                let tag = self.tagged("subgroup partition operation", maximum)?;
+                 let receiver = SemanticTypeIdV1(self.u32()?);
+                 let receiver_type = SemanticTypeIdV1(self.u32()?);
+                 let third = SemanticTypeIdV1(self.u32()?);
+-                let fourth = if tag != 1 { Some(SemanticTypeIdV1(self.u32()?)) } else { None };
++                let fourth = if matches!(tag, 0 | 2) { Some(SemanticTypeIdV1(self.u32()?)) } else { None };
+                 let width = self.u32()?;
+                 let partition_width = self.u32()?;
+                 SemanticExecutionCapabilityOperationV1::SubgroupPartition(match tag {
+                     0 => Partition::Derive { subgroup_reference: receiver, subgroup: receiver_type, epoch: third, partition: fourth.unwrap(), width, partition_width },
+                     1 => Partition::ReduceSumF32 { partition_reference: receiver, partition: receiver_type, element: third, width, partition_width },
++                    3 => Partition::ReduceMaxF32 { partition_reference: receiver, partition: receiver_type, element: third, width, partition_width },
+                     2 => Partition::BroadcastF32 { partition_reference: receiver, partition: receiver_type, element: third, source_lane: fourth.unwrap(), width, partition_width },
+                     _ => unreachable!("bounded partition tag"),
+                 })
+@@ -3258,6 +3260,7 @@
+     include!("workgroup_borrow_decode_tests.rs");
+     include!("defined_math_document_tests.rs");
+     include!("subgroup_partition_decode_tests.rs");
++    include!("subgroup_partition_ordered_max_decode_tests.rs");
+     include!("workgroup_memory_index_decode_tests.rs");
+ 
+     fn identity(tag: u8) -> [u8; 32] {
+@@ -5131,7 +5134,8 @@
+                     P::Derive { subgroup_reference, epoch, partition, .. } => {
+                         (vec![subgroup_reference, epoch], partition)
+                     }
+-                    P::ReduceSumF32 { partition_reference, element, .. } => {
++                    P::ReduceSumF32 { partition_reference, element, .. }
++                    | P::ReduceMaxF32 { partition_reference, element, .. } => {
+                         (vec![partition_reference, element], element)
+                     }
+                     P::BroadcastF32 { partition_reference, element, source_lane, .. } => {
+--- a/crates/fe2o3-kernel-ir/src/verify.rs
++++ b/crates/fe2o3-kernel-ir/src/verify.rs
+@@ -3808,6 +3808,7 @@
+                     ExecutionOperandContractV1::PartitionEpochBorrow,
+                 ],
+                 P::ReduceSumF32 { partition_reference, partition, .. }
++                | P::ReduceMaxF32 { partition_reference, partition, .. }
+                 | P::BroadcastF32 { partition_reference, partition, .. } => {
+                     let mut operands = vec![capability(execution_sources(partition_reference, partition), ExecutionRoleContractV1::SubgroupPartition { width, partition_width }), ExecutionOperandContractV1::Scalar(ScalarType::F32)];
+                     if matches!(operation, Op::SubgroupPartition(P::BroadcastF32 { .. })) { operands.push(ExecutionOperandContractV1::Scalar(ScalarType::U32)); }
+@@ -4237,7 +4238,7 @@
+             use crate::SubgroupPartitionOperationV1 as P;
+             match *partition {
+                 P::Derive { partition, width, partition_width, .. } => vec![capability(partition, ExecutionRoleContractV1::SubgroupPartition { width, partition_width })],
+-                P::ReduceSumF32 { .. } | P::BroadcastF32 { .. } => vec![ExecutionResultContractV1::Scalar(ScalarType::F32)],
++                P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => vec![ExecutionResultContractV1::Scalar(ScalarType::F32)],
+             }
+         }
+         Op::NumericalPolicyIssue { capability: output, policy, mode, .. } => vec![capability(
+--- a/crates/fe2o3-kernel-analysis/src/uniformity.rs
++++ b/crates/fe2o3-kernel-analysis/src/uniformity.rs
+@@ -1249,7 +1249,7 @@
+             match partition {
+                 P::Derive { .. } => operand_variation(0).join(operand_variation(1)),
+                 // Distinct partitions need not agree, nor need broadcast lane selectors.
+-                P::ReduceSumF32 { .. } | P::BroadcastF32 { .. } => Variation::Varying,
++                P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => Variation::Varying,
+             }
+         }
+         Capability::NumericalPolicyIssue { .. } => operand_variation(0),
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_execution_capability_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_execution_capability_01.rs
+@@ -641,7 +641,7 @@
+                         width: *width, partition_width: *partition_width,
+                     },
+                 )],
+-                P::ReduceSumF32 { .. } | P::BroadcastF32 { .. } => vec![Type::Scalar(ScalarType::F32)],
++                P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => vec![Type::Scalar(ScalarType::F32)],
+             }
+         }
+         Op::NumericalPolicyIssue { capability, policy, mode, .. } => vec![cap(
+--- a/crates/fe2o3-kernel-ir/src/verify/subgroup_partition.rs
++++ b/crates/fe2o3-kernel-ir/src/verify/subgroup_partition.rs
+@@ -27,6 +27,11 @@
+                 partition_width,
+                 ..
+             }
++            | P::ReduceMaxF32 {
++                width,
++                partition_width,
++                ..
++            }
+             | P::BroadcastF32 {
+                 width,
+                 partition_width,
+--- a/crates/fe2o3-pliron/src/production/semantic_ssa/adapter/borrowed_workgroup_v1.rs
++++ b/crates/fe2o3-pliron/src/production/semantic_ssa/adapter/borrowed_workgroup_v1.rs
+@@ -149,6 +149,11 @@
+                     partition,
+                     ..
+                 }
++                | P::ReduceMaxF32 {
++                    partition_reference,
++                    partition,
++                    ..
++                }
+                 | P::BroadcastF32 {
+                     partition_reference,
+                     partition,
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01/dispatch.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01/dispatch.rs
+@@ -214,7 +214,7 @@
+                 }
+                 Ok(Some(receipt))
+             }
+-            P::ReduceSumF32 { .. } | P::BroadcastF32 { .. } => {
++            P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => {
+                 let Some(receiver) = operands.first() else {
+                     return Err(reject("partition consumer lost its receiver"));
+                 };
+--- a/crates/fe2o3-amdgcn-model/src/lowering/operational_translation_v1.rs
++++ b/crates/fe2o3-amdgcn-model/src/lowering/operational_translation_v1.rs
+@@ -70,6 +70,8 @@
+     MemoryStore,
+     /// Derive subgroup authority while retaining a shared Workgroup source borrow.
+     SubgroupDeriveBorrowed,
++    /// Ordered-comparison maximum with the exact ascending-XOR partition tree.
++    SubgroupPartitionReduceMaxF32,
+ }
+ 
+ /// Closed KIR operation family awaiting complete operational translation evidence.
+@@ -280,6 +282,7 @@
+             match partition {
+                 P::Derive { .. } => Kind::SubgroupPartitionDerive,
+                 P::ReduceSumF32 { .. } => Kind::SubgroupPartitionReduceSumF32,
++                P::ReduceMaxF32 { .. } => Kind::SubgroupPartitionReduceMaxF32,
+                 P::BroadcastF32 { .. } => Kind::SubgroupPartitionBroadcastF32,
+             }
+         }
+--- a/crates/fe2o3-kir-sim/src/execution_capability_v13.rs
++++ b/crates/fe2o3-kir-sim/src/execution_capability_v13.rs
+@@ -51,6 +51,7 @@
+     NumericalPolicyIssue,
+     NumericalPolicyMath,
+     SubgroupDeriveBorrowed,
++    SubgroupPartitionReduceMaxF32,
+ }
+ 
+ impl SimulationExecutionCapabilityFamilyV13 {
+@@ -63,6 +64,7 @@
+                 match partition {
+                     P::Derive { .. } => Self::SubgroupPartitionDerive,
+                     P::ReduceSumF32 { .. } => Self::SubgroupPartitionReduceSumF32,
++                    P::ReduceMaxF32 { .. } => Self::SubgroupPartitionReduceMaxF32,
+                     P::BroadcastF32 { .. } => Self::SubgroupPartitionBroadcastF32,
+                 }
+             }
+--- a/crates/fe2o3-amdgcn-model/src/production_target_capabilities_v1.rs
++++ b/crates/fe2o3-amdgcn-model/src/production_target_capabilities_v1.rs
+@@ -1890,6 +1890,7 @@
+             let collective = match partition {
+                 P::Derive { .. } => None,
+                 P::ReduceSumF32 { .. } => Some(TargetCollectiveOperationV1::ReduceAdd),
++                P::ReduceMaxF32 { .. } => Some(TargetCollectiveOperationV1::ReduceMax),
+                 P::BroadcastF32 { .. } => Some(TargetCollectiveOperationV1::Broadcast),
+             };
+             if let Some(collective) = collective {
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/subgroup_partition_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/subgroup_partition_01.rs
+@@ -52,6 +52,29 @@
+                 partition_width,
+             }
+         }
++        M::ReduceMaxF32 {
++            partition_reference,
++            partition,
++            element,
++            width,
++            partition_width,
++        } => {
++            if execution_scalar_v1(types, element)? != ScalarType::F32 {
++                return Err(unsupported(
++                    0,
++                    None,
++                    None,
++                    "partition reduction requires exact f32",
++                ));
++            }
++            K::ReduceMaxF32 {
++                partition_reference: id(partition_reference)?,
++                partition: id(partition)?,
++                element: id(element)?,
++                width,
++                partition_width,
++            }
++        }
+         M::BroadcastF32 {
+             partition_reference,
+             partition,
+@@ -214,5 +237,7 @@
+     use super::*;
+     use fe2o3_mir_model::semantic_mir_v1::*;
+ 
++    include!("subgroup_partition_01/ordered_max_tests.rs");
++
+     fn types() -> Vec<SemanticTypeDeclV1> {
+         (0..7)
+--- a/crates/fe2o3-amdgcn-model/src/lowering/v13/subgroup_partition.rs
++++ b/crates/fe2o3-amdgcn-model/src/lowering/v13/subgroup_partition.rs
+@@ -105,6 +105,13 @@
+                 kind: WaveF32ReductionKindV1::Sum,
+             }
+         }
++        (P::ReduceMaxF32 { .. }, [(value, Type::Scalar(ScalarType::F32))]) => {
++            WaveOperationKind::ReduceF32 {
++                value: *value,
++                tile_width: partition_width,
++                kind: WaveF32ReductionKindV1::Maximum,
++            }
++        }
+         (
+             P::BroadcastF32 { .. },
+             [
+@@ -135,6 +142,10 @@
+ }
+ 
+ #[cfg(test)]
++#[path = "subgroup_partition/ordered_max_tests.rs"]
++mod ordered_max_tests;
++
++#[cfg(test)]
+ mod tests {
+     use super::*;
+     use fe2o3_kernel_ir::*;
+--- a/crates/fe2o3-kir-sim/src/execution_capability_v13/subgroup_partition.rs
++++ b/crates/fe2o3-kir-sim/src/execution_capability_v13/subgroup_partition.rs
+@@ -137,6 +137,13 @@
+                 kind: WaveF32ReductionKindV1::Sum,
+             }
+         }
++        (P::ReduceMaxF32 { .. }, [value]) if scalar(value, ScalarType::F32) => {
++            WaveOperationKind::ReduceF32 {
++                value: *value,
++                tile_width: partition_width,
++                kind: WaveF32ReductionKindV1::Maximum,
++            }
++        }
+         (P::BroadcastF32 { .. }, [value, lane])
+             if scalar(value, ScalarType::F32) && scalar(lane, ScalarType::U32) =>
+         {
+@@ -156,6 +163,10 @@
+ }
+ 
+ #[cfg(test)]
++#[path = "subgroup_partition/ordered_max_tests.rs"]
++mod ordered_max_tests;
++
++#[cfg(test)]
+ mod tests {
+     use super::*;
+     use fe2o3_kernel_ir::*;
+--- a/crates/fe2o3-kernel-analysis/src/execution_capability_semantics.rs
++++ b/crates/fe2o3-kernel-analysis/src/execution_capability_semantics.rs
+@@ -1236,6 +1236,7 @@
+                         | ExecutionCapabilityOperationV1::SubgroupCollective { .. }
+                         | ExecutionCapabilityOperationV1::SubgroupPartition(
+                             fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceSumF32 { .. }
++                            | fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceMaxF32 { .. }
+                             | fe2o3_kernel_ir::SubgroupPartitionOperationV1::BroadcastF32 { .. }
+                         )
+                 );
+@@ -1296,6 +1297,7 @@
+                     | ExecutionCapabilityOperationV1::SubgroupBarrier { width, .. }
+                     | ExecutionCapabilityOperationV1::SubgroupPartition(
+                         fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceSumF32 { width, .. }
++                        | fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceMaxF32 { width, .. }
+                         | fe2o3_kernel_ir::SubgroupPartitionOperationV1::BroadcastF32 { width, .. }
+                     ) => {
+                         match workgroup_size {
+@@ -1920,6 +1922,7 @@
+         | ExecutionCapabilityOperationV1::SubgroupCollective { .. }
+         | ExecutionCapabilityOperationV1::SubgroupPartition(
+             fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceSumF32 { .. }
++            | fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceMaxF32 { .. }
+             | fe2o3_kernel_ir::SubgroupPartitionOperationV1::BroadcastF32 { .. }
+         )
+         | ExecutionCapabilityOperationV1::MatrixAccess { .. } => {
+--- a/crates/rustc-codegen-fe2o3/src/production_semantic_terminal_v1.rs
++++ b/crates/rustc-codegen-fe2o3/src/production_semantic_terminal_v1.rs
+@@ -139,6 +139,7 @@
+     SubgroupPartitionDerive,
+     SubgroupPartitionReduceSumF32,
+     SubgroupPartitionBroadcastF32,
++    SubgroupPartitionReduceMaxF32,
+ }
+ 
+ impl ProductionExecutionTerminalV1 {
+@@ -153,7 +154,7 @@
+     }
+ 
+     #[cfg(test)]
+-    const ALL: [Self; 46] = [
++    const ALL: [Self; 47] = [
+         Self::BindAtomicView,
+         Self::WorkgroupDerive,
+         Self::SubgroupDerive,
+@@ -200,6 +201,7 @@
+         Self::SubgroupPartitionDerive,
+         Self::SubgroupPartitionReduceSumF32,
+         Self::SubgroupPartitionBroadcastF32,
++        Self::SubgroupPartitionReduceMaxF32,
+     ];
+ 
+     pub(crate) const fn identity_tag(self) -> u8 {
+@@ -250,6 +252,7 @@
+             Self::SubgroupPartitionDerive => 43,
+             Self::SubgroupPartitionReduceSumF32 => 44,
+             Self::SubgroupPartitionBroadcastF32 => 45,
++            Self::SubgroupPartitionReduceMaxF32 => 46,
+         }
+     }
+ 
+@@ -266,6 +269,7 @@
+             Self::BindAtomicView
+             | Self::SubgroupPartitionDerive
+             | Self::SubgroupPartitionReduceSumF32
++            | Self::SubgroupPartitionReduceMaxF32
+             | Self::SubgroupBarrier
+             | Self::WorkgroupFence
+             | Self::LdsPublish
+@@ -308,6 +312,7 @@
+         match self {
+             Self::SubgroupPartitionDerive => TrustedDeviceItem::Gfx950SubgroupWave16,
+             Self::SubgroupPartitionReduceSumF32 => TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16,
++            Self::SubgroupPartitionReduceMaxF32 => TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16,
+             Self::SubgroupPartitionBroadcastF32 => TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16,
+             Self::BindAtomicView => TrustedDeviceItem::CapabilityGlobalBindAtomic,
+             Self::WorkgroupDerive => TrustedDeviceItem::ExecutionWorkgroupCurrent,
+@@ -374,6 +379,7 @@
+         TrustedDeviceItem::ExecutionSubgroupCurrent => Terminal::SubgroupDerive,
+         TrustedDeviceItem::Gfx950SubgroupWave16 => Terminal::SubgroupPartitionDerive,
+         TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16 => Terminal::SubgroupPartitionReduceSumF32,
++        TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16 => Terminal::SubgroupPartitionReduceMaxF32,
+         TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16 => Terminal::SubgroupPartitionBroadcastF32,
+         TrustedDeviceItem::ExecutionLdsAllocate => Terminal::LdsAllocate,
+         TrustedDeviceItem::ExecutionWorkgroupBarrier => Terminal::WorkgroupBarrier,
+@@ -1307,7 +1313,7 @@
+         }
+         assert_eq!(
+             tags.into_iter().collect::<Vec<_>>(),
+-            (0_u8..46).collect::<Vec<_>>()
++            (0_u8..47).collect::<Vec<_>>()
+         );
+     }
+ 
+@@ -1318,6 +1324,7 @@
+             (Terminal::SubgroupPartitionDerive, 43, 2),
+             (Terminal::SubgroupPartitionReduceSumF32, 44, 2),
+             (Terminal::SubgroupPartitionBroadcastF32, 45, 3),
++            (Terminal::SubgroupPartitionReduceMaxF32, 46, 2),
+         ] {
+             assert_eq!(terminal.identity_tag(), tag);
+             assert_eq!(terminal.source_argument_count(), arguments);
+--- a/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1.rs
++++ b/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1.rs
+@@ -3241,6 +3241,7 @@
+     match terminal {
+         Terminal::SubgroupPartitionDerive
+         | Terminal::SubgroupPartitionReduceSumF32
++        | Terminal::SubgroupPartitionReduceMaxF32
+         | Terminal::SubgroupPartitionBroadcastF32 => {
+             subgroup_partition_v1::subgroup_partition_terminal_operation_v1(
+                 tcx, instance, terminal, abi, types, Some(root), source_identity, kernel_contexts,
+@@ -8831,6 +8832,11 @@
+         );
+         let current = expansions.map(|op| terminal_operation_tag_for_schema_v1(op, TerminalIdentitySchemaV1::CombinedV5));
+         assert_eq!(current, [167, 168, 169, 170, 171]);
++        let maximum = terminal_operation_tag_for_schema_v1(
++            Expansion::Execution(Terminal::SubgroupPartitionReduceMaxF32), TerminalIdentitySchemaV1::CombinedV5,
++        );
++        assert_eq!(maximum, 172);
++        assert!(!current.contains(&maximum));
+         assert_eq!(current.into_iter().collect::<BTreeSet<_>>().len(), expansions.len());
+         assert_ne!(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4, PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V5);
+     }
+--- a/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1.rs
++++ b/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1.rs
+@@ -46,6 +46,10 @@
+             TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16,
+             &[SharedBorrow, ByValue],
+         ),
++        T::SubgroupPartitionReduceMaxF32 => (
++            TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16,
++            &[SharedBorrow, ByValue],
++        ),
+         T::SubgroupPartitionBroadcastF32 => (
+             TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16,
+             &[SharedBorrow, ByValue, ByValue],
+@@ -140,7 +144,7 @@
+             }
+             Some(epoch_type)
+         }
+-        T::SubgroupPartitionReduceSumF32 | T::SubgroupPartitionBroadcastF32 => {
++        T::SubgroupPartitionReduceSumF32 | T::SubgroupPartitionReduceMaxF32 | T::SubgroupPartitionBroadcastF32 => {
+             if !matches!(inputs[1].kind(), TyKind::Float(FloatTy::F32)) || output != inputs[1] {
+                 return Err(rejected("subgroup partition exact f32 operands"));
+             }
+@@ -321,7 +325,7 @@
+                 partition_width,
+             }
+         }
+-        T::SubgroupPartitionReduceSumF32 | T::SubgroupPartitionBroadcastF32 => {
++        T::SubgroupPartitionReduceSumF32 | T::SubgroupPartitionReduceMaxF32 | T::SubgroupPartitionBroadcastF32 => {
+             if source.epoch_borrow.is_some()
+                 || output != inputs[1]
+                 || !scalar(inputs[1], SemanticScalarTypeV1::Float { bits: 32 })
+@@ -337,6 +341,11 @@
+                     width,
+                     partition_width,
+                 }
++            } else if terminal == T::SubgroupPartitionReduceMaxF32 {
++                Partition::ReduceMaxF32 {
++                    partition_reference: inputs[0], partition: receiver, element: inputs[1],
++                    width, partition_width,
++                }
+             } else {
+                 if !scalar(
+                     inputs[2],
+--- a/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/tests.rs
++++ b/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/tests.rs
+@@ -168,7 +168,7 @@
+                 Some(identity(3)),
+                 SemanticAbiPassModeV1::Ignore,
+             ),
+-            T::SubgroupPartitionReduceSumF32 => {
++            T::SubgroupPartitionReduceSumF32 | T::SubgroupPartitionReduceMaxF32 => {
+                 (vec![id(5), id(6)], id(6), identity(5), None, direct())
+             }
+             T::SubgroupPartitionBroadcastF32 => (
+@@ -228,10 +228,11 @@
+     }
+ }
+ 
+-const TERMINALS: [ProductionExecutionTerminalV1; 3] = [
++const TERMINALS: [ProductionExecutionTerminalV1; 4] = [
+     ProductionExecutionTerminalV1::SubgroupPartitionDerive,
+     ProductionExecutionTerminalV1::SubgroupPartitionReduceSumF32,
+     ProductionExecutionTerminalV1::SubgroupPartitionBroadcastF32,
++    ProductionExecutionTerminalV1::SubgroupPartitionReduceMaxF32,
+ ];
+ 
+ #[test]
+@@ -262,6 +263,7 @@
+             panic!("partition source must not become an argument-free collective");
+         };
+         assert_eq!(operation.widths(), (64, 16));
++        assert_eq!(matches!(operation, Partition::ReduceMaxF32 { .. }), terminal == ProductionExecutionTerminalV1::SubgroupPartitionReduceMaxF32);
+         assert_eq!(contract.obligations().bits(), operation.obligations());
+         match operation {
+             Partition::Derive {
+@@ -281,6 +283,9 @@
+                 partition,
+                 element,
+                 ..
++            }
++            | Partition::ReduceMaxF32 {
++                partition_reference, partition, element, ..
+             } => {
+                 assert_eq!(
+                     (partition_reference, partition, element),
+--- a/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/workgroup_source_v1/canonical_transport_v1/import_tests.rs
++++ b/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/workgroup_source_v1/canonical_transport_v1/import_tests.rs
+@@ -278,7 +278,8 @@
+                     assert_eq!(other.provenance(), provenance);
+                     let arity = match operation {
+                         SemanticSubgroupPartitionOperationV1::Derive { .. } => 2,
+-                        SemanticSubgroupPartitionOperationV1::ReduceSumF32 { .. } => 2,
++                        SemanticSubgroupPartitionOperationV1::ReduceSumF32 { .. }
++                        | SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. } => 2,
+                         SemanticSubgroupPartitionOperationV1::BroadcastF32 { .. } => 3,
+                     };
+                     assert_eq!(other.signature().arguments().count(), arity);
+@@ -392,5 +393,8 @@
+ #[path = "lowering_tests.rs"]
+ mod lowering_tests;
+ 
++#[path = "ordered_max_import_tests.rs"]
++mod ordered_max_import_tests;
++
+ const CRATE_NAME: &str = "workgroup_import_source";
+ const METADATA: &str = "fe2o3-workgroup-import-v20";
+@@ -417,7 +421,7 @@
+     path.canonicalize().unwrap()
+ }
+ 
+-fn run() {
++fn run(test: &str, callback: impl FnOnce(&[String])) {
+     use fe2o3_rustc_invocation::{
+         CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, derive_cargo_metadata_build_observation_v2,
+     };
+@@ -433,7 +437,6 @@
+         std::fs::write(scratch.path().join("Cargo.toml"), format!(
+             "[package]\nname = \"workgroup-import-source\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nfe2o3-device = {{ path = {device_source:?} }}\n"
+         )).unwrap();
+-        let test = "collector::production_importer_v1::subgroup_partition_v1::workgroup_source_v1::canonical_transport_v1::import_tests::workgroup_full_import_gfx950_v20";
+         let output = crate::process_execution::capture_output(
+             std::process::Command::new(std::env::current_exe().unwrap())
+                 .args([
+@@ -521,18 +524,20 @@
+         ),
+         "-".into(),
+     ];
+-    let mut probe = Probe { completed: false };
+-    rustc_driver::run_compiler(&args, &mut probe);
+-    assert!(
+-        probe.completed,
+-        "must complete canonical import and every custody check"
+-    );
++    callback(&args);
+ }
+ 
+ #[test]
+ #[ignore = "requires complete cached FE2O3_CORE_TRY_DEVICE_RMETA, HOST_DEPS, AMDGPU_CORE and AMDGPU_BUILTINS; never runs Cargo"]
+ fn workgroup_full_import_gfx950_v20() {
+-    run();
++    run("collector::production_importer_v1::subgroup_partition_v1::workgroup_source_v1::canonical_transport_v1::import_tests::workgroup_full_import_gfx950_v20", |args| {
++        let mut probe = Probe { completed: false };
++        rustc_driver::run_compiler(args, &mut probe);
++        assert!(
++            probe.completed,
++            "must complete canonical import and every custody check"
++        );
++    });
+ }
+ 
+ #[test]
+--- a/crates/rustc-codegen-fe2o3/src/rustc_semantic_plan_v1/tests.rs
++++ b/crates/rustc-codegen-fe2o3/src/rustc_semantic_plan_v1/tests.rs
+@@ -403,6 +403,12 @@
+             terminal_expansion_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::CombinedV5)
+         }).to_vec();
+         assert_eq!(tags, [167, 168, 169, 170, 171]);
++        let maximum = terminal_expansion_tag_for_schema_v1(
++            ProductionTerminalExpansionV1::Execution(Terminal::SubgroupPartitionReduceMaxF32),
++            TerminalIdentitySchemaV1::CombinedV5,
++        );
++        assert_eq!(maximum, 172);
++        tags.push(maximum);
+         let functions = [
+             Math::Sqrt, Math::FusedMultiplyAdd, Math::Floor, Math::Ceil,
+             Math::Truncate, Math::RoundTiesEven, Math::Sin, Math::Cos,
+--- a/crates/fe2o3-kernel-ir/tests/execution_capability_catalog_v13/extended.rs
++++ b/crates/fe2o3-kernel-ir/tests/execution_capability_catalog_v13/extended.rs
+@@ -57,6 +57,13 @@
+             width: 64,
+             partition_width: 8,
+         }),
++        Op::SubgroupPartition(Partition::ReduceMaxF32 {
++            partition_reference: id(0xd1),
++            partition: id(0xd0),
++            element: id(0xd2),
++            width: 64,
++            partition_width: 8,
++        }),
+         Op::SubgroupPartition(Partition::BroadcastF32 {
+             partition_reference: id(0xd1),
+             partition: id(0xd0),
+@@ -102,6 +109,11 @@
+             partition_reference,
+             element,
+             ..
++        }
++        | Partition::ReduceMaxF32 {
++            partition_reference,
++            element,
++            ..
+         } => (vec![partition_reference, element], element),
+         Partition::BroadcastF32 {
+             partition_reference,
+@@ -150,7 +162,7 @@
+             &Op::SubgroupPartition(operation),
+             epoch,
+         )],
+-        Partition::ReduceSumF32 { .. } | Partition::BroadcastF32 { .. } => vec![Type::F32],
++        Partition::ReduceSumF32 { .. } | Partition::ReduceMaxF32 { .. } | Partition::BroadcastF32 { .. } => vec![Type::F32],
+     }
+ }
+ 
+@@ -198,6 +210,12 @@
+                 partition_width,
+                 ..
+             }
++            | Partition::ReduceMaxF32 {
++                partition,
++                width,
++                partition_width,
++                ..
++            }
+             | Partition::BroadcastF32 {
+                 partition,
+                 width,
+@@ -283,7 +301,7 @@
+     ]);
+     match operation {
+         Partition::Derive { .. } => {}
+-        Partition::ReduceSumF32 { .. } | Partition::BroadcastF32 { .. } => {
++        Partition::ReduceSumF32 { .. } | Partition::ReduceMaxF32 { .. } | Partition::BroadcastF32 { .. } => {
+             assert_eq!(width, 64, "catalog partition width");
+             requirements.insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+         }
+@@ -311,6 +329,9 @@
+         | Partition::ReduceSumF32 {
+             partition_width, ..
+         }
++        | Partition::ReduceMaxF32 {
++            partition_width, ..
++        }
+         | Partition::BroadcastF32 {
+             partition_width, ..
+         } => *partition_width = 4,
+@@ -382,7 +403,7 @@
+ #[test]
+ fn nested_partition_and_policy_math_rosters_are_complete() {
+     let operations = catalog();
+-    assert_eq!(operations.len(), 20);
++    assert_eq!(operations.len(), 21);
+     let partitions = operations
+         .iter()
+         .filter_map(|op| {
+@@ -392,7 +413,7 @@
+             Some(*operation)
+         })
+         .collect::<Vec<_>>();
+-    assert_eq!(partitions.len(), 3);
++    assert_eq!(partitions.len(), 4);
+     assert!(
+         partitions
+             .iter()
+@@ -408,6 +429,7 @@
+             .iter()
+             .any(|op| matches!(op, Partition::BroadcastF32 { .. }))
+     );
++    assert!(partitions.iter().any(|op| matches!(op, Partition::ReduceMaxF32 { .. })));
+     let consumers = operations
+         .iter()
+         .filter_map(|op| {
+--- a/crates/fe2o3-kernel-ir/tests/execution_capability_catalog_v13.rs
++++ b/crates/fe2o3-kernel-ir/tests/execution_capability_catalog_v13.rs
+@@ -2041,7 +2041,7 @@
+     ]);
+     assert_eq!(actual, expected);
+     assert_eq!(actual.len(), 29);
+-    assert_eq!(catalog().len(), 45);
++    assert_eq!(catalog().len(), 46);
+ }
+ 
+ #[test]
+--- a/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/workgroup_source_v1/canonical_transport_v1/lowering_tests.rs
++++ b/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/workgroup_source_v1/canonical_transport_v1/lowering_tests.rs
+@@ -1,5 +1,8 @@
+-//! Real AMD lowering callback, using its live authenticated inputs.
++//! Canonical lowering checks using the real AMD callback's live authenticated inputs.
+ 
++#[path = "ordered_max_lowering_tests.rs"]
++mod ordered_max_lowering_tests;
++
+ use super::*;
+ use fe2o3_kernel_ir::{
+     ExecutionCapabilityOperationV1 as E, ExecutionCapabilityRoleV1 as R,
+@@ -29,7 +32,12 @@
+         &imported.semantic_mir,
+     )
+     .unwrap();
+-    let poisoned = killed_owner(&imported.semantic_mir);
++    let poisoned = killed_owner(&imported.semantic_mir, false);
++    let poisoned_maximum = imported.semantic_mir.callables().iter().any(|callable| matches!(callable,
++        SemanticCallableDeclV1::CompilerIntrinsic {
++            operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
++        } if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. }))
++    )).then(|| killed_owner(&imported.semantic_mir, true));
+     let semantic = ProductionSemanticMirOwnerV1::try_new(
+         imported.semantic_mir,
+         ProductionSemanticMirLimitsV1::default(),
+@@ -41,6 +49,7 @@
+     ssa.verify_replay().unwrap();
+     let failure_context = lowering_failure::FailureContext::capture(&ssa);
+     let whole_expansion = *ssa.execution_expansion().identity();
++    let expected_maximums = ordered_max_lowering_tests::source_sites(&ssa);
+     let inputs = typed_roots
+         .iter()
+         .map(|typed| {
+@@ -140,6 +149,7 @@
+     }
+     assert_eq!(derived.len(), 1);
+     reject_kir_mutations(module);
++    let maximum_sources = ordered_max_lowering_tests::check_module(module, expected_maximums);
+ 
+     // This is the original registered source's exact static geometry, not a replacement fixture.
+     let launch =
+@@ -155,6 +165,7 @@
+     assert!(amd.llvm_ir().contains("target-cpu\"=\"gfx950"));
+     assert!(!amd.grants_load_authority());
+     assert!(!amd.grants_launch_authority());
++    ordered_max_lowering_tests::check_amd(amd.llvm_ir(), maximum_sources.len());
+ 
+     use fe2o3_kir_sim::*;
+     let admitted = AdmittedSimulationModuleV1::admit_v13(
+@@ -163,6 +174,7 @@
+     )
+     .expect("simulator must validate before erasing borrowed logical tokens");
+     assert!(!admitted.grants_execution_authority());
++    ordered_max_lowering_tests::check_sim(&admitted, &maximum_sources);
+     let projection = admitted.capability_projection_receipt_v13().unwrap();
+     assert!(projection.coordinates().iter().any(|coordinate| {
+         coordinate.execution_family()
+@@ -193,20 +205,22 @@
+ 
+     // Negative-only replay of the observed source with an owner storage death.
+     // The context inputs are the original checked inputs, never manufactured identities.
+-    let poisoned =
+-        ProductionSemanticMirOwnerV1::try_new(poisoned, ProductionSemanticMirLimitsV1::default())
+-            .unwrap();
+-    let error = ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
+-        poisoned,
+-        ProductionSemanticKirLimitsV1::default(),
+-        negative_contexts,
+-    )
+-    .expect_err("retained references cannot outlive their actual Workgroup storage");
+-    let detail = format!("{error:?}").to_ascii_lowercase();
+-    assert!(
+-        detail.contains("loan") || detail.contains("storage") || detail.contains("killed"),
+-        "unexpected rejection: {error:?}"
+-    );
++    for poisoned in std::iter::once(poisoned).chain(poisoned_maximum) {
++        let poisoned =
++            ProductionSemanticMirOwnerV1::try_new(poisoned, ProductionSemanticMirLimitsV1::default())
++                .unwrap();
++        let error = ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
++            poisoned,
++            ProductionSemanticKirLimitsV1::default(),
++            negative_contexts.clone(),
++        )
++        .expect_err("retained references cannot outlive their actual Workgroup storage");
++        let detail = format!("{error:?}").to_ascii_lowercase();
++        assert!(
++            detail.contains("loan") || detail.contains("storage") || detail.contains("killed"),
++            "unexpected rejection: {error:?}"
++        );
++    }
+ }
+ 
+ fn reject_kir_mutations(module: &Module) {
+@@ -285,7 +299,7 @@
+     );
+ }
+ 
+-fn killed_owner(mir: &AdmittedInertSemanticMirV1) -> AdmittedInertSemanticMirV1 {
++fn killed_owner(mir: &AdmittedInertSemanticMirV1, before_maximum: bool) -> AdmittedInertSemanticMirV1 {
+     let owned = mir
+         .callables()
+         .iter()
+@@ -354,10 +368,14 @@
+             let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                 continue;
+             };
+-            if !matches!(&mir.callables()[call.callee().index() as usize], SemanticCallableDeclV1::CompilerIntrinsic {
++            let targeted = matches!(&mir.callables()[call.callee().index() as usize], SemanticCallableDeclV1::CompilerIntrinsic {
+                 operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
+-            } if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::Derive { .. })))
+-            {
++            } if match contract.operation() {
++                SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::Derive { .. }) => !before_maximum,
++                SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. }) => before_maximum,
++                _ => false,
++            });
++            if !targeted {
+                 continue;
+             }
+             let mut statements = block.statements().to_vec();
+@@ -396,9 +414,9 @@
+     }
+     assert_eq!(
+         deaths, 2,
+-        "mutate both observed partition call sites, not an unrelated local"
++        "mutate both observed targeted calls, not an unrelated local"
+     );
+-    InertSemanticMirRequestV1::new_with_callables(
++    let request = InertSemanticMirRequestV1::new_with_callables(
+         mir.target(),
+         mir.types().to_vec(),
+         mir.allocations().to_vec(),
+@@ -408,7 +426,11 @@
+         mir.callables().to_vec(),
+         mir.roots().to_vec(),
+     )
+-    .unwrap()
+-    .admit_exact_v20(SemanticMirLimitsV1::default())
++    .unwrap();
++    match mir.wire_version() {
++        SemanticMirWireVersionV1::V20 => request.admit_exact_v20(SemanticMirLimitsV1::default()),
++        SemanticMirWireVersionV1::V22 => request.admit_exact_v22(SemanticMirLimitsV1::default()),
++        version => panic!("unexpected actual source version: {version:?}"),
++    }
+     .unwrap()
+ }

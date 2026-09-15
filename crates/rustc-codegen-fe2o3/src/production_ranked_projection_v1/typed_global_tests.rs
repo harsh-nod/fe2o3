@@ -1,5 +1,24 @@
 // Projection-unit fixtures exercise the checked execution assignment shapes.
 // Production admission and final KIR correspondence remain separate gates.
+fn assert_global_access_rejected<T>(
+    result: Result<T, ProductionRankedProjectionErrorV1>,
+    expected: &'static str,
+) {
+    let Err(error) = result else { panic!("expected rejected global access") };
+    let ProductionRankedProjectionErrorV1::GlobalAccess { block, receiver, reason, .. } = &error else {
+        panic!("expected global access diagnostic, got {error}");
+    };
+    assert_eq!(*reason, expected);
+    assert!(receiver.is_some());
+    let message = error.to_string();
+    assert!(message.contains(&format!("bb{block} at ")));
+    let (primary, observation) = message
+        .split_once("; rejection-only Global origin observation: ")
+        .expect("rejected typed receiver retains a diagnostic observation");
+    assert!(primary.ends_with(expected));
+    assert!(observation.starts_with("Observation {"));
+}
+
 fn typed_global_projection_fixture_v1() -> (
     Vec<SemanticTypeDeclV1>,
     Vec<SemanticCallableDeclV1>,
@@ -735,9 +754,9 @@ fn typed_global_exclusive_projection_rejects_contract_and_provenance_substitutio
                 1 => *provenance = capability_index_provenance(Some(3)),
                 _ => *contract = SemanticCapabilityMemoryContractV1::global_read_only(),
             }
-            assert_incomplete(
+            assert_global_access_rejected(
                 project_capability_index_fixture(&types, &changed, &function),
-                "a typed global access lacks its exact bound allocation, borrow, or source contract",
+                ["intrinsic source identity differs", "root provenance differs", "memory contract differs"][axis],
             );
         }
     }
@@ -1069,9 +1088,9 @@ fn typed_global_projection_rejects_source_provenance_and_mapping_substitution() 
                 )
             }
         }
-        assert_incomplete(
+        assert_global_access_rejected(
             project_capability_index_fixture(&types, &changed, &function),
-            "a typed global access lacks its exact bound allocation, borrow, or source contract",
+            ["intrinsic source identity differs", "root provenance differs", "memory contract differs"][axis],
         );
     }
 }
@@ -1101,9 +1120,9 @@ fn typed_global_projection_does_not_invent_exclusive_root_ownership() {
         function.blocks().to_vec(),
     )
     .unwrap();
-    assert_incomplete(
+    assert_global_access_rejected(
         project_capability_index_fixture(&types, &callables, &changed),
-        "a typed global access lacks its exact bound allocation, borrow, or source contract",
+        "receiver binding is absent",
     );
 }
 
@@ -1146,9 +1165,9 @@ fn typed_global_projection_rejects_unbound_receiver_and_borrow_escalation() {
             blocks,
         )
         .unwrap();
-        assert_incomplete(
+        assert_global_access_rejected(
             project_capability_index_fixture(&types, &callables, &changed),
-            "a typed global access lacks its exact bound allocation, borrow, or source contract",
+            "receiver binding is absent",
         );
     }
     let mut state = HashMap::new();
@@ -1156,7 +1175,7 @@ fn typed_global_projection_rejects_unbound_receiver_and_borrow_escalation() {
         1,
         ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::KernelContext {
             context: CAP_INDEX_CONTEXT,
-            shared_borrow: false,
+            borrow: context_borrow_v1::Borrow::Owned,
         }),
     );
     assert_eq!(
@@ -1165,6 +1184,25 @@ fn typed_global_projection_rejects_unbound_receiver_and_borrow_escalation() {
             &typed_place(1, CAP_INDEX_CONTEXT),
             SemanticBorrowKindV1::Mutable
         ),
+        Some(ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::KernelContext {
+            context: CAP_INDEX_CONTEXT,
+            borrow: context_borrow_v1::Borrow::Exclusive,
+        }))
+    );
+    state.insert(
+        1,
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::KernelContext {
+            context: CAP_INDEX_CONTEXT,
+            borrow: context_borrow_v1::Borrow::Shared,
+        }),
+    );
+    let shared_pointee = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(1),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, CAP_INDEX_CONTEXT).unwrap()],
+        CAP_INDEX_CONTEXT,
+    ).unwrap();
+    assert_eq!(
+        capability_borrow_origin_v1(&state, &shared_pointee, SemanticBorrowKindV1::Mutable),
         None
     );
 }

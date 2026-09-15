@@ -20,7 +20,7 @@
       "status": "not-applicable"
     }
   },
-  "compilerInputContractSha256": "041fc1c495f2fdbb453f8632b9527897abc00e39e9da5ebc8d65c57b654f4eda",
+  "compilerInputContractSha256": "b96ed1ce0dd7261ed63e4de8a835d58e295a3ea2d3ee3d7d668fb627cfcab7d0",
   "expectedArguments": [
     {
       "bytes": "0x000000000000e04000000000000080bf0000803f0000c0400000803f000080bf000000400000a04000000040000080bf000040400000804000000000000080bf00008040000040400000803f000080bf0000a0400000004000000040000080bf0000c0400000803f00000000000080bf0000e040000000000000803f000080bf",
@@ -132,9 +132,9 @@
   },
   "productionExport": {
     "coordinates": null,
-    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
-    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
-    "diagnosticIdentitySha256": "69f3a067cf7b9480282bdff8bf93f7c1cf6777dc4835032a99dc12d88be00efa",
+    "diagnostic": "FE2O3-TUTORIAL-TXN-007: protected cargo-fe2o3 fixture build failed with exit status: 1: cargo fe2o3 authority release: cannot admit the fixed compiler-execution client profile: trusted client-profile directory \"profile root\" has invalid descriptor, type, owner, mode, or link state",
+    "diagnosticCode": "FE2O3-TUTORIAL-TXN-007",
+    "diagnosticIdentitySha256": "583d66aa5923de2f854f49cf98c5b7f27add9d8eb4552ef671b50a6f48de1bbb",
     "identityContract": {
       "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
       "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
@@ -145,7 +145,7 @@
       ],
       "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
     },
-    "stage": "exporter-build",
+    "stage": "protected-completion",
     "status": "blocked"
   },
   "request": {
@@ -221,6 +221,6 @@
     ]
   },
   "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
-  "sourceClosureSha256": "4824dcad396638ebe771e866a08e2625526d5c56473d1a9bb7c02e4e2b61e2a4",
+  "sourceClosureSha256": "0f8d6996809ce18cab5f7550726927daf36a728dce9c53795ed74c630b96f92e",
   "target": "gfx942"
 }

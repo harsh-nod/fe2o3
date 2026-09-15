@@ -356,9 +356,9 @@
   },
   "productionExport": {
     "coordinates": null,
-    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
-    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
-    "diagnosticIdentitySha256": "8769bf38b5bb2e9e2f9e44c3bf7d851f8cc2696d7d1103bc5e1d9a5da0a54950",
+    "diagnostic": "FE2O3-TUTORIAL-TXN-007: protected cargo-fe2o3 fixture build failed with exit status: 1: cargo fe2o3 authority release: cannot admit the fixed compiler-execution client profile: trusted client-profile directory \"profile root\" has invalid descriptor, type, owner, mode, or link state",
+    "diagnosticCode": "FE2O3-TUTORIAL-TXN-007",
+    "diagnosticIdentitySha256": "58e7cfe66229417ba77d5aa9a825eadda645ca8cdee7e67e6b5dcd0114f3c340",
     "identityContract": {
       "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
       "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
@@ -369,7 +369,7 @@
       ],
       "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
     },
-    "stage": "exporter-build",
+    "stage": "protected-completion",
     "status": "blocked"
   },
   "request": {

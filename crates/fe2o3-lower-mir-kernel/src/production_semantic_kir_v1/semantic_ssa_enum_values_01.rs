@@ -135,12 +135,23 @@ impl SemanticEnumAnalysisBudgetV1 {
     }
 }
 
+#[cfg(test)]
 fn analyze_promoted_enum_variants_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     control_flow_ssa: &SemanticControlFlowSsaPlanV1,
     max_analysis_work: usize,
     max_analysis_storage: usize,
+) -> Result<BTreeMap<(u32, SsaValueV1), u32>, ProductionSemanticKirErrorV1> {
+    let mut budget = SemanticEnumAnalysisBudgetV1::new(max_analysis_work, max_analysis_storage);
+    analyze_promoted_enum_variants_with_budget_v1(types, function, control_flow_ssa, &mut budget)
+}
+
+fn analyze_promoted_enum_variants_with_budget_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    control_flow_ssa: &SemanticControlFlowSsaPlanV1,
+    mut budget: &mut SemanticEnumAnalysisBudgetV1,
 ) -> Result<BTreeMap<(u32, SsaValueV1), u32>, ProductionSemanticKirErrorV1> {
     fn whole_local(operand: &SemanticOperandV1) -> Option<u32> {
         match operand {
@@ -193,7 +204,6 @@ fn analyze_promoted_enum_variants_v1(
         Ok(())
     }
 
-    let mut budget = SemanticEnumAnalysisBudgetV1::new(max_analysis_work, max_analysis_storage);
     let mut promoted_enums = BTreeSet::new();
     for (local, promoted) in &control_flow_ssa.promoted {
         budget.charge_work(1)?;
@@ -661,6 +671,9 @@ enum SemanticValueBindingV1 {
         producer_block: SemanticBlockIdV1,
     },
     MatrixContext,
+    // A leaf result is not authority and cannot be reconstructed from its type.
+    MatrixBridgeLeaf { result: fe2o3_pliron::ProductionSemanticMatrixBridgeResultV1 },
+    KernelMatrix(Box<kernel_matrix_derive_01::MatrixValueV1>),
     WaveLane {
         value: ValueId,
         wave: SemanticCurrentWaveV1,
@@ -766,6 +779,8 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
         SemanticValueBindingV1::WorkgroupLdsScope => "workgroup LDS scope",
         SemanticValueBindingV1::DynamicLds { .. } => "compiler-issued dynamic LDS",
         SemanticValueBindingV1::MatrixContext => "matrix context",
+        SemanticValueBindingV1::MatrixBridgeLeaf { .. } => "checked Matrix Current leaf",
+        SemanticValueBindingV1::KernelMatrix(_) => "checked root Matrix",
         SemanticValueBindingV1::WaveLane { .. } => "wave lane",
         SemanticValueBindingV1::MatrixFragment { .. } => "matrix fragment",
         SemanticValueBindingV1::AccumulatorFragment { .. } => "accumulator fragment",
@@ -783,6 +798,9 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
 }
 
 fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBindingV1) -> bool {
+    if exact_workgroup_index_enum_custody_v1(binding) {
+        return true;
+    }
     match binding {
         SemanticValueBindingV1::Unit
         | SemanticValueBindingV1::KernelContext { .. }
@@ -802,7 +820,9 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
             .iter()
             .all(semantic_binding_can_restore_from_unique_source_v1),
         SemanticValueBindingV1::Value { .. } => true,
-        SemanticValueBindingV1::Unmaterialized
+        SemanticValueBindingV1::MatrixBridgeLeaf { .. }
+        | SemanticValueBindingV1::KernelMatrix(_)
+        | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
         | SemanticValueBindingV1::OptionIndexWitness { .. }
@@ -853,6 +873,8 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
         | SemanticValueBindingV1::CollectiveContext
         | SemanticValueBindingV1::WorkgroupLdsScope
         | SemanticValueBindingV1::DynamicLds { .. }
+        | SemanticValueBindingV1::MatrixBridgeLeaf { .. }
+        | SemanticValueBindingV1::KernelMatrix(_)
         | SemanticValueBindingV1::MatrixContext
         | SemanticValueBindingV1::WaveLane { .. }
         | SemanticValueBindingV1::MatrixFragment { .. }
@@ -892,6 +914,8 @@ impl SemanticValueBindingV1 {
             | Self::CollectiveContext
             | Self::WorkgroupLdsScope
             | Self::DynamicLds { .. }
+            | Self::MatrixBridgeLeaf { .. }
+            | Self::KernelMatrix(_)
             | Self::MatrixContext
             | Self::MatrixFragment { .. }
             | Self::AccumulatorFragment { .. }
@@ -956,6 +980,8 @@ impl SemanticValueBindingV1 {
             | Self::CollectiveContext
             | Self::WorkgroupLdsScope
             | Self::DynamicLds { .. }
+            | Self::MatrixBridgeLeaf { .. }
+            | Self::KernelMatrix(_)
             | Self::MatrixContext
             | Self::WorkgroupPipeline { .. }
             | Self::OptionPointer { .. }

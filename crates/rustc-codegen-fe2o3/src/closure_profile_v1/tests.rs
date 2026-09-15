@@ -62,6 +62,11 @@ fn device_fn(seed: u32) -> u32 {
     closure(1).wrapping_add(closure(2))
 }
 
+fn unused_environment(seed: u32) -> u32 {
+    let _closure = move || seed;
+    seed
+}
+
 #[inline(never)]
 fn device_fn_mut(mut seed: u32) -> u32 {
     let mut closure = |delta: u32| {
@@ -107,6 +112,25 @@ fn ref_chain(mut seed: u32) -> u32 {
 #[inline(never)]
 fn constant_transport(value: u32) -> u32 {
     host_ref_apply(|delta| delta, value)
+}
+
+struct ZeroSizedToken;
+
+#[inline(never)]
+fn consume_zst(_token: ZeroSizedToken) -> u32 { 1 }
+
+#[inline(never)]
+fn constant_captured_zst(value: u32) -> u32 {
+    let token = ZeroSizedToken;
+    host_ref_apply(move |delta| consume_zst(token).wrapping_add(delta), value)
+}
+
+#[inline(never)]
+fn runtime_captured_zst(enabled: u32, value: u32) -> u32 {
+    let token = ZeroSizedToken;
+    host_ref_apply(move |delta| {
+        if enabled != 0 { consume_zst(token).wrapping_add(delta) } else { delta }
+    }, value)
 }
 
 #[inline(never)]
@@ -188,6 +212,7 @@ struct DriverResults {
     custody: CustodyResults,
     large_environment: ProductionClosureLoweringV1,
     capture_budget_errors: Vec<String>,
+    budget_profiles: BTreeMap<&'static str, Result<ProductionClosureLoweringV1, String>>,
 }
 
 #[derive(Default)]
@@ -378,9 +403,60 @@ impl Callbacks for CaptureCallbacks {
                 .to_string()
             })
             .collect(),
+            budget_profiles: budget_profiles(tcx),
         });
         Compilation::Stop
     }
+}
+
+fn budget_profiles(
+    tcx: TyCtxt<'_>,
+) -> BTreeMap<&'static str, Result<ProductionClosureLoweringV1, String>> {
+    [
+        "nine_environments",
+        "environment_limit",
+        "environment_limit_forwarded",
+        "too_many_environments",
+        "multi_capture_overflow",
+        "environment_bytes_limit",
+        "multi_environment_bytes_overflow",
+        "static_calls_limit",
+        "too_many_static_calls",
+        "mixed_calls_limit",
+        "too_many_mixed_calls",
+        "unused_environment",
+    ]
+    .into_iter()
+    .map(|name| {
+        let instance = Instance::mono(tcx, local_function(tcx, name));
+        let result = analyze_production_closures_v1(
+            tcx,
+            instance,
+            ClosureOriginPolicyV1::DeviceInternal,
+            "gfx950",
+        )
+        .map_err(|error| error.to_string());
+        if name == "environment_limit_forwarded" {
+            let plan = result
+                .as_ref()
+                .expect("64 environments plus value forwarding");
+            let last = plan.environments().last().unwrap().local;
+            let body = tcx.instance_mir(instance.def);
+            // Require a closure-typed alias after the last environment, not just
+            // a borrowed call receiver, to exercise the admission-order boundary.
+            assert!(
+                body.local_decls
+                    .iter_enumerated()
+                    .any(|(local, declaration)| {
+                        local.as_usize() > last
+                            && matches!(declaration.ty.kind(), TyKind::Closure(..))
+                            && plan.aliases.get(&local) == Some(&Local::from_usize(last))
+                    })
+            );
+        }
+        (name, result)
+    })
+    .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -553,13 +629,38 @@ impl CompilerFixture {
         let output = root.join("fixture.rmeta");
         fs::create_dir(&root).expect("create closure fixture directory");
         let mut text = FIXTURE_SOURCE.to_owned();
-        append_capture_fixture(&mut text, "large_environment", 1, 37);
-        append_capture_fixture(&mut text, "too_many_captures", 1, MAX_TOTAL_CAPTURES + 1);
-        append_capture_fixture(&mut text, "aggregate_captures", 2, 80);
+        append_capture_fixture(&mut text, "large_environment", 1, 37, false);
+        append_capture_fixture(&mut text, "too_many_captures", 1, 129, false);
+        append_capture_fixture(&mut text, "aggregate_captures", 2, 80, false);
         text.push_str(&format!(
             "fn oversized_environment(seed: u8) -> u8 {{ let values = [seed; {}]; let closure = move || values[0]; closure() }}",
             MAX_TOTAL_ENVIRONMENT_BYTES + 1,
         ));
+        for (name, closures, captures, forward_last) in [
+            ("nine_environments", 9, 1, false),
+            ("environment_limit", 64, 2, false),
+            ("environment_limit_forwarded", 64, 2, true),
+            ("too_many_environments", 65, 1, false),
+            ("multi_capture_overflow", 43, 3, false),
+        ] {
+            append_capture_fixture(&mut text, name, closures, captures, forward_last);
+        }
+        append_environment_bytes_fixture(&mut text, "environment_bytes_limit", &[32; 64]);
+        let mut overflowing_sizes = [32; 64];
+        overflowing_sizes[63] = 33;
+        append_environment_bytes_fixture(
+            &mut text,
+            "multi_environment_bytes_overflow",
+            &overflowing_sizes,
+        );
+        for (name, calls, transports) in [
+            ("static_calls_limit", 64, 0),
+            ("too_many_static_calls", 65, 0),
+            ("mixed_calls_limit", 32, 32),
+            ("too_many_mixed_calls", 32, 33),
+        ] {
+            append_call_budget_fixture(&mut text, name, calls, transports);
+        }
         fs::write(&source, text).expect("write closure fixture");
         Self {
             root,
@@ -569,7 +670,13 @@ impl CompilerFixture {
     }
 }
 
-fn append_capture_fixture(source: &mut String, name: &str, closures: usize, captures: usize) {
+fn append_capture_fixture(
+    source: &mut String,
+    name: &str,
+    closures: usize,
+    captures: usize,
+    forward_last: bool,
+) {
     use std::fmt::Write;
     write!(source, "\nfn {name}(seed: u32) -> u32 {{").unwrap();
     for capture in 0..captures {
@@ -582,11 +689,51 @@ fn append_capture_fixture(source: &mut String, name: &str, closures: usize, capt
         }
         source.push(';');
     }
-    source.push_str("closure0()");
-    for closure in 1..closures {
+    if forward_last {
+        write!(source, "let forwarded = closure{};", closures - 1).unwrap();
+    }
+    source.push_str("0u32");
+    for closure in 0..closures {
+        if forward_last && closure == closures - 1 {
+            source.push_str(".wrapping_add(forwarded())");
+        } else {
+            write!(source, ".wrapping_add(closure{closure}())").unwrap();
+        }
+    }
+    source.push_str("}\n");
+}
+
+fn append_environment_bytes_fixture(source: &mut String, name: &str, sizes: &[usize]) {
+    use std::fmt::Write;
+    write!(source, "\nfn {name}(seed: u8) -> u8 {{").unwrap();
+    for (closure, size) in sizes.iter().enumerate() {
+        write!(
+            source,
+            "let values{closure} = [seed; {size}]; let closure{closure} = move || values{closure}[0];"
+        )
+        .unwrap();
+    }
+    source.push_str("0u8");
+    for closure in 0..sizes.len() {
         write!(source, ".wrapping_add(closure{closure}())").unwrap();
     }
     source.push_str("}\n");
+}
+
+fn append_call_budget_fixture(source: &mut String, name: &str, calls: usize, transports: usize) {
+    use std::fmt::Write;
+    write!(
+        source,
+        "\nfn {name}(seed: u32) -> u32 {{ let closure = move |delta: u32| seed.wrapping_add(delta); let mut result = 0u32;"
+    )
+    .unwrap();
+    for _ in 0..calls {
+        source.push_str("result = result.wrapping_add(closure(1));");
+    }
+    for _ in 0..transports {
+        source.push_str("result = result.wrapping_add(host_ref_apply(closure, 1));");
+    }
+    source.push_str("result }\n");
 }
 
 impl Drop for CompilerFixture {
@@ -643,6 +790,8 @@ fn run_fixture(callbacks: &mut (dyn Callbacks + Send), mir_optimization: u8) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     rustc_driver::run_compiler(&args, callbacks);
 }
+
+include!("zst_capture_tests.rs");
 
 #[test]
 fn optimized_zero_capture_transport_has_exact_constant_custody() {
@@ -780,6 +929,164 @@ fn device_borrow_custody_rejects_missing_exported_and_mismatched_edges() {
         results
             .altered_root
             .contains("exact caller environment root")
+    );
+}
+
+#[test]
+fn more_than_eight_environments_have_distinct_static_calls() {
+    let results = compiler_results();
+    let plan = results.budget_profiles["nine_environments"]
+        .as_ref()
+        .unwrap();
+    assert_eq!(plan.environments().len(), 9);
+    assert_eq!(plan.calls().len(), 9);
+    assert_eq!(
+        plan.environments()
+            .iter()
+            .map(|environment| environment.definition_hash)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        9
+    );
+    for environment in plan.environments() {
+        assert_eq!(environment.captures.len(), 1);
+        assert!(plan.calls().iter().any(|call| {
+            call.closure_local == environment.local
+                && call.target_definition_hash == environment.definition_hash
+        }));
+    }
+}
+
+#[test]
+fn sixty_four_environments_and_forwarding_alias_fit_the_call_budget() {
+    let results = compiler_results();
+    for name in ["environment_limit", "environment_limit_forwarded"] {
+        let plan = results.budget_profiles[name].as_ref().unwrap();
+        assert_eq!(plan.environments().len(), 64, "{name}");
+        assert_eq!(plan.calls().len(), 64, "{name}");
+        assert!(plan.transport_calls().is_empty());
+        assert!(plan.higher_order_calls().is_empty());
+        assert_eq!(
+            plan.calls()
+                .iter()
+                .map(|call| call.closure_local)
+                .collect::<BTreeSet<_>>(),
+            plan.environments()
+                .iter()
+                .map(|environment| environment.local)
+                .collect::<BTreeSet<_>>()
+        );
+        assert_eq!(
+            plan.environments()
+                .iter()
+                .map(|environment| environment.captures.len())
+                .sum::<usize>(),
+            128
+        );
+        assert_eq!(
+            plan.environments()
+                .iter()
+                .map(|environment| environment.size_bytes)
+                .sum::<u64>(),
+            1024
+        );
+    }
+}
+
+#[test]
+fn sixty_five_environments_exceed_the_environment_budget() {
+    let results = compiler_results();
+    assert_eq!(
+        results.budget_profiles["too_many_environments"]
+            .as_ref()
+            .unwrap_err(),
+        "production closure profile rejected MIR: closure count exceeds 64"
+    );
+}
+
+#[test]
+fn multiple_environments_preserve_aggregate_storage_limits() {
+    let results = compiler_results();
+    let plan = results.budget_profiles["environment_bytes_limit"]
+        .as_ref()
+        .unwrap();
+    assert_eq!(plan.environments().len(), 64);
+    assert_eq!(plan.calls().len(), 64);
+    assert_eq!(
+        plan.environments()
+            .iter()
+            .map(|environment| environment.size_bytes)
+            .sum::<u64>(),
+        2048
+    );
+    assert!(
+        plan.environments()
+            .iter()
+            .all(|environment| { environment.captures.len() == 1 && environment.size_bytes == 32 })
+    );
+    for (name, diagnostic) in [
+        (
+            "multi_capture_overflow",
+            "per-function budget of 128 captures",
+        ),
+        (
+            "multi_environment_bytes_overflow",
+            "per-function environment budget of 2048 bytes",
+        ),
+    ] {
+        let error = results.budget_profiles[name].as_ref().unwrap_err();
+        assert!(error.contains(diagnostic), "{name}: {error}");
+    }
+}
+
+#[test]
+fn static_and_transport_calls_share_the_unchanged_total_budget() {
+    let results = compiler_results();
+    for (name, calls, transports) in [("static_calls_limit", 64, 0), ("mixed_calls_limit", 32, 32)]
+    {
+        let plan = results.budget_profiles[name].as_ref().unwrap();
+        assert_eq!(plan.environments().len(), 1);
+        assert_eq!(plan.calls().len(), calls);
+        assert_eq!(plan.transport_calls().len(), transports);
+        assert!(plan.higher_order_calls().is_empty());
+        assert!(plan.transport_calls().iter().all(|call| {
+            call.closure_custody == ClosureCustodyV1::EnvironmentLocal(plan.environments()[0].local)
+        }));
+    }
+    for name in ["too_many_static_calls", "too_many_mixed_calls"] {
+        assert_eq!(
+            results.budget_profiles[name].as_ref().unwrap_err(),
+            "production closure profile rejected MIR: closure call count exceeds 64",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn unused_environments_still_require_a_call() {
+    let results = compiler_results();
+    let error = results.budget_profiles["unused_environment"]
+        .as_ref()
+        .unwrap_err();
+    assert!(error.contains("invalid call count 0"), "{error}");
+}
+
+#[test]
+fn alias_traversal_is_bounded_at_sixty_four_edges() {
+    let root = Local::from_usize(1);
+    let roots = BTreeSet::from([root]);
+    let mut aliases = (2..=66)
+        .map(|local| (Local::from_usize(local), Local::from_usize(local - 1)))
+        .collect::<BTreeMap<_, _>>();
+    let boundary = Local::from_usize(65);
+    let beyond = Local::from_usize(66);
+    assert_eq!(resolve_alias_root(boundary, &roots, &aliases), Some(root));
+    assert_eq!(resolve_alias_root(beyond, &roots, &aliases), None);
+    aliases.insert(boundary, beyond);
+    assert_eq!(resolve_alias_root(boundary, &roots, &aliases), None);
+    assert_eq!(
+        resolve_alias_root(Local::from_usize(67), &roots, &aliases),
+        None
     );
 }
 

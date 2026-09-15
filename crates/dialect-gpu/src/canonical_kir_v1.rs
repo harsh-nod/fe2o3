@@ -8,6 +8,7 @@ use fe2o3_kernel_ir::{
     BasicBlock as KirBlock, BlockId, Function, InlineAssembly, MatrixOperationKind, MemoryEffect,
     Module, Operation as KirOperation, OperationKind, Signature, TargetCapability, Terminator,
     ValueId, WaveOperationKind, decode_module_v13, encode_module_v13,
+    CanonicalKernelIrVersionV1, decode_module_v14, encode_module_v14,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -35,6 +36,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{SynchronizationOpInterface, TargetNeutralGpuOpInterface};
 
+mod declared_v14;
+pub use declared_v14::PhaseValueTypeV14;
+
 const PAYLOAD_MODULE_ID: &str = "fe2o3.pliron.canonical-kir-payload.v1";
 const PAYLOAD_FUNCTION_ID: &str = "payload";
 const OPERATION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/PLIRON/CANONICAL-KIR-OP/V1\0";
@@ -57,6 +61,15 @@ impl CanonicalKirOperationAttr {
         Some(Self(StringAttr::new(encode_hex(&bytes))))
     }
 
+    pub fn new_declared(operation: &KirOperation, version: CanonicalKernelIrVersionV1) -> Option<Self> {
+        let bytes = encode_operation_declared(operation, version)?;
+        Some(Self(StringAttr::new(encode_hex(&bytes))))
+    }
+
+    pub fn operation_declared(&self, version: CanonicalKernelIrVersionV1) -> Option<KirOperation> {
+        decode_operation_declared(&decode_hex(self.0.as_str(), MAX_CANONICAL_KIR_OPERATION_BYTES_V1)?, version)
+    }
+
     pub fn operation(&self) -> Option<KirOperation> {
         decode_operation(&decode_hex(
             self.0.as_str(),
@@ -69,11 +82,20 @@ impl CanonicalKirOperationAttr {
         decode_operation(&bytes)?;
         Some(bytes)
     }
+
+    fn bytes_declared(&self, version: CanonicalKernelIrVersionV1) -> Option<Vec<u8>> {
+        let bytes = decode_hex(self.0.as_str(), MAX_CANONICAL_KIR_OPERATION_BYTES_V1)?;
+        decode_operation_declared(&bytes, version)?;
+        Some(bytes)
+    }
 }
 
 impl Verify for CanonicalKirOperationAttr {
     fn verify(&self, _context: &Context) -> Result<()> {
-        if self.bytes().is_none() {
+        let valid = decode_hex(self.0.as_str(), MAX_CANONICAL_KIR_OPERATION_BYTES_V1)
+            .and_then(|bytes| declared_v14::version(&bytes)
+                .and_then(|version| decode_operation_declared(&bytes, version))).is_some();
+        if !valid {
             return verify_err_noloc!(
                 "gpu canonical KIR operation payload is not canonical V1 data"
             );
@@ -346,6 +368,7 @@ pub enum CanonicalKirSafetyCarrierErrorV1 {
     NonSelfContainedInterface,
     MalformedCarrier(CanonicalKirSafetyFamilyV1),
     UnknownInterfaceImplementation,
+    UnsupportedDeclaredPhase,
 }
 
 impl core::fmt::Display for CanonicalKirSafetyCarrierErrorV1 {
@@ -359,6 +382,8 @@ impl core::fmt::Display for CanonicalKirSafetyCarrierErrorV1 {
             Self::UnknownInterfaceImplementation => formatter.write_str(
                 "canonical KIR safety interface implementation is absent from the closed family inventory",
             ),
+            Self::UnsupportedDeclaredPhase => formatter.write_str(
+                "canonical V14 phase has structural custody but no semantic proof adapter"),
         }
     }
 }
@@ -374,6 +399,10 @@ pub trait CanonicalKirOperationCarrier: Op + Verify {
 }
 
 fn encode_operation(operation: &KirOperation) -> Option<Vec<u8>> {
+    encode_operation_declared(operation, CanonicalKernelIrVersionV1::V13)
+}
+
+fn encode_operation_declared(operation: &KirOperation, version: CanonicalKernelIrVersionV1) -> Option<Vec<u8>> {
     if operation.kind.operands().len() > MAX_CANONICAL_KIR_OPERATION_OPERANDS_V1
         || operation.results.len() > MAX_CANONICAL_KIR_OPERATION_RESULTS_V1
     {
@@ -389,16 +418,31 @@ fn encode_operation(operation: &KirOperation) -> Option<Vec<u8>> {
         vec![],
         vec![block],
     ));
-    let bytes = encode_module_v13(&module).ok()?;
+    let bytes = match version {
+        CanonicalKernelIrVersionV1::V13 => encode_module_v13(&module).ok()?,
+        CanonicalKernelIrVersionV1::V14 => encode_module_v14(&module).ok()?,
+    };
     (bytes.len() <= MAX_CANONICAL_KIR_OPERATION_BYTES_V1).then_some(bytes)
 }
 
 fn decode_operation(bytes: &[u8]) -> Option<KirOperation> {
+    decode_operation_declared(bytes, CanonicalKernelIrVersionV1::V13)
+}
+
+fn decode_operation_declared(bytes: &[u8], version: CanonicalKernelIrVersionV1) -> Option<KirOperation> {
     if bytes.len() > MAX_CANONICAL_KIR_OPERATION_BYTES_V1 {
         return None;
     }
-    let module = decode_module_v13(bytes).ok()?;
-    if encode_module_v13(&module).ok()?.as_slice() != bytes
+    if declared_v14::version(bytes)? != version { return None; }
+    let module = match version {
+        CanonicalKernelIrVersionV1::V13 => decode_module_v13(bytes).ok()?,
+        CanonicalKernelIrVersionV1::V14 => decode_module_v14(bytes).ok()?,
+    };
+    let canonical = match version {
+        CanonicalKernelIrVersionV1::V13 => encode_module_v13(&module).ok()?,
+        CanonicalKernelIrVersionV1::V14 => encode_module_v14(&module).ok()?,
+    };
+    if canonical.as_slice() != bytes
         || module.id.as_str() != PAYLOAD_MODULE_ID
         || !module.kernels.is_empty()
         || !module.required_capabilities.is_empty()
@@ -555,7 +599,16 @@ fn operation_identity(
     graph_epoch: [u8; 32],
     coordinate: SourceCoordinateAttr,
 ) -> Option<[u8; 32]> {
-    let bytes = contract.bytes()?;
+    operation_identity_declared(contract, graph_epoch, coordinate, CanonicalKernelIrVersionV1::V13)
+}
+
+fn operation_identity_declared(
+    contract: &CanonicalKirOperationAttr,
+    graph_epoch: [u8; 32],
+    coordinate: SourceCoordinateAttr,
+    version: CanonicalKernelIrVersionV1,
+) -> Option<[u8; 32]> {
+    let bytes = contract.bytes_declared(version)?;
     let (function, block, operation) = coordinate.components();
     let mut digest = Sha256::new();
     digest.update(OPERATION_IDENTITY_DOMAIN_V1);
@@ -587,6 +640,7 @@ fn verify_operation_contract(
     graph_epoch: [u8; 32],
     coordinate: SourceCoordinateAttr,
     identity: [u8; 32],
+    version: CanonicalKernelIrVersionV1,
 ) -> Result<()> {
     let raw = op.get_operation().deref(context);
     if raw.get_num_operands() > MAX_CANONICAL_KIR_OPERATION_OPERANDS_V1
@@ -601,7 +655,7 @@ fn verify_operation_contract(
         );
     }
     let operation = contract
-        .operation()
+        .operation_declared(version)
         .ok_or_else(|| pliron::verify_error!(op.loc(context), "invalid canonical KIR payload"))?;
     if !expected(&operation.kind)
         || operation.kind.operands().len() != raw.get_num_operands()
@@ -612,14 +666,25 @@ fn verify_operation_contract(
             "canonical KIR payload family or SSA shape mismatch"
         );
     }
-    if identity != operation_identity(contract, graph_epoch, coordinate).unwrap_or([0; 32]) {
+    if identity != operation_identity_declared(contract, graph_epoch, coordinate, version).unwrap_or([0; 32]) {
         return verify_err!(op.loc(context), "canonical KIR operation identity mismatch");
+    }
+    if version == CanonicalKernelIrVersionV1::V14
+        && !declared_v14::valid_phase_ssa(context, &raw, &operation) {
+        return verify_err!(op.loc(context), "canonical phase SSA types or result relation changed");
     }
     Ok(())
 }
 
 macro_rules! canonical_operation {
+    ($name:ident, $op_name:literal, $matches:expr, [$($interface:ty),* $(,)?],
+     $contract_attr:ident, $epoch_attr:ident, $coordinate_attr:ident, $identity_attr:ident) => {
+        canonical_operation!(@declared CanonicalKernelIrVersionV1::V13,
+            $name, $op_name, $matches, [$($interface),*],
+            $contract_attr, $epoch_attr, $coordinate_attr, $identity_attr);
+    };
     (
+        @declared $version:expr,
         $name:ident,
         $op_name:literal,
         $matches:expr,
@@ -659,9 +724,9 @@ macro_rules! canonical_operation {
                 {
                     return None;
                 }
-                let payload = CanonicalKirOperationAttr::new(contract)?;
+                let payload = CanonicalKirOperationAttr::new_declared(contract, $version)?;
                 let epoch = graph_epoch.bytes()?;
-                let identity = operation_identity(&payload, epoch, coordinate)?;
+                let identity = operation_identity_declared(&payload, epoch, coordinate, $version)?;
                 let operation = Operation::new(
                     context,
                     Self::get_concrete_op_info(),
@@ -689,7 +754,7 @@ macro_rules! canonical_operation {
                     .deref(context)
                     .attributes
                     .get::<CanonicalKirOperationAttr>(&attr_key(stringify!($contract_attr)))?
-                    .operation()
+                    .operation_declared($version)
             }
 
             pub fn operands(&self, context: &Context) -> Vec<Value> {
@@ -758,6 +823,7 @@ macro_rules! canonical_operation {
                     graph_epoch,
                     coordinate,
                     identity,
+                    $version,
                 )
             }
         }
@@ -916,6 +982,18 @@ canonical_operation!(
     gpu_kir_inline_assembly_identity
 );
 
+canonical_operation!(
+    @declared CanonicalKernelIrVersionV1::V14,
+    ReusablePhaseOp,
+    "gpu.kir_reusable_phase_v14",
+    |kind: &OperationKind| matches!(kind, OperationKind::ReusablePhase(_)),
+    [TargetNeutralGpuOpInterface],
+    gpu_kir_phase_contract,
+    gpu_kir_phase_graph_epoch,
+    gpu_kir_phase_coordinate,
+    gpu_kir_phase_identity
+);
+
 pub fn remap_canonical_operation(
     mut operation: KirOperation,
     operands: &[ValueId],
@@ -926,6 +1004,9 @@ pub fn remap_canonical_operation(
     let mut next = operands.iter().copied();
     let take = |next: &mut std::iter::Copied<std::slice::Iter<'_, ValueId>>| next.next();
     match &mut operation.kind {
+        OperationKind::ReusablePhase(phase) => {
+            for operand in &mut phase.operands { *operand = take(&mut next)?; }
+        }
         OperationKind::Intrinsic(_)
         | OperationKind::Barrier(_)
         | OperationKind::Fence(_)
@@ -1562,6 +1643,9 @@ pub fn canonical_kir_safety_contract_v1(
     };
     if !interface.is_self_contained_canonical_kir() {
         return Err(CanonicalKirSafetyCarrierErrorV1::NonSelfContainedInterface);
+    }
+    if op.downcast_ref::<ReusablePhaseOp>().is_some() {
+        return Err(CanonicalKirSafetyCarrierErrorV1::UnsupportedDeclaredPhase);
     }
 
     macro_rules! operation_carrier {

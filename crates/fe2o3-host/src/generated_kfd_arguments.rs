@@ -306,6 +306,23 @@ pub struct GeneratedKfdReadWriteSlice<'allocation, T: GeneratedDeviceScalarV1> {
 pub type GeneratedHostReadWriteSliceV1<'allocation, T> = GeneratedKfdReadWriteSlice<'allocation, T>;
 
 impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadWriteSlice<'allocation, T> {
+    /// Binds a raw Rust mutable slice without asserting an invocation index space.
+    #[doc(hidden)]
+    pub fn bind_mutable_argument(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+        let input = plan
+            .bind_generated_address_free_mutable_slice_v1::<T>(
+                argument_index,
+                self.values.len(),
+                GeneratedArgumentBorrowV1::new(),
+            )
+            .map_err(GeneratedKfdArgumentError::Pack)?;
+        self.finish_binding(argument_index, input)
+    }
+
     pub fn new(values: &'allocation mut [T]) -> Self {
         Self {
             values,
@@ -381,6 +398,14 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadWriteSlice<'alloca
             ),
         }
         .map_err(GeneratedKfdArgumentError::Pack)?;
+        self.finish_binding(argument_index, input)
+    }
+
+    fn finish_binding(
+        self,
+        argument_index: usize,
+        input: GeneratedArgumentInputV1<'allocation>,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
         if self.values.is_empty() {
             return Ok(GeneratedKfdSliceBinding {
                 argument_index,
@@ -1398,6 +1423,68 @@ mod tests {
         }
         drop(packed);
         assert_eq!(output, [i32::MIN, i32::MIN]);
+    }
+
+    #[test]
+    fn mutable_slice_binding_retains_contents_extent_and_rejects_disjoint_substitution() {
+        let field = AbiField::new(
+            Name::new("values").unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            Mutability::Mutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            i32::mutable_slice_type_identity_v1(PointerWidth::Bits64),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        )
+        .unwrap();
+        let layout = AbiLayout::new(16, 8, PointerWidth::Bits64, vec![field.clone()]).unwrap();
+        let generated =
+            CompilerGeneratedArgumentLayoutV1::new(16, 8, PointerWidth::Bits64, vec![field])
+                .unwrap();
+        let mutable_plan =
+            validate_argument_packing(KernelId::from_bytes([0x42; 32]), &layout, &generated)
+                .unwrap();
+        let mut values = [17_i32, -9];
+        assert!(
+            GeneratedKfdReadWriteSlice::new(&mut values)
+                .bind_argument(&mutable_plan, 0)
+                .is_err()
+        );
+        assert!(
+            GeneratedKfdReadWriteSlice::new(&mut values)
+                .bind_mapped_argument(&mutable_plan, 0, RustDisjointIndexSpaceV1::Index1D)
+                .is_err()
+        );
+        assert!(
+            GeneratedKfdReadWriteSlice::new(&mut values)
+                .bind_mutable_argument(&plan(), 1)
+                .is_err()
+        );
+        let binding = GeneratedKfdReadWriteSlice::new(&mut values)
+            .bind_mutable_argument(&mutable_plan, 0)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(vec![], vec![binding])
+                .pack(&mutable_plan)
+                .unwrap();
+        assert_eq!(&packed.explicit_kernarg()[0..8], &[0; 8]);
+        assert_eq!(&packed.explicit_kernarg()[8..16], &2_u64.to_le_bytes());
+        assert_eq!(
+            packed.buffers()[0].access(),
+            Gfx942RuntimeBufferAccessV1::ReadWrite
+        );
+        assert_eq!(packed.buffers()[0].bytes(), encode_values(&[17_i32, -9]));
+        assert_eq!(
+            packed.pointer_fixups(),
+            [Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)]
+        );
     }
 
     #[test]

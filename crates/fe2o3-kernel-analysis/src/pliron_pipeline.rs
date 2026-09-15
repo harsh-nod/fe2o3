@@ -993,6 +993,70 @@ mod tests {
     }
 
     #[test]
+    fn restored_store_rhs_is_rejected_even_when_the_final_graph_matches() {
+        use dialect_kernel::{
+            AccessKindAttr, RankedAccessOp, RankedViewOp, RankedViewType, SemanticSymbolOp,
+        };
+        for remove_and_restore in [false, true] {
+            let context = &mut setup();
+            let (function, ret) = valid_tensor_function(context, "restored_rhs");
+            let ty = RankedViewType::new(context, 32, true, vec![8]).unwrap();
+            let view = RankedViewOp::new(context, ty, vec![]).unwrap();
+            let index = IndexConstantOp::new(context, 0);
+            let first = SemanticSymbolOp::new(context, 1);
+            let second = SemanticSymbolOp::new(context, 2);
+            let access = RankedAccessOp::new_value(
+                context,
+                AccessKindAttr::Write,
+                view.result(context),
+                vec![index.result(context)],
+                first.result(context),
+            )
+            .unwrap();
+            for op in [
+                view.get_operation(),
+                index.get_operation(),
+                first.get_operation(),
+                second.get_operation(),
+                access.get_operation(),
+            ] {
+                op.insert_before(context, ret.get_operation());
+            }
+            let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+            let mut preservation =
+                begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+            let error = preservation
+                .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                    if remove_and_restore {
+                        Operation::remove_operand(access.get_operation(), context, 2);
+                        Operation::insert_operand(
+                            access.get_operation(),
+                            context,
+                            2,
+                            first.result(context),
+                        );
+                    } else {
+                        Operation::replace_operand(
+                            access.get_operation(),
+                            context,
+                            2,
+                            second.result(context),
+                        );
+                        Operation::replace_operand(
+                            access.get_operation(),
+                            context,
+                            2,
+                            first.result(context),
+                        );
+                    }
+                    Ok::<_, ()>(())
+                })
+                .unwrap_err();
+            assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+        }
+    }
+
+    #[test]
     fn restored_attributes_and_operation_structure_are_rejected() {
         let context = &mut setup();
         let (function, ret) = valid_tensor_function(context, "restored_attribute");

@@ -46,6 +46,7 @@ mod ranked_memory;
 mod semantic_contract;
 mod semantic_typed_contract;
 mod semantic_typed_expression;
+mod semantic_typed_read_v1;
 mod tensor_layout;
 
 pub use pipeline_protocol::{
@@ -87,6 +88,10 @@ pub use semantic_typed_expression::{
     MAX_SEMANTIC_TYPED_EXPRESSION_DEPTH_V1, MAX_SEMANTIC_TYPED_EXPRESSION_NODES_V1,
     SemanticNumericalContractV1, SemanticTypedExpressionErrorV1, SemanticTypedExpressionStatsV1,
     SemanticTypedExpressionV1,
+};
+pub use semantic_typed_read_v1::{
+    SEMANTIC_TYPED_READ_SYMBOL_BASE_V1, SemanticReadOrderingAttr, SemanticReadVolatilityAttr,
+    SemanticTypedReadErrorV1, SemanticTypedReadOp,
 };
 pub use tensor_layout::{
     TensorConvergenceAttr, TensorDataflowRootsV1, TensorFragmentAttr, TensorInstructionAttr,
@@ -474,6 +479,9 @@ pub fn register_dialect(
     SemanticExpressionCommitmentOp::register(context);
     SemanticBinaryOp::register(context);
     SemanticTypedSymbolOp::register(context);
+    SemanticReadOrderingAttr::register(context);
+    SemanticReadVolatilityAttr::register(context);
+    SemanticTypedReadOp::register(context);
     TensorResultComponentOp::register(context);
     SemanticTypedConstantOp::register(context);
     SemanticTypedUnaryOp::register(context);

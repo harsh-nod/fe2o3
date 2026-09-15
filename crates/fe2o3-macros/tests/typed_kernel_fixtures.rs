@@ -202,6 +202,32 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
 }
 
 #[test]
+fn atomic_entry_host_custody_accepts_mutable_and_rejects_substitution() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
+    let target_dir = fixture_target(&manifest_dir, "generic-worker-v3-adapter-test");
+    let output = cargo_check(&manifest, &target_dir, Some("atomic_entry_pass"));
+    assert!(output.status.success(), "atomic host custody positive:\n{}", String::from_utf8_lossy(&output.stderr));
+    let cases: &[(&str, &[&str])] = &[
+        ("atomic_entry_readonly", &["expected", "GeneratedKfdReadWriteSlice", "found", "GeneratedKfdReadSlice"]),
+        ("atomic_entry_writeonly", &["expected", "GeneratedKfdReadWriteSlice", "found", "GeneratedKfdWriteSlice"]),
+        ("atomic_entry_alias", &["cannot borrow `*target` as mutable more than once"]),
+        ("atomic_entry_lifetime", &["lifetime may not live long enough"]),
+        ("atomic_entry_binder_readonly", &["mismatched types", "mutability"]),
+        ("atomic_entry_ordinary_load", &["no method named `load`", "CapabilityMemoryView"]),
+        ("atomic_entry_ordinary_store", &["no method named `store`", "CapabilityMemoryView"]),
+    ];
+    for (bin, expected) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for diagnostic in *expected {
+            assert!(stderr.contains(diagnostic), "{bin} missing {diagnostic:?}:\n{stderr}");
+        }
+    }
+}
+
+#[test]
 fn generated_worker_v3_adapter_compiles_downstream() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");

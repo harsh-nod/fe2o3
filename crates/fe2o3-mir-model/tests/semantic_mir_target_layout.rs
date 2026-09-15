@@ -167,12 +167,6 @@ fn backend_pointer_type(
         )
         .unwrap(),
     )
-    .with_rustc_abi_properties(
-        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
-            Some(SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()),
-            None,
-        ),
-    )
 }
 
 #[test]
@@ -206,6 +200,24 @@ fn gfx942_descriptor_pointer_profiles_are_exact() {
             )
             .admit(SemanticMirLimitsV1::default()),
         );
+    }
+}
+
+#[test]
+fn uninitialized_descriptor_scalars_reject_pointee_evidence() {
+    for (address_space, size_bytes, alignment_bytes) in [(7, 20, 32), (8, 16, 16), (9, 24, 32)] {
+        let ty = backend_pointer_type(1, address_space, size_bytes, alignment_bytes)
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                    Some(SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()),
+                    None,
+                ),
+            );
+        assert!(matches!(
+            request(vec![ty], SemanticTypeIdV1::from_index(0), direct(), vec![])
+                .admit(SemanticMirLimitsV1::default()),
+            Err(SemanticMirErrorV1::InvalidFunctionAbi)
+        ));
     }
 }
 

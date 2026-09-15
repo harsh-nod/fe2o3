@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr,
-};
+use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp,
     DYNAMIC_EXTENT, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
@@ -35,7 +33,7 @@ use crate::{
     ProductionW4AnalysisObligationKindV1, derive_pliron_ir_structural_identity_v1,
 };
 
-const RAW_IR_EVIDENCE_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-W4/RAW-IR-EVIDENCE/V1\0";
+const RAW_IR_EVIDENCE_DOMAIN_V2: &[u8] = b"FE2O3/PRODUCTION-W4/RAW-IR-EVIDENCE/V2\0";
 const RAW_GRID_SCOPE_V1: u8 = 3;
 const RAW_WORKGROUP_SCOPE_V1: u8 = 2;
 const RAW_SUBGROUP_SCOPE_V1: u8 = 1;
@@ -45,7 +43,7 @@ pub(super) const PRODUCTION_W4_RAW_IR_RECEIPT_COUNT_V1: usize = 9;
 
 pub(super) fn production_w4_raw_ir_checker_identity_v1() -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(RAW_IR_EVIDENCE_DOMAIN_V1);
+    digest.update(RAW_IR_EVIDENCE_DOMAIN_V2);
     digest.update(MAX_PRODUCTION_W4_RAW_IR_WORK_UNITS_V1.to_le_bytes());
     digest.update(MAX_PRODUCTION_W4_RAW_IR_VALUE_DEPTH_V1.to_le_bytes());
     digest.update(PRODUCTION_W4_RAW_IR_RECEIPT_COUNT_V1.to_le_bytes());
@@ -585,55 +583,23 @@ fn raw_layout(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
 ) -> Result<Option<RawLayoutV1>, ProductionW4RawIrFailureV1> {
-    let mut layout = None;
-    for site in inventory.operations() {
-        let operation = Operation::get_op_dyn(site.pointer(), context);
-        let Some(candidate) = operation.downcast_ref::<ExecutionLayoutOp>() else {
-            continue;
-        };
-        if layout.is_some() {
-            return Err(raw_ir_incomplete(
+    crate::pliron_invocation_trace::pliron_execution_layout_with_inventory_v1(context, inventory)
+        .map(|layout| {
+            layout.map(|layout| RawLayoutV1 {
+                global: layout.global_extents,
+                workgroup: layout.workgroup_extents,
+                subgroup: layout.subgroup_size,
+            })
+        })
+        .map_err(|failure| {
+            raw_ir_incomplete(
                 ProductionW4AnalysisObligationKindV1::Uniformity,
                 ProductionCapabilityAnalysisKindV1::Uniformity,
                 ProductionW4CounterexampleClassV1::Uniformity,
-                Some(raw_location(*site)),
-                "raw-IR function has more than one execution layout".to_owned(),
-            ));
-        }
-        let Some(global) = candidate.global_extents(context) else {
-            return Err(raw_ir_incomplete(
-                ProductionW4AnalysisObligationKindV1::Uniformity,
-                ProductionCapabilityAnalysisKindV1::Uniformity,
-                ProductionW4CounterexampleClassV1::Uniformity,
-                Some(raw_location(*site)),
-                "raw-IR execution layout has no global extents".to_owned(),
-            ));
-        };
-        let Some(workgroup) = candidate.workgroup_extents(context) else {
-            return Err(raw_ir_incomplete(
-                ProductionW4AnalysisObligationKindV1::Uniformity,
-                ProductionCapabilityAnalysisKindV1::Uniformity,
-                ProductionW4CounterexampleClassV1::Uniformity,
-                Some(raw_location(*site)),
-                "raw-IR execution layout has no workgroup extents".to_owned(),
-            ));
-        };
-        let Some(subgroup) = candidate.subgroup_size(context) else {
-            return Err(raw_ir_incomplete(
-                ProductionW4AnalysisObligationKindV1::Uniformity,
-                ProductionCapabilityAnalysisKindV1::Uniformity,
-                ProductionW4CounterexampleClassV1::Uniformity,
-                Some(raw_location(*site)),
-                "raw-IR execution layout has no subgroup size".to_owned(),
-            ));
-        };
-        layout = Some(RawLayoutV1 {
-            global,
-            workgroup,
-            subgroup,
-        });
-    }
-    Ok(layout)
+                None,
+                crate::pliron_barrier::trace_failure_detail(failure),
+            )
+        })
 }
 
 fn raw_value_scopes(
@@ -840,10 +806,11 @@ fn raw_branch_scope(
             return scope;
         }
         if ordered {
-            if let Some(scope) = raw_aligned_invocation_partition(context, lhs, rhs, layout) {
+            if let Some(scope) = raw_aligned_invocation_partition(context, lhs, rhs, true, layout) {
                 return scope;
             }
-            if let Some(scope) = raw_aligned_invocation_partition(context, rhs, lhs, layout) {
+            if let Some(scope) = raw_aligned_invocation_partition(context, rhs, lhs, false, layout)
+            {
                 return scope;
             }
         }
@@ -872,6 +839,7 @@ fn raw_aligned_invocation_partition(
     context: &Context,
     invocation: Value,
     boundary: Value,
+    invocation_is_lhs: bool,
     layout: Option<RawLayoutV1>,
 ) -> Option<RawControlScopeV1> {
     let invocation = invocation
@@ -885,8 +853,15 @@ fn raw_aligned_invocation_partition(
         .downcast_ref::<IndexConstantOp>()
         .and_then(|constant| constant.value(context))?;
     let layout = layout?;
-    let dimension = usize::try_from(invocation.dimension(context)?).ok()?;
-    let launch_extent = invocation.launch_extent(context)?;
+    let (dimension, launch_extent) = raw_invocation_extent(context, invocation, layout)?;
+    // Both predicate directions partition at the first index in the upper set.
+    let boundary = if invocation_is_lhs {
+        boundary
+    } else if let Some(split) = boundary.checked_add(1) {
+        split
+    } else {
+        return Some(RawControlScopeV1::GRID);
+    };
     if boundary == 0 || boundary >= launch_extent {
         return Some(RawControlScopeV1::GRID);
     }
@@ -897,13 +872,30 @@ fn raw_aligned_invocation_partition(
             known: true,
         });
     }
-    if dimension == 0 && layout.subgroup != 0 && boundary % layout.subgroup == 0 {
+    // Waves restart in every workgroup. Global alignment is sufficient only
+    // when each x row is an exact multiple of the subgroup width.
+    if dimension == 0
+        && layout.subgroup != 0
+        && workgroup.is_multiple_of(layout.subgroup)
+        && boundary.is_multiple_of(layout.subgroup)
+    {
         return Some(RawControlScopeV1 {
             rank: RAW_SUBGROUP_SCOPE_V1,
             known: true,
         });
     }
     Some(RawControlScopeV1::LANE)
+}
+
+fn raw_invocation_extent(
+    context: &Context,
+    invocation: InvocationIndexOp,
+    layout: RawLayoutV1,
+) -> Option<(usize, u64)> {
+    let dimension = usize::try_from(invocation.dimension(context)?).ok()?;
+    let declared = invocation.launch_extent(context)?;
+    let actual = *layout.global.get(dimension)?;
+    (actual != 0 && (declared == 0 || declared == actual)).then_some((dimension, actual))
 }
 
 fn raw_definite_divergent_controller(
@@ -957,8 +949,7 @@ fn raw_definite_divergent_controller(
                         raw_invocation_boundary(context, rhs, lhs)
                             .map(|(invocation, boundary)| (invocation, boundary, false))
                     })?;
-            let dimension = usize::try_from(invocation.dimension(context)?).ok()?;
-            let extent = invocation.launch_extent(context)?;
+            let (dimension, extent) = raw_invocation_extent(context, invocation, model.layout?)?;
             let split = if equality {
                 boundary
             } else if invocation_is_lhs {
@@ -1002,28 +993,46 @@ fn raw_partition_definitely_diverges(
     if extent == 0 || split >= extent || required == 0 {
         return false;
     }
-    if required == RAW_GRID_SCOPE_V1 {
-        return if equality { extent > 1 } else { split != 0 };
-    }
     let Some(layout) = layout else {
         return false;
     };
-    let width = if required == RAW_WORKGROUP_SCOPE_V1 {
-        layout.workgroup.get(dimension).copied().unwrap_or(0)
-    } else if required == RAW_SUBGROUP_SCOPE_V1 && dimension == 0 {
-        layout.subgroup
-    } else {
-        0
-    };
-    if width <= 1 {
+    if layout.global.contains(&0) {
         return false;
     }
-    let group_start = split / width * width;
-    let active = extent.saturating_sub(group_start).min(width);
+    if required == RAW_GRID_SCOPE_V1 {
+        return if equality { extent > 1 } else { split != 0 };
+    }
+    let Some(workgroup) = layout
+        .workgroup
+        .get(dimension)
+        .copied()
+        .filter(|width| *width != 0)
+    else {
+        return false;
+    };
+    // A concrete adjacent pair suffices. Subgroup IDs use local coordinates,
+    // since waves restart at each workgroup rather than at global multiples.
+    let same_scope = |first: u64, second: u64| {
+        if first / workgroup != second / workgroup {
+            return false;
+        }
+        match required {
+            RAW_WORKGROUP_SCOPE_V1 => true,
+            RAW_SUBGROUP_SCOPE_V1 if dimension == 0 && layout.subgroup != 0 => {
+                (first % workgroup) / layout.subgroup == (second % workgroup) / layout.subgroup
+            }
+            _ => false,
+        }
+    };
     if equality {
-        active > 1
+        [split.checked_sub(1), split.checked_add(1)]
+            .into_iter()
+            .flatten()
+            .any(|neighbor| neighbor < extent && same_scope(split, neighbor))
     } else {
-        split > group_start && split < group_start.saturating_add(active)
+        split
+            .checked_sub(1)
+            .is_some_and(|previous| same_scope(previous, split))
     }
 }
 
@@ -1222,7 +1231,7 @@ impl RawFactsV1 {
         pliron_epoch: u64,
     ) -> Self {
         let mut digest = Sha256::new();
-        digest.update(RAW_IR_EVIDENCE_DOMAIN_V1);
+        digest.update(RAW_IR_EVIDENCE_DOMAIN_V2);
         digest.update([independent_obligation_checker_tag(checker)]);
         digest.update(structural.sha256());
         digest.update(structural.canonical_bytes_len().to_le_bytes());
@@ -2359,7 +2368,7 @@ fn raw_semantic_expression_identity(
     let operation = value.defining_op()?;
     let dynamic = Operation::get_op_dyn(operation, context);
     let mut digest = Sha256::new();
-    digest.update(RAW_IR_EVIDENCE_DOMAIN_V1);
+    digest.update(RAW_IR_EVIDENCE_DOMAIN_V2);
     if let Some(symbol) = dynamic.downcast_ref::<SemanticSymbolOp>() {
         digest.update([0]);
         digest.update(symbol.symbol(context)?.to_le_bytes());
@@ -2501,15 +2510,17 @@ pub(super) fn derive_production_w4_raw_ir_evidence_v1(
         )
     })?;
     let observed_identity =
-        derive_pliron_ir_structural_identity_v1(context, live.pliron).map_err(|error| {
-            raw_ir_incomplete(
-                ProductionW4AnalysisObligationKindV1::Uniformity,
-                ProductionCapabilityAnalysisKindV1::Uniformity,
-                ProductionW4CounterexampleClassV1::Uniformity,
-                None,
-                error.to_string(),
-            )
-        })?;
+        derive_pliron_ir_structural_identity_v1(context, live.analysis_pliron()).map_err(
+            |error| {
+                raw_ir_incomplete(
+                    ProductionW4AnalysisObligationKindV1::Uniformity,
+                    ProductionCapabilityAnalysisKindV1::Uniformity,
+                    ProductionW4CounterexampleClassV1::Uniformity,
+                    None,
+                    error.to_string(),
+                )
+            },
+        )?;
     if observed_epoch != pliron_epoch || !structural.exactly_matches(&observed_identity) {
         return Err(raw_ir_incomplete(
             ProductionW4AnalysisObligationKindV1::Uniformity,
@@ -2519,7 +2530,7 @@ pub(super) fn derive_production_w4_raw_ir_evidence_v1(
             "raw-IR subject changed before independent obligation replay".to_owned(),
         ));
     }
-    let model = ProductionW4RawIrModelV1::build(context, live.pliron)?;
+    let model = ProductionW4RawIrModelV1::build(context, live.analysis_pliron())?;
     let receipts = vec![
         raw_uniformity_receipt(context, &model, structural, pliron_epoch)?,
         raw_memory_bounds_receipt(context, &model, structural, pliron_epoch)?,
@@ -2540,16 +2551,16 @@ pub(super) fn derive_production_w4_raw_ir_evidence_v1(
             error.to_string(),
         )
     })?;
-    let after_identity =
-        derive_pliron_ir_structural_identity_v1(context, live.pliron).map_err(|error| {
-            raw_ir_incomplete(
-                ProductionW4AnalysisObligationKindV1::Uniformity,
-                ProductionCapabilityAnalysisKindV1::Uniformity,
-                ProductionW4CounterexampleClassV1::Uniformity,
-                None,
-                error.to_string(),
-            )
-        })?;
+    let after_identity = derive_pliron_ir_structural_identity_v1(context, live.analysis_pliron())
+        .map_err(|error| {
+        raw_ir_incomplete(
+            ProductionW4AnalysisObligationKindV1::Uniformity,
+            ProductionCapabilityAnalysisKindV1::Uniformity,
+            ProductionW4CounterexampleClassV1::Uniformity,
+            None,
+            error.to_string(),
+        )
+    })?;
     if after_epoch != pliron_epoch || !structural.exactly_matches(&after_identity) {
         return Err(raw_ir_incomplete(
             ProductionW4AnalysisObligationKindV1::Uniformity,
@@ -2604,3 +2615,7 @@ fn raw_ir_incomplete(
         detail,
     }
 }
+
+#[cfg(test)]
+#[path = "production_w4_raw_ir_checker/partition_tests.rs"]
+mod partition_tests;

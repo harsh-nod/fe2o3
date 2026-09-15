@@ -1941,7 +1941,7 @@ impl CapabilityGlobalArgumentV1 {
                 #device_api::WriteOnlyDisjointSlice<#element, #index_space>
             )),
             CapabilityGlobalRoleV1::ExclusiveReadWrite => syn::parse2(quote!(&mut [#element])),
-            CapabilityGlobalRoleV1::AtomicReadWrite { .. } => syn::parse2(quote!(&[#element])),
+            CapabilityGlobalRoleV1::AtomicReadWrite { .. } => syn::parse2(quote!(&mut [#element])),
         }
     }
 
@@ -2656,6 +2656,7 @@ impl GeneralTypedScalarV1 {
 enum GeneralTypedArgumentKindV1 {
     Scalar(GeneralTypedScalarV1),
     SharedSlice(GeneralTypedScalarV1),
+    MutableSlice(GeneralTypedScalarV1),
     WriteOnlyExclusiveSlice(GeneralTypedScalarV1),
     ExclusiveSlice(GeneralTypedScalarV1),
     MappedWriteOnlyExclusiveSlice(GeneralTypedScalarV1, RustDisjointIndexSpaceV1),
@@ -2700,6 +2701,7 @@ fn generated_general_typed_arguments_v1(
                 argument,
                 GeneralTypedArgumentKindV1::SharedSlice(_)
                     | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MutableSlice(_)
                     | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
                     | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                     | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
@@ -2719,6 +2721,7 @@ fn generated_general_typed_arguments_v1(
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
             | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::MutableSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
             | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
             | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _) => {
@@ -2760,7 +2763,8 @@ fn generated_general_typed_arguments_v1(
                         >
                     )
                 }
-                GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+                GeneralTypedArgumentKindV1::MutableSlice(scalar)
+                | GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
                     let scalar = scalar.rust_type_tokens();
                     quote!(
                         __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
@@ -2792,6 +2796,7 @@ fn generated_general_typed_arguments_v1(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
                 | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MutableSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
                 | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                 | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
@@ -3049,6 +3054,9 @@ fn generated_worker_v3_adapter_v1(
         .zip(&fields)
         .enumerate()
         .filter_map(|(index, (argument, field))| match argument {
+            GeneralTypedArgumentKindV1::MutableSlice(_) => {
+                Some(quote!(self.#field.bind_mutable_argument(plan, #index)?))
+            }
             GeneralTypedArgumentKindV1::SharedSlice(_)
             | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
@@ -3089,7 +3097,8 @@ fn generated_worker_v3_adapter_v1(
                     >
                 ))
             }
-            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar)
+            GeneralTypedArgumentKindV1::MutableSlice(scalar)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(scalar)
             | GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
                 let scalar = scalar.rust_type_tokens();
                 Some(quote!(
@@ -3108,6 +3117,7 @@ fn generated_worker_v3_adapter_v1(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
                 | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MutableSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
                 | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                 | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
@@ -3188,6 +3198,7 @@ fn generated_safe_host_contract_v2(
                 argument,
                 GeneralTypedArgumentKindV1::SharedSlice(_)
                     | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MutableSlice(_)
                     | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
                     | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                     | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
@@ -3205,6 +3216,7 @@ fn generated_safe_host_contract_v2(
                 argument,
                 GeneralTypedArgumentKindV1::SharedSlice(_)
                     | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MutableSlice(_)
                     | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
                     | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
                     | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
@@ -3331,6 +3343,7 @@ fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_m
             .iter()
             .map(|kind| match kind {
                 GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MutableSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => quote!(None),
                 GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, index_space)
                 | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
@@ -3379,7 +3392,8 @@ fn generated_worker_v3_field_v1(
         GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar) => {
             (scalar, false, true, true, None)
         }
-        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, false, true, None),
+        GeneralTypedArgumentKindV1::MutableSlice(scalar)
+        | GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, false, true, None),
         GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, index_space) => {
             (scalar, false, true, true, Some(index_space))
         }
@@ -3410,6 +3424,11 @@ fn generated_worker_v3_field_v1(
             let type_identity = if shared {
                 quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
                 shared_slice_type_identity_v1(
+                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                ))
+            } else if matches!(kind, GeneralTypedArgumentKindV1::MutableSlice(_)) {
+                quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                mutable_slice_type_identity_v1(
                     __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
                 ))
             } else if let Some(index_space) = mapped_index_space {
@@ -3635,7 +3654,7 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         };
         let scalar = parse_general_typed_scalar_v1(&slice.elem).ok_or(())?;
         return Ok(if reference.mutability.is_some() {
-            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar)
+            GeneralTypedArgumentKindV1::MutableSlice(scalar)
         } else {
             GeneralTypedArgumentKindV1::SharedSlice(scalar)
         });
@@ -3933,6 +3952,7 @@ fn general_typed_abi_v1(
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.size_alignment(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
             | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::MutableSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
             | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
             | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _) => (
@@ -4015,7 +4035,8 @@ fn general_typed_abi_field_v1(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
-            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (
+            GeneralTypedArgumentKindV1::MutableSlice(scalar)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (
                 GENERAL_TYPED_SLICE_SIZE_V1,
                 GENERAL_TYPED_POINTER_ALIGNMENT_V1,
                 general_typed_slice_kind_v1(scalar),
@@ -4092,6 +4113,13 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
         GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
             general_typed_slice_type_identity_v1(scalar, true)
         }
+        GeneralTypedArgumentKindV1::MutableSlice(scalar) => {
+            general_typed_slice_type_identity_with_source_v1(
+                scalar,
+                true,
+                RustSourceTypeShapeV1::mutable_slice(scalar.rust_layout_scalar()),
+            )
+        }
         GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, index_space) => {
             general_typed_mapped_slice_type_identity_v1(scalar, index_space)
         }
@@ -4166,6 +4194,14 @@ fn general_typed_slice_type_identity_v1(
     } else {
         RustSourceTypeShapeV1::shared_slice(scalar.rust_layout_scalar())
     };
+    general_typed_slice_type_identity_with_source_v1(scalar, exclusive, source_type)
+}
+
+fn general_typed_slice_type_identity_with_source_v1(
+    scalar: GeneralTypedScalarV1,
+    exclusive: bool,
+    source_type: RustSourceTypeShapeV1,
+) -> TypeIdentity {
     let pointer = RustPhysicalComponentV1::new(
         0,
         GENERAL_TYPED_POINTER_SIZE_V1,
@@ -5459,6 +5495,10 @@ fn validate_lower_hex_256(value: &str, field: &str) -> syn::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "atomic_entry_custody_v1_tests.rs"]
+mod atomic_entry_custody_v1_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         DeviceFfiOptions, GeneralTypedArgumentKindV1, GeneralTypedScalarV1, KernelMode,
@@ -6438,7 +6478,7 @@ mod tests {
         assert!(
             expansion.contains("WriteOnlyDisjointSlice < u32 , Blocked < Index1D , 64 , 2 > >")
         );
-        assert!(expansion.contains("counters : & [u32]"));
+        assert!(expansion.contains("counters : & mut [u32]"));
         assert!(expansion.contains("KernelCapabilityBrand < '__fe2o3_kernel"));
         assert!(expansion.contains("CurrentTarget"));
         assert!(expansion.contains("RegisteredLaunch"));
@@ -6508,7 +6548,7 @@ mod tests {
         assert_eq!(entry.sig.inputs.len(), 1);
 
         let expansion = expansion.to_string();
-        assert!(expansion.contains("counters : & [u32]"));
+        assert!(expansion.contains("counters : & mut [u32]"));
         assert!(expansion.contains("AtomicReadWrite < SystemScope >"));
         assert!(expansion.contains("__compiler_bind_atomic"));
         assert!(expansion.contains("KernelCapabilityBrand < '__fe2o3_kernel"));
@@ -7548,6 +7588,49 @@ mod tests {
         assert_eq!(model.launch.max_grid().x(), u32::MAX);
         assert_eq!(model.launch.max_grid().y(), 1);
         assert_eq!(model.launch.max_grid().z(), 1);
+    }
+
+    #[test]
+    fn mutable_slice_model_identity_and_host_binding_are_distinct_from_disjoint() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let mutable: ItemFn = parse_quote!(
+            pub fn update(values: &mut [i32]) {}
+        );
+        let disjoint: ItemFn = parse_quote!(
+            pub fn update(values: fe2o3_device::DisjointSlice<i32>) {}
+        );
+        let mapped: ItemFn = parse_quote!(
+            pub fn update(values: fe2o3_device::DisjointSlice<i32, fe2o3_device::GridExclusive>) {}
+        );
+        let mutable_model =
+            model_general_typed_signature_v1(&mutable, &options, [0x41; 32]).unwrap();
+        assert_eq!(
+            mutable_model.arguments,
+            [GeneralTypedArgumentKindV1::MutableSlice(
+                GeneralTypedScalarV1::I32
+            )]
+        );
+        let field = &mutable_model.abi.fields()[0];
+        assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
+        assert_eq!(field.access(), Access::ReadWrite);
+        assert_eq!(field.alias_class(), AliasClass::Exclusive);
+        let expanded = super::generated_worker_v3_adapter_v1(&mutable, &mutable_model);
+        assert!(expanded.to_string().contains("bind_mutable_argument"));
+        let fields = super::generated_worker_v3_layout_v1(&mutable_model).to_string();
+        assert!(fields.contains("mutable_slice_type_identity_v1"));
+        assert!(!fields.contains("disjoint_slice_type_identity"));
+        for input in [disjoint, mapped] {
+            let model = model_general_typed_signature_v1(&input, &options, [0x41; 32]).unwrap();
+            assert_eq!(mutable_model.abi.size(), model.abi.size());
+            assert_eq!(mutable_model.abi.alignment(), model.abi.alignment());
+            assert_ne!(field.type_identity(), model.abi.fields()[0].type_identity());
+            assert_ne!(
+                mutable_model.generated_host_contract_identity,
+                model.generated_host_contract_identity
+            );
+            let expansion = super::generated_worker_v3_adapter_v1(&input, &model).to_string();
+            assert!(!expansion.contains("bind_mutable_argument"));
+        }
     }
 
     #[test]

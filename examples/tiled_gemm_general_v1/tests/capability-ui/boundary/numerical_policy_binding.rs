@@ -1,8 +1,16 @@
-// expected-boundary: FE2O3-CAP-GEMM matrix numerical policy needs a typed source owner
-use fe2o3_device::MatrixCapability;
+// expected-rejection: FE2O3-CAP-GEMM missing-policy-owner
+#![no_std]
 
-enum StrictIeee {}
+#[cfg(not(target_arch = "amdgpu"))]
+compile_error!("GEMM device UI must compile the actual AMD target");
 
-fn missing_policy_owner<Brand>(matrix: &MatrixCapability<Brand>) {
-    let _ = matrix.with_numerical_policy::<StrictIeee>();
+use fe2o3_device::{
+    CurrentTarget, KernelCapabilityBrand, MatrixCapability, RegisteredLaunch, StrictIeee,
+};
+
+enum Kernel {}
+type Brand<'kernel> = KernelCapabilityBrand<'kernel, Kernel, CurrentTarget, RegisteredLaunch>;
+
+fn missing_policy_owner<'kernel>(matrix: &MatrixCapability<Brand<'kernel>>) {
+    let _ = matrix.with_numerical_policy::<Brand<'kernel>, StrictIeee>();
 }

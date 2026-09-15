@@ -36,19 +36,41 @@ use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
 mod core_checked_mul_v1;
+mod core_bool_v1;
+mod core_identity_v1;
+mod core_mem_drop_v1;
 mod core_option_v1;
+mod core_option_compare_v1;
+mod core_option_zip_v1;
+mod core_primitive_value_v1;
+mod core_result_map_v1;
+mod core_result_try_v1;
 mod core_wrapping_v1;
-pub(crate) use core_checked_mul_v1::authenticate_reviewed_safe_core_checked_mul_helper_v1;
+mod production_mir_v1;
+mod provider_trait_identity_v1;
+mod reviewed_closure_v1;
+pub(crate) use core_checked_mul_v1::authenticate_reviewed_safe_core_arithmetic_helper_v1;
+pub(crate) use core_checked_mul_v1::authenticate_reviewed_safe_core_checked_div_v1;
+pub(crate) use core_bool_v1::authenticate_reviewed_safe_core_bool_helper_v1;
+pub(crate) use core_identity_v1::authenticate_reviewed_safe_core_identity_helper_v1;
+pub(crate) use core_mem_drop_v1::authenticate_reviewed_safe_core_mem_drop_helper_v1;
 pub(crate) use core_option_v1::authenticate_reviewed_safe_core_option_helper_v1;
+pub(crate) use core_option_compare_v1::authenticate_reviewed_safe_core_option_compare_helper_v1;
+pub(crate) use core_option_zip_v1::authenticate_reviewed_safe_core_option_zip_helper_v1;
+pub(crate) use core_primitive_value_v1::authenticate_reviewed_safe_core_primitive_value_helper_v1;
+pub(crate) use core_result_map_v1::authenticate_reviewed_safe_core_result_map_helper_v1;
+pub(crate) use core_result_try_v1::authenticate_reviewed_safe_core_result_try_helper_v1;
 pub(crate) use core_wrapping_v1::authenticate_reviewed_safe_core_wrapping_helper_v1;
+pub(crate) use production_mir_v1::{ProductionMirV1, production_mir_v1};
 
 const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
+// Atomic global entries retain exclusive physical custody before logical binding.
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x7e, 0x2d, 0xed, 0x6c, 0x4f, 0x91, 0xae, 0x0b, 0x27, 0x2a, 0xf1, 0x24, 0xf3, 0xa2, 0x24, 0xf5,
-    0xa5, 0x8a, 0xe2, 0xb6, 0x83, 0x5a, 0x11, 0x28, 0x77, 0x6c, 0xa9, 0x74, 0xbc, 0x55, 0xcb, 0x81,
+    0x65, 0x66, 0xdb, 0x62, 0x03, 0xf6, 0x1e, 0xc3, 0x51, 0xf9, 0xc5, 0x5e, 0x9e, 0xbf, 0x05, 0xac,
+    0x9d, 0xa9, 0xd3, 0x8b, 0x1f, 0xec, 0x4e, 0xe1, 0xa4, 0x37, 0x26, 0xd8, 0xf8, 0x48, 0x5a, 0x28,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -2670,6 +2692,9 @@ pub(crate) fn authenticate_reviewed_safe_external_helper_v1(
     {
         return Ok(false);
     }
+    if tcx.def_kind(provider_definition) == DefKind::Closure {
+        return reviewed_closure_v1::authenticate(tcx, provider_definition);
+    }
     let definition = reviewed_provider_semantic_definition_v1(tcx, provider_definition)?;
     validate_safe_execution_provider_definition_v1(&definition)?;
     validate_authenticated_provider_structure_v1(tcx, provider_definition, &definition)?;
@@ -2686,6 +2711,7 @@ pub(crate) fn authenticate_reviewed_safe_core_scalar_bitcast_helper_v1<'tcx>(
         return false;
     };
     if !matches!(instance.def, InstanceKind::Item(_))
+        || !matches!(tcx.def_kind(instance.def_id()), DefKind::Fn | DefKind::AssocFn)
         || instance.def_id().krate != core_lang_item.krate
         || tcx.crate_name(core_lang_item.krate).as_str() != "core"
         || !instance.args.is_empty()
@@ -2738,6 +2764,7 @@ pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
         return false;
     };
     if !matches!(instance.def, InstanceKind::Item(_))
+        || !matches!(tcx.def_kind(instance.def_id()), DefKind::Fn | DefKind::AssocFn)
         || instance.def_id().krate != core_lang_item.krate
         || tcx.crate_name(core_lang_item.krate).as_str() != "core"
         || !instance.args.is_empty()
@@ -2800,6 +2827,13 @@ pub(crate) fn authenticate_reviewed_safe_core_f32_is_finite_helper_v1<'tcx>(
     let Some(core_lang_item) = tcx.lang_items().sized_trait() else {
         return false;
     };
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || !matches!(tcx.def_kind(instance.def_id()), DefKind::Fn | DefKind::AssocFn)
+        || instance.def_id().krate != core_lang_item.krate
+        || !instance.args.is_empty()
+    {
+        return false;
+    }
     let crate_name = tcx.crate_name(instance.def_id().krate);
     let canonical_path = tcx.def_path_str(instance.def_id());
     let mir_available = tcx.is_mir_available(instance.def_id());
@@ -3159,7 +3193,7 @@ fn stable_provider_structure_v1(
         };
         let owner_path = stable_nominal_provider_path_v1(tcx, owner.did())?;
         let trait_path = if tcx.impl_is_of_trait(impl_id) {
-            stable_nominal_provider_path_v1(tcx, tcx.impl_trait_id(impl_id))?
+            provider_trait_identity_v1::nominal_trait_path(tcx, tcx.impl_trait_id(impl_id))?
         } else {
             String::new()
         };

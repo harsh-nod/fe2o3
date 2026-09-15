@@ -24,7 +24,7 @@ use crate::{
 /// The revision includes the advanced AMD model revision because neutral
 /// decisions consume those reviewed facts directly.
 pub const PRODUCTION_AMD_NEUTRAL_CAPABILITY_MODEL_REVISION_V1: &str =
-    "production-neutral-v1-backend-contract-v3";
+    "production-neutral-v1-backend-contract-v4";
 
 const PRODUCTION_KERNEL_ARGUMENT_ALIGNMENT_V1: u16 = 8;
 const PRODUCTION_KERNEL_ARGUMENT_BYTES_V1: u32 = 1 << 20;
@@ -380,10 +380,14 @@ impl ProductionAmdTargetCapabilityModelV1 {
             {
                 Supported
             }
-            (
-                TargetExecutionScopeV1::Subgroup,
-                TargetCollectiveOperationV1::ReduceMin | TargetCollectiveOperationV1::ReduceMax,
-            ) if is_f32
+            (TargetExecutionScopeV1::Subgroup, TargetCollectiveOperationV1::ReduceMax)
+                if is_f32
+                    && requirement.participants().is_power_of_two()
+                    && requirement.participants() <= 64 =>
+            {
+                Supported
+            }
+            (TargetExecutionScopeV1::Subgroup, TargetCollectiveOperationV1::ReduceMin) if is_f32
                 && requirement.participants().is_power_of_two()
                 && requirement.participants() <= 64 =>
             {

@@ -1,0 +1,85 @@
+*** Begin Patch
+*** Update File: crates/fe2o3-kernel-ir/tests/execution_capability_catalog_v13.rs
+@@
+         ExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
+             workgroup: id(0x11),
+             witness: id(0x3c),
+         },
++        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
++            workgroup_reference: id(0x70), workgroup: id(0x11), option: id(0x71), witness: id(0x72),
++        },
++        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
++            input_witness: id(0x72), output_witness: id(0x73),
++        },
+@@
+         ExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. } => "WorkgroupMemoryIndex",
++        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => "WorkgroupMemoryIndexV2",
++        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => "WorkgroupMemoryIndexIntoDisjoint",
+@@
+         Op::WorkgroupMemoryIndex { workgroup, witness } => (vec![*workgroup], *witness),
++        Op::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => (vec![*workgroup_reference], *option),
++        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => (vec![*input_witness], *output_witness),
+@@
+-        Op::WorkgroupMemoryIndex { witness, .. } => (
++        Op::WorkgroupMemoryIndex { witness, .. }
++        | Op::WorkgroupMemoryIndexV2 { witness, .. } => (
+             *witness,
+             Some(ExecutionCapabilityRoleV1::WorkgroupMemoryIndex),
+         ),
++        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => (
++            *output_witness, Some(ExecutionCapabilityRoleV1::WorkgroupMemoryIndex),
++        ),
+@@
+-        Op::WorkgroupMemoryIndex { witness, .. } => vec![cap(
++        Op::WorkgroupMemoryIndex { witness, .. }
++        | Op::WorkgroupMemoryIndexV2 { witness, .. } => vec![cap(
+             *witness,
+             ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
+         )],
++        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => vec![cap(
++            *output_witness, ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
++        )],
+@@
+     fn target_operands(
+@@
+         match operation {
++            Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, .. } => {
++                let workgroup = self.workgroup(id(0x11), EPOCH_BEFORE);
++                let witness = self.emit(Op::WorkgroupMemoryIndexV2 {
++                    workgroup_reference: id(0x70), workgroup: id(0x11), option: id(0x71), witness: *input_witness,
++                }, vec![workgroup], EPOCH_BEFORE)[0];
++                (vec![witness], EPOCH_BEFORE)
++            }
+@@
+             | Op::WorkgroupMemoryIndex { workgroup, .. }
++            | Op::WorkgroupMemoryIndexV2 { workgroup, .. }
+@@
+         | Op::WorkgroupMemoryIndex { .. }
++        | Op::WorkgroupMemoryIndexV2 { .. }
++        | Op::WorkgroupMemoryIndexIntoDisjoint { .. }
+         | Op::WorkgroupMemoryPublish { .. }
+@@
+         | Op::WorkgroupMemoryIndex { .. }
++        | Op::WorkgroupMemoryIndexV2 { .. }
++        | Op::WorkgroupMemoryIndexIntoDisjoint { .. }
+         | Op::NumericalPolicyIssue { .. } => Vec::new(),
+@@
+-        Op::WorkgroupMemoryIndex { witness, .. } => *witness = id(0xe1),
++        Op::WorkgroupMemoryIndex { witness, .. }
++        | Op::WorkgroupMemoryIndexV2 { witness, .. } => *witness = id(0xe1),
++        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => *output_witness = id(0xe1),
+@@
+         "WorkgroupMemoryIndex",
++        "WorkgroupMemoryIndexV2",
++        "WorkgroupMemoryIndexIntoDisjoint",
+@@
+-    assert_eq!(actual.len(), 27);
+-    assert_eq!(catalog().len(), 43);
++    assert_eq!(actual.len(), 29);
++    assert_eq!(catalog().len(), 45);
+*** Update File: crates/fe2o3-kernel-ir/tests/execution_capability_catalog_v13/extended.rs
+@@
+         Op::WorkgroupMemoryIndex { .. } => [1, 18],
++        Op::WorkgroupMemoryIndexV2 { .. } => [1, 27],
++        Op::WorkgroupMemoryIndexIntoDisjoint { .. } => [1, 28],
+*** End Patch

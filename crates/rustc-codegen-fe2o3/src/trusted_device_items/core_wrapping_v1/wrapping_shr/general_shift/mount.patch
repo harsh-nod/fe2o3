@@ -1,0 +1,48 @@
+*** Begin Patch
+*** Update File: crates/rustc-codegen-fe2o3/src/trusted_device_items/core_wrapping_v1/wrapping_shr.rs
+@@
+ #[path = "wrapping_shr/retained.rs"]
+ mod retained;
++
++#[path = "wrapping_shr/general_shift.rs"]
++mod general_shift;
++pub(crate) use general_shift::{ReviewedCoreWrappingShiftV1, prove_core_wrapping_shift_v1};
+*** Update File: crates/rustc-codegen-fe2o3/src/trusted_device_items/core_wrapping_v1.rs
+@@
+ pub(crate) use wrapping_shr::{ReviewedU32WrappingShrV1, prove_core_u32_wrapping_shr_v1};
++pub(crate) use wrapping_shr::{ReviewedCoreWrappingShiftV1, prove_core_wrapping_shift_v1};
+*** Update File: crates/rustc-codegen-fe2o3/src/trusted_device_items/production_mir_v1.rs
+@@
+-    core_wrapping_v1::{ReviewedU32WrappingShrV1, prove_core_u32_wrapping_shr_v1},
++    core_wrapping_v1::{
++        ReviewedCoreWrappingShiftV1, ReviewedU32WrappingShrV1,
++        prove_core_u32_wrapping_shr_v1, prove_core_wrapping_shift_v1,
++    },
+@@
+     WrappingShift(ReviewedU32WrappingShrV1<'tcx>),
++    GeneralWrappingShift(ReviewedCoreWrappingShiftV1<'tcx>),
+@@
+             Self::WrappingShift(proof) => {
+                 debug_assert_eq!(proof.instance(), instance);
+                 proof.expand_mir(tcx)
+             }
++            Self::GeneralWrappingShift(proof) => {
++                debug_assert_eq!(proof.instance(), instance);
++                proof.expand_mir(tcx)
++            }
+@@
+             Self::WrappingShift(proof) => proof.expansion_fingerprint(tcx, body),
++            Self::GeneralWrappingShift(proof) => proof.expansion_fingerprint(tcx, body),
+@@
+         .map(SourceExpansionV1::WrappingShift)
++        .or_else(|| {
++            prove_core_wrapping_shift_v1(tcx, instance).map(SourceExpansionV1::GeneralWrappingShift)
++        })
+*** Update File: crates/rustc-codegen-fe2o3/src/collector/production_importer_v1.rs
+@@
+ mod core_wrapping_shift_compiler_tests;
++
++#[cfg(test)]
++#[path = "../trusted_device_items/core_wrapping_v1/general_compiler_tests.rs"]
++mod core_wrapping_general_compiler_tests;
+*** End Patch

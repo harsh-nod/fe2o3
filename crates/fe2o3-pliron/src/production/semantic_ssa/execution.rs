@@ -3,54 +3,10 @@
 use super::*;
 use fe2o3_mir_model::SsaInputSiteV1;
 
-/// Exclusive event endpoints recorded by the adapter that actually emitted them.
-/// One row per nonempty statement/terminator, not one row per SSA event.
-#[derive(Default)]
-pub(super) struct ExecutionEventOriginsV1(Vec<(u32, usize, Option<u32>)>);
+mod undefined_return_v1;
 
-impl ExecutionEventOriginsV1 {
-    pub(super) fn record(
-        &mut self,
-        block: u32,
-        statement: Option<u32>,
-        events: std::ops::Range<usize>,
-    ) {
-        if !events.is_empty() {
-            self.0.push((block, events.end, statement));
-        }
-    }
-
-    pub(super) fn statement(&self, block: u32, event: u32) -> Option<Option<u32>> {
-        let index = self
-            .0
-            .partition_point(|(candidate, end, _)| (*candidate, *end) <= (block, event as usize));
-        self.0
-            .get(index)
-            .filter(|(candidate, _, _)| *candidate == block)
-            .map(|(_, _, statement)| *statement)
-    }
-
-    pub(super) fn resources(
-        &self,
-    ) -> Result<SemanticSsaAuxiliaryResourcesV1, ProductionSemanticSsaErrorV1> {
-        // Include vector growth/minimum-capacity slack and diagnostic lookup work.
-        let storage_words = self
-            .0
-            .len()
-            .checked_mul(6)
-            .and_then(|words| words.checked_add(if self.0.is_empty() { 0 } else { 12 }))
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        let work_units = self
-            .0
-            .len()
-            .checked_mul(2)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        Ok(SemanticSsaAuxiliaryResourcesV1 {
-            storage_words,
-            work_units,
-        })
-    }
-}
+mod event_origins_v2;
+pub(super) use event_origins_v2::ExecutionEventOriginsV1;
 
 pub(super) fn wrap_error(
     view: &SemanticExpandedRootV1,
@@ -150,6 +106,7 @@ pub(super) fn wrap_error(
         source_local: local
             .and_then(|local| view.local_origins().get(local as usize))
             .copied(),
+        return_transfer_diagnostic: None,
         error: Box::new(error),
     }
 }
@@ -267,7 +224,28 @@ fn construct_plans(
             limits,
         )
         .map_err(|error| wrap_error(view, &without_events, error))?;
-        let transparent_borrows = transparent_borrow_sites_v1(view.body(), semantic.callables());
+        let defined_results = defined_math_results::DefinedMathResultsV1::derive(
+            semantic, expansion, view, limits,
+        )
+        .map_err(|error| wrap_error(view, &without_events, error))?;
+        let reusable_results = defined_reusable_lds_results::DefinedReusableLdsResultsV1::derive(
+            semantic, expansion, view, limits,
+        ).map_err(|error| wrap_error(view, &without_events, error))?;
+        let phase_results = defined_reusable_phase_results::DefinedReusablePhaseResultsV1::derive(semantic, expansion, view, limits)
+            .map_err(|error| wrap_error(view, &without_events, error))?;
+        let matrix_results = defined_matrix_results::DefinedMatrixResultsV1::derive(
+            semantic, expansion, view, limits,
+        ).map_err(|error| wrap_error(view, &without_events, error))?;
+        let guarded_grid_results = guarded_grid_results::GuardedGridResultsV1::derive(semantic, expansion, view, limits)
+            .map_err(|error| wrap_error(view, &without_events, error))?;
+        let mut transparent_borrows = super::adapter::transparent_borrow_sites_for_execution_v1(
+            semantic,
+            expansion,
+            view,
+            limits.planner().max_work_units(),
+        )
+        .map_err(|error| wrap_error(view, &without_events, error))?;
+        super::adapter::extend_guarded_grid_borrows_v1(&mut transparent_borrows, &guarded_grid_results);
         let plan = plan_semantic_function_ssa_with_borrow_sites_v1(
             view.source_body(),
             view.body(),
@@ -275,9 +253,12 @@ fn construct_plans(
             semantic.callables(),
             limits,
             &transparent_borrows,
-            Some((view, initializations)),
-        )?;
-        accumulate_summary_v1(&mut summary, &plan, view.body().locals().len(), limits)
+            Some((view, initializations, defined_results, matrix_results, reusable_results, phase_results, guarded_grid_results)),
+        )
+        .map_err(|error| undefined_return_v1::annotate(semantic, view, error))?;
+        let variables = view.body().locals().len().checked_add(plan.defined_reusable_phase_results.synthetic_variables())
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+        accumulate_summary_v1(&mut summary, &plan, variables, limits)
             .map_err(|error| wrap_error(view, &without_events, error))?;
         summary.function_count = summary.function_count.checked_add(1).ok_or_else(|| {
             wrap_error(
@@ -289,6 +270,11 @@ fn construct_plans(
         digest.update(view.root().index().to_le_bytes());
         digest.update(view.identity());
         plan.frame_initializations.hash_into(&mut digest);
+        plan.defined_math_results.hash_into(&mut digest);
+        plan.defined_matrix_results.hash_into(&mut digest);
+        plan.defined_reusable_lds_results.hash_into(&mut digest);
+        plan.guarded_grid_results.hash_into(&mut digest);
+        plan.defined_reusable_phase_results.hash_into(&mut digest);
         digest.update(
             derive_semantic_ssa_identity_v1(
                 semantic.semantic_sha256().as_bytes(),
@@ -310,6 +296,26 @@ fn construct_plans(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    include!("defined_math_results/replay_tests.rs");
+    include!("defined_matrix_results/replay_tests.rs");
+
+    #[test]
+    fn retained_source_use_execution_roster_omission_is_replay_mismatch() {
+        let mut owner = frame_initialization::tests::owner(false);
+        assert!(
+            owner.execution.plans[0]
+                .1
+                .event_origins
+                .block_ends(0)
+                .is_some()
+        );
+        owner.execution.plans[0].1.event_origins = ExecutionEventOriginsV1::default();
+        assert_eq!(
+            owner.verify_replay(),
+            Err(ProductionSemanticSsaErrorV1::ReplayMismatch)
+        );
+    }
 
     #[test]
     fn execution_replay_rejects_omitted_frame_initializations() {

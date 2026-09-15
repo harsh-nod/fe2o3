@@ -6,6 +6,13 @@
 
 use std::fmt;
 
+#[path = "production_backend_v1/target_output.rs"]
+mod target_output;
+pub(crate) use target_output::{
+    ProductionBackendLoweredModuleV1, ProductionBackendWorkerModuleV1,
+    ProductionBackendWorkerOutputV1,
+};
+
 use fe2o3_amd_target::{
     PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
     ProductionAmdTargetProfileV1,
@@ -156,8 +163,17 @@ impl ProductionBackendTargetV1 {
         canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
         epoch: u64,
         closure: &ProductionBackendCapabilityClosureV1,
-    ) -> Result<String, ProductionBackendErrorV1> {
+    ) -> Result<ProductionBackendLoweredModuleV1, ProductionBackendErrorV1> {
         AmdProductionBackendV1::lower_v13_module_v1(&self.inner, canonical, epoch, &closure.inner)
+    }
+
+    pub(crate) fn lower_declared_module_v1(
+        &self,
+        canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV1,
+        epoch: u64,
+        closure: &dialect_amdgcn::ProductionTargetCapabilityClosureKirV1,
+    ) -> Result<ProductionBackendLoweredModuleV1, ProductionBackendErrorV1> {
+        ProductionBackendLoweredModuleV1::lower_declared(&self.inner, canonical, epoch, closure)
     }
 
     pub(crate) fn bind_worker_layout_v1(
@@ -327,6 +343,7 @@ impl ProductionBackendCapabilityClosureV1 {
             canonical_graph_version: match subject.version() {
                 dialect_amdgcn::ProductionCanonicalGraphVersionV1::V12 => 12,
                 dialect_amdgcn::ProductionCanonicalGraphVersionV1::V13 => 13,
+                dialect_amdgcn::ProductionCanonicalGraphVersionV1::V14 => 14,
             },
             digest: subject.digest(),
             canonical_length: subject.canonical_length(),
@@ -451,7 +468,7 @@ trait ProductionBackendAdapterV1 {
         canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
         epoch: u64,
         closure: &Self::CapabilityClosure,
-    ) -> Result<String, ProductionBackendErrorV1>;
+    ) -> Result<ProductionBackendLoweredModuleV1, ProductionBackendErrorV1>;
     fn bind_worker_layout_v1(
         target: &Self::Target,
         llvm_ir: &str,
@@ -546,6 +563,7 @@ impl ProductionBackendAdapterV1 for AmdProductionBackendV1 {
             canonical_graph_version: match launch_subject.version() {
                 dialect_amdgcn::ProductionCanonicalGraphVersionV1::V12 => 12,
                 dialect_amdgcn::ProductionCanonicalGraphVersionV1::V13 => 13,
+                dialect_amdgcn::ProductionCanonicalGraphVersionV1::V14 => 14,
             },
             digest: launch_subject.digest(),
             canonical_length: launch_subject.canonical_length(),
@@ -560,6 +578,7 @@ impl ProductionBackendAdapterV1 for AmdProductionBackendV1 {
                     canonical_graph_version: match subject.version() {
                         dialect_amdgcn::ProductionCanonicalGraphVersionV1::V12 => 12,
                         dialect_amdgcn::ProductionCanonicalGraphVersionV1::V13 => 13,
+                        dialect_amdgcn::ProductionCanonicalGraphVersionV1::V14 => 14,
                     },
                     digest: subject.digest(),
                     canonical_length: subject.canonical_length(),
@@ -577,21 +596,8 @@ impl ProductionBackendAdapterV1 for AmdProductionBackendV1 {
         canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
         epoch: u64,
         closure: &Self::CapabilityClosure,
-    ) -> Result<String, ProductionBackendErrorV1> {
-        if closure.profile != target.profile {
-            return Err(ProductionBackendErrorV1::CapabilityClosureChanged);
-        }
-        let lowered = dialect_amdgcn::lower_verified_canonical_kir_v13_to_amd_llvm_ir_v1(
-            canonical,
-            epoch,
-            closure.closure.launch_evidence(),
-            target.profile,
-        )
-        .map_err(ProductionBackendErrorV1::V13Lowering)?;
-        if lowered.capability_closure() != &closure.closure {
-            return Err(ProductionBackendErrorV1::CapabilityClosureChanged);
-        }
-        Ok(lowered.llvm_ir().to_owned())
+    ) -> Result<ProductionBackendLoweredModuleV1, ProductionBackendErrorV1> {
+        ProductionBackendLoweredModuleV1::lower_v13(target, canonical, epoch, closure)
     }
 
     fn bind_worker_layout_v1(
@@ -664,6 +670,9 @@ impl ProductionBackendAdapterV1 for AmdProductionBackendV1 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionBackendErrorV1 {
+    CompilerModule(crate::kernel_ir_codegen::CompilerModuleConstructionError),
+    DeclaredCanonical(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV1),
+    TargetOutput(&'static str),
     CapabilityClosure(dialect_amdgcn::ProductionTargetCapabilityErrorV1),
     CapabilityCanonical(dialect_amdgcn::ProductionTargetCapabilityCanonicalErrorV1),
     CapabilityModel(fe2o3_target_spec::TargetCapabilityModelIdentityErrorV1),
@@ -686,6 +695,9 @@ pub(crate) enum ProductionBackendErrorV1 {
 impl fmt::Display for ProductionBackendErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CompilerModule(error) => write!(formatter, "target module text failed: {error}"),
+            Self::DeclaredCanonical(error) => write!(formatter, "declared target graph failed: {error}"),
+            Self::TargetOutput(message) => write!(formatter, "backend output custody failed: {message}"),
             Self::CapabilityClosure(error) => {
                 write!(formatter, "semantic capability closure failed: {error}")
             }
@@ -739,6 +751,9 @@ impl fmt::Display for ProductionBackendErrorV1 {
 impl std::error::Error for ProductionBackendErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::CompilerModule(error) => Some(error),
+            Self::DeclaredCanonical(error) => Some(error),
+            Self::TargetOutput(_) => None,
             Self::CapabilityClosure(error) => Some(error),
             Self::CapabilityCanonical(error) => Some(error),
             Self::CapabilityModel(error) => Some(error),
@@ -852,7 +867,7 @@ mod tests {
             _canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
             _epoch: u64,
             _closure: &Self::CapabilityClosure,
-        ) -> Result<String, ProductionBackendErrorV1> {
+        ) -> Result<ProductionBackendLoweredModuleV1, ProductionBackendErrorV1> {
             Err(ProductionBackendErrorV1::ObjectLoweringUnavailable {
                 backend_family: "synthetic-test-v1",
             })

@@ -2,6 +2,10 @@
 
 use std::ops::Range;
 
+#[path = "pliron_function_inventory/closed_ssa.rs"]
+mod closed_ssa;
+pub(crate) use closed_ssa::{ClosedPlironSsaErrorV1, preflight_closed_pliron_ssa_v1};
+
 use pliron::{
     basic_block::BasicBlock,
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},

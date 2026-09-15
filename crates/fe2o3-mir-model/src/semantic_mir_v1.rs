@@ -17,9 +17,75 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 mod canonical_decode;
+#[cfg(test)]
+mod abi_union_pointer_v1_tests;
+#[cfg(test)]
+mod caller_location_abi_v1_tests;
+#[cfg(test)]
+mod rust_call_unit_v1_tests;
+mod defined_capability_v1;
+mod defined_reusable_phase_v26;
+#[cfg(test)]
+mod phase_v26_document_tests;
+pub use defined_reusable_phase_v26::{attach_reusable_phase_contracts_v26,
+    canonical_reusable_phase_operand_sha256_v25, SemanticDefinedReusablePhaseV1,
+    SemanticDefinedReusablePhaseRecipeV1, SemanticPhaseReferenceV1, SemanticPhaseReferenceKindV1,
+    SemanticPhaseBrandsV1, SemanticPhaseCallableV1, SemanticPhaseIncomingCommitmentV1,
+    SemanticPhaseCompletionRelayV1, SemanticPhaseCompletionFieldV1, SemanticPhaseCompletionDropV1};
+mod source_fragment_v25;
+mod transpose_owned_flow_v25;
+#[cfg(test)]
+mod common_v25_tests;
+pub use source_fragment_v25::{canonical_semantic_source_body_sha256_v25, SEMANTIC_SOURCE_BODY_FRAGMENT_VERSION_V25};
+pub use transpose_owned_flow_v25::{SemanticOwnedSourceCallSiteV1, SemanticOwnedSourceStatementSiteV1,
+    SemanticTransposeOwnedFlowSitesV1, SemanticSourceBodyBindingV25, SemanticTransposeOwnedFlowV1};
+mod defined_math_v1;
+mod defined_matrix_issuer_v1;
+mod defined_reusable_lds_v1;
+mod guarded_grid_leader_v26;
+pub use guarded_grid_leader_v26::{SemanticGuardedGridLeaderV1, SemanticGuardedGridBodyIdentityV1,
+    SemanticGuardedGridLeaderTypesV1, SemanticGuardedGridLeaderSourceV1, SemanticGuardedGridLeaderBodyV1};
+pub use defined_reusable_lds_v1::{SemanticReusableLdsConversionV1, SemanticReusableLdsSourceV1, SemanticReusableLdsTypesV1};
+mod defined_matrix_v1;
+mod global_bf16_matrix_v1;
+pub mod layout_diagnostics_v1;
+mod abi_failure_observation_v1;
+mod layout_identity_v1;
+mod numerical_policy_math_v1;
+mod numerical_policy_v1;
+mod subgroup_partition_v1;
+mod gfx950_transpose_v1;
+pub use gfx950_transpose_v1::{SemanticGfx950TransposeContractV1, SemanticGfx950TransposeOperationV1};
 mod target_properties;
+mod workgroup_borrow_v1;
+mod workgroup_memory_index_v1;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
+pub use defined_capability_v1::SemanticDefinedCapabilityContractV1;
+pub use global_bf16_matrix_v1::{
+    SemanticGlobalBf16MatrixLoadV1, SemanticGlobalBf16MatrixTypesV1,
+    semantic_global_bf16_matrix_layout_matches_v1,
+};
+pub use defined_math_v1::{
+    SemanticDefinedMathBodyV1, SemanticKernelMathDeriveTypesV1, SemanticKernelMathDeriveV1,
+    SemanticPolicyMathBindTypesV1, SemanticPolicyMathBindV1,
+};
+pub use defined_matrix_v1::{
+    SemanticDefinedMatrixBodyV1, SemanticDefinedMatrixIdentityV1,
+    SemanticPolicyGfx950NarrowTypesV1, SemanticPolicyGfx950NarrowV1,
+    SemanticPolicyMatrixBindTypesV1, SemanticPolicyMatrixBindV1,
+};
+pub use defined_matrix_issuer_v1::{
+    SemanticKernelMatrixDeriveTypesV1, SemanticKernelMatrixDeriveV1, SemanticMatrixIssuerBodyV1,
+};
+pub use workgroup_borrow_v1::{
+    SemanticWorkgroupEpochProjectionTypesV1, SemanticWorkgroupEpochProjectionV1,
+};
+pub use numerical_policy_math_v1::{
+    SemanticF32MathImplementationV1, SemanticNumericalModeV1,
+    SemanticNumericalPolicyMathContractV1, SemanticNumericalPolicyMathTypesV1,
+};
+pub use subgroup_partition_v1::SemanticSubgroupPartitionOperationV1;
 use target_properties::{
     target_object_size_bound_in, target_pointer_profile, target_vector_alignment,
     validate_target_primitive,
@@ -42,6 +108,15 @@ pub const INERT_SEMANTIC_MIR_VERSION_V14: u16 = 14;
 pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 pub const INERT_SEMANTIC_MIR_VERSION_V16: u16 = 16;
 pub const INERT_SEMANTIC_MIR_VERSION_V17: u16 = 17;
+pub const INERT_SEMANTIC_MIR_VERSION_V18: u16 = 18;
+pub const INERT_SEMANTIC_MIR_VERSION_V19: u16 = 19;
+pub const INERT_SEMANTIC_MIR_VERSION_V20: u16 = 20;
+pub const INERT_SEMANTIC_MIR_VERSION_V21: u16 = 21;
+pub const INERT_SEMANTIC_MIR_VERSION_V22: u16 = 22;
+pub const INERT_SEMANTIC_MIR_VERSION_V23: u16 = 23;
+pub const INERT_SEMANTIC_MIR_VERSION_V24: u16 = 24;
+pub const INERT_SEMANTIC_MIR_VERSION_V25: u16 = 25;
+pub const INERT_SEMANTIC_MIR_VERSION_V26: u16 = 26;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -66,6 +141,15 @@ pub enum SemanticMirWireVersionV1 {
     V15,
     V16,
     V17,
+    V18,
+    V19,
+    V20,
+    V21,
+    V22,
+    V23,
+    V24,
+    V25,
+    V26,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -87,6 +171,15 @@ impl SemanticMirWireVersionV1 {
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
             Self::V16 => INERT_SEMANTIC_MIR_VERSION_V16,
             Self::V17 => INERT_SEMANTIC_MIR_VERSION_V17,
+            Self::V18 => INERT_SEMANTIC_MIR_VERSION_V18,
+            Self::V19 => INERT_SEMANTIC_MIR_VERSION_V19,
+            Self::V20 => INERT_SEMANTIC_MIR_VERSION_V20,
+            Self::V21 => INERT_SEMANTIC_MIR_VERSION_V21,
+            Self::V22 => INERT_SEMANTIC_MIR_VERSION_V22,
+            Self::V23 => INERT_SEMANTIC_MIR_VERSION_V23,
+            Self::V24 => INERT_SEMANTIC_MIR_VERSION_V24,
+            Self::V25 => INERT_SEMANTIC_MIR_VERSION_V25,
+            Self::V26 => INERT_SEMANTIC_MIR_VERSION_V26,
         }
     }
 
@@ -108,6 +201,15 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             INERT_SEMANTIC_MIR_VERSION_V16 => Some(Self::V16),
             INERT_SEMANTIC_MIR_VERSION_V17 => Some(Self::V17),
+            INERT_SEMANTIC_MIR_VERSION_V18 => Some(Self::V18),
+            INERT_SEMANTIC_MIR_VERSION_V19 => Some(Self::V19),
+            INERT_SEMANTIC_MIR_VERSION_V20 => Some(Self::V20),
+            INERT_SEMANTIC_MIR_VERSION_V21 => Some(Self::V21),
+            INERT_SEMANTIC_MIR_VERSION_V22 => Some(Self::V22),
+            INERT_SEMANTIC_MIR_VERSION_V23 => Some(Self::V23),
+            INERT_SEMANTIC_MIR_VERSION_V24 => Some(Self::V24),
+            INERT_SEMANTIC_MIR_VERSION_V25 => Some(Self::V25),
+            INERT_SEMANTIC_MIR_VERSION_V26 => Some(Self::V26),
             _ => None,
         }
     }
@@ -4255,6 +4357,8 @@ pub enum SemanticCastKindV1 {
     PointerExposeProvenance,
     PointerWithExposedProvenance,
     Transmute,
+    /// Retain an array reference's provenance and add its element count.
+    ArrayReferenceToSlice,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -5654,11 +5758,28 @@ pub enum SemanticExecutionAtomicKindV1 {
 /// Closed semantic payload for the reviewed target-neutral execution surface.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticExecutionCapabilityOperationV1 {
+    Gfx950Transpose(SemanticGfx950TransposeContractV1),
+    SubgroupPartition(SemanticSubgroupPartitionOperationV1),
+    /// Issues strict IEEE policy ownership, not a numerical refinement proof.
+    /// `context` is the shared-reference source argument. `policy` retains the
+    /// exact authenticated `StrictIeee` nominal identity; no relaxed mode exists.
+    NumericalPolicyIssue {
+        context: SemanticTypeIdV1,
+        capability: SemanticTypeIdV1,
+        policy: SemanticTypeIdentityV1,
+    },
     WorkgroupDerive {
         context: SemanticTypeIdV1,
         workgroup: SemanticTypeIdV1,
     },
     SubgroupDerive {
+        workgroup: SemanticTypeIdV1,
+        subgroup: SemanticTypeIdV1,
+        width: u32,
+    },
+    /// Retains the source shared reference separately from its live owned value.
+    SubgroupDeriveBorrowed {
+        workgroup_reference: SemanticTypeIdV1,
         workgroup: SemanticTypeIdV1,
         subgroup: SemanticTypeIdV1,
         width: u32,
@@ -5795,6 +5916,16 @@ pub enum SemanticExecutionCapabilityOperationV1 {
         workgroup: SemanticTypeIdV1,
         witness: SemanticTypeIdV1,
     },
+    WorkgroupMemoryIndexV2 {
+        workgroup_reference: SemanticTypeIdV1,
+        workgroup: SemanticTypeIdV1,
+        option: SemanticTypeIdV1,
+        witness: SemanticTypeIdV1,
+    },
+    WorkgroupMemoryIndexIntoDisjoint {
+        input_witness: SemanticTypeIdV1,
+        output_witness: SemanticTypeIdV1,
+    },
     WorkgroupMemoryAllocate {
         workgroup: SemanticTypeIdV1,
         view: SemanticTypeIdV1,
@@ -5829,30 +5960,31 @@ pub enum SemanticExecutionCapabilityOperationV1 {
     },
 }
 
-/// Unresolved proof obligations retained by V17. These bits are derived from
-/// the operation and cannot be supplied by an importer or decoder.
+/// Unresolved proof obligations retained by V17/V18. These bits are derived
+/// from the operation and cannot be supplied by an importer or decoder.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SemanticExecutionSafetyObligationsV1(u16);
+pub struct SemanticExecutionSafetyObligationsV1(u32);
 
 impl SemanticExecutionSafetyObligationsV1 {
-    pub const TARGET_SUPPORT: u16 = 1 << 0;
-    pub const DYNAMIC_WORKGROUP_IDENTITY: u16 = 1 << 1;
-    pub const WORKGROUP_CONVERGENCE: u16 = 1 << 2;
-    pub const SUBGROUP_CONVERGENCE: u16 = 1 << 3;
-    pub const BOUNDS: u16 = 1 << 4;
-    pub const DISJOINT_LDS_ALLOCATION: u16 = 1 << 5;
-    pub const INITIALIZATION: u16 = 1 << 6;
-    pub const RACE_FREEDOM: u16 = 1 << 7;
-    pub const EXACT_PARTICIPATION: u16 = 1 << 8;
-    pub const ASYNC_COMPLETION: u16 = 1 << 9;
-    pub const MEMORY_MODEL: u16 = 1 << 10;
-    pub const MATRIX_LEGALITY: u16 = 1 << 11;
-    pub const RAW_POINTER_VALIDITY: u16 = 1 << 12;
-    pub const LIFETIME_VALIDITY: u16 = 1 << 13;
-    pub const ADDRESS_SPACE_VALIDITY: u16 = 1 << 14;
-    pub const ALIASING_VALIDITY: u16 = 1 << 15;
+    pub const NUMERICAL_POLICY: u32 = 1 << 16;
+    pub const TARGET_SUPPORT: u32 = 1 << 0;
+    pub const DYNAMIC_WORKGROUP_IDENTITY: u32 = 1 << 1;
+    pub const WORKGROUP_CONVERGENCE: u32 = 1 << 2;
+    pub const SUBGROUP_CONVERGENCE: u32 = 1 << 3;
+    pub const BOUNDS: u32 = 1 << 4;
+    pub const DISJOINT_LDS_ALLOCATION: u32 = 1 << 5;
+    pub const INITIALIZATION: u32 = 1 << 6;
+    pub const RACE_FREEDOM: u32 = 1 << 7;
+    pub const EXACT_PARTICIPATION: u32 = 1 << 8;
+    pub const ASYNC_COMPLETION: u32 = 1 << 9;
+    pub const MEMORY_MODEL: u32 = 1 << 10;
+    pub const MATRIX_LEGALITY: u32 = 1 << 11;
+    pub const RAW_POINTER_VALIDITY: u32 = 1 << 12;
+    pub const LIFETIME_VALIDITY: u32 = 1 << 13;
+    pub const ADDRESS_SPACE_VALIDITY: u32 = 1 << 14;
+    pub const ALIASING_VALIDITY: u32 = 1 << 15;
 
-    pub const fn bits(self) -> u16 {
+    pub const fn bits(self) -> u32 {
         self.0
     }
 }
@@ -6024,7 +6156,8 @@ impl SemanticExecutionCapabilityContractV1 {
 const fn operation_is_kernel_scoped(operation: SemanticExecutionCapabilityOperationV1) -> bool {
     matches!(
         operation,
-        SemanticExecutionCapabilityOperationV1::Atomic {
+        SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. }
+        | SemanticExecutionCapabilityOperationV1::Atomic {
             kind: SemanticExecutionAtomicKindV1::BindGlobalView,
             ..
         } | SemanticExecutionCapabilityOperationV1::RawMemoryBind {
@@ -6047,6 +6180,11 @@ fn execution_operation_signature_is_well_formed(
     signature: SemanticExecutionCapabilitySignatureV1,
 ) -> bool {
     match operation {
+        SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => transpose.signature_matches(signature),
+        SemanticExecutionCapabilityOperationV1::SubgroupPartition(partition) => partition.signature_matches(signature),
+        SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { context, capability, .. } => {
+            signature.matches(&[context], capability)
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupDerive { context, workgroup } => {
             signature.matches(&[context], workgroup)
         }
@@ -6055,6 +6193,9 @@ fn execution_operation_signature_is_well_formed(
             subgroup,
             ..
         } => signature.matches(&[workgroup], subgroup),
+        SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+            workgroup_reference, subgroup, ..
+        } => signature.matches(&[workgroup_reference], subgroup),
         SemanticExecutionCapabilityOperationV1::LdsAllocate { workgroup, lds, .. } => {
             signature.matches(&[workgroup], lds)
         }
@@ -6172,6 +6313,12 @@ fn execution_operation_signature_is_well_formed(
         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
             signature.matches(&[workgroup], witness)
         }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => {
+            signature.matches(&[workgroup_reference], option)
+        }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+            signature.matches(&[input_witness], output_witness)
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
             workgroup, view, ..
         } => signature.matches(&[workgroup], view),
@@ -6208,6 +6355,9 @@ fn execution_operation_signature_is_well_formed(
 const fn operation_requires_epoch_transition(
     operation: SemanticExecutionCapabilityOperationV1,
 ) -> bool {
+    if let SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) = operation {
+        return transpose.advances_epoch();
+    }
     matches!(
         operation,
         SemanticExecutionCapabilityOperationV1::LdsPublish { .. }
@@ -6221,7 +6371,15 @@ const fn operation_requires_epoch_transition(
 
 fn execution_operation_is_well_formed(operation: SemanticExecutionCapabilityOperationV1) -> bool {
     match operation {
+        SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => transpose.is_well_formed(),
+        SemanticExecutionCapabilityOperationV1::SubgroupPartition(partition) => partition.is_well_formed(),
+        SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { context, capability, policy } => {
+            context != capability && policy.as_bytes() != &[0; 32]
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupDerive { .. } => true,
+        SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+            workgroup_reference, workgroup, subgroup, width,
+        } => width == 64 && workgroup_borrow_v1::distinct_type_ids(&[workgroup_reference, workgroup, subgroup]),
         SemanticExecutionCapabilityOperationV1::SubgroupDerive { width, .. }
         | SemanticExecutionCapabilityOperationV1::SubgroupCollective { width, .. } => {
             width == 32 || width == 64
@@ -6356,6 +6514,13 @@ fn execution_operation_is_well_formed(operation: SemanticExecutionCapabilityOper
         }
         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. }
         | SemanticExecutionCapabilityOperationV1::WorkgroupMemoryPublish { .. } => true,
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
+            let ids = [workgroup_reference, workgroup, option, witness];
+            ids.iter().enumerate().all(|(i, id)| !ids[..i].contains(id))
+        }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+            input_witness != output_witness
+        }
         SemanticExecutionCapabilityOperationV1::MemoryLoad {
             workgroup,
             space,
@@ -6413,12 +6578,20 @@ const fn valid_compare_exchange_order_pair(
     )
 }
 
-const fn execution_operation_obligations(operation: SemanticExecutionCapabilityOperationV1) -> u16 {
+const fn execution_operation_obligations(operation: SemanticExecutionCapabilityOperationV1) -> u32 {
     let kernel_base = SemanticExecutionSafetyObligationsV1::TARGET_SUPPORT;
     let base = kernel_base | SemanticExecutionSafetyObligationsV1::DYNAMIC_WORKGROUP_IDENTITY;
     match operation {
+        SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => transpose.obligations(),
+        SemanticExecutionCapabilityOperationV1::SubgroupPartition(partition) => partition.obligations(),
+        SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } => {
+            kernel_base | SemanticExecutionSafetyObligationsV1::NUMERICAL_POLICY
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupDerive { .. }
         | SemanticExecutionCapabilityOperationV1::SubgroupDerive { .. } => base,
+        SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. } => {
+            base | SemanticExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+        }
         SemanticExecutionCapabilityOperationV1::LdsAllocate { .. } => {
             base | SemanticExecutionSafetyObligationsV1::DISJOINT_LDS_ALLOCATION
         }
@@ -6517,6 +6690,14 @@ const fn execution_operation_obligations(operation: SemanticExecutionCapabilityO
             base | SemanticExecutionSafetyObligationsV1::BOUNDS
                 | SemanticExecutionSafetyObligationsV1::EXACT_PARTICIPATION
         }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => {
+            base | SemanticExecutionSafetyObligationsV1::BOUNDS
+                | SemanticExecutionSafetyObligationsV1::EXACT_PARTICIPATION
+                | SemanticExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+        }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => {
+            base | SemanticExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate { .. } => {
             base | SemanticExecutionSafetyObligationsV1::BOUNDS
                 | SemanticExecutionSafetyObligationsV1::DISJOINT_LDS_ALLOCATION
@@ -6566,6 +6747,13 @@ fn execution_operation_type_references(
 ) -> [Option<SemanticTypeIdV1>; 8] {
     let mut references = [None; 8];
     match &operation {
+        SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => transpose.type_references(),
+        SemanticExecutionCapabilityOperationV1::SubgroupPartition(partition) => partition.type_references(),
+        SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { context, capability, .. } => {
+            references[0] = Some(*context);
+            references[1] = Some(*capability);
+            references
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupDerive { context, workgroup } => {
             references[0] = Some(*context);
             references[1] = Some(*workgroup);
@@ -6579,6 +6767,14 @@ fn execution_operation_type_references(
             references[0] = Some(*workgroup);
             references[1] = Some(*subgroup);
             return references;
+        }
+        SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+            workgroup_reference, workgroup, subgroup, ..
+        } => {
+            references[0] = Some(*workgroup_reference);
+            references[1] = Some(*workgroup);
+            references[2] = Some(*subgroup);
+            references
         }
         SemanticExecutionCapabilityOperationV1::LdsAllocate {
             workgroup,
@@ -6801,6 +6997,18 @@ fn execution_operation_type_references(
             references[1] = Some(*witness);
             return references;
         }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
+            references[0] = Some(*workgroup_reference);
+            references[1] = Some(*workgroup);
+            references[2] = Some(*option);
+            references[3] = Some(*witness);
+            return references;
+        }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+            references[0] = Some(*input_witness);
+            references[1] = Some(*output_witness);
+            return references;
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
             workgroup,
             view,
@@ -7015,6 +7223,11 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         context: SemanticTypeIdV1,
         function: SemanticF32MathFunctionV1,
     },
+    /// Policy-bound FP32 consumer only. The Rust binding constructor remains
+    /// a defined callable whose original body must be traversed.
+    PolicyMathF32 {
+        contract: SemanticNumericalPolicyMathContractV1,
+    },
     /// Converts between physical `u16`, `Bf16`, and `f32` without exposing the ADT body.
     Bf16Conversion {
         kind: SemanticBf16ConversionKindV1,
@@ -7106,6 +7319,9 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     ///
     /// Unlike the legacy `Bf16MatrixLoad`, checked coordinate overflow and logical
     /// matrix edges are represented by zero-filled lanes rather than `None`.
+    GlobalBf16MatrixLoad {
+        contract: SemanticGlobalBf16MatrixLoadV1,
+    },
     Bf16MatrixLoadZeroFilledV2 {
         fragment: SemanticTypeIdV1,
         view: SemanticTypeIdV1,
@@ -7527,6 +7743,7 @@ pub struct SemanticFunctionDeclV1 {
     identity: SemanticFunctionIdentityV1,
     role: SemanticFunctionRoleV1,
     export: Option<SemanticFunctionExportV1>,
+    defined_capability_contract: Option<SemanticDefinedCapabilityContractV1>,
     item_definition_identity: SemanticItemDefinitionIdentityV1,
     monomorphization_identity: SemanticMonomorphizationIdentityV1,
     generic_type_arguments_identity: SemanticGenericTypeArgumentsIdentityV1,
@@ -7559,6 +7776,7 @@ impl SemanticFunctionDeclV1 {
             identity,
             role,
             export: None,
+            defined_capability_contract: None,
             item_definition_identity,
             monomorphization_identity,
             generic_type_arguments_identity,
@@ -7654,6 +7872,7 @@ pub struct InertSemanticMirRequestV1 {
     functions: Box<[SemanticFunctionDeclV1]>,
     callables: Box<[SemanticCallableDeclV1]>,
     roots: Box<[SemanticFunctionIdV1]>,
+    transpose_owned_flows: Box<[SemanticTransposeOwnedFlowV1]>,
 }
 
 impl InertSemanticMirRequestV1 {
@@ -7713,6 +7932,7 @@ impl InertSemanticMirRequestV1 {
             functions: functions.into_boxed_slice(),
             callables: callables.into_boxed_slice(),
             roots: roots.into_boxed_slice(),
+            transpose_owned_flows: Box::new([]),
         })
     }
 
@@ -7881,6 +8101,14 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V17, limits)
     }
 
+    /// Admits strict numerical-policy authority and its unresolved obligation.
+    pub fn admit_exact_v18(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V18, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -7889,7 +8117,11 @@ impl InertSemanticMirRequestV1 {
     /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
     /// V14 for checked disjoint-block component projection, V15 for
     /// compiler-issued kernel-context acquisition, V16 for typed global memory
-    /// capabilities, and V17 for branded execution capabilities.
+    /// capabilities, V17 for branded execution capabilities, and V18 for
+    /// strict numerical-policy authority, V19 for policy-bound FP32 consumers,
+    /// V20 for borrowed subgroup or retained epoch projection contracts, and
+    /// V21 for retained Math getter and policy binding contracts, V22 for
+    /// retained Matrix bindings, and V23 for distinct Matrix execution brands.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -8916,7 +9148,7 @@ fn validate_request(
     let mut layouts_by_identity = BTreeMap::new();
     for ty in &request.types {
         if let Some(previous) = layouts_by_identity.insert(ty.layout_identity, &ty.layout)
-            && previous != &ty.layout
+            && !layout_identity_v1::same_structural_layout_v1(previous, &ty.layout)
         {
             return Err(SemanticMirErrorV1::InvalidTypeLayout);
         }
@@ -8932,7 +9164,7 @@ fn validate_request(
             if let Some(adjusted) = value.adjusted()
                 && let Some(previous) =
                     layouts_by_identity.insert(adjusted.layout_identity, &adjusted.layout)
-                && previous != &adjusted.layout
+                && !layout_identity_v1::same_structural_layout_v1(previous, &adjusted.layout)
             {
                 return Err(SemanticMirErrorV1::InvalidTypeLayout);
             }
@@ -8953,7 +9185,7 @@ fn validate_request(
             if let Some(adjusted) = value.adjusted()
                 && let Some(previous) =
                     layouts_by_identity.insert(adjusted.layout_identity, &adjusted.layout)
-                && previous != &adjusted.layout
+                && !layout_identity_v1::same_structural_layout_v1(previous, &adjusted.layout)
             {
                 return Err(SemanticMirErrorV1::InvalidTypeLayout);
             }
@@ -8964,7 +9196,10 @@ fn validate_request(
         context.one()?;
         validate_type(&mut context, SemanticTypeIdV1(index as u32), ty)?;
     }
-    validate_callables(&mut context)?;
+    validate_callables(&mut context).map_err(|error| {
+        abi_failure_observation_v1::record(&context.request.types, SemanticMirLocationV1::Module,
+            "callables", None, error)
+    })?;
     for (index, allocation) in request.allocations.iter().enumerate() {
         context.one()?;
         validate_allocation(
@@ -9002,9 +9237,45 @@ fn validate_request(
     validate_kernel_entries(&mut context)?;
     for (index, function) in request.functions.iter().enumerate() {
         context.one()?;
-        validate_function(&mut context, SemanticFunctionIdV1(index as u32), function)?;
+        validate_function(&mut context, SemanticFunctionIdV1(index as u32), function).map_err(|error| {
+            abi_failure_observation_v1::record(&context.request.types,
+                SemanticMirLocationV1::Function(SemanticFunctionIdV1(index as u32)),
+                "function", Some(function.abi()), error)
+        })?;
+        defined_capability_v1::validate_function_contract(
+            &mut context, SemanticFunctionIdV1(index as u32), function,
+        ).map_err(|error| {
+            abi_failure_observation_v1::record(&context.request.types,
+                SemanticMirLocationV1::Function(SemanticFunctionIdV1(index as u32)),
+                "defined-contract", Some(function.abi()), error)
+        })?;
     }
+    transpose_owned_flow_v25::validate(&mut context)?;
     validate_exact_function_closure(&mut context)?;
+    // Finite interprocedural facts require every retained body and contract to
+    // have passed structural validation, independent of canonical function order.
+    charge_validation_work(&mut context, request.functions.len())?;
+    let remaining = limits
+        .limit(SemanticMirResourceV1::ValidationWork)
+        .saturating_sub(context.work);
+    let mut arithmetic_work = crate::semantic_option_dominance::WorkBudgetV1::with_limit(
+        usize::try_from(remaining).unwrap_or(usize::MAX),
+    );
+    let arithmetic_result = request
+        .functions
+        .iter()
+        .enumerate()
+        .try_for_each(|(index, function)| {
+            validate_function_unchecked_arithmetic(
+                &context,
+                SemanticFunctionIdV1(index as u32),
+                function,
+                &mut arithmetic_work,
+            )
+        });
+    // Charge attempted work on rejection too, preserving the request-wide limit.
+    charge_validation_work(&mut context, arithmetic_work.used())?;
+    arithmetic_result?;
     Ok(())
 }
 
@@ -9112,6 +9383,13 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
             {
                 return Err(SemanticMirErrorV1::InvalidFunctionAbi);
             }
+            if let Some(record) = context.request.functions[index].defined_capability_contract() {
+                if !intrinsic_capabilities.record_defined_contract(*record) {
+                    return Err(abi_failure_observation_v1::record(&context.request.types, location,
+                        "defined-claims", Some(context.request.functions[index].abi()),
+                        SemanticMirErrorV1::InvalidFunctionAbi));
+                }
+            }
             continue;
         }
         let (tag, binding) = match callable {
@@ -9158,7 +9436,9 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
                     )
                     || !record_intrinsic_capability_claims(*operation, &mut intrinsic_capabilities)
                 {
-                    return Err(SemanticMirErrorV1::InvalidFunctionAbi);
+                    return Err(abi_failure_observation_v1::record(&context.request.types, location,
+                        "intrinsic-identity-signature-claims", Some(binding.abi()),
+                        SemanticMirErrorV1::InvalidFunctionAbi));
                 }
                 (2_u8, binding)
             }
@@ -9172,7 +9452,10 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
             });
         }
         previous_non_body = Some(key);
-        validate_non_body_callable_abi(context, location, binding)?;
+        validate_non_body_callable_abi(context, location, binding).map_err(|error| {
+            abi_failure_observation_v1::record(&context.request.types, location,
+                "non-body-abi", Some(binding.abi()), error)
+        })?;
     }
     if !intrinsic_capabilities.memory_accesses_match_bindings() {
         return Err(SemanticMirErrorV1::InvalidFunctionAbi);
@@ -9222,6 +9505,12 @@ fn compiler_intrinsic_source_identity_matches(
         SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
             contract.source_identity() == binding
         }
+        SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract } => {
+            contract.source_identity() == binding
+        }
+        SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { contract } => {
+            contract.source_identity() == binding
+        }
         _ => true,
     }
 }
@@ -9235,11 +9524,20 @@ struct BoundCapabilityMemoryViewV1 {
 
 #[derive(Default)]
 struct IntrinsicCapabilityClaimsV1 {
+    reusable_lds_origins: BTreeMap<SemanticFunctionIdV1, SemanticReusableLdsConversionV1>,
+    guarded_grid_origins: BTreeMap<SemanticFunctionIdV1, SemanticGuardedGridLeaderV1>,
+    reusable_phase_origins: BTreeMap<SemanticFunctionIdV1, SemanticDefinedReusablePhaseV1>,
     disjoint_mappings: BTreeMap<SemanticTypeIdV1, SemanticDisjointIndexSpaceV1>,
     grid_leader: Option<SemanticTypeIdV1>,
     memory_bindings: BTreeMap<SemanticTypeIdV1, BoundCapabilityMemoryViewV1>,
     memory_accesses: Vec<(SemanticTypeIdV1, BoundCapabilityMemoryViewV1)>,
     execution_workgroups: BTreeMap<SemanticTypeIdentityV1, SemanticKernelCapabilityProvenanceV1>,
+    numerical_policies: BTreeMap<SemanticTypeIdV1, (SemanticTypeIdentityV1, SemanticKernelCapabilityProvenanceV1)>,
+    numerical_math_brands: BTreeMap<SemanticTypeIdV1, SemanticTypeIdentityV1>,
+    numerical_math_origins: BTreeMap<SemanticTypeIdV1, (SemanticKernelCapabilityProvenanceV1, SemanticTypeIdentityV1)>,
+    matrix_origins: BTreeMap<SemanticTypeIdV1, (SemanticKernelCapabilityProvenanceV1, SemanticTypeIdentityV1)>,
+    borrowed_workgroups: BTreeMap<SemanticTypeIdV1, (SemanticKernelCapabilityProvenanceV1, SemanticTypeIdentityV1, SemanticTypeIdentityV1)>,
+    transpose_tiles: BTreeMap<SemanticTypeIdV1, gfx950_transpose_v1::TileClaim>,
 }
 
 impl IntrinsicCapabilityClaimsV1 {
@@ -9304,6 +9602,17 @@ impl IntrinsicCapabilityClaimsV1 {
     ) -> bool {
         if contract.obligations().bits() != execution_operation_obligations(contract.operation()) {
             return false;
+        }
+        if !gfx950_transpose_v1::record_claim(self, contract)
+            || !workgroup_borrow_v1::record_execution_claim(self, contract) {
+            return false;
+        }
+        if let SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { capability, policy, .. } = contract.operation() {
+            let binding = (policy, contract.provenance());
+            return match self.numerical_policies.entry(capability) {
+                std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(binding); true }
+                std::collections::btree_map::Entry::Occupied(entry) => *entry.get() == binding,
+            };
         }
         let Some(workgroup_brand) = contract.workgroup_brand() else {
             return operation_is_kernel_scoped(contract.operation());
@@ -9491,6 +9800,12 @@ fn record_intrinsic_capability_claims(
         }
         SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
             claims.record_execution_contract(contract)
+        }
+        SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract } => {
+            claims.record_policy_math(contract)
+        }
+        SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { contract } => {
+            global_bf16_matrix_v1::record_claim(claims, contract)
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. }
         | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
@@ -9893,9 +10208,7 @@ fn validate_non_body_callable_abi(
         abi.source_input_types().len(),
         context.limits,
     )?;
-    for source_type in abi.source_input_types() {
-        context.type_reference(*source_type, location)?;
-    }
+    validate_source_argument_types(context, abi, location)?;
     context.type_reference(abi.source_output_type(), location)?;
     validate_rust_call_expansion(context.request, abi)?;
     context.totals.charge(
@@ -10301,6 +10614,13 @@ fn compiler_intrinsic_signature_matches(
         }
         SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
             contract.signature().matches(inputs, output)
+                && numerical_policy_v1::abi_matches(request, abi, contract.operation())
+                && workgroup_borrow_v1::abi_matches(request, abi, contract.operation())
+                && workgroup_memory_index_v1::abi_matches(request, abi, contract.operation())
+                && match contract.operation() {
+                    SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => gfx950_transpose_v1::abi_matches(request, abi, transpose),
+                    _ => true,
+                }
                 && kernel_capability_provenance_matches(request, contract.provenance())
                 && contract.obligations().bits()
                     == execution_operation_obligations(contract.operation())
@@ -10311,6 +10631,12 @@ fn compiler_intrinsic_signature_matches(
         }
         SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context } => {
             inputs.is_empty() && output == context
+        }
+        SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract } => {
+            numerical_policy_math_v1::abi_matches(request, abi, contract)
+        }
+        SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { contract } => {
+            global_bf16_matrix_v1::abi_matches(request, abi, contract)
         }
         SemanticCompilerIntrinsicOperationV1::MathF32 { context, function } => {
             inputs.len() == function.arity() + 1
@@ -14303,9 +14629,7 @@ fn validate_function(
         function.abi.source_input_types().len(),
         context.limits,
     )?;
-    for source_type in function.abi.source_input_types() {
-        context.type_reference(*source_type, function_location)?;
-    }
+    validate_source_argument_types(context, &function.abi, function_location)?;
     context.type_reference(function.abi.source_output_type(), function_location)?;
     validate_rust_call_expansion(context.request, &function.abi)?;
     context.totals.charge(
@@ -14379,11 +14703,27 @@ fn validate_function(
         validate_terminator(context, id, function, location, &block.terminator.kind)?;
     }
     validate_dynamic_lds_linearity(context, id, function)?;
+    Ok(())
+}
+
+fn validate_function_unchecked_arithmetic(
+    context: &ValidationContextV1<'_>,
+    id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+    budget: &mut crate::semantic_option_dominance::WorkBudgetV1,
+) -> Result<(), SemanticMirErrorV1> {
+    let function_location = SemanticMirLocationV1::Function(id);
     let unchecked_operation = first_unchecked_operation(function);
     let violation = match unchecked_operation {
         Some(operation) => {
-            crate::semantic_option_dominance::semantic_unchecked_arithmetic_violation_v1(function)
-                .map_err(|_| SemanticMirErrorV1::UnprovenUncheckedArithmetic {
+            crate::semantic_option_dominance::semantic_unchecked_arithmetic_violation_with_budget_v1(
+                &context.request.types,
+                &context.request.functions,
+                &context.request.callables,
+                id,
+                budget,
+            )
+            .map_err(|_| SemanticMirErrorV1::UnprovenUncheckedArithmetic {
                 operation,
                 location: function_location,
             })?
@@ -15119,9 +15459,14 @@ fn validate_hidden_abi_argument(
 ) -> Result<(), SemanticMirErrorV1> {
     match role {
         SemanticAbiHiddenArgumentRoleV1::CallerLocation => {
-            let SemanticTypeShapeV1::Pointer(pointer) =
-                &request.types[value.adjusted_ty().0 as usize].shape
-            else {
+            let ty = &request.types[value.adjusted_ty().0 as usize];
+            let SemanticTypeShapeV1::Pointer(pointer) = &ty.shape else {
+                return Err(SemanticMirErrorV1::InvalidFunctionAbi);
+            };
+            let Some(pointee) = ty.abi_properties.first_pointee else {
+                return Err(SemanticMirErrorV1::InvalidFunctionAbi);
+            };
+            let SemanticAbiPointeeKindV1::SharedReference { frozen } = pointee.kind else {
                 return Err(SemanticMirErrorV1::InvalidFunctionAbi);
             };
             let pointee_layout = &request.types[pointer.pointee.0 as usize].layout;
@@ -15131,20 +15476,26 @@ fn validate_hidden_abi_argument(
             let SemanticAbiPassModeV1::Direct(attributes) = value.mode else {
                 return Err(SemanticMirErrorV1::InvalidFunctionAbi);
             };
+            // rustc's opt-level=0 profile retains a non-frozen shared reference.
+            // Hidden arguments must match that recorded profile, just like source arguments.
+            let guaranteed_size = if frozen { pointee_size } else { 0 };
             let regular = attributes.regular;
             if pointer.kind != SemanticPointerKindV1::Reference
                 || pointer.mutability != SemanticMutabilityV1::Immutable
                 || pointer.address_space != 0
                 || pointer.pointer_width_bits != 64
                 || pointer.metadata != SemanticPointerMetadataV1::None
-                || !regular.no_alias()
-                || regular.pointer_capture() != Some(SemanticAbiPointerCaptureV1::CapturesReadOnly)
+                || regular.no_alias() != frozen
+                || regular.pointer_capture()
+                    != frozen.then_some(SemanticAbiPointerCaptureV1::CapturesReadOnly)
                 || !regular.non_null()
-                || !regular.read_only()
+                || regular.read_only() != frozen
                 || regular.in_register()
                 || !regular.no_undef()
                 || attributes.extension != SemanticAbiExtensionV1::None
-                || attributes.pointee_size_bytes != pointee_size
+                || pointee.guaranteed_size_bytes != guaranteed_size
+                || pointee.reliable_alignment_bytes != pointee_layout.alignment_bytes
+                || attributes.pointee_size_bytes != guaranteed_size
                 || attributes.pointee_alignment_bytes != Some(pointee_layout.alignment_bytes)
             {
                 return Err(SemanticMirErrorV1::InvalidFunctionAbi);
@@ -15211,6 +15562,41 @@ fn validate_drop_glue_abi(
     Ok(())
 }
 
+fn validate_source_argument_types(
+    context: &mut ValidationContextV1<'_>,
+    abi: &SemanticFunctionAbiV1,
+    location: SemanticMirLocationV1,
+) -> Result<(), SemanticMirErrorV1> {
+    use SemanticSourceArgumentOwnershipV1 as Ownership;
+
+    for (&ty, &ownership) in abi
+        .source_input_types()
+        .iter()
+        .zip(abi.source_argument_ownership())
+    {
+        context.type_reference(ty, location)?;
+        context.one()?;
+        let shape = &context.request.types[ty.index() as usize].shape;
+        let matches = match ownership {
+            Ownership::SharedBorrow => matches!(shape, SemanticTypeShapeV1::Pointer(pointer)
+                if pointer.kind() == SemanticPointerKindV1::Reference
+                    && pointer.mutability() == SemanticMutabilityV1::Immutable),
+            Ownership::UniqueBorrow => matches!(shape, SemanticTypeShapeV1::Pointer(pointer)
+                if pointer.kind() == SemanticPointerKindV1::Reference
+                    && pointer.mutability() == SemanticMutabilityV1::Mutable),
+            Ownership::RawPointer => matches!(shape, SemanticTypeShapeV1::Pointer(pointer)
+                if pointer.kind() == SemanticPointerKindV1::Raw),
+            // These tags supply no structural borrow claim. Exclusive ownership
+            // still needs its authenticated device contract at the consumer.
+            Ownership::Unspecified | Ownership::ByValue | Ownership::ExclusiveOwner => true,
+        };
+        if !matches {
+            return Err(SemanticMirErrorV1::InvalidFunctionAbi);
+        }
+    }
+    Ok(())
+}
+
 fn validate_function_abi_contract(
     target: SemanticTargetDataLayoutV1,
     abi: &SemanticFunctionAbiV1,
@@ -15251,15 +15637,16 @@ fn validate_rust_call_expansion(
         .source_input_types()
         .last()
         .ok_or(SemanticMirErrorV1::InvalidFunctionAbi)?;
-    let SemanticTypeShapeV1::Tuple(tuple_fields) = &request.types[tuple_type.0 as usize].shape
-    else {
-        return Err(SemanticMirErrorV1::InvalidFunctionAbi);
+    let tuple_fields: &[SemanticTypeIdV1] = match &request.types[tuple_type.0 as usize].shape {
+        SemanticTypeShapeV1::Unit => &[],
+        SemanticTypeShapeV1::Tuple(tuple) => &tuple.fields,
+        _ => return Err(SemanticMirErrorV1::InvalidFunctionAbi),
     };
     let expanded = &abi.arguments[abi.fixed_count as usize..abi.adjusted_arguments().len()];
-    if expanded.len() != tuple_fields.fields.len()
+    if expanded.len() != tuple_fields.len()
         || expanded
             .iter()
-            .zip(tuple_fields.fields.iter())
+            .zip(tuple_fields.iter())
             .enumerate()
             .any(|(index, (argument, field_type))| {
                 argument.role != SemanticAbiArgumentRoleV1::RustCallTupleField(index as u32)
@@ -15657,6 +16044,17 @@ fn validate_scalar_abi_attributes(
     }
     match scalar.primitive() {
         SemanticBackendPrimitiveV1::Pointer { .. } => {
+            // Uninitialized pointer scalars carry bits, not pointee facts.
+            if !initialized {
+                return if attributes == SemanticAbiValueAttributesV1::plain()
+                    && pointee.is_none()
+                    && !safe_non_null_override
+                {
+                    Ok(())
+                } else {
+                    Err(SemanticMirErrorV1::InvalidFunctionAbi)
+                };
+            }
             let requires_non_null = matches!(
                 scalar,
                 SemanticBackendScalarV1::Initialized { valid_range, .. }
@@ -16157,6 +16555,10 @@ fn validate_rvalue(
                         && plain_bit_scalar(context.request, input)
                         && plain_bit_scalar(context.request, output)
                 }
+                SemanticCastKindV1::ArrayReferenceToSlice => {
+                    array_reference_unsize_length_v1(&context.request.types, input, output)
+                        .is_some()
+                }
             };
             if !valid {
                 return invalid_type_operation(SemanticTypeOperationV1::Cast, location);
@@ -16180,7 +16582,13 @@ fn validate_rvalue(
             if pointer.kind != SemanticPointerKindV1::Reference
                 || pointer.address_space != 0
                 || pointer.pointer_width_bits != 64
-                || pointer.metadata != SemanticPointerMetadataV1::None
+                || !match pointer.metadata {
+                    SemanticPointerMetadataV1::None => true,
+                    SemanticPointerMetadataV1::SliceLength => {
+                        exact_slice_reference_reborrow(context, function, *kind, place)
+                    }
+                    SemanticPointerMetadataV1::VTable => false,
+                }
                 || pointer.pointee != place.ty
                 || !mutability_valid
             {
@@ -16449,6 +16857,40 @@ fn pointer_type(
     }
 }
 
+/// The length component of an exact reference unsizing conversion. This is
+/// a type relation, not allocation, initialized-memory or borrow authority.
+pub fn array_reference_unsize_length_v1(
+    types: &[SemanticTypeDeclV1],
+    input: SemanticTypeIdV1,
+    output: SemanticTypeIdV1,
+) -> Option<u64> {
+    let shape = |id: SemanticTypeIdV1| types.get(id.index() as usize).map(|ty| ty.shape());
+    let (SemanticTypeShapeV1::Pointer(input), SemanticTypeShapeV1::Pointer(output)) =
+        (shape(input)?, shape(output)?)
+    else {
+        return None;
+    };
+    if input.kind != SemanticPointerKindV1::Reference
+        || output.kind != SemanticPointerKindV1::Reference
+        || input.mutability != output.mutability
+        || input.address_space != 0
+        || output.address_space != input.address_space
+        || input.pointer_width_bits != 64
+        || output.pointer_width_bits != input.pointer_width_bits
+        || input.metadata != SemanticPointerMetadataV1::None
+        || output.metadata != SemanticPointerMetadataV1::SliceLength
+    {
+        return None;
+    }
+    match (shape(input.pointee)?, shape(output.pointee)?) {
+        (
+            SemanticTypeShapeV1::Array { element, length },
+            SemanticTypeShapeV1::Slice { element: target },
+        ) if element == target => Some(*length),
+        _ => None,
+    }
+}
+
 fn is_comparable_type(request: &InertSemanticMirRequestV1, ty: SemanticTypeIdV1) -> bool {
     is_scalar_type(request, ty) || is_pointer_type(request, ty)
 }
@@ -16565,6 +17007,39 @@ const fn compare_exchange_failure_allowed(
                 | SemanticAtomicOrderingV1::SequentiallyConsistent
         ),
     }
+}
+
+// Reborrowing a dereferenced slice reference preserves its existing data/length
+// pair; it does not synthesize metadata or establish allocation ownership. The
+// ordinary place, initialization, lifetime and downstream escape checks remain.
+fn exact_slice_reference_reborrow(
+    context: &ValidationContextV1<'_>,
+    function: &SemanticFunctionDeclV1,
+    kind: SemanticBorrowKindV1,
+    place: &SemanticPlaceV1,
+) -> bool {
+    let [projection] = place.projections.as_ref() else {
+        return false;
+    };
+    if projection.kind != SemanticProjectionKindV1::Dereference
+        || !matches!(type_shape(context, place.ty), SemanticTypeShapeV1::Slice { .. })
+    {
+        return false;
+    }
+    let source = function.locals[place.local.0 as usize].ty;
+    let SemanticTypeShapeV1::Pointer(source) = type_shape(context, source) else {
+        return false;
+    };
+    source.kind == SemanticPointerKindV1::Reference
+        && source.metadata == SemanticPointerMetadataV1::SliceLength
+        && source.address_space == 0
+        && source.pointer_width_bits == 64
+        && source.pointee == place.ty
+        && match kind {
+            SemanticBorrowKindV1::Shared => true,
+            SemanticBorrowKindV1::Mutable => source.mutability == SemanticMutabilityV1::Mutable,
+            SemanticBorrowKindV1::Fake => false,
+        }
 }
 
 fn validate_place(
@@ -17908,6 +18383,19 @@ fn validate_exact_type_closure(
         if let Some(adjusted) = function.abi.return_value.adjusted() {
             pending.push_back(adjusted.ty);
         }
+        if let Some(SemanticDefinedCapabilityContractV1::ReusablePhase(record)) = function.defined_capability_contract() {
+            record.recipe().try_visit_types(|ty| {
+                context.one()?;
+                pending.push_back(ty);
+                Ok::<_, SemanticMirErrorV1>(())
+            })?;
+        }
+        if let Some(SemanticDefinedCapabilityContractV1::GuardedGridLeader(record)) = function.defined_capability_contract() {
+            for ty in record.types().all() {
+                context.one()?;
+                pending.push_back(ty);
+            }
+        }
         pending.extend(function.abi.source_input_types().iter().copied());
         pending.push_back(function.abi.source_output_type());
         pending.extend(function.locals.iter().map(|local| local.ty));
@@ -18008,6 +18496,9 @@ fn enqueue_compiler_intrinsic_type_references(
     pending: &mut VecDeque<SemanticTypeIdV1>,
 ) {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { contract } => {
+            pending.extend(contract.types().all());
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
@@ -18171,6 +18662,9 @@ fn enqueue_compiler_intrinsic_type_references(
         SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { context, .. } => {
             pending.push_back(context);
+        }
+        SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract } => {
+            pending.extend(contract.types().all());
         }
         SemanticCompilerIntrinsicOperationV1::Bf16Conversion { input, output, .. } => {
             pending.push_back(input);
@@ -18955,6 +19449,7 @@ fn encode_request(
     for root in &request.roots {
         writer.u32(root.0)?;
     }
+    transpose_owned_flow_v25::encode_footer(&mut writer, wire_version, &request.transpose_owned_flows)?;
     Ok(writer.finish())
 }
 
@@ -18985,6 +19480,21 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
     })
 }
 
+fn uses_array_reference_unsize_v1(function: &SemanticFunctionDeclV1) -> bool {
+    function.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                &statement.kind,
+                SemanticStatementKindV1::Assign(assignment)
+                    if matches!(&assignment.value.kind,
+                        SemanticRvalueKindV1::Cast {
+                            kind: SemanticCastKindV1::ArrayReferenceToSlice, ..
+                        })
+            )
+        })
+    })
+}
+
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
@@ -19007,6 +19517,28 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         )
     });
     let mut required = SemanticMirWireVersionV1::V2;
+    if !request.transpose_owned_flows.is_empty() { required = required.max(SemanticMirWireVersionV1::V25); }
+    if request.functions.iter().any(uses_array_reference_unsize_v1) {
+        required = required.max(SemanticMirWireVersionV1::V23);
+    }
+    if request.callables.iter().any(|callable| matches!(callable,
+        SemanticCallableDeclV1::CompilerIntrinsic { operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, .. }
+        if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::Gfx950Transpose(_)))) {
+        required = required.max(SemanticMirWireVersionV1::V24);
+    }
+    if request.callables.iter().any(|callable| matches!(callable,
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
+        } if workgroup_memory_index_v1::is_scoped_index(contract.operation())
+            || matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. })))) {
+        required = required.max(SemanticMirWireVersionV1::V22);
+    }
+    if request.callables.iter().any(|callable| matches!(callable,
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { .. }, ..
+        })) {
+        required = required.max(SemanticMirWireVersionV1::V22);
+    }
     if request.callables.iter().any(|callable| {
         matches!(
             callable,
@@ -19200,6 +19732,32 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         )
     }) {
         required = required.max(SemanticMirWireVersionV1::V17);
+    }
+    if request.callables.iter().any(|callable| {
+        matches!(callable, SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
+        } if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. }
+            | SemanticExecutionCapabilityOperationV1::SubgroupPartition(_)))
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V18);
+    }
+    if request.callables.iter().any(|callable| {
+        matches!(callable, SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { .. }, ..
+        })
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V19);
+    }
+    for contract in request.functions.iter().filter_map(SemanticFunctionDeclV1::defined_capability_contract) {
+        required = required.max(contract.minimum_wire_version());
+    }
+    if request.callables.iter().any(|callable| {
+            matches!(callable, SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
+            } if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }))
+        })
+    {
+        required = required.max(SemanticMirWireVersionV1::V20);
     }
     if request.callables.iter().any(|callable| {
         matches!(
@@ -19945,6 +20503,28 @@ fn encode_function(
     function: &SemanticFunctionDeclV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    encode_function_with_defined_contract(writer, function, wire_version, function.defined_capability_contract)
+}
+
+fn encode_function_with_defined_contract(
+    writer: &mut CanonicalWriterV1,
+    function: &SemanticFunctionDeclV1,
+    wire_version: SemanticMirWireVersionV1,
+    defined_contract: Option<SemanticDefinedCapabilityContractV1>,
+) -> Result<(), SemanticMirErrorV1> {
+    if wire_version < SemanticMirWireVersionV1::V23 && uses_array_reference_unsize_v1(function) {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V23,
+        });
+    }
+    if let Some(contract) = defined_contract
+        && wire_version < contract.minimum_wire_version()
+    {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version, required: contract.minimum_wire_version(),
+        });
+    }
     writer.identity(function.identity.0)?;
     match function.role {
         SemanticFunctionRoleV1::KernelRoot => writer.u8(0)?,
@@ -19998,6 +20578,12 @@ fn encode_function(
         }
         encode_source(writer, block.terminator.source)?;
         encode_terminator(writer, &block.terminator.kind)?;
+    }
+    if wire_version >= SemanticMirWireVersionV1::V20 {
+        writer.bool(defined_contract.is_some())?;
+        if let Some(contract) = defined_contract {
+            contract.encode(writer)?;
+        }
     }
     Ok(())
 }
@@ -20060,6 +20646,16 @@ fn encode_compiler_intrinsic_operation(
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { contract } => {
+            if wire_version < SemanticMirWireVersionV1::V22 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V22,
+                });
+            }
+            writer.u8(80)?;
+            global_bf16_matrix_v1::encode(writer, contract)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
             writer.u8(0)?;
             encode_axis(writer, axis)
@@ -20083,7 +20679,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V14
                 && wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20095,7 +20691,7 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context } => {
             if wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20110,7 +20706,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V14
                 && wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20193,7 +20789,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V14
                 && wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20357,11 +20953,33 @@ fn encode_compiler_intrinsic_operation(
             encode_kernel_capability_provenance(writer, provenance)?;
             writer.identity(source_identity.0)
         }
-        SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
-            if wire_version != SemanticMirWireVersionV1::V17 {
+        SemanticCompilerIntrinsicOperationV1::PolicyMathF32 { contract } => {
+            if wire_version < SemanticMirWireVersionV1::V19 {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
-                    required: SemanticMirWireVersionV1::V17,
+                    required: SemanticMirWireVersionV1::V19,
+                });
+            }
+            writer.u8(79)?;
+            numerical_policy_math_v1::encode(writer, contract)
+        }
+        SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
+            let required = if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::Gfx950Transpose(_)) {
+                SemanticMirWireVersionV1::V24
+            } else if workgroup_memory_index_v1::is_scoped_index(contract.operation())
+                || matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupPartition(SemanticSubgroupPartitionOperationV1::ReduceMaxF32 { .. })) {
+                SemanticMirWireVersionV1::V22
+            } else if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }) {
+                SemanticMirWireVersionV1::V20
+            } else if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } | SemanticExecutionCapabilityOperationV1::SubgroupPartition(_)) {
+                SemanticMirWireVersionV1::V18
+            } else {
+                SemanticMirWireVersionV1::V17
+            };
+            if wire_version < required {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required,
                 });
             }
             writer.u8(73)?;
@@ -20374,7 +20992,7 @@ fn encode_compiler_intrinsic_operation(
             provenance,
             source_identity,
         } => {
-            if wire_version != SemanticMirWireVersionV1::V17 {
+            if wire_version < SemanticMirWireVersionV1::V17 {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V17,
@@ -20648,7 +21266,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V14
                 && wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20675,7 +21293,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V14
                 && wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20902,7 +21520,7 @@ fn encode_compiler_intrinsic_operation(
             if wire_version != SemanticMirWireVersionV1::V14
                 && wire_version != SemanticMirWireVersionV1::V15
                 && wire_version != SemanticMirWireVersionV1::V16
-                && wire_version != SemanticMirWireVersionV1::V17
+                && wire_version < SemanticMirWireVersionV1::V17
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -21090,7 +21708,7 @@ fn require_capability_memory_wire_version(
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     if wire_version != SemanticMirWireVersionV1::V16
-        && wire_version != SemanticMirWireVersionV1::V17
+        && wire_version < SemanticMirWireVersionV1::V17
     {
         Err(SemanticMirErrorV1::WireVersionCannotRepresent {
             requested: wire_version,
@@ -21134,7 +21752,11 @@ fn encode_execution_capability_contract(
             writer.identity(epoch.0)?;
         }
     }
-    writer.u16(contract.obligations.0)?;
+    if matches!(contract.operation, SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. }) {
+        writer.u32(contract.obligations.0)?;
+    } else {
+        writer.u16(u16::try_from(contract.obligations.0).map_err(|_| SemanticMirErrorV1::InvalidFunctionAbi)?)?;
+    }
     writer.identity(contract.source_identity.0)
 }
 
@@ -21143,6 +21765,29 @@ fn encode_execution_capability_operation(
     operation: SemanticExecutionCapabilityOperationV1,
 ) -> Result<(), SemanticMirErrorV1> {
     match operation {
+        SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+            workgroup_reference, workgroup, subgroup, width,
+        } => {
+            writer.u8(25)?;
+            writer.u32(workgroup_reference.0)?;
+            writer.u32(workgroup.0)?;
+            writer.u32(subgroup.0)?;
+            writer.u32(width)
+        }
+        SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => {
+            writer.u8(29)?;
+            transpose.encode(writer)
+        }
+        SemanticExecutionCapabilityOperationV1::SubgroupPartition(partition) => {
+            writer.u8(24)?;
+            partition.encode(writer)
+        }
+        SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { context, capability, policy } => {
+            writer.u8(23)?;
+            writer.u32(context.0)?;
+            writer.u32(capability.0)?;
+            writer.identity(policy.0)
+        }
         SemanticExecutionCapabilityOperationV1::SubgroupDerive {
             workgroup,
             subgroup,
@@ -21432,6 +22077,18 @@ fn encode_execution_capability_operation(
             writer.u32(workgroup.0)?;
             writer.u32(witness.0)
         }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
+            writer.u8(26)?;
+            writer.u32(workgroup_reference.0)?;
+            writer.u32(workgroup.0)?;
+            writer.u32(option.0)?;
+            writer.u32(witness.0)
+        }
+        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+            writer.u8(27)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_witness.0)
+        }
         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
             workgroup,
             view,
@@ -21633,7 +22290,7 @@ fn encode_capability_memory_contract(
 fn require_exclusive_capability_memory_wire_version(
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
-    if wire_version == SemanticMirWireVersionV1::V17 {
+    if wire_version >= SemanticMirWireVersionV1::V17 {
         Ok(())
     } else {
         Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -22347,6 +23004,7 @@ fn encode_rvalue(
                 SemanticCastKindV1::PointerExposeProvenance => 3,
                 SemanticCastKindV1::PointerWithExposedProvenance => 4,
                 SemanticCastKindV1::Transmute => 5,
+                SemanticCastKindV1::ArrayReferenceToSlice => 6,
             })?;
             encode_operand(writer, operand)
         }
@@ -22651,6 +23309,8 @@ fn encode_assert_message(
 #[cfg(test)]
 mod private_tests {
     use super::*;
+
+    include!("semantic_mir_v1/array_reference_unsize_tests.rs");
 
     fn test_type(
         tag: u8,

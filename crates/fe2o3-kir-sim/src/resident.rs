@@ -255,6 +255,10 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
             resident.add_vec::<fe2o3_kernel_ir::ValueId>(capability.operands.capacity())?;
             resident.add_bytes(capability.provenance.root.retained_capacity_bytes())
         }
+        OperationKind::ReusablePhase(phase) => {
+            resident.add_vec::<fe2o3_kernel_ir::ValueId>(phase.operands.capacity())?;
+            resident.add_bytes(phase.provenance.root.retained_capacity_bytes())
+        }
         OperationKind::Constant(_)
         | OperationKind::MemoryIntrinsic(_)
         | OperationKind::Unary { .. }
@@ -300,6 +304,10 @@ fn add_type_boxes(resident: &mut ResidentLedger, ty: &Type) -> Option<()> {
             }
             Type::ExecutionCapability(capability) => {
                 resident.add_bytes(capability.provenance.root.retained_capacity_bytes())?;
+                return Some(());
+            }
+            Type::ReusablePhaseToken(token) => {
+                resident.add_bytes(token.provenance.root.retained_capacity_bytes())?;
                 return Some(());
             }
             Type::Unit | Type::Scalar(_) => return Some(()),

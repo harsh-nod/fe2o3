@@ -1,8 +1,9 @@
 use dialect_gpu::{HierarchyAttr, HierarchyIdOp, HierarchyIndexType};
 use dialect_kernel::{
-    BranchOp, DIALECT_NAME, DimensionAttr, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexType, IndexUnknownOp, InvocationDimensionAttr, IterationDomainAttr, MemorySpaceAttr,
-    RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    AccessKindAttr, BranchOp, DIALECT_NAME, DimensionAttr, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexType, IndexUnknownOp, InvocationDimensionAttr, IterationDomainAttr,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, SemanticSymbolOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     MAX_PLIRON_IDENTITY_BLOCKS_V1, MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1,
@@ -188,6 +189,72 @@ fn operand_wiring_mutation_reports_the_binary_operands() {
     assert_eq!(change.component(), "operands");
     assert_eq!(change.before(), "v0, v1");
     assert_eq!(change.after(), "v1, v0");
+}
+
+#[test]
+fn stored_rhs_identity_tracks_the_exact_ssa_and_accessors_preserve_epoch() {
+    fn kernel(context: &mut Context, alternate: bool) -> FuncOp {
+        let function = empty_function(context, "stored_identity", vec![]);
+        let block = function.get_entry_block(context);
+        let ty = RankedViewType::new(context, 32, true, vec![8]).unwrap();
+        let view = RankedViewOp::new(context, ty, vec![]).unwrap();
+        let index = IndexConstantOp::new(context, 0);
+        let first = SemanticSymbolOp::new(context, 1);
+        let second = SemanticSymbolOp::new(context, 2);
+        let rhs = if alternate {
+            second.result(context)
+        } else {
+            first.result(context)
+        };
+        let access = RankedAccessOp::new_value(
+            context,
+            AccessKindAttr::Write,
+            view.result(context),
+            vec![index.result(context)],
+            rhs,
+        )
+        .unwrap();
+        let ret = ReturnOp::new(context);
+        for op in [
+            view.get_operation(),
+            index.get_operation(),
+            first.get_operation(),
+            second.get_operation(),
+            access.get_operation(),
+            ret.get_operation(),
+        ] {
+            op.insert_at_back(block, context);
+        }
+        let epoch = context.ir_mutation_attempt_epoch().unwrap();
+        for _ in 0..2 {
+            assert_eq!(access.stored_value(context), Some(rhs));
+            assert_eq!(access.indices(context), vec![index.result(context)]);
+            derive_pliron_ir_structural_identity_v1(context, &function).unwrap();
+        }
+        assert_eq!(context.ir_mutation_attempt_epoch().unwrap(), epoch);
+        function
+    }
+    let before_context = &mut setup();
+    let before = kernel(before_context, false);
+    let after_context = &mut setup();
+    let after = kernel(after_context, true);
+    let error = require_pliron_ir_structural_identity_preserved_v1(
+        before_context,
+        &before,
+        after_context,
+        &after,
+    )
+    .unwrap_err();
+    let change = verified_change(&error);
+    assert!(matches!(
+        change.location(),
+        PlironPreserveLocationV1::Operation {
+            block: 0,
+            operation: 4,
+            ..
+        }
+    ));
+    assert_eq!(change.component(), "operands");
 }
 
 #[test]

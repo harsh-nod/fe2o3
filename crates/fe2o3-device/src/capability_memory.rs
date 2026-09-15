@@ -1124,13 +1124,14 @@ where
     ///
     /// Production import authenticates this exact terminal together with the
     /// physical ABI, coherent allocation, exact width, static scope, and
-    /// absence of conflicting non-atomic aliases.
+    /// absence of conflicting non-atomic aliases. The entry consumes an exclusive
+    /// host borrow; the resulting logical role still permits only atomic aliases.
     #[doc(hidden)]
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_capability_global_bind_atomic_v1"]
     pub fn __compiler_bind_atomic(
         context: &KernelContext<'kernel, Kernel, Target, Launch>,
-        physical: &'kernel [T],
+        physical: &'kernel mut [T],
     ) -> Self {
         let _ = (context, physical);
         unreachable!("global atomic capability binding requires authenticated lowering")

@@ -207,6 +207,7 @@ pub fn analyze_execution_capability_atomic_scope_v1(
                         | OperationKind::Gfx950LdsTranspose(_)
                         | OperationKind::Wave(_)
                         | OperationKind::InlineAssembly(_)
+                        | OperationKind::ReusablePhase(_)
                         | OperationKind::KernelContextIssue(_)
                         | OperationKind::GlobalCapabilityBind(_)
                         | OperationKind::GlobalCapabilityIndex(_) => {}
@@ -224,6 +225,8 @@ pub fn analyze_execution_capability_atomic_scope_v1(
 
 #[cfg(test)]
 mod tests {
+    mod phase_compile_closure_tests;
+
     use fe2o3_kernel_ir::{
         BasicBlock, ExecutionCapabilityOpV1, ExecutionCapabilityProvenanceV1,
         ExecutionCapabilitySignatureV1, ExecutionMemoryOrderingV1, ExecutionSafetyObligationsV1,
@@ -281,6 +284,7 @@ mod tests {
                     function: [15; 32],
                     operation: [16; 32],
                     block: 3,
+                    occurrence: None,
                 },
                 operation,
             }),

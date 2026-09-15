@@ -6,6 +6,8 @@ mod context;
 mod debug;
 mod execute;
 mod execution_capability_v13;
+#[cfg(test)]
+mod phase_declared_tests;
 mod explore;
 mod f32_surface;
 mod model;
@@ -47,6 +49,7 @@ pub use execute::{
     WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
 };
 pub use execution_capability_v13::{
+    SimulationCapabilityProjectionReceiptV1, SimulationPhaseCoordinateV1, SimulationPhaseFamilyV1,
     SimulationCapabilityCoordinateKindV13, SimulationCapabilityCoordinateV13,
     SimulationCapabilityProjectionReceiptV13, SimulationExecutionCapabilityFamilyV13,
     SimulationLogicalCapabilityKindV13,

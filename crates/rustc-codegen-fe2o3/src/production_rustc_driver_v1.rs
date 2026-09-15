@@ -938,7 +938,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v8(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 8,
         result: None,

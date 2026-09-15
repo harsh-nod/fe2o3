@@ -205,6 +205,8 @@ pub(super) fn derive_semantic_ssa_identity_v1(
         digest.update(function.function.index().to_le_bytes());
         digest.update(function.function_identity.as_bytes());
         digest.update(function.plan.identity().as_bytes());
+        function.event_origins.hash_into(&mut digest);
+        function.value_origins.hash_into(&mut digest);
         hash_resource_report_v1(&mut digest, function.plan.resources());
         hash_usize_v1(&mut digest, function.partial_moves.projected_moves());
         hash_usize_v1(&mut digest, function.partial_moves.state_entries());

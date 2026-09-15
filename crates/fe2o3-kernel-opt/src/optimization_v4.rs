@@ -494,16 +494,23 @@ fn optimize_kernel_ir_module_with_policy_at_epoch_v4(
             },
         );
     }
-    let committed_mutations = u64::try_from(
-        capability_pass_replays
-            .iter()
-            .filter(|pass| pass.preservation().changed())
-            .count(),
-    )
-    .map_err(|_| KernelIrPlironOptimizationErrorV4::EpochOverflow)?;
-    let capability_replay = capability_analysis
-        .replay_candidate(initial_epoch, final_epoch, committed_mutations, &module)
+    let mut capability_replay = capability_analysis
+        .replay_candidate(initial_epoch, initial_epoch, 0, &decoded_input)
         .map_err(KernelIrPlironOptimizationErrorV4::CapabilityReplay)?;
+    for pass in &capability_pass_replays {
+        capability_replay = capability_replay
+            .then(*pass.preservation().capability_replay())
+            .map_err(KernelIrPlironOptimizationErrorV4::CapabilityReplay)?;
+    }
+    if capability_replay.output_identity() != output.identity()
+        || capability_replay.output_epoch() != final_epoch
+    {
+        return Err(
+            KernelIrPlironOptimizationErrorV4::CapabilityPassAccountingMismatch {
+                position: passes.len(),
+            },
+        );
+    }
     let input_identity = *capability_replay.input_identity();
     let output_identity = *capability_replay.output_identity();
     let optimizer = KernelIrPlironOptimizationReportV2::from_parts(

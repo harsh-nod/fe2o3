@@ -388,6 +388,48 @@
     }
 
     #[test]
+    fn current_terminal_tags_separate_policy_authority_and_fp_consumers() {
+        use crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1 as Terminal;
+        use fe2o3_kernel_ir::F32MathFunction as Math;
+
+        let expansions = [
+            ProductionTerminalExpansionV1::Invocation3DIndex1D,
+            ProductionTerminalExpansionV1::Execution(Terminal::NumericalPolicyIssue),
+            ProductionTerminalExpansionV1::Execution(Terminal::SubgroupPartitionDerive),
+            ProductionTerminalExpansionV1::Execution(Terminal::SubgroupPartitionReduceSumF32),
+            ProductionTerminalExpansionV1::Execution(Terminal::SubgroupPartitionBroadcastF32),
+        ];
+        let mut tags = expansions.map(|expansion| {
+            terminal_expansion_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::CombinedV5)
+        }).to_vec();
+        assert_eq!(tags, [167, 168, 169, 170, 171]);
+        let maximum = terminal_expansion_tag_for_schema_v1(
+            ProductionTerminalExpansionV1::Execution(Terminal::SubgroupPartitionReduceMaxF32),
+            TerminalIdentitySchemaV1::CombinedV5,
+        );
+        assert_eq!(maximum, 172);
+        tags.push(maximum);
+        let functions = [
+            Math::Sqrt, Math::FusedMultiplyAdd, Math::Floor, Math::Ceil,
+            Math::Truncate, Math::RoundTiesEven, Math::Sin, Math::Cos,
+            Math::Exp, Math::Exp2, Math::Ln, Math::Log2, Math::Log10, Math::Abs,
+        ];
+        for (index, function) in functions.into_iter().enumerate() {
+            let tag = terminal_expansion_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::PolicyMathF32(function),
+                TerminalIdentitySchemaV1::CombinedV5,
+            );
+            assert_eq!(usize::from(tag), 180 + index);
+            assert_ne!(tag, terminal_expansion_tag_for_schema_v1(
+                ProductionTerminalExpansionV1::MathF32(function),
+                TerminalIdentitySchemaV1::CombinedV5,
+            ));
+            tags.push(tag);
+        }
+        assert_eq!(tags.iter().copied().collect::<BTreeSet<_>>().len(), tags.len());
+    }
+
+    #[test]
     fn terminal_recipe_tags_are_closed_and_distinct() {
         let tags = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndex1d),

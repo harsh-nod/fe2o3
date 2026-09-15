@@ -1,0 +1,60 @@
+*** Begin Patch
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1.rs
+@@
+ include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
++include!("production_semantic_kir_v1/workgroup_index_transport_01.rs");
+@@
+                 let key = (*local, variant as u32, field as u32);
++                if contains_workgroup_index_payload_v1(types, semantic_type, &control_flow_ssa.compiler_issued_bindings)? {
++                    if !sources.contains_key(&key) {
++                        return Err(unsupported(0, None, None, "scoped index enum payload has no unique source custody"));
++                    }
++                    requires_compile_time_custody.insert(key);
++                    continue;
++                }
+@@
+                             | SemanticPromotedBindingV1::BorrowedSubgroup(_)
++                            | SemanticPromotedBindingV1::WorkgroupIndex(_)
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs
+@@
+     let mut bindings = BTreeMap::new();
++    WorkgroupIndexTransportV1::register(types, callables, &mut bindings)?;
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_01.rs
+@@
+     BorrowedSubgroup(BorrowedSubgroupTransportV1),
++    WorkgroupIndex(WorkgroupIndexTransportV1),
+@@
+             Self::BorrowedSubgroup(transport) => transport.types(types, semantic_type, kernel_context_type)?,
++            Self::WorkgroupIndex(transport) => transport.types(types, semantic_type, kernel_context_type)?,
+@@
+             | Self::BorrowedSubgroup(_)
++            | Self::WorkgroupIndex(_)
+@@
+             (Self::BorrowedSubgroup(transport), binding) => transport.values(binding),
++            (Self::WorkgroupIndex(transport), binding) => transport.values(binding),
+@@
+         if let Self::BorrowedSubgroup(transport) = self {
+             return transport.restore(types, semantic_type, values);
+         }
++        if let Self::WorkgroupIndex(transport) = self {
++            return transport.restore(types, semantic_type, values);
++        }
+@@
+             Self::BorrowedSubgroup(_) => unreachable!("handled exact borrowed authority above"),
++            Self::WorkgroupIndex(_) => unreachable!("handled scoped index transport above"),
+@@
+-            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_))) => {
++            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_) | SemanticPromotedBindingV1::WorkgroupIndex(_))) => {
+                 let values = semantic.transport_values(binding)?;
+@@
+-            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_))) => {
++            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_) | SemanticPromotedBindingV1::WorkgroupIndex(_))) => {
+                 if values.iter().map(|value| &value.ty).ne(expected.iter()) {
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_enum_values_01.rs
+@@
+ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBindingV1) -> bool {
++    if exact_workgroup_index_enum_custody_v1(binding) {
++        return true;
++    }
+     match binding {
+*** End Patch

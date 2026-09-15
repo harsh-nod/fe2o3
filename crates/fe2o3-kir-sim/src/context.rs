@@ -172,19 +172,25 @@ pub(crate) fn first_incomplete_execution_capability_v13(
 /// already implemented by the simulator. No logical value reaches preflight
 /// or execution.
 pub(crate) fn erase_logical_capabilities(
-    mut module: Module,
+    module: Module,
     retain_v13_receipt: bool,
 ) -> Result<
     (
         Module,
         usize,
-        Option<crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV13>,
+        Option<crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV1>,
     ),
     LogicalCapabilityErasureError,
 > {
+    erase_logical_capabilities_declared(module, retain_v13_receipt, fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13)
+}
+
+pub(crate) fn erase_logical_capabilities_declared(
+    mut module: Module, retain_v13_receipt: bool, version: fe2o3_kernel_ir::CanonicalKernelIrVersionV1,
+) -> Result<(Module, usize, Option<crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV1>), LogicalCapabilityErasureError> {
     let (receipt, receipt_scratch_bytes) = if retain_v13_receipt {
         let (receipt, scratch) =
-            crate::execution_capability_v13::record_projection_coordinates_v13(&module).map_err(
+            crate::execution_capability_v13::record_projection_coordinates(&module, version).map_err(
                 |error| match error {
                     crate::execution_capability_v13::ExecutionCapabilityProjectionErrorV13::AllocationFailure => {
                         LogicalCapabilityErasureError::AllocationFailure
@@ -201,8 +207,11 @@ pub(crate) fn erase_logical_capabilities(
     } else {
         (None, 0)
     };
-    let projected = crate::execution_capability_v13::project_execution_capabilities_v13(
-        &mut module,
+    let mut phase_limits = fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1::DEFAULT;
+    phase_limits.work = phase_limits.work.checked_sub(receipt.as_ref().map_or(0, |r| r.phase_work()))
+        .ok_or(LogicalCapabilityErasureError::InvalidProjection("phase receipt exhausted shared projection work"))?;
+    let projected = crate::execution_capability_v13::project_execution_capabilities_v1(
+        &mut module, version, phase_limits,
     )
     .map_err(|error| match error {
         crate::execution_capability_v13::ExecutionCapabilityProjectionErrorV13::AllocationFailure => {
@@ -419,7 +428,7 @@ fn erase_runtime_type(ty: &mut Type) -> Result<(), LogicalCapabilityErasureError
             *ty = capability.physical_slice_type();
             Ok(())
         }
-        Type::KernelContext(_) | Type::ExecutionCapability(_) => {
+        Type::KernelContext(_) | Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_) => {
             Err(LogicalCapabilityErasureError::InvalidProjection(
                 "logical capability appears in an executable type position",
             ))
@@ -638,7 +647,7 @@ fn rewrite_operation_operands(
         OperationKind::KernelContextIssue(_)
         | OperationKind::GlobalCapabilityBind(_)
         | OperationKind::GlobalCapabilityIndex(_)
-        | OperationKind::ExecutionCapability(_) => {
+        | OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_) => {
             return Err(LogicalCapabilityErasureError::InvalidProjection(
                 "logical operation survived projection",
             ));
@@ -761,7 +770,7 @@ fn operation_contains_logical_capability(operation: &Operation) -> bool {
             OperationKind::KernelContextIssue(_)
             | OperationKind::GlobalCapabilityBind(_)
             | OperationKind::GlobalCapabilityIndex(_)
-            | OperationKind::ExecutionCapability(_) => true,
+            | OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_) => true,
             OperationKind::Intrinsic(intrinsic) => {
                 intrinsic.result_type.contains_logical_capability()
             }

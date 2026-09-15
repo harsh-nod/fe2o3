@@ -1665,6 +1665,7 @@ fn sparse_fact_is_subgroup_uniform(
         }
         SparseIndexFactV1::Unknown
         | SparseIndexFactV1::MachineOverflow(_)
+        | SparseIndexFactV1::Quotient { .. }
         | SparseIndexFactV1::CheckedTiled2D(_)
         | SparseIndexFactV1::CheckedRowStriped2D(_) => false,
     }

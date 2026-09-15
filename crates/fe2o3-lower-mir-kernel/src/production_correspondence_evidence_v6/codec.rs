@@ -17,6 +17,7 @@ pub(super) fn encode(e: &InertCanonicalMirToKirCorrespondenceEvidenceV6) -> Resu
         ProductionCanonicalKernelIrVersionV1::V11 => 11,
         ProductionCanonicalKernelIrVersionV1::V12 => 12,
         ProductionCanonicalKernelIrVersionV1::V13 => 13,
+        ProductionCanonicalKernelIrVersionV1::V14 => return Err(E::InvalidHeader),
     })?;
     w.bytes(&e.canonical_kernel_ir.canonical_length().to_le_bytes())?;
     w.bytes(e.canonical_kernel_ir.digest())?;

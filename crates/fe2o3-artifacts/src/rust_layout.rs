@@ -174,6 +174,10 @@ pub enum RustSourceTypeShapeV1 {
     SharedSlice {
         element: RustScalarElementTypeV1,
     },
+    /// An exclusive Rust borrow; carries no per-invocation index-space guarantee.
+    MutableSlice {
+        element: RustScalarElementTypeV1,
+    },
     DisjointSlice {
         element: RustScalarElementTypeV1,
         index_space: RustDisjointIndexSpaceV1,
@@ -190,6 +194,10 @@ impl RustSourceTypeShapeV1 {
 
     pub const fn shared_slice(element: RustScalarElementTypeV1) -> Self {
         Self::SharedSlice { element }
+    }
+
+    pub const fn mutable_slice(element: RustScalarElementTypeV1) -> Self {
+        Self::MutableSlice { element }
     }
 
     pub const fn disjoint_slice(
@@ -209,7 +217,9 @@ impl RustSourceTypeShapeV1 {
     pub const fn element(self) -> RustScalarElementTypeV1 {
         match self {
             Self::Scalar { scalar } => scalar,
-            Self::SharedSlice { element } | Self::DisjointSlice { element, .. } => element,
+            Self::SharedSlice { element }
+            | Self::MutableSlice { element }
+            | Self::DisjointSlice { element, .. } => element,
             Self::GlobalMutPointer { pointee } => pointee,
         }
     }
@@ -623,7 +633,8 @@ fn validate_source_semantics(
             unreachable!("scalar source types return before slice validation")
         }
         RustSourceTypeShapeV1::SharedSlice { element } => (element, RustPointerMutabilityV1::Const),
-        RustSourceTypeShapeV1::DisjointSlice { element, .. } => {
+        RustSourceTypeShapeV1::MutableSlice { element }
+        | RustSourceTypeShapeV1::DisjointSlice { element, .. } => {
             (element, RustPointerMutabilityV1::Mut)
         }
         RustSourceTypeShapeV1::GlobalMutPointer { .. } => {
@@ -759,6 +770,10 @@ fn encode_source_type(source_type: RustSourceTypeShapeV1) -> Vec<u8> {
         RustSourceTypeShapeV1::GlobalMutPointer { pointee } => {
             writer.u8(4);
             writer.u8(scalar_tag(pointee));
+        }
+        RustSourceTypeShapeV1::MutableSlice { element } => {
+            writer.u8(5);
+            writer.u8(scalar_tag(element));
         }
     }
     writer.finish()

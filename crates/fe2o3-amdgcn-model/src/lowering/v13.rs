@@ -19,6 +19,20 @@ use super::{
     target_requirements_for_execution_operation_v1,
 };
 
+#[cfg(test)]
+#[path = "numerical_policy_tests.rs"]
+mod numerical_policy_tests;
+
+mod numerical_policy_math;
+mod subgroup_partition;
+mod reusable_lds;
+mod reusable_phase;
+#[cfg(test)]
+mod reusable_phase_tests;
+#[cfg(test)]
+mod borrowed_lds_tests;
+mod workgroup_memory_index_v2;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PhysicalExtentV1 {
     Static(u64),
@@ -1293,6 +1307,7 @@ fn emit_workgroup_scan_sum(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExecutionAliasV1 {
     Physical(PhysicalValueV1),
+    Partition(subgroup_partition::PartitionBinding),
     Erased,
 }
 
@@ -1301,6 +1316,35 @@ pub(super) fn lower_execution_capabilities_v1(
     profile: ProductionAmdTargetProfileV1,
     authority: &V13LoweringAuthorityV1,
 ) -> Result<Module, LoweringErrors> {
+    lower_declared_execution_capabilities_v1(
+        module, profile, authority,
+        fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13,
+        fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1::DEFAULT,
+    )
+}
+
+// Private core shared with the strict V13 facade. A V14 production caller must
+// retain the exact version-bound target closure; the version is not authority.
+pub(super) fn lower_declared_execution_capabilities_v1(
+    module: &Module,
+    profile: ProductionAmdTargetProfileV1,
+    authority: &V13LoweringAuthorityV1,
+    declared_version: fe2o3_kernel_ir::CanonicalKernelIrVersionV1,
+    phase_limits: fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1,
+) -> Result<Module, LoweringErrors> {
+    lower_declared_execution_capabilities_recorded_v1(module, profile, authority, declared_version, phase_limits, None)
+}
+
+pub(super) fn lower_declared_execution_capabilities_recorded_v1(
+    module: &Module,
+    profile: ProductionAmdTargetProfileV1,
+    authority: &V13LoweringAuthorityV1,
+    declared_version: fe2o3_kernel_ir::CanonicalKernelIrVersionV1,
+    phase_limits: fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1,
+    mut recorder: Option<&mut super::declared_translation::Builder>,
+) -> Result<Module, LoweringErrors> {
+    reusable_phase::check_declared_version(module, declared_version)?;
+    let mut phase_budget = reusable_phase::ModuleBudget::new(phase_limits);
     let mut lowered = module.clone();
     strip_exact_execution_requirements(&mut lowered);
     bind_exact_amd_target(&mut lowered, profile);
@@ -1312,42 +1356,72 @@ pub(super) fn lower_execution_capabilities_v1(
         if function.body.is_none() {
             continue;
         }
+        let original = &module.functions[function_index];
+        let mut phase = reusable_phase::prepare(module, original, declared_version, phase_budget.remaining())?;
         reject_execution_capability_parameters(module, function)?;
         let types = value_types(function);
+        let policy_math = numerical_policy_math::Plan::new(module, function_index, &types)?;
         let element_types = infer_element_types(module, function, &types)?;
         let mut aliases = BTreeMap::new();
         let mut lowered_types = types.clone();
         let mut next_value = next_value_id(module, function)?;
         let mut wave_width = None;
         let body = function.body.as_mut().expect("definition checked above");
+        workgroup_memory_index_v2::prepare_parameters(body, &mut lowered_types, &mut aliases);
+        let used_values = body.blocks.iter().flat_map(|block| {
+            block.operations.iter().flat_map(Operation::operands)
+                .chain(block.terminator.iter().flat_map(Terminator::operands))
+        }).collect::<BTreeSet<_>>();
 
         for block in &mut body.blocks {
             let mut operations = Vec::with_capacity(block.operations.len());
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                let OperationKind::ExecutionCapability(contract) = &operation.kind else {
+                let physical_start = operations.len();
+                if matches!(operation.kind, OperationKind::ReusablePhase(_)) {
+                    reusable_phase::lower(
+                        module, declared_version,
+                        phase.as_mut().ok_or_else(|| incomplete(module, "phase operation lacks its ordered audit"))?,
+                        original, block.id, operation_index, operation,
+                        &element_types, &mut lowered_types, &mut aliases,
+                    )?;
+                } else if let OperationKind::ExecutionCapability(contract) = &operation.kind {
+                    require_operation_closure(module, authority, contract)?;
+                    lower_operation(
+                        module, operation, contract, &types, &used_values, Some(&policy_math),
+                        &element_types, &mut lowered_types, &mut aliases, &mut next_value,
+                        &mut wave_width, &mut operations, &mut generated_helpers,
+                        function_index, block.id, operation_index,
+                    )?;
+                } else {
                     reject_unlowered_execution_operand(module, operation, &aliases)?;
                     operations.push(operation.clone());
-                    continue;
-                };
-                require_operation_closure(module, authority, contract)?;
-                lower_operation(
-                    module,
-                    operation,
-                    contract,
-                    &types,
-                    &element_types,
-                    &mut lowered_types,
-                    &mut aliases,
-                    &mut next_value,
-                    &mut wave_width,
-                    &mut operations,
-                    &mut generated_helpers,
-                    function_index,
-                    block.id,
-                    operation_index,
-                )?;
+                }
+                if let Some(trace) = recorder.as_deref_mut() {
+                    use super::DeclaredPhysicalCarrierV1 as Carrier;
+                    let result_start = trace.result_count();
+                    for result in &operation.results {
+                        let carrier = match aliases.get(&result.id) {
+                            Some(ExecutionAliasV1::Erased) => Carrier::Erased,
+                            Some(ExecutionAliasV1::Physical(p)) => match p.extent {
+                                None => Carrier::Value(p.value),
+                                Some(PhysicalExtentV1::Static(elements)) => Carrier::StaticView {value:p.value,elements},
+                                Some(PhysicalExtentV1::Dynamic(elements)) => Carrier::DynamicView {value:p.value,elements},
+                            },
+                            Some(ExecutionAliasV1::Partition(_)) => return Err(incomplete(module, "declared projection has no partition carrier record")),
+                            None if lowered_types.get(&result.id).is_some_and(|ty| !matches!(ty, Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_))) => Carrier::Value(result.id),
+                            None => return Err(incomplete(module, "declared projection result has no exact physical carrier")),
+                        };
+                        trace.result(module, result.id, carrier)?;
+                    }
+                    trace.record(module, function_index, block.id, operation_index,
+                        physical_start, operations.len(), result_start)?;
+                }
             }
             block.operations = operations;
+        }
+        if let Some(phase) = phase {
+            let usage = phase.finish().map_err(|error| incomplete(module, format!("phase physical census incomplete: {error:?}")))?;
+            phase_budget.consume(module, usage)?;
         }
 
         if let Some(width) = wave_width {
@@ -1360,6 +1434,8 @@ pub(super) fn lower_execution_capabilities_v1(
                 .flat_map(Operation::required_capabilities),
         );
     }
+    if let Some(trace) = recorder.as_deref_mut() { trace.after_phase(phase_budget.remaining()); }
+    numerical_policy_math::append_declarations(module, &mut generated_helpers)?;
     lowered.functions.extend(generated_helpers);
 
     let physical_capabilities = lowered
@@ -1490,12 +1566,11 @@ fn reject_execution_capability_parameters(
         .signature
         .parameters
         .iter()
-        .chain(
-            body.blocks
-                .iter()
-                .flat_map(|block| block.parameters.iter().map(|value| &value.ty)),
-        )
-        .any(|ty| matches!(ty, Type::ExecutionCapability(_)))
+        .any(|ty| matches!(ty, Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_)))
+        || function.signature.results.iter().any(reusable_phase::is_phase_type)
+        || body.blocks.iter().flat_map(|block| &block.parameters).any(|parameter|
+            matches!(parameter.ty, Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_))
+                && !workgroup_memory_index_v2::is_index(&parameter.ty))
     {
         return Err(incomplete(
             module,
@@ -1510,12 +1585,15 @@ fn reject_unlowered_execution_operand(
     operation: &Operation,
     aliases: &BTreeMap<ValueId, ExecutionAliasV1>,
 ) -> Result<(), LoweringErrors> {
+    if operation.results.iter().any(|result| reusable_phase::is_phase_type(&result.ty)) {
+        return Err(incomplete(module, "phase result lacks its exact lifecycle adapter"));
+    }
     if operation
         .kind
         .operands()
         .into_iter()
         .any(|operand| match aliases.get(&operand) {
-            Some(ExecutionAliasV1::Erased) => true,
+            Some(ExecutionAliasV1::Erased | ExecutionAliasV1::Partition(_)) => true,
             Some(ExecutionAliasV1::Physical(physical)) => physical.value != operand,
             None => false,
         })
@@ -1534,6 +1612,8 @@ fn lower_operation(
     operation: &Operation,
     contract: &ExecutionCapabilityOpV1,
     original_types: &BTreeMap<ValueId, Type>,
+    used_values: &BTreeSet<ValueId>,
+    policy_math: Option<&numerical_policy_math::Plan<'_>>,
     element_types: &BTreeMap<ExecutionTypeIdentityV1, Type>,
     lowered_types: &mut BTreeMap<ValueId, Type>,
     aliases: &mut BTreeMap<ValueId, ExecutionAliasV1>,
@@ -1548,8 +1628,33 @@ fn lower_operation(
     use ExecutionCapabilityOperationV1 as Op;
 
     match &contract.operation {
+        Op::ReusableLdsConversion(conversion) => reusable_lds::lower(
+            module, operation, contract, *conversion, original_types, lowered_types, aliases,
+        ),
+        Op::NumericalPolicyMath(_) => policy_math.ok_or_else(|| incomplete(
+            module,
+            "V13 policy-bound FP32 requires its retained numerical contract and exact consumer adapter",
+        ))?.lower(module, function_index, (block_id, operation_index), operation, contract, aliases, output),
+        Op::SubgroupPartition(partition) => subgroup_partition::lower(
+            module, operation, contract, *partition, original_types, lowered_types,
+            aliases, wave_width, output,
+        ),
+        Op::NumericalPolicyIssue { .. } => {
+            if operation.results.iter().any(|result| used_values.contains(&result.id))
+                && !policy_math.is_some_and(|plan| plan.approves(
+                    module, function_index, (block_id, operation_index), operation,
+                ))
+            {
+                return Err(incomplete(
+                    module,
+                    "V13 numerical-policy use requires an exact consumer adapter; issuance does not discharge numerical refinement",
+                ));
+            }
+            // Canonical V13 verification authenticated the exact strict role and provenance.
+            erase_capability_results(module, operation, aliases)
+        }
         Op::WorkgroupDerive { .. } => erase_capability_results(module, operation, aliases),
-        Op::SubgroupDerive { width, .. } => {
+        Op::SubgroupDerive { width, .. } | Op::SubgroupDeriveBorrowed { width, .. } => {
             require_wave(module, *width, wave_width)?;
             erase_capability_results(module, operation, aliases)
         }
@@ -1557,7 +1662,8 @@ fn lower_operation(
             require_wave(module, *width, wave_width)?;
             erase_capability_results(module, operation, aliases)
         }
-        Op::LdsAllocate {
+        Op::LdsAllocateBorrowed { element, layout, elements, .. }
+        | Op::LdsAllocate {
             element,
             layout,
             elements,
@@ -1770,6 +1876,11 @@ fn lower_operation(
             );
             Ok(())
         }
+        Op::WorkgroupMemoryIndexV2 { .. }
+        | Op::WorkgroupMemoryIndexIntoDisjoint { .. } => workgroup_memory_index_v2::lower(
+            module, &module.functions[function_index], operation, contract, original_types,
+            lowered_types, aliases, next_value, output,
+        ),
         Op::WorkgroupMemoryPublish { .. } => {
             let physical = physical_operands(contract, original_types, lowered_types, aliases);
             let pointer = require_pointer(module, &physical)?;
@@ -2823,9 +2934,9 @@ fn physical_operands(
                 .get(&physical.value)
                 .cloned()
                 .map(|ty| (physical.value, ty)),
-            Some(ExecutionAliasV1::Erased) => None,
+            Some(ExecutionAliasV1::Erased | ExecutionAliasV1::Partition(_)) => None,
             None => original_types.get(operand).and_then(|ty| {
-                (!matches!(ty, Type::ExecutionCapability(_) | Type::KernelContext(_)))
+                (!matches!(ty, Type::ExecutionCapability(_) | Type::KernelContext(_) | Type::ReusablePhaseToken(_)))
                     .then(|| (*operand, ty.clone()))
             }),
         })
@@ -2865,7 +2976,7 @@ fn ordinary_results(operation: &Operation) -> Vec<ValueDef> {
     operation
         .results
         .iter()
-        .filter(|result| !matches!(result.ty, Type::ExecutionCapability(_)))
+        .filter(|result| !matches!(result.ty, Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_)))
         .cloned()
         .collect()
 }
@@ -2893,6 +3004,14 @@ fn erase_capability_results(
     operation: &Operation,
     aliases: &mut BTreeMap<ValueId, ExecutionAliasV1>,
 ) -> Result<(), LoweringErrors> {
+    reusable_phase::reject_legacy_results(module, operation)?;
+    if operation.results.iter().any(|result| matches!(
+        &result.ty,
+        Type::ExecutionCapability(capability)
+            if matches!(capability.role, ExecutionCapabilityRoleV1::ReusableLds { .. })
+    )) {
+        return Err(incomplete(module, "reusable LDS requires its exact allocation transfer adapter"));
+    }
     if !ordinary_results(operation).is_empty() {
         return Err(incomplete(
             module,
@@ -2911,12 +3030,31 @@ fn alias_capability_results(
     physical: PhysicalValueV1,
     aliases: &mut BTreeMap<ValueId, ExecutionAliasV1>,
 ) -> Result<(), LoweringErrors> {
+    reusable_phase::reject_legacy_results(module, operation)?;
     let mut count = 0;
     for result in &operation.results {
         let Type::ExecutionCapability(capability) = &result.ty else {
             continue;
         };
         let alias = match capability.role {
+            ExecutionCapabilityRoleV1::ReusableWorkgroup
+            | ExecutionCapabilityRoleV1::ReusablePhaseCompletion => {
+                return Err(incomplete(module, "phase authority requires its exact lifecycle adapter"));
+            }
+            ExecutionCapabilityRoleV1::ReusableLds { .. } => {
+                return Err(incomplete(module, "reusable LDS requires its exact allocation transfer adapter"));
+            }
+            ExecutionCapabilityRoleV1::SubgroupPartition { .. } => {
+                return Err(incomplete(module, "partition authority requires its exact consumer adapter"));
+            }
+            ExecutionCapabilityRoleV1::NumericalPolicy { .. }
+            | ExecutionCapabilityRoleV1::NumericalPolicyMathSource(_)
+            | ExecutionCapabilityRoleV1::NumericalPolicyMathBound(_) => {
+                return Err(incomplete(
+                    module,
+                    "V13 numerical-policy authority cannot be erased by a memory-capability adapter",
+                ));
+            }
             ExecutionCapabilityRoleV1::Lds { .. }
             | ExecutionCapabilityRoleV1::ScopedAtomic { .. }
             | ExecutionCapabilityRoleV1::PendingAsyncCopy { .. }
@@ -2924,6 +3062,7 @@ fn alias_capability_results(
             ExecutionCapabilityRoleV1::KernelAuthority
             | ExecutionCapabilityRoleV1::Workgroup
             | ExecutionCapabilityRoleV1::Subgroup { .. }
+            | ExecutionCapabilityRoleV1::BorrowedSubgroup { .. }
             | ExecutionCapabilityRoleV1::Matrix { .. }
             | ExecutionCapabilityRoleV1::WorkgroupMemoryIndex
             | ExecutionCapabilityRoleV1::EpochTransition
@@ -2949,7 +3088,7 @@ fn physical_value(
         .values()
         .find_map(|alias| match alias {
             ExecutionAliasV1::Physical(physical) if physical.value == value => Some(*physical),
-            ExecutionAliasV1::Physical(_) | ExecutionAliasV1::Erased => None,
+            ExecutionAliasV1::Physical(_) | ExecutionAliasV1::Erased | ExecutionAliasV1::Partition(_) => None,
         })
         .unwrap_or_else(|| PhysicalValueV1::scalar(value))
 }

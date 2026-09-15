@@ -26,6 +26,9 @@ use fe2o3_kir_sim::{
     SimulationTargetV1,
 };
 
+#[path = "execution_capabilities_v13/typed_float_uniformity.rs"]
+mod typed_float_uniformity;
+
 const UPPER_BOUND: u64 = 257;
 
 fn identity(byte: u8) -> ExecutionTypeIdentityV1 {
@@ -105,6 +108,7 @@ fn workgroup_derivation(
                 function: [0xf1; 32],
                 operation: [source; 32],
                 block: 0,
+                occurrence: None,
             },
             operation,
         }),
@@ -152,6 +156,7 @@ fn subgroup_derivation(
                 function: [0xf2; 32],
                 operation: [source; 32],
                 block: 0,
+                occurrence: None,
             },
             operation,
         }),
@@ -223,6 +228,7 @@ fn raw_bind_module() -> Module {
             function: [13; 32],
             operation: [14; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     };
@@ -339,6 +345,7 @@ fn barrier_contract(before: u8, after: u8, source: u8) -> ExecutionCapabilityOpV
             function: [13; 32],
             operation: [source; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     }
@@ -449,12 +456,17 @@ fn collective_contract(
             function: [71; 32],
             operation: [source; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     }
 }
 
 fn workgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
+    workgroup_collective_typed_module(kind, ScalarType::U32)
+}
+
+fn workgroup_collective_typed_module(kind: ExecutionCollectiveKindV1, scalar: ScalarType) -> Module {
     let layout = ExecutionElementLayoutV1 {
         byte_size: 4,
         byte_alignment: 4,
@@ -476,7 +488,7 @@ fn workgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
         scratch: lds_type,
         element: element_type,
         transition: transition_type,
-        value_type: ScalarType::U32,
+        value_type: scalar,
         layout,
         elements: 4,
     };
@@ -498,12 +510,12 @@ fn workgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
         },
     });
     let output = Type::slice(
-        Type::Scalar(ScalarType::U32),
+        Type::Scalar(scalar),
         AddressSpace::Global,
         AccessMode::WriteOnly,
     );
     let output_pointer = Type::pointer(
-        Type::Scalar(ScalarType::U32),
+        Type::Scalar(scalar),
         AddressSpace::Global,
         AccessMode::WriteOnly,
     );
@@ -557,7 +569,7 @@ fn workgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
                         },
                     ),
                 ),
-                ValueDef::new(ValueId(7), Type::Scalar(ScalarType::U32)),
+                ValueDef::new(ValueId(7), Type::Scalar(scalar)),
             ],
             OperationKind::ExecutionCapability(collective_contract(
                 collective_operation,
@@ -600,7 +612,7 @@ fn workgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
     block.terminator = Some(Terminator::Return { values: vec![] });
     let mut entry = Function::kernel_entry(
         "entry",
-        Signature::new(vec![Type::Scalar(ScalarType::U32), output], vec![]),
+        Signature::new(vec![Type::Scalar(scalar), output], vec![]),
         vec![ValueId(0), ValueId(1)],
         vec![block],
     );
@@ -621,6 +633,10 @@ fn workgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
 }
 
 fn subgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
+    subgroup_collective_typed_module(kind, ScalarType::U32)
+}
+
+fn subgroup_collective_typed_module(kind: ExecutionCollectiveKindV1, scalar: ScalarType) -> Module {
     let workgroup = identity(79);
     let operation = ExecutionCapabilityOperationV1::SubgroupCollective {
         kind,
@@ -628,7 +644,7 @@ fn subgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
         subgroup: identity(81),
         epoch: identity(82),
         element: identity(83),
-        value_type: ScalarType::U32,
+        value_type: scalar,
         width: 64,
     };
     let requirements = operation.required_capabilities();
@@ -650,16 +666,17 @@ fn subgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
             function: [86; 32],
             operation: [87; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     };
     let output = Type::slice(
-        Type::Scalar(ScalarType::U32),
+        Type::Scalar(scalar),
         AddressSpace::Global,
         AccessMode::WriteOnly,
     );
     let output_pointer = Type::pointer(
-        Type::Scalar(ScalarType::U32),
+        Type::Scalar(scalar),
         AddressSpace::Global,
         AccessMode::WriteOnly,
     );
@@ -682,7 +699,7 @@ fn subgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
             0x56,
         ),
         Operation::new(
-            vec![ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U32))],
+            vec![ValueDef::new(ValueId(5), Type::Scalar(scalar))],
             OperationKind::ExecutionCapability(ExecutionCapabilityOpV1 {
                 operands: vec![ValueId(4), ValueId(0)],
                 ..contract
@@ -721,7 +738,7 @@ fn subgroup_collective_module(kind: ExecutionCollectiveKindV1) -> Module {
     block.terminator = Some(Terminator::Return { values: vec![] });
     let mut entry = Function::kernel_entry(
         "entry",
-        Signature::new(vec![Type::Scalar(ScalarType::U32), output], vec![]),
+        Signature::new(vec![Type::Scalar(scalar), output], vec![]),
         vec![ValueId(0), ValueId(1)],
         vec![block],
     );
@@ -779,6 +796,7 @@ fn kernel_scoped_contract(
             function: [88; 32],
             operation: [source; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     }
@@ -1001,6 +1019,7 @@ fn raw_memory_roundtrip_module() -> Module {
             function: [106; 32],
             operation: [107; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     };
@@ -1174,6 +1193,7 @@ fn workgroup_contract(
             function: [121; 32],
             operation: [source; 32],
             block: 0,
+            occurrence: None,
         },
         operation,
     }

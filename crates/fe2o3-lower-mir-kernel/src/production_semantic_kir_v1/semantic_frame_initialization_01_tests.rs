@@ -377,6 +377,8 @@ mod frame_initialization_tests {
             true,
             owner.source_semantic().target().object_size_bound_bytes(),
             65_536,
+            None,
+            None,
         )
         .unwrap()
     }

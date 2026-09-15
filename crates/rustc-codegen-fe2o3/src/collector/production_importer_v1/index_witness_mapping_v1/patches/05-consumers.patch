@@ -1,0 +1,137 @@
+*** Begin Patch
+*** Update File: crates/fe2o3-kir-sim/src/execution_capability_v13.rs
+@@
+ mod subgroup_partition;
++mod workgroup_memory_index_v2;
+@@
+     WorkgroupMemoryIndex,
++    WorkgroupMemoryIndexV2,
++    WorkgroupMemoryIndexIntoDisjoint,
+@@
+             Operation::WorkgroupMemoryIndex { .. } => Self::WorkgroupMemoryIndex,
++            Operation::WorkgroupMemoryIndexV2 { .. } => Self::WorkgroupMemoryIndexV2,
++            Operation::WorkgroupMemoryIndexIntoDisjoint { .. } => Self::WorkgroupMemoryIndexIntoDisjoint,
+@@
+         let mut promoted = BTreeMap::new();
++        workgroup_memory_index_v2::prepare_parameters(body, &mut promoted);
+@@
+         Capability::WorkgroupMemoryIndex { .. } => {
+             project_workgroup_index(results, promoted, next_value)
+         }
++        Capability::WorkgroupMemoryIndexV2 { .. } => workgroup_memory_index_v2::issue(
++            results, workgroup, promoted, next_value,
++        ),
++        Capability::WorkgroupMemoryIndexIntoDisjoint { .. } => workgroup_memory_index_v2::into_disjoint(
++            results, &contract, types, aliases, promoted, next_value,
++        ),
+*** Update File: crates/fe2o3-kir-sim/src/model.rs
+@@
+     WorkgroupMemoryIndex,
++    WorkgroupMemoryIndexV2,
++    WorkgroupMemoryIndexIntoDisjoint,
+@@
+             Self::WorkgroupMemoryIndex => "workgroup_memory_index",
++            Self::WorkgroupMemoryIndexV2 => "workgroup_memory_index_v2",
++            Self::WorkgroupMemoryIndexIntoDisjoint => "workgroup_memory_index_into_disjoint",
+*** Update File: crates/fe2o3-amdgcn-model/src/lowering/operational_translation_v1.rs
+@@
+     WorkgroupMemoryIndex,
++    /// Source-shaped optional workgroup index issuance.
++    WorkgroupMemoryIndexV2,
++    /// Scope-preserving conversion of an existing workgroup index.
++    WorkgroupMemoryIndexIntoDisjoint,
+@@
+         Operation::WorkgroupMemoryIndex { .. } => Kind::WorkgroupMemoryIndex,
++        Operation::WorkgroupMemoryIndexV2 { .. } => Kind::WorkgroupMemoryIndexV2,
++        Operation::WorkgroupMemoryIndexIntoDisjoint { .. } => Kind::WorkgroupMemoryIndexIntoDisjoint,
+*** Update File: crates/fe2o3-amdgcn-model/src/production_target_capabilities_v1.rs
+@@
+-        | Op::WorkgroupMemoryIndex { .. } => {}
++        | Op::WorkgroupMemoryIndex { .. }
++        | Op::WorkgroupMemoryIndexV2 { .. }
++        | Op::WorkgroupMemoryIndexIntoDisjoint { .. } => {}
+@@
+         Op::WorkgroupMemoryIndex { .. } => "workgroup-memory-index",
++        Op::WorkgroupMemoryIndexV2 { .. } => "workgroup-memory-index-v2",
++        Op::WorkgroupMemoryIndexIntoDisjoint { .. } => "workgroup-memory-index-into-disjoint",
+*** Update File: crates/fe2o3-amdgcn-model/src/lowering/v13.rs
+@@
+ mod subgroup_partition;
++mod workgroup_memory_index_v2;
+@@
+         let body = function.body.as_mut().expect("definition checked above");
++        workgroup_memory_index_v2::prepare_parameters(body, &mut lowered_types, &mut aliases);
+@@
+-        .chain(
+-            body.blocks
+-                .iter()
+-                .flat_map(|block| block.parameters.iter().map(|value| &value.ty)),
+-        )
+         .any(|ty| matches!(ty, Type::ExecutionCapability(_)))
++        || body.blocks.iter().flat_map(|block| &block.parameters).any(|parameter|
++            matches!(parameter.ty, Type::ExecutionCapability(_))
++                && !workgroup_memory_index_v2::is_index(&parameter.ty))
+@@
+         Op::WorkgroupMemoryIndex { .. } => {
+@@
+             Ok(())
+         }
++        Op::WorkgroupMemoryIndexV2 { .. }
++        | Op::WorkgroupMemoryIndexIntoDisjoint { .. } => workgroup_memory_index_v2::lower(
++            module, &module.functions[function_index], operation, contract, original_types,
++            lowered_types, aliases, next_value, output,
++        ),
+         Op::WorkgroupMemoryPublish { .. } => {
+*** Update File: crates/fe2o3-kernel-analysis/src/uniformity.rs
+@@
+         | Capability::WorkgroupMemoryIndex { .. }
++        | Capability::WorkgroupMemoryIndexV2 { .. }
++        | Capability::WorkgroupMemoryIndexIntoDisjoint { .. }
+*** Update File: crates/fe2o3-verifier/src/final_kir_output_equivalence_v1.rs
+@@
+ use crate::{CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3};
++
++mod workgroup_memory_index_v2;
+@@
+-        let workgroup_width = source_kernel
+-            .workgroup_size
+-            .filter(|size| size.y == 1 && size.z == 1)
+-            .map(|size| size.x);
++        let workgroup_size = source_kernel.workgroup_size;
+         let source_effects =
+-            extract_kernel_effects(source_function, &numerical_policies, workgroup_width)?;
++            extract_kernel_effects(source_function, &numerical_policies, workgroup_size)?;
+         let final_effects =
+-            extract_kernel_effects(final_function, &numerical_policies, workgroup_width)?;
++            extract_kernel_effects(final_function, &numerical_policies, workgroup_size)?;
+@@
+ fn extract_kernel_effects(
+     function: &Function,
+     numerical_policies: &BTreeMap<ScalarType, NumericalModeV1>,
+-    workgroup_width: Option<u32>,
++    workgroup_size: Option<fe2o3_kernel_ir::WorkgroupSize>,
+@@
+                 numerical_policies,
+-                workgroup_width,
++                workgroup_size,
+                 &execution_element_scalars,
+@@
+     numerical_policies: &BTreeMap<ScalarType, NumericalModeV1>,
+-    workgroup_width: Option<u32>,
++    workgroup_size: Option<fe2o3_kernel_ir::WorkgroupSize>,
+     execution_element_scalars: &BTreeMap<fe2o3_kernel_ir::ExecutionTypeIdentityV1, ScalarV1>,
+ ) -> Result<(), FinalKirOutputEquivalenceErrorV1> {
++    let workgroup_width = workgroup_size.filter(|size| size.y == 1 && size.z == 1).map(|size| size.x);
+@@
+             ExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. } => {
+@@
+                 )))
+             }
++            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => Some(
++                workgroup_memory_index_v2::issue(capability, state, intrinsics, workgroup_size)?
++            ),
++            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => Some(
++                workgroup_memory_index_v2::into_disjoint(capability, state)?
++            ),
+             ExecutionCapabilityOperationV1::RawMemoryBind {
+*** End Patch

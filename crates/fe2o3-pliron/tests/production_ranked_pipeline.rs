@@ -135,6 +135,7 @@ fn typed_load_kernel(
                         block: 0,
                         operation: load_operation,
                         scalar,
+                        read_mode: fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedNonVolatile,
                         allocation_origin: load_origin,
                         view: local(VIEW),
                         indices: vec![local(INDEX)].into_boxed_slice(),
@@ -1285,21 +1286,25 @@ fn tensor_receipt_kernel(
         coverage: OwnershipCoverageAttr::TotalView,
         partition: OwnershipPartitionAttr::ExactSets,
     });
+    let contract = ProductionTensorRefinementContractV1::new(
+        77,
+        ProductionTensorInstructionSiteV1::new(0, 3),
+        result_root,
+        local(ProductionRankedValueIdV1::new(0)),
+        local(ProductionRankedValueIdV1::new(6)),
+        local(ProductionRankedValueIdV1::new(7)),
+        scalar,
+        numerical,
+        components,
+    )
+    .unwrap();
     operations.push(ProductionRankedOperationV1::RequestTensorRefinement {
-        contract: ProductionTensorRefinementContractV1::new(
-            77,
-            ProductionTensorInstructionSiteV1::new(0, 3),
-            result_root,
-            local(ProductionRankedValueIdV1::new(0)),
-            local(ProductionRankedValueIdV1::new(6)),
-            local(ProductionRankedValueIdV1::new(7)),
-            scalar,
-            numerical,
-            components,
-        )
-        .unwrap(),
+        contract: contract.clone(),
         subjects: functional_subjects(44),
     });
+    if include_all_stores {
+        append_tensor_effect_requests(&mut operations, &mut 16, &contract, 0);
+    }
     ProductionRankedKernelV1::new(
         "tensor_receipt_boundary",
         0,
@@ -1328,6 +1333,135 @@ fn fresh_ranked_value(next: &mut u32) -> ProductionRankedValueIdV1 {
     let result = ProductionRankedValueIdV1::new(*next);
     *next += 1;
     result
+}
+
+fn append_fixture_effect_request(
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    store_site: ProductionGpuWriteSiteV2,
+    reference_site: ProductionReferenceOutputSiteV2,
+    coordinates: Vec<ProductionRankedValueV1>,
+    predicate: ProductionRankedValueV1,
+    reference_value: ProductionRankedValueV1,
+) {
+    assert_eq!(store_site.block(), 0);
+    let ProductionRankedOperationV1::ValueAccess {
+        kind: AccessKindAttr::Write,
+        view,
+        indices,
+        value,
+    } = &operations[store_site.operation() as usize]
+    else {
+        panic!("effect fixture must name an explicit stored value");
+    };
+    let contract = ProductionEffectRefinementContractV2::new(
+        1000 + u64::from(store_site.operation()),
+        store_site,
+        reference_site,
+        *view,
+        indices.clone(),
+        coordinates.clone(),
+        coordinates,
+        predicate,
+        predicate,
+        predicate,
+        predicate,
+        *value,
+        reference_value,
+    )
+    .unwrap();
+    operations.push(ProductionRankedOperationV1::RequestEffectRefinement {
+        contract,
+        subjects: functional_subjects(44),
+    });
+}
+
+fn compile_fixture_with_staged_refinements(
+    mut kernel: ProductionRankedKernelV1,
+) -> Result<fe2o3_pliron::ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV2> {
+    assert_eq!(kernel.blocks().len(), 1);
+    let requests = kernel.blocks()[0]
+        .operations()
+        .iter()
+        .enumerate()
+        .filter_map(|(operation, request)| {
+            let (subjects, obligation) = match request {
+                ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => (
+                    *subjects,
+                    normalized_effect_refinement_hash_for_kernel_v2(
+                        &kernel, 0, operation, contract, *subjects,
+                    ),
+                ),
+                ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects } => (
+                    *subjects,
+                    normalized_tensor_refinement_hash_for_kernel_v1(
+                        &kernel, 0, operation, contract, *subjects,
+                    ),
+                ),
+                _ => return None,
+            };
+            Some((operation, subjects, obligation.unwrap()))
+        })
+        .collect::<Vec<_>>();
+    let mut receipts = Vec::new();
+    let mut policy = None;
+    // These synthetic receipts exercise exact binding and staging, not CPU/GPU semantics.
+    for (operation, subjects, obligation) in requests {
+        let (proof, imported, request_policy) = imported_reference(
+            FunctionalRefinementBindingV2::from_subjects(subjects, obligation).unwrap(),
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        );
+        kernel = kernel
+            .bind_functional_refinement_request_v2(0, operation, proof)
+            .unwrap();
+        receipts.push(imported);
+        policy = Some(request_policy);
+    }
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+        receipts,
+        policy.expect("fixture has explicit refinement requests"),
+    )?;
+    assert!(!input.grants_compiler_refinement_authority());
+    for receipt in input.retained_policy_checked_refinement_staging() {
+        assert!(receipt.is_policy_checked_untrusted_staging());
+        assert!(!receipt.grants_source_to_isa_authority());
+        assert!(!receipt.grants_artifact_or_launch_authority());
+    }
+    Ok(input)
+}
+
+fn append_tensor_effect_requests(
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    contract: &ProductionTensorRefinementContractV1,
+    reference_argument: u32,
+) {
+    let row = fresh_ranked_value(next_value);
+    let predicate = fresh_ranked_value(next_value);
+    operations.push(ProductionRankedOperationV1::SemanticSymbol {
+        result: row,
+        symbol: 0,
+    });
+    operations.push(ProductionRankedOperationV1::SemanticConstant {
+        result: predicate,
+        value: 1,
+    });
+    for (ordinal, component) in contract.components().iter().enumerate() {
+        let column = fresh_ranked_value(next_value);
+        operations.push(ProductionRankedOperationV1::SemanticConstant {
+            result: column,
+            value: ordinal as u64,
+        });
+        append_fixture_effect_request(
+            operations,
+            component.store_site(),
+            ProductionReferenceOutputSiteV2::new(reference_argument, 0, ordinal as u32),
+            vec![local(row), local(column)],
+            local(predicate),
+            component.reference_value(),
+        );
+    }
 }
 
 fn append_tensor_receipt_segment(
@@ -1422,21 +1556,23 @@ fn append_tensor_receipt_segment(
         partition: OwnershipPartitionAttr::ExactSets,
     });
     let request = operations.len();
+    let contract = ProductionTensorRefinementContractV1::new(
+        contract_identity,
+        tensor_site,
+        binding.result_root(),
+        local(view),
+        local(actual),
+        local(reference),
+        scalar,
+        numerical,
+        components,
+    )
+    .unwrap();
     operations.push(ProductionRankedOperationV1::RequestTensorRefinement {
-        contract: ProductionTensorRefinementContractV1::new(
-            contract_identity,
-            tensor_site,
-            binding.result_root(),
-            local(view),
-            local(actual),
-            local(reference),
-            scalar,
-            numerical,
-            components,
-        )
-        .unwrap(),
+        contract: contract.clone(),
         subjects: functional_subjects(44),
     });
+    append_tensor_effect_requests(operations, next_value, &contract, output_identity as u32);
     request
 }
 
@@ -1519,29 +1655,23 @@ fn two_tensor_sites_bind_two_outputs_through_independent_receipts() {
         normalized_tensor_refinement_hash_for_kernel_v1(&kernel, 0, operation, contract, *subjects)
             .unwrap()
     });
-    let mut kernel = kernel;
-    let mut receipts = Vec::new();
-    let mut trust_policy = None;
-    for (operation, obligation) in requests.into_iter().zip(obligations) {
-        let (request, imported, policy) = imported_reference(
-            functional_binding(44, obligation),
-            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
-        );
-        kernel = kernel
-            .bind_functional_refinement_request_v2(0, operation, request)
-            .unwrap();
-        receipts.push(imported);
-        trust_policy = Some(policy);
-    }
-    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
-        construction(kernel),
-        ProductionSessionLimitsV1::default(),
-        receipts,
-        trust_policy.unwrap(),
-    )
-    .expect("two independent tensor sites and outputs must reach the production boundary");
+    assert_ne!(obligations[0], obligations[1]);
+    let input = compile_fixture_with_staged_refinements(kernel)
+        .expect("two independent tensor sites and outputs must reach the production boundary");
     assert!(input.all_mandatory_reports_are_clean());
-    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 2);
+    assert_eq!(input.semantic_report().reference_obligation_count(), 2);
+    assert_eq!(
+        input.semantic_report().effect_refinement().contract_count(),
+        8
+    );
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        8
+    );
+    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 10);
 }
 
 #[test]
@@ -1553,36 +1683,27 @@ fn claim_specific_tensor_receipt_reaches_the_public_production_boundary() {
         true,
         None,
     );
-    let (contract, operation) = tensor_request_contract(&kernel);
-    let obligation = normalized_tensor_refinement_hash_for_kernel_v1(
-        &kernel,
-        0,
-        operation,
-        contract,
-        functional_subjects(44),
-    )
-    .unwrap();
-    let (request, imported, policy) = imported_reference(
-        functional_binding(44, obligation),
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
-    );
-    let kernel = kernel
-        .bind_functional_refinement_request_v2(0, operation, request)
-        .unwrap();
-    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
-        construction(kernel),
-        ProductionSessionLimitsV1::default(),
-        vec![imported],
-        policy,
-    )
-    .expect("claim-specific tensor receipt reaches checked PLIRON lowering");
+    let input = compile_fixture_with_staged_refinements(kernel)
+        .expect("claim-specific tensor receipt reaches checked PLIRON lowering");
     assert!(input.all_mandatory_reports_are_clean());
     assert!(
         input
             .semantic_report()
             .all_reference_obligations_are_policy_checked()
     );
-    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 1);
+    assert_eq!(input.semantic_report().reference_obligation_count(), 1);
+    assert_eq!(
+        input.semantic_report().effect_refinement().contract_count(),
+        4
+    );
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        4
+    );
+    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 5);
 }
 
 #[test]
@@ -1945,8 +2066,13 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     assert!(!reconciliation.grants_target_value_authority());
 }
 
-#[test]
-fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
+fn finite_error_kernel(
+    absolute: f64,
+    relative: f64,
+) -> (
+    ProductionRankedKernelV1,
+    ProductionNumericalRefinementContractV2,
+) {
     let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
     let boolean = ProductionSemanticScalarTypeV2::Bool;
     let actual = ProductionRankedValueIdV1::new(0);
@@ -1959,8 +2085,8 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
         local(reference),
         local(domain),
         local(precondition),
-        0.001_f64.to_bits(),
-        0.01_f64.to_bits(),
+        absolute.to_bits(),
+        relative.to_bits(),
     )
     .unwrap();
     let operations = vec![
@@ -2010,6 +2136,12 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
         )],
     )
     .unwrap();
+    (kernel, numerical)
+}
+
+#[test]
+fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
+    let (kernel, numerical) = finite_error_kernel(0.001, 0.01);
     let obligation = normalized_numerical_refinement_hash_for_kernel_v2(
         &kernel,
         0,
@@ -2020,10 +2152,10 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
     .unwrap();
     let changed = ProductionNumericalRefinementContractV2::new(
         41,
-        local(actual),
-        local(reference),
-        local(domain),
-        local(precondition),
+        numerical.actual(),
+        numerical.reference(),
+        numerical.domain(),
+        numerical.precondition(),
         0.002_f64.to_bits(),
         0.01_f64.to_bits(),
     )
@@ -2060,29 +2192,329 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
             .all_numerical_obligations_are_policy_checked()
     );
     assert_eq!(input.semantic_report().numerical_obligation_count(), 1);
+    assert!(!input.grants_compiler_refinement_authority());
 }
 
 #[test]
-fn finite_error_contract_rejects_vacuous_and_nonfinite_bounds() {
+fn finite_error_contract_accepts_nonnegative_bounds_and_retains_signed_zero_bits() {
+    let roots = [0, 1, 2, 3].map(|id| local(ProductionRankedValueIdV1::new(id)));
+    let bounds = [
+        0.0_f64,
+        -0.0,
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        0.01,
+        f64::MAX,
+    ];
+    let mut shapes = Vec::new();
+    for absolute in bounds {
+        for relative in bounds {
+            let build = |identity| {
+                ProductionNumericalRefinementContractV2::new(
+                    identity,
+                    roots[0],
+                    roots[1],
+                    roots[2],
+                    roots[3],
+                    absolute.to_bits(),
+                    relative.to_bits(),
+                )
+            };
+            let contract = build(41).unwrap();
+            assert_eq!(contract.contract_identity(), 41);
+            assert_eq!(contract.actual(), roots[0]);
+            assert_eq!(contract.reference(), roots[1]);
+            assert_eq!(contract.domain(), roots[2]);
+            assert_eq!(contract.precondition(), roots[3]);
+            assert_eq!(contract.absolute_error_f64_bits(), absolute.to_bits());
+            assert_eq!(contract.relative_error_f64_bits(), relative.to_bits());
+            let shape = contract.request_shape_hash();
+            assert!(
+                !shapes.contains(&shape),
+                "distinct bound bits must stay bound"
+            );
+            shapes.push(shape);
+            assert_eq!(
+                build(0),
+                Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+            );
+        }
+    }
+}
+
+#[test]
+fn finite_error_contract_rejects_negative_and_nonfinite_bounds() {
     let value = ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0));
+    for invalid in [
+        -f64::from_bits(1),
+        -f64::MIN_POSITIVE,
+        -1.0,
+        -f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        -f64::NAN,
+        f64::from_bits(0x7ff0_0000_0000_0001),
+        f64::from_bits(0xfff0_0000_0000_0001),
+    ] {
+        for valid in [0.0_f64, -0.0, 1.0] {
+            for (absolute, relative) in [(invalid, valid), (valid, invalid)] {
+                assert_eq!(
+                    ProductionNumericalRefinementContractV2::new(
+                        1,
+                        value,
+                        value,
+                        value,
+                        value,
+                        absolute.to_bits(),
+                        relative.to_bits(),
+                    ),
+                    Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn finite_error_zero_contract_binds_identity_roots_and_bound_bits() {
+    let (kernel, numerical) = finite_error_kernel(0.0, 0.0);
+    let hash = |kernel: &ProductionRankedKernelV1, contract| {
+        normalized_numerical_refinement_hash_for_kernel_v2(
+            kernel,
+            0,
+            4,
+            contract,
+            functional_subjects(44),
+        )
+        .unwrap()
+    };
+    let obligation = hash(&kernel, numerical);
+    for field in 0..7 {
+        let mut identity = numerical.contract_identity();
+        let mut roots = [
+            numerical.actual(),
+            numerical.reference(),
+            numerical.domain(),
+            numerical.precondition(),
+        ];
+        let mut bounds = [0.0_f64.to_bits(); 2];
+        match field {
+            0 => identity += 1,
+            1..=4 => roots[field - 1] = roots[(field - 1) ^ 1],
+            5..=6 => bounds[field - 5] = (-0.0_f64).to_bits(),
+            _ => unreachable!(),
+        }
+        let changed = ProductionNumericalRefinementContractV2::new(
+            identity, roots[0], roots[1], roots[2], roots[3], bounds[0], bounds[1],
+        )
+        .unwrap();
+        assert_ne!(numerical, changed);
+        assert_ne!(numerical.request_shape_hash(), changed.request_shape_hash());
+        assert_ne!(obligation, hash(&kernel, changed));
+
+        let mut operations = kernel.blocks()[0].operations().to_vec();
+        operations[4] = ProductionRankedOperationV1::RequestNumericalRefinement {
+            contract: changed,
+            subjects: functional_subjects(44),
+        };
+        let changed_kernel = ProductionRankedKernelV1::new(
+            "finite_error",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        // The full graph transcript must retain the changed contract too.
+        assert_ne!(obligation, hash(&changed_kernel, numerical));
+        let (proof, imported, policy) = imported_reference(
+            functional_binding(44, obligation),
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        );
+        let bound = changed_kernel
+            .bind_functional_refinement_request_v2(0, 4, proof)
+            .unwrap();
+        let error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+            construction(bound),
+            ProductionSessionLimitsV1::default(),
+            vec![imported],
+            policy,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionRankedCompileErrorV2::Proof(
+                ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(_)
+            )
+        ));
+    }
+}
+
+#[test]
+fn finite_error_zero_limits_preserve_proof_gates_and_nonzero_staging_bits() {
     for (absolute, relative) in [
         (0.0_f64, 0.0_f64),
-        (f64::NAN, 0.0_f64),
-        (f64::INFINITY, 0.0_f64),
-        (-1.0_f64, 0.0_f64),
+        (-0.0, 0.0),
+        (0.0, -0.0),
+        (-0.0, -0.0),
+        (0.0, 0.01),
+        (-0.0, 0.01),
+        (0.001, 0.0),
+        (0.001, -0.0),
+        (0.001, 0.01),
     ] {
-        assert_eq!(
-            ProductionNumericalRefinementContractV2::new(
-                1,
-                value,
-                value,
-                value,
-                value,
-                absolute.to_bits(),
-                relative.to_bits(),
-            ),
-            Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+        let (kernel, numerical) = finite_error_kernel(absolute, relative);
+        let obligation = normalized_numerical_refinement_hash_for_kernel_v2(
+            &kernel,
+            0,
+            4,
+            numerical,
+            functional_subjects(44),
+        )
+        .unwrap();
+        let (_, imported, policy) = imported_reference(
+            functional_binding(44, obligation),
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
         );
+        let unbound = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+            construction(kernel.clone()),
+            ProductionSessionLimitsV1::default(),
+            vec![imported],
+            policy,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            unbound,
+            ProductionRankedCompileErrorV2::Proof(
+                ProductionFunctionalRefinementAdmissionErrorV2::UnboundRequest
+            )
+        ));
+
+        let (proof, imported, policy) = imported_reference(
+            functional_binding(44, obligation),
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        );
+        let bound = kernel
+            .bind_functional_refinement_request_v2(0, 4, proof)
+            .unwrap();
+        assert!(matches!(
+            &bound.blocks()[0].operations()[4],
+            ProductionRankedOperationV1::RequireNumericalRefinement { contract, .. }
+                if *contract == numerical
+        ));
+        let result = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+            construction(bound),
+            ProductionSessionLimitsV1::default(),
+            vec![imported],
+            policy,
+        );
+        if absolute == 0.0 && relative == 0.0 {
+            assert!(matches!(
+                result.unwrap_err(),
+                ProductionRankedCompileErrorV2::Pipeline(ProductionRankedCompileErrorV1::Session(
+                    ProductionSessionErrorV1::Operation(_)
+                ))
+            ));
+        } else {
+            let input = result.unwrap();
+            assert!(!input.grants_compiler_refinement_authority());
+            assert_eq!(input.semantic_report().numerical_obligation_count(), 1);
+            let certificates = input.semantic_report().numerical_certificates();
+            assert_eq!(certificates.len(), 1);
+            assert_eq!(
+                certificates[0].requested_absolute_error_f64_bits(),
+                absolute.to_bits()
+            );
+            assert_eq!(
+                certificates[0].requested_relative_error_f64_bits(),
+                relative.to_bits()
+            );
+            let retained = input.retained_policy_checked_refinement_staging();
+            assert_eq!(retained.len(), 1);
+            assert!(retained[0].is_policy_checked_untrusted_staging());
+            assert!(!retained[0].grants_source_to_isa_authority());
+            assert!(!retained[0].grants_artifact_or_launch_authority());
+        }
+    }
+}
+
+#[test]
+fn finite_error_signed_zero_outputs_do_not_become_exact_bit_equality() {
+    for (actual, reference) in [(0.0_f32, -0.0_f32), (-0.0, 0.0)] {
+        assert_eq!(actual, reference);
+        assert_ne!(actual.to_bits(), reference.to_bits());
+        for (absolute, relative) in [
+            (0.0_f64, 0.0_f64),
+            (-0.0, 0.0),
+            (0.0, -0.0),
+            (-0.0, -0.0),
+            (0.001, 0.01),
+        ] {
+            let (kernel, numerical) = finite_error_kernel(absolute, relative);
+            let mut operations = kernel.blocks()[0].operations().to_vec();
+            for (operation, value) in operations.iter_mut().zip([actual, reference]) {
+                let ProductionRankedOperationV1::SemanticExpression { expression, .. } = operation
+                else {
+                    unreachable!();
+                };
+                *expression = ProductionSemanticExpressionV2::Constant {
+                    scalar: ProductionSemanticScalarTypeV2::Float { bits: 32 },
+                    bits: u64::from(value.to_bits()),
+                };
+            }
+            let kernel = ProductionRankedKernelV1::new(
+                "finite_error",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    operations,
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap();
+            let obligation = normalized_numerical_refinement_hash_for_kernel_v2(
+                &kernel,
+                0,
+                4,
+                numerical,
+                functional_subjects(44),
+            )
+            .unwrap();
+            let (proof, imported, policy) = imported_reference(
+                functional_binding(44, obligation),
+                FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+            );
+            let bound = kernel
+                .bind_functional_refinement_request_v2(0, 4, proof)
+                .unwrap();
+            let error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+                construction(bound),
+                ProductionSessionLimitsV1::default(),
+                vec![imported],
+                policy,
+            )
+            .unwrap_err();
+            if absolute == 0.0 && relative == 0.0 {
+                assert!(matches!(
+                    error,
+                    ProductionRankedCompileErrorV2::Pipeline(
+                        ProductionRankedCompileErrorV1::Session(
+                            ProductionSessionErrorV1::Operation(_)
+                        )
+                    )
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    ProductionRankedCompileErrorV2::Pipeline(
+                        ProductionRankedCompileErrorV1::Session(
+                            ProductionSessionErrorV1::RankedSemantic(_)
+                        )
+                    )
+                ));
+            }
+        }
     }
 }
 
@@ -2702,12 +3134,60 @@ fn concurrent_write_kernel(indexed_by_invocation: bool) -> ProductionRankedKerne
         },
         invocation,
     ];
+    if indexed_by_invocation {
+        operations.insert(
+            0,
+            ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity: 1,
+                global_extents: [64, 1, 1],
+                workgroup_extents: [64, 1, 1],
+                subgroup_size: 64,
+                full_physical_workgroups: true,
+            },
+        );
+    }
     operations.extend(constant);
-    operations.push(ProductionRankedOperationV1::Access {
+    let mut next_value = if indexed_by_invocation { 2 } else { 3 };
+    let value = fresh_ranked_value(&mut next_value);
+    let reference = fresh_ranked_value(&mut next_value);
+    let predicate = fresh_ranked_value(&mut next_value);
+    let coordinate = fresh_ranked_value(&mut next_value);
+    for result in [value, reference, predicate] {
+        operations.push(ProductionRankedOperationV1::SemanticConstant { result, value: 1 });
+    }
+    operations.push(if indexed_by_invocation {
+        ProductionRankedOperationV1::SemanticSymbol {
+            result: coordinate,
+            symbol: 0,
+        }
+    } else {
+        ProductionRankedOperationV1::SemanticConstant {
+            result: coordinate,
+            value: 0,
+        }
+    });
+    let store_site = ProductionGpuWriteSiteV2::new(0, operations.len() as u32);
+    operations.push(ProductionRankedOperationV1::ValueAccess {
         kind: AccessKindAttr::Write,
         view: local(VIEW),
         indices: vec![local(access_index)],
+        value: local(value),
     });
+    operations.push(ProductionRankedOperationV1::OwnershipContract {
+        view: local(VIEW),
+        coverage: OwnershipCoverageAttr::TotalView,
+        partition: OwnershipPartitionAttr::ExactSets,
+    });
+    if indexed_by_invocation {
+        append_fixture_effect_request(
+            &mut operations,
+            store_site,
+            ProductionReferenceOutputSiteV2::new(0, 0, 0),
+            vec![local(coordinate)],
+            local(predicate),
+            local(reference),
+        );
+    }
     ProductionRankedKernelV1::new(
         "concurrent_write",
         0,
@@ -2721,13 +3201,18 @@ fn concurrent_write_kernel(indexed_by_invocation: bool) -> ProductionRankedKerne
 
 #[test]
 fn invocation_owned_output_reaches_lowering_after_race_verification() {
-    let input = compile_ranked_kernel_for_lowering_v1(
-        construction(concurrent_write_kernel(true)),
-        ProductionSessionLimitsV1::default(),
-    )
-    .expect("invocation-owned output is disjoint");
+    let input = compile_fixture_with_staged_refinements(concurrent_write_kernel(true))
+        .expect("invocation-owned output is disjoint");
     assert!(input.bounds_report().is_clean());
     assert!(input.race_report().is_clean());
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        1
+    );
 }
 
 fn hierarchy_owned_output_kernel(has_holes: bool) -> ProductionRankedKernelV1 {
@@ -2781,11 +3266,52 @@ fn hierarchy_owned_output_kernel(has_holes: bool) -> ProductionRankedKernelV1 {
     } else {
         INDEX
     };
-    operations.push(ProductionRankedOperationV1::Access {
+    let mut next_value = if has_holes { 4 } else { 2 };
+    let value = fresh_ranked_value(&mut next_value);
+    let reference = fresh_ranked_value(&mut next_value);
+    let predicate = fresh_ranked_value(&mut next_value);
+    let coordinate = fresh_ranked_value(&mut next_value);
+    for result in [value, reference, predicate] {
+        operations.push(ProductionRankedOperationV1::SemanticConstant { result, value: 1 });
+    }
+    operations.push(ProductionRankedOperationV1::SemanticSymbol {
+        result: coordinate,
+        symbol: 0,
+    });
+    let coordinate = if has_holes {
+        let two = fresh_ranked_value(&mut next_value);
+        let doubled = fresh_ranked_value(&mut next_value);
+        operations.push(ProductionRankedOperationV1::SemanticConstant {
+            result: two,
+            value: 2,
+        });
+        operations.push(ProductionRankedOperationV1::SemanticBinary {
+            result: doubled,
+            kind: SemanticBinaryKindAttr::Multiply,
+            lhs: local(coordinate),
+            rhs: local(two),
+        });
+        doubled
+    } else {
+        coordinate
+    };
+    let store_site = ProductionGpuWriteSiteV2::new(0, operations.len() as u32);
+    operations.push(ProductionRankedOperationV1::ValueAccess {
         kind: AccessKindAttr::Write,
         view: local(VIEW),
         indices: vec![local(access_index)],
+        value: local(value),
     });
+    if !has_holes {
+        append_fixture_effect_request(
+            &mut operations,
+            store_site,
+            ProductionReferenceOutputSiteV2::new(0, 0, 0),
+            vec![local(coordinate)],
+            local(predicate),
+            local(reference),
+        );
+    }
     ProductionRankedKernelV1::new(
         "hierarchy_owned_output",
         0,
@@ -2799,11 +3325,8 @@ fn hierarchy_owned_output_kernel(has_holes: bool) -> ProductionRankedKernelV1 {
 
 #[test]
 fn production_pipeline_enforces_complete_gpu_hierarchy_ownership() {
-    let input = compile_ranked_kernel_for_lowering_v1(
-        construction(hierarchy_owned_output_kernel(false)),
-        ProductionSessionLimitsV1::default(),
-    )
-    .expect("complete disjoint hierarchy ownership");
+    let input = compile_fixture_with_staged_refinements(hierarchy_owned_output_kernel(false))
+        .expect("complete disjoint hierarchy ownership");
     assert!(input.ownership_report().is_clean());
     assert!(!input.ownership_report().regions().is_empty());
     assert!(
@@ -2818,21 +3341,20 @@ fn production_pipeline_enforces_complete_gpu_hierarchy_ownership() {
             .total_view_declared(),
         1
     );
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        1
+    );
 }
 
 #[test]
 fn v2_lowering_input_retains_non_vacuous_total_output_coverage() {
-    let (_, _, policy) = imported_reference(
-        functional_binding(4, proof_digest(5)),
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
-    );
-    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
-        construction(hierarchy_owned_output_kernel(false)),
-        ProductionSessionLimitsV1::default(),
-        vec![],
-        policy,
-    )
-    .expect("V2 mandatory pipeline retains total-output coverage");
+    let input = compile_fixture_with_staged_refinements(hierarchy_owned_output_kernel(false))
+        .expect("V2 mandatory pipeline retains total-output coverage");
     assert!(
         input
             .ownership_report()
@@ -2845,6 +3367,15 @@ fn v2_lowering_input_retains_non_vacuous_total_output_coverage() {
             .total_view_proved(),
         1
     );
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        1
+    );
+    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 1);
 }
 
 #[test]
@@ -3181,51 +3712,94 @@ fn typed_analysis_split_materializes_and_recursively_verifies_exact_segments() {
 fn rank_two_static_shapes_are_checked_without_gemm_semantics() {
     let row = ProductionRankedValueIdV1::new(1);
     let column = ProductionRankedValueIdV1::new(2);
+    let value = ProductionRankedValueIdV1::new(3);
+    let reference = ProductionRankedValueIdV1::new(4);
+    let row_coordinate = ProductionRankedValueIdV1::new(5);
+    let column_coordinate = ProductionRankedValueIdV1::new(6);
+    let predicate = ProductionRankedValueIdV1::new(7);
+    let mut operations = vec![
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity: 1,
+            global_extents: [1, 1, 1],
+            workgroup_extents: [1, 1, 1],
+            subgroup_size: 1,
+            full_physical_workgroups: true,
+        },
+        ProductionRankedOperationV1::View {
+            result: VIEW,
+            element_width: 8,
+            writable: true,
+            shape: vec![32, 64],
+            dynamic_extents: vec![],
+            allocation_origin: 1,
+            noalias_class: 1,
+        },
+        ProductionRankedOperationV1::IndexConstant {
+            result: row,
+            value: 31,
+        },
+        ProductionRankedOperationV1::IndexConstant {
+            result: column,
+            value: 63,
+        },
+    ];
+    for result in [value, reference] {
+        operations.push(ProductionRankedOperationV1::SemanticExpression {
+            result,
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: 8,
+                },
+                bits: 1,
+            },
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        });
+    }
+    for (result, value) in [
+        (row_coordinate, 31),
+        (column_coordinate, 63),
+        (predicate, 1),
+    ] {
+        operations.push(ProductionRankedOperationV1::SemanticConstant { result, value });
+    }
+    let store_site = ProductionGpuWriteSiteV2::new(0, operations.len() as u32);
+    operations.push(ProductionRankedOperationV1::ValueAccess {
+        kind: AccessKindAttr::Write,
+        view: local(VIEW),
+        indices: vec![local(row), local(column)],
+        value: local(value),
+    });
+    operations.push(ProductionRankedOperationV1::OwnershipContract {
+        view: local(VIEW),
+        coverage: OwnershipCoverageAttr::ExactEffectDomain,
+        partition: OwnershipPartitionAttr::ExactSets,
+    });
+    append_fixture_effect_request(
+        &mut operations,
+        store_site,
+        ProductionReferenceOutputSiteV2::new(0, 0, 0),
+        vec![local(row_coordinate), local(column_coordinate)],
+        local(predicate),
+        local(reference),
+    );
     let kernel = ProductionRankedKernelV1::new(
         "image_tile",
         0,
         vec![ProductionRankedBlockV1::new(
-            vec![
-                ProductionRankedOperationV1::ExecutionLayout {
-                    grid_identity: 1,
-                    global_extents: [1, 1, 1],
-                    workgroup_extents: [1, 1, 1],
-                    subgroup_size: 1,
-                    full_physical_workgroups: true,
-                },
-                ProductionRankedOperationV1::View {
-                    result: VIEW,
-                    element_width: 8,
-                    writable: true,
-                    shape: vec![32, 64],
-                    dynamic_extents: vec![],
-                    allocation_origin: 1,
-                    noalias_class: 1,
-                },
-                ProductionRankedOperationV1::IndexConstant {
-                    result: row,
-                    value: 31,
-                },
-                ProductionRankedOperationV1::IndexConstant {
-                    result: column,
-                    value: 63,
-                },
-                ProductionRankedOperationV1::Access {
-                    kind: AccessKindAttr::Write,
-                    view: local(VIEW),
-                    indices: vec![local(row), local(column)],
-                },
-            ],
+            operations,
             ProductionRankedTerminatorV1::Return,
         )],
     )
     .expect("rank-two recipe");
-    assert!(
-        compile_ranked_kernel_for_lowering_v1(
-            construction(kernel),
-            ProductionSessionLimitsV1::default(),
-        )
-        .is_ok()
+    let input = compile_fixture_with_staged_refinements(kernel).expect("rank-two staged write");
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        1
     );
 }
 
@@ -3284,7 +3858,7 @@ fn same_session_stage_root_substitution_is_rejected_before_analysis() {
 }
 
 #[test]
-fn recipe_rejects_undefined_duplicate_and_cross_block_values() {
+fn recipe_rejects_undefined_and_duplicate_values_but_constructs_dominating_cross_block_values() {
     let undefined = ProductionRankedKernelV1::new(
         "undefined",
         0,
@@ -3371,15 +3945,15 @@ fn recipe_rejects_undefined_duplicate_and_cross_block_values() {
             ),
         ],
     );
-    assert_eq!(
-        cross_block,
-        Err(
-            ProductionRankedKernelErrorV1::CrossBlockDefinitionRequiresArgument {
-                definition_block: 1,
-                use_block: 2,
-            }
+    let mut session = session(true);
+    let registered = session
+        .register_construction(
+            ProductionConstructionV1::ranked_kernel("cross_block", cross_block.unwrap()).unwrap(),
         )
-    );
+        .unwrap();
+    let _constructed = session
+        .construct_registered(registered)
+        .expect("completed CFG proves dominance");
 }
 
 #[test]

@@ -3,6 +3,7 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
+    PhaseValueTypeV14, ReusablePhaseOp,
     AddressSpaceAttr, AllocaOp, AtomicOp, BarrierOp, CanonicalBarrierOp, CanonicalFenceOp,
     CanonicalKirOperationAttr, CanonicalKirTerminatorAttr, DIALECT_NAME, ExecutionCapabilityOp,
     ExecutionDomainAttr, ExecutionExtentAttr, ExecutionLayoutOp, FenceOp, Gfx950LdsTransposeOp,
@@ -51,6 +52,7 @@ fn registration_hook(
     service.register_type::<BFloat16Type>()?;
     service.register_type::<PointerType>()?;
     service.register_type::<SliceType>()?;
+    service.register_type::<PhaseValueTypeV14>()?;
     service.register_operation::<HierarchyIdOp>()?;
     service.register_operation::<ExecutionLayoutOp>()?;
     service.register_operation::<MemorySpaceOp>()?;
@@ -91,6 +93,7 @@ fn registration_hook(
     service.register_operation::<IntegerSwitchOp>()?;
     service.register_operation::<UnreachableOp>()?;
     service.register_operation::<ExecutionCapabilityOp>()?;
+    service.register_operation::<ReusablePhaseOp>()?;
     Ok(())
 }
 

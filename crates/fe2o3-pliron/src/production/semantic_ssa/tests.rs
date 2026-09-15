@@ -17,6 +17,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticVolatilityV1,
 };
 
+mod unused_borrows;
+mod incoming_retention;
+mod dynamic_array_destinations;
+mod source_partial_move_diagnostic_v1;
+mod discriminant_read_v1;
+mod event_origins_storage_v2;
+mod synthetic_ambient_namespace;
+
 fn test_bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }
@@ -882,7 +890,14 @@ fn production_ssa_identity_binds_source_and_function_identity() {
             partial_moves: ProductionSemanticPartialMoveCertificateV1::default(),
             implicit_entry_variables: Box::new([]),
             frame_initializations: frame_initialization::FrameInitializationsV1::default(),
+            defined_math_results: defined_math_results::DefinedMathResultsV1::default(),
+            defined_matrix_results: defined_matrix_results::DefinedMatrixResultsV1::default(),
+            defined_reusable_lds_results: defined_reusable_lds_results::DefinedReusableLdsResultsV1::default(),
+        guarded_grid_results: guarded_grid_results::GuardedGridResultsV1::default(),
+            defined_reusable_phase_results: defined_reusable_phase_results::DefinedReusablePhaseResultsV1::default(),
             retained_cross_edge_variables: Box::new([]),
+            event_origins: execution::ExecutionEventOriginsV1::default(),
+            value_origins: source_uses_v1::definitions_v1::ValueOriginsV1::default(),
             auxiliary_resources: SemanticSsaAuxiliaryResourcesV1::default(),
         }];
         derive_semantic_ssa_identity_v1(
@@ -1128,7 +1143,14 @@ fn module_accounting_exceeds_one_function_budget_then_fails_the_module_budget() 
         partial_moves: ProductionSemanticPartialMoveCertificateV1::default(),
         implicit_entry_variables: Box::new([]),
         frame_initializations: frame_initialization::FrameInitializationsV1::default(),
+        defined_math_results: defined_math_results::DefinedMathResultsV1::default(),
+        defined_matrix_results: defined_matrix_results::DefinedMatrixResultsV1::default(),
+        defined_reusable_lds_results: defined_reusable_lds_results::DefinedReusableLdsResultsV1::default(),
+        guarded_grid_results: guarded_grid_results::GuardedGridResultsV1::default(),
+        defined_reusable_phase_results: defined_reusable_phase_results::DefinedReusablePhaseResultsV1::default(),
         retained_cross_edge_variables: Box::new([]),
+        event_origins: execution::ExecutionEventOriginsV1::default(),
+        value_origins: source_uses_v1::definitions_v1::ValueOriginsV1::default(),
         auxiliary_resources: SemanticSsaAuxiliaryResourcesV1::default(),
     };
     let twice = |value: usize| value.checked_mul(2).unwrap();
@@ -1561,7 +1583,11 @@ fn semantic_adapter_resource_limits_are_inclusive_and_fail_closed() {
     assert!(limits(storage, work - 1).module().max_work_units() > work);
     assert!(matches!(
         plan_semantic_function_ssa_v1(function_id, &function, limits(storage - 1, work)),
-        Err(ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {
+        Err(ProductionSemanticSsaErrorV1::ResourceStage {
+            stage: "combined",
+            error,
+            ..
+        }) if matches!(*error, ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {
             resource: SsaPlannerResourceV1::StorageWords,
             ..
         })
@@ -2671,3 +2697,6 @@ fn projected_call_destination_reinitializes_only_its_return_edge() {
     ]);
     plan_test_function(&return_only, &test_types(false)).unwrap();
 }
+
+#[path = "tests/resource_diagnostic_v1.rs"]
+mod resource_diagnostic_v1_tests;

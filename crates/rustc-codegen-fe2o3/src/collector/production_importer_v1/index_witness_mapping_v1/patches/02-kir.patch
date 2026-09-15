@@ -1,0 +1,118 @@
+*** Begin Patch
+*** Update File: crates/fe2o3-kernel-ir/src/execution_capability_v1.rs
+@@
+     WorkgroupMemoryIndex {
+         workgroup: ExecutionTypeIdentityV1,
+         witness: ExecutionTypeIdentityV1,
+     },
++    WorkgroupMemoryIndexV2 {
++        workgroup_reference: ExecutionTypeIdentityV1,
++        workgroup: ExecutionTypeIdentityV1,
++        option: ExecutionTypeIdentityV1,
++        witness: ExecutionTypeIdentityV1,
++    },
++    WorkgroupMemoryIndexIntoDisjoint {
++        input_witness: ExecutionTypeIdentityV1,
++        output_witness: ExecutionTypeIdentityV1,
++    },
+@@
+             Op::WorkgroupMemoryIndex { workgroup, witness } => vec![*workgroup, *witness],
++            Op::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => vec![*workgroup_reference, *workgroup, *option, *witness],
++            Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => vec![*input_witness, *output_witness],
+@@
+             Self::WorkgroupMemoryIndex { .. } => true,
++            Self::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
++                let ids = [workgroup_reference, workgroup, option, witness];
++                ids.iter().enumerate().all(|(i, id)| !ids[..i].contains(id))
++            }
++            Self::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => input_witness != output_witness,
+@@
+             Self::WorkgroupMemoryIndex { workgroup, witness } => matches(&[*workgroup], *witness),
++            Self::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => matches(&[*workgroup_reference], *option),
++            Self::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => matches(&[*input_witness], *output_witness),
+@@
+-            | Self::WorkgroupMemoryIndex { .. } => Vec::new(),
++            | Self::WorkgroupMemoryIndex { .. }
++            | Self::WorkgroupMemoryIndexV2 { .. }
++            | Self::WorkgroupMemoryIndexIntoDisjoint { .. } => Vec::new(),
+@@
+-            | Self::WorkgroupMemoryIndex { .. } => {}
++            | Self::WorkgroupMemoryIndex { .. }
++            | Self::WorkgroupMemoryIndexV2 { .. }
++            | Self::WorkgroupMemoryIndexIntoDisjoint { .. } => {}
+@@
+             && match &self.operation {
++                ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. }
++                | ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => self.operands.len() == 1,
+@@
+         ExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. } => {
+             base | ExecutionSafetyObligationsV1::BOUNDS
+                 | ExecutionSafetyObligationsV1::EXACT_PARTICIPATION
+         }
++        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => {
++            base | ExecutionSafetyObligationsV1::BOUNDS
++                | ExecutionSafetyObligationsV1::EXACT_PARTICIPATION
++                | ExecutionSafetyObligationsV1::LIFETIME_VALIDITY
++        }
++        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => {
++            base | ExecutionSafetyObligationsV1::LIFETIME_VALIDITY
++        }
+@@
+         Op::WorkgroupMemoryIndex { workgroup, witness } => {
+             writer.u8(18);
+             writer.identity(*workgroup);
+             writer.identity(*witness);
+         }
++        Op::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
++            writer.u8(27);
++            writer.identity(*workgroup_reference);
++            writer.identity(*workgroup);
++            writer.identity(*option);
++            writer.identity(*witness);
++        }
++        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++            writer.u8(28);
++            writer.identity(*input_witness);
++            writer.identity(*output_witness);
++        }
+@@
++#[cfg(test)]
++#[path = "execution_capability_v1/workgroup_memory_index_v2_tests.rs"]
++mod workgroup_memory_index_v2_tests;
++
+ fn decode_execution_operation(
+@@
+         18 => Op::WorkgroupMemoryIndex {
+             workgroup: reader.identity()?,
+             witness: reader.identity()?,
+         },
++        27 => Op::WorkgroupMemoryIndexV2 {
++            workgroup_reference: reader.identity()?,
++            workgroup: reader.identity()?,
++            option: reader.identity()?,
++            witness: reader.identity()?,
++        },
++        28 => Op::WorkgroupMemoryIndexIntoDisjoint {
++            input_witness: reader.identity()?,
++            output_witness: reader.identity()?,
++        },
+*** Update File: crates/fe2o3-kernel-ir/src/verify.rs
+@@
+         | Op::WorkgroupMemoryAllocate {
+             workgroup: source, ..
+         } => vec![workgroup(*source)],
++        Op::WorkgroupMemoryIndexV2 { workgroup: source, .. } => vec![workgroup(*source)],
++        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, .. } => vec![capability(
++            execution_source(*input_witness), ExecutionRoleContractV1::WorkgroupMemoryIndex,
++        )],
+@@
+-        Op::WorkgroupMemoryIndex { witness, .. } => vec![capability(
++        Op::WorkgroupMemoryIndex { witness, .. }
++        | Op::WorkgroupMemoryIndexV2 { witness, .. } => vec![capability(
+             *witness,
+             ExecutionRoleContractV1::WorkgroupMemoryIndex,
+         )],
++        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => vec![capability(
++            *output_witness, ExecutionRoleContractV1::WorkgroupMemoryIndex,
++        )],
+*** End Patch

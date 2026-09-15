@@ -127,11 +127,14 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn prepare_sparse_indices(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
         if self.sparse_indices.is_none() {
-            self.prepare_function_inventory(context, function);
+            self.prepare_execution_layout(context, function);
             self.sparse_indices = Some(match self.function_inventory() {
-                Ok(inventory) => {
-                    analyze_pliron_sparse_indices_with_inventory_v1(context, function, inventory)
-                }
+                Ok(inventory) => match self.execution_layout() {
+                    Ok(layout) => analyze_pliron_sparse_indices_with_inventory_v1(
+                        context, function, inventory, layout,
+                    ),
+                    Err(_) => Err(SparseIndexFailureV1::InvalidExecutionLayout),
+                },
                 Err(failure) => Err(SparseIndexFailureV1::ResourceLimit {
                     resource: failure.resource(),
                     limit: failure.limit(),
@@ -235,6 +238,9 @@ impl PlironAnalysisManagerV1 {
                     .function_inventory()
                     .expect("trace inventory was prepared");
                 trace_pliron_invocations_with_inputs_v1(context, inventory, sparse, *layout)
+            }
+            (Some(Err(SparseIndexFailureV1::InvalidExecutionLayout)), _) => {
+                Err(PlironTraceFailureV1::InvalidExecutionLayout)
             }
             (Some(Err(failure)), _) => Err(PlironTraceFailureV1::Sparse(failure.clone())),
             (_, Some(Err(failure))) => Err(failure.clone()),

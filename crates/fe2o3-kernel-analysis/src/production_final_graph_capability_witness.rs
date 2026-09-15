@@ -30,7 +30,12 @@ use fe2o3_target_spec::{
     TargetCapabilityDecisionOutcomeV1, TargetCapabilityDecisionV1, TargetCapabilityModelIdentityV1,
     TargetCapabilityRequirementV1,
 };
-use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
+use pliron::{
+    builtin::ops::FuncOp,
+    context::{Context, Ptr},
+    op::Op,
+    operation::Operation,
+};
 use sha2::{Digest, Sha256};
 
 use self::production_w4_raw_ir_checker::derive_production_w4_raw_ir_evidence_v1;
@@ -508,17 +513,67 @@ fn canonical_target_decision_v1(
 pub struct ProductionW4LiveFunctionV1<'a> {
     function: &'a FunctionId,
     pliron: &'a FuncOp,
+    ranked_view: Option<&'a crate::CheckedCanonicalRankedViewV1>,
 }
 
 impl<'a> ProductionW4LiveFunctionV1<'a> {
     pub const fn new(function: &'a FunctionId, pliron: &'a FuncOp) -> Self {
-        Self { function, pliron }
+        Self {
+            function,
+            pliron,
+            ranked_view: None,
+        }
+    }
+    pub const fn with_ranked_view(
+        function: &'a FunctionId,
+        pliron: &'a FuncOp,
+        ranked_view: &'a crate::CheckedCanonicalRankedViewV1,
+    ) -> Self {
+        Self {
+            function,
+            pliron,
+            ranked_view: Some(ranked_view),
+        }
     }
     pub const fn function(&self) -> &'a FunctionId {
         self.function
     }
     pub const fn pliron(&self) -> &'a FuncOp {
         self.pliron
+    }
+    pub fn analysis_pliron(&self) -> &'a FuncOp {
+        self.ranked_view.map_or(self.pliron, |view| view.pliron())
+    }
+
+    fn require_exact_analysis_view(
+        &self,
+        context: &Context,
+        canonical: &VerifiedCanonicalKernelIrV13,
+        module: &Module,
+        final_epoch: u64,
+    ) -> Result<(), ProductionW4ExecutionErrorV1> {
+        let function = module.functions.iter()
+            .find(|function| &function.id == self.function)
+            .ok_or(ProductionW4ExecutionErrorV1::FunctionOrderSubstituted)?;
+        if crate::needs_ranked_projection(function) != self.ranked_view.is_some() {
+            return Err(ProductionW4ExecutionErrorV1::AnalysisProjectionRejected {
+                function: self.function.clone(),
+                detail: "analysis representation does not match the exact canonical function".into(),
+            });
+        }
+        let Some(view) = self.ranked_view else {
+            return Ok(());
+        };
+        if view.function_id() != self.function {
+            return Err(ProductionW4ExecutionErrorV1::FunctionOrderSubstituted);
+        }
+        view.revalidate(context, canonical, final_epoch)
+            .map_err(
+                |error| ProductionW4ExecutionErrorV1::AnalysisProjectionRejected {
+                    function: self.function.clone(),
+                    detail: error.to_string(),
+                },
+            )
     }
 }
 
@@ -1208,6 +1263,8 @@ pub struct ProductionW4FinalGraphCapabilityWitnessV1 {
     stages: Box<[ProductionW4StageResultV1]>,
     analysis_schedule: ProductionW4AnalysisScheduleWitnessV1,
     functions: Box<[ProductionW4FunctionOutcomeV1]>,
+    // Live custody, deliberately excluded from portable witness encoding.
+    original_functions: Box<[Ptr<Operation>]>,
     canonical_encoding: Box<[u8]>,
     identity: ProductionW4WitnessIdentityV1,
 }
@@ -1287,15 +1344,23 @@ impl ProductionW4FinalGraphCapabilityWitnessV1 {
         if context_identity != self.context_identity || epoch != self.pliron_epoch {
             return Err(ProductionW4HandoffErrorV1::ContextSubstituted);
         }
-        if functions.len() != self.functions.len() {
+        if functions.len() != self.functions.len()
+            || functions.len() != self.original_functions.len()
+        {
             return Err(ProductionW4HandoffErrorV1::FunctionSubstituted);
         }
         let mut raw_ir_evidence = Vec::with_capacity(functions.len());
-        for (live, retained) in functions.iter().zip(&self.functions) {
-            if live.function != retained.function() {
+        for ((live, retained), original) in functions
+            .iter()
+            .zip(&self.functions)
+            .zip(&self.original_functions)
+        {
+            live.require_exact_analysis_view(context, canonical, module, subject.final_epoch())
+                .map_err(ProductionW4HandoffErrorV1::Execution)?;
+            if live.function != retained.function() || live.pliron.get_operation() != *original {
                 return Err(ProductionW4HandoffErrorV1::FunctionSubstituted);
             }
-            let observed = derive_pliron_ir_structural_identity_v1(context, live.pliron)
+            let observed = derive_pliron_ir_structural_identity_v1(context, live.analysis_pliron())
                 .map_err(ProductionW4HandoffErrorV1::PlironIdentity)?;
             if !retained.structural_identity.exactly_matches(&observed) {
                 return Err(ProductionW4HandoffErrorV1::FunctionSubstituted);
@@ -1426,6 +1491,10 @@ pub enum ProductionW4ExecutionErrorV1 {
     TargetResourceSubstituted,
     KernelRootsSubstituted,
     FunctionOrderSubstituted,
+    AnalysisProjectionRejected {
+        function: FunctionId,
+        detail: String,
+    },
     EmptyFunctions,
     ScheduleLength {
         expected: usize,
@@ -1473,6 +1542,9 @@ impl fmt::Display for ProductionW4ExecutionErrorV1 {
             }
             Self::FunctionOrderSubstituted => {
                 f.write_str("defined KIR to PLIRON function order was substituted")
+            }
+            Self::AnalysisProjectionRejected { function, detail } => {
+                write!(f, "final ranked analysis view for {function} was rejected: {detail}")
             }
             Self::EmptyFunctions => f.write_str("final graph has no defined functions"),
             Self::ScheduleLength { expected, observed } => {
@@ -1749,6 +1821,9 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
     let context_identity = require_context_identity(context)
         .map_err(|_| ProductionW4ExecutionErrorV1::ContextIdentityUnavailable)?;
     let before_epoch = current_pliron_epoch(context)?;
+    for live in functions {
+        live.require_exact_analysis_view(context, canonical, module, subject.final_epoch())?;
+    }
     let capability_provenance =
         analyze_kernel_capability_preservation_v1(module, subject.final_epoch)
             .map_err(ProductionW4ExecutionErrorV1::CapabilityProvenance)?;
@@ -1840,7 +1915,8 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
     let mut outcomes = Vec::with_capacity(functions.len());
     let mut raw_ir_evidence = Vec::with_capacity(functions.len());
     for live in functions {
-        let identity = match derive_pliron_ir_structural_identity_v1(context, live.pliron) {
+        let analysis = live.analysis_pliron();
+        let identity = match derive_pliron_ir_structural_identity_v1(context, analysis) {
             Ok(identity) => identity,
             Err(error) => {
                 return non_clean_without_pipeline(
@@ -1853,7 +1929,7 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
             }
         };
         let checked = if root_entries.contains(&live.function) {
-            let live_layouts = match live_execution_layout_count(context, live.pliron) {
+            let live_layouts = match live_execution_layout_count(context, analysis) {
                 Ok(count) => count,
                 Err(detail) => {
                     return non_clean_without_pipeline(
@@ -1884,7 +1960,7 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
                 };
                 require_production_pliron_checks_with_atomic_target_and_canonical_layout_before_lowering_v2(
                     context,
-                    live.pliron,
+                    analysis,
                     target_resource.atomic_target(),
                     target_resource.launch_contract(),
                     canonical_layout,
@@ -1892,7 +1968,7 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
             } else {
                 require_production_pliron_checks_with_atomic_and_target_before_lowering_v2(
                     context,
-                    live.pliron,
+                    analysis,
                     target_resource.atomic_target(),
                     target_resource.launch_contract(),
                 )
@@ -1900,7 +1976,7 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
         } else {
             require_production_pliron_checks_with_atomic_target_before_lowering_v2(
                 context,
-                live.pliron,
+                analysis,
                 target_resource.atomic_target(),
             )
         };
@@ -1940,8 +2016,8 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
             }
         };
         require_exact_function_report(&checks)?;
-        let after_identity = derive_pliron_ir_structural_identity_v1(context, live.pliron)
-            .map_err(|error| {
+        let after_identity =
+            derive_pliron_ir_structural_identity_v1(context, analysis).map_err(|error| {
                 ProductionW4ExecutionErrorV1::Encoding(ProductionW4EncodingErrorV1::ResourceLimit {
                     resource: error.code(),
                     limit: MAX_PRODUCTION_W4_WITNESS_ENCODING_BYTES_V1,
@@ -2018,6 +2094,10 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
             stages: stages.into_boxed_slice(),
             analysis_schedule,
             functions: outcomes.into_boxed_slice(),
+            original_functions: functions
+                .iter()
+                .map(|live| live.pliron.get_operation())
+                .collect(),
             canonical_encoding: canonical_encoding.into_boxed_slice(),
             identity,
         },
@@ -3057,6 +3137,9 @@ fn execution_counterexample_classification(
         }
         Reason::ConflictingEffects | Reason::ConflictingAccessCorrespondenceUnavailable => {
             (Obligation::RaceFreedom, Class::RaceConflict)
+        }
+        Reason::NumericalPolicyRefinementUnavailable => {
+            (Obligation::SemanticRefinement, Class::SemanticRefinement)
         }
         Reason::ResourceLimit { .. }
         | Reason::UnsupportedExternalCall { .. }
@@ -4931,6 +5014,7 @@ const fn source_tag(source: ProductionW4OutcomeSourceV1) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    mod projection;
     use std::collections::BTreeSet;
 
     use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
@@ -5496,6 +5580,42 @@ mod tests {
     }
 
     #[test]
+    fn numerical_policy_w4_classification_retains_incomplete_without_authority() {
+        let reason =
+            crate::ExecutionCapabilitySemanticReasonV1::NumericalPolicyRefinementUnavailable;
+        assert_eq!(
+            execution_counterexample_classification(&reason),
+            (
+                ProductionW4AnalysisObligationKindV1::SemanticRefinement,
+                ProductionW4CounterexampleClassV1::SemanticRefinement,
+            )
+        );
+        assert!(!execution_finding_is_unsupported(&reason));
+
+        let canonical = VerifiedCanonicalKernelIrV13::from_module(kir_module()).unwrap();
+        let (subject, _) = subject_and_target(&canonical);
+        let execution = non_clean_without_pipeline(
+            subject.clone(),
+            ProductionCapabilityAnalysisKindV1::SemanticRefinement,
+            Some(FunctionId::new("entry")),
+            KernelCheckStatusV1::Incomplete,
+            format!("{reason:?}"),
+        )
+        .unwrap();
+        let ProductionW4FinalGraphExecutionV1::NonClean(result) = execution else {
+            panic!("expected incomplete W4 result");
+        };
+        let ProductionW4CapabilityOutcomeV1::Incomplete(diagnostic) = result.outcome() else {
+            panic!("expected incomplete numerical-policy diagnostic");
+        };
+        assert!(diagnostic.counterexample().is_none());
+        assert_eq!(diagnostic.final_graph(), canonical.identity());
+        assert!(!result.grants_any_authority());
+        result.require_exact_subject_v1(&subject).unwrap();
+        ProductionW4CanonicalEncodingV1::decode(result.canonical_encoding()).unwrap();
+    }
+
+    #[test]
     fn diagnostic_source_map_and_non_clean_subject_are_canonical() {
         let module = kir_module();
         let canonical = VerifiedCanonicalKernelIrV13::from_module(module).unwrap();
@@ -5843,6 +5963,8 @@ mod tests {
         ));
     }
 
+    include!("production_final_graph_capability_witness/missing_effect_fixture_tests.rs");
+
     fn parse_fixture(source: &str) -> (Context, FuncOp) {
         let ir = source
             .lines()
@@ -5974,16 +6096,15 @@ mod tests {
             )),
             ProductionPlironPreloweringErrorV2::TensorLayout(_)
         ));
-        let (context, function) = parse_fixture(include_str!(
-            "../tests/lit/ownership_total_finite_induction_loop.pliron"
-        ));
-        let report = require_production_pliron_checks_with_atomic_target_before_lowering_v2(
-            &context,
-            &function,
-            &atomic_target(),
-        )
-        .unwrap();
-        assert!(report.is_clean());
+        let report = missing_effect_fixture_tests::assert_exact_stage_evidence(
+            include_str!("../tests/lit/ownership_total_finite_induction_loop.pliron"),
+            &[(
+                KernelCheckPassKindV1::HierarchicalOwnership,
+                ProductionAnalysisWitnessCheckerV1::OwnershipFreshLiveIrReplayV2,
+            )],
+        );
+        assert!(report.progress().is_clean());
+        assert_eq!(report.progress().certificates().len(), 1);
     }
 
     #[test]
@@ -5998,7 +6119,7 @@ mod tests {
             assert_eq!(status, KernelCheckStatusV1::Incomplete);
         }
 
-        assert_exact_fixture_passes(
+        missing_effect_fixture_tests::assert_exact_stage_evidence(
             include_str!("../tests/lit/ownership_total_finite_induction_loop.pliron"),
             &[(
                 KernelCheckPassKindV1::HierarchicalOwnership,
@@ -6030,7 +6151,7 @@ mod tests {
                 ProductionAnalysisWitnessCheckerV1::BarrierFreshLiveIrReplayV2,
             )],
         );
-        assert_exact_fixture_passes(
+        missing_effect_fixture_tests::assert_exact_stage_evidence(
             include_str!("../tests/lit/scoped_cross_workgroup_atomic.pliron"),
             &[
                 (
@@ -6059,12 +6180,8 @@ mod tests {
     }
 
     #[test]
-    fn advanced_affine_pipeline_collective_atomic_and_lds_fixtures_receive_all_obligations() {
+    fn advanced_fixtures_require_effects_before_full_w4_admission() {
         for (name, source) in [
-            (
-                "ownership_total_finite_induction_loop",
-                include_str!("../tests/lit/ownership_total_finite_induction_loop.pliron"),
-            ),
             (
                 "pipeline_dynamic_double_buffer",
                 include_str!("../tests/lit/pipeline_dynamic_double_buffer.pliron"),
@@ -6086,15 +6203,23 @@ mod tests {
                 include_str!("../tests/lit/scoped_subgroup_collective.pliron"),
             ),
             (
-                "scoped_cross_workgroup_atomic",
-                include_str!("../tests/lit/scoped_cross_workgroup_atomic.pliron"),
-            ),
-            (
                 "workgroup_published",
                 include_str!("../tests/lit/workgroup_published.pliron"),
             ),
         ] {
             assert_full_fixture_admission(name, source);
+        }
+        for (name, source) in [
+            (
+                "ownership_total_finite_induction_loop",
+                include_str!("../tests/lit/ownership_total_finite_induction_loop.pliron"),
+            ),
+            (
+                "scoped_cross_workgroup_atomic",
+                include_str!("../tests/lit/scoped_cross_workgroup_atomic.pliron"),
+            ),
+        ] {
+            missing_effect_fixture_tests::assert_full_w4_rejection(name, source);
         }
     }
 

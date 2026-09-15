@@ -922,6 +922,8 @@
                     block_index,
                     &[],
                     semantic_statement,
+                    &ProjectedGlobalSemanticUsesV1::default(),
+                    None,
                     &constants,
                     local_contracts,
                     &[],
@@ -1080,6 +1082,9 @@
                 | ProductionRankedProjectionErrorV1::Unsupported(detail),
             ) => {
                 assert_eq!(detail, expected)
+            }
+            Err(ProductionRankedProjectionErrorV1::UnrankedDereference(_)) => {
+                assert_eq!(unranked_dereference_diagnostic_v1::REASON, expected)
             }
             Err(other) => panic!("expected unsupported projection, got {other}"),
             Ok(_) => panic!("hostile projection unexpectedly passed"),

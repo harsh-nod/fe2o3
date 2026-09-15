@@ -35,6 +35,8 @@ use crate::{
     PresburgerMachineRangeDecisionV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
 };
 
+mod invocation_reachability_v1;
+
 pub const MAX_PLIRON_RACE_INVOCATIONS_V1: u64 = 65_536;
 pub const MAX_PLIRON_RACE_EFFECT_INSTANCES_V1: usize = 1_048_576;
 pub const MAX_PLIRON_RACE_FINDINGS_V1: usize = 4_096;
@@ -732,12 +734,22 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         }
     }
 
+    let mut reachability = invocation_reachability_v1::Reachability::new(
+        context,
+        function,
+        &inventory,
+        sparse,
+        &mut raw_evaluation_steps,
+    );
     let mut addresses: HashMap<AddressKeyV1, AddressStateV1> = HashMap::new();
     let mut findings = Vec::new();
     let mut conflict_classes = HashSet::new();
     let mut effect_instances = 0_usize;
     for linear_invocation in 0..invocation_count {
         let invocation = decode_invocation(linear_invocation, &launch_extents);
+        if let Some(reachability) = &mut reachability {
+            reachability.prepare(&invocation, &mut raw_evaluation_steps);
+        }
         for effect in &effects {
             effect_instances = effect_instances.saturating_add(1);
             if effect_instances > MAX_PLIRON_RACE_EFFECT_INSTANCES_V1 {
@@ -745,6 +757,13 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                     actual: effect_instances,
                     limit: MAX_PLIRON_RACE_EFFECT_INSTANCES_V1,
                 });
+            }
+            // Retain the original instance cap even for effects proved inactive.
+            if reachability
+                .as_ref()
+                .is_some_and(|reachable| !reachable.may_reach(effect.location.block))
+            {
+                continue;
             }
             let Some(indices) = effect
                 .indices
@@ -1693,6 +1712,9 @@ fn decode_invocation(mut linear: u64, extents: &[u64]) -> Vec<u64> {
 
 fn sparse_failure(failure: SparseIndexFailureV1) -> String {
     match failure {
+        SparseIndexFailureV1::InvalidExecutionLayout => {
+            "execution layout is malformed or conflicts with invocation declarations".to_owned()
+        }
         SparseIndexFailureV1::ResourceLimit {
             resource,
             limit,

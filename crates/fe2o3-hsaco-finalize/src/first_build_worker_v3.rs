@@ -471,7 +471,7 @@ const fn binding_mismatch(field: &'static str) -> ProtectedCompilerHandoffBindin
 
 /// Move-only measured worker execution retaining its complete strict-V3 binding.
 ///
-/// The underlying exchange uses the existing direct-LLVM Worker V2 wire protocol. This wrapper
+/// The underlying exchange uses the existing revisioned direct-LLVM worker protocol. This wrapper
 /// neither converts the compiler transaction to V2 nor grants artifact authority.
 #[derive(Debug, Eq, PartialEq)]
 pub struct InertProtectedCompilerHandoffExecutionV3 {
@@ -957,6 +957,8 @@ impl Error for ProtectedFirstBuildWorkerV3Error {
 /// The caller must retain its artifact-transaction currentness lease while this function borrows
 /// the exact handoff named by `expected_receipt`. No worker process is started. Success proves that
 /// both candidate and replay request shapes are protocol-valid for the selected configuration.
+/// Production requires captured stage contents in both V5 success responses. An unsupported
+/// worker or a success response without capture fails closed; no request downgrade is attempted.
 #[allow(clippy::too_many_arguments)]
 pub fn preflight_protected_reproducible_first_build_worker_v3(
     handoff: &InertSemanticCompilerModuleHandoffV3,
@@ -977,7 +979,7 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
         link_options,
         candidate_output_bound,
         limits,
-        WorkerRequestRevisionV1::V2,
+        WorkerRequestRevisionV1::CaptureRequiredV3,
     )
 }
 
@@ -1252,6 +1254,7 @@ const fn preflight_mismatch(field: &'static str) -> ProtectedFirstBuildWorkerV3E
 /// APIs in the pinned production worker; this crate neither invokes COMGR nor provides a COMGR
 /// fallback. The returned evidence records the worker's measured LLVM build identity but does not
 /// independently prove the implementation behind that measurement.
+/// Bootstrap and replay require capture-required V3 requests and captured V5 success responses.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_protected_reproducible_first_build_worker_v3(
     consumed: ConsumedCompilerModuleHandoffV3,

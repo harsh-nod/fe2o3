@@ -38,6 +38,7 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 [dev-dependencies]
 fe2o3-build-authority.workspace = true
 fe2o3-kernel-descriptor.workspace = true
+fe2o3-target-spec.workspace = true
 
 [[bin]]
 name = "fe2o3-verifier-test-recorder"

@@ -457,6 +457,8 @@ pub(super) mod checked_execution_view_tests {
         assert_eq!(lowered.semantic_ssa_identity(), identity);
         assert!(lowered.has_expanded_calls());
         assert!(lowered.retains_mandatory_generic_checks());
+        assert!(lowered.ranked_lowering_for_root(root).is_some());
+        assert!(lowered.ranked_lowering_for_root(SemanticFunctionIdV1::from_index(1)).is_none());
         lowered.verify_equivalence().unwrap();
     }
 }

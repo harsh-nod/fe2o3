@@ -12,10 +12,7 @@ use crate::compiler_module_contract::{
     CompilerModuleRoleError, ExactTargetBindingError, construct_symbol_manifest,
     validate_envelope_module_roles, validate_exact_target_binding,
 };
-use crate::kernel_ir_codegen::{
-    CompilerModuleConstructionError, bind_compiler_descriptor_source_v1,
-    retain_production_compiler_module_text_v1,
-};
+use crate::kernel_ir_codegen::CompilerModuleConstructionError;
 use crate::production_backend_v1::{
     ProductionBackendCapabilityClosureV1, ProductionBackendResourceEvidenceV1,
 };
@@ -69,6 +66,7 @@ pub(crate) struct PreparedProductionWorkerHandoff {
     handoff: CompilerModuleHandoffV2,
     compiler_descriptor_source: CompilerDescriptorSourceV1,
     generated_host_contract_identities: Box<[[u8; 32]]>,
+    target_output: crate::production_backend_v1::ProductionBackendWorkerOutputV1,
 }
 
 impl PreparedProductionWorkerHandoff {
@@ -79,6 +77,7 @@ impl PreparedProductionWorkerHandoff {
             CompilerModuleHandoffV2,
             CompilerDescriptorSourceV1,
             Box<[[u8; 32]]>,
+            crate::production_backend_v1::ProductionBackendWorkerOutputV1,
         ),
         ProductionWorkerHandoffError,
     > {
@@ -87,14 +86,18 @@ impl PreparedProductionWorkerHandoff {
             handoff,
             compiler_descriptor_source,
             generated_host_contract_identities,
+            target_output,
         } = self;
         if Sha256::digest(handoff.module_bytes()).as_slice() != llvm_ir_sha256 {
             return Err(ProductionWorkerHandoffError::MissingProductionBindings);
         }
+        target_output.validate_worker_input(&handoff, &compiler_descriptor_source)
+            .map_err(ProductionWorkerHandoffError::ProductionBackend)?;
         Ok((
             handoff,
             compiler_descriptor_source,
             generated_host_contract_identities,
+            target_output,
         ))
     }
 }
@@ -188,6 +191,7 @@ pub(crate) struct PreparedProductionW4CapabilityCarriageV5 {
     subjects: Vec<CapabilitySubjectV1>,
     compiler_policy: [u8; 32],
     source_refinement: InertCapabilityRefinementReceiptV1,
+    functional_binding: crate::production_pipeline::ProductionFinalFunctionalW4BindingV1,
     target_closure: InertProductionTargetCapabilityClosureV5,
     w4_subject: ProductionW4FinalGraphSubjectV1,
     w4_target: ProductionW4TargetResourceInputV1,
@@ -233,11 +237,22 @@ impl PreparedProductionW4CapabilityCarriageV5 {
         self,
         witness: &ProductionW4FinalGraphCapabilityWitnessV1,
     ) -> Result<ProductionCapabilityCarriageInputsV5, ProductionWorkerHandoffError> {
-        let retained_functional_refinement = functional_refinement_identity_v5(
+        validate_source_functional_roster_v5(
             &self.proof_lineage,
             self.final_canonical.identity(),
             self.w4_subject.final_epoch(),
         )?;
+        if !self.functional_binding.matches_subject(
+            self.w4_subject.pre_optimization_graph(),
+            self.final_canonical.identity(),
+            self.w4_subject.final_epoch(),
+            self.w4_subject.target_closure_identity(),
+        ) {
+            return Err(ProductionWorkerHandoffError::CapabilitySubjectMismatch(
+                "final-graph functional custody",
+            ));
+        }
+        let retained_functional_refinement = *self.functional_binding.identity();
         if witness.subject() != &self.w4_subject
             || witness.subject().functional_refinement_identity() != &retained_functional_refinement
             || witness.target_resource() != &self.w4_target
@@ -314,6 +329,7 @@ pub(crate) fn prepare_production_w4_capability_carriage_v5(
     semantic_mir_identity: [u8; 32],
     compiler_policy: [u8; 32],
     source_refinement: InertCapabilityRefinementReceiptV1,
+    functional_binding: crate::production_pipeline::ProductionFinalFunctionalW4BindingV1,
     live_closure: &ProductionBackendCapabilityClosureV1,
     live_report: &fe2o3_pliron::ProductionFinalGraphVerificationReportV1,
     module: &Module,
@@ -380,8 +396,18 @@ pub(crate) fn prepare_production_w4_capability_carriage_v5(
         .collect::<Result<Vec<_>, _>>()?;
     let aggregate_launch = *target_closure.launch_contract().digest().as_bytes();
     let target_identity = *target_model.digest().as_bytes();
-    let functional_refinement_identity =
-        functional_refinement_identity_v5(&proof_lineage, final_canonical.identity(), final_epoch)?;
+    validate_source_functional_roster_v5(&proof_lineage, final_canonical.identity(), final_epoch)?;
+    if !functional_binding.matches_subject(
+        &pre_optimization_graph,
+        final_canonical.identity(),
+        final_epoch,
+        &live_closure.closure_identity(),
+    ) {
+        return Err(ProductionWorkerHandoffError::CapabilitySubjectMismatch(
+            "final-graph functional custody",
+        ));
+    }
+    let functional_refinement_identity = *functional_binding.identity();
     let w4_subject = ProductionW4FinalGraphSubjectV1::try_new(
         pre_optimization_graph,
         pre_optimization_epoch,
@@ -414,17 +440,18 @@ pub(crate) fn prepare_production_w4_capability_carriage_v5(
         subjects,
         compiler_policy,
         source_refinement,
+        functional_binding,
         target_closure,
         w4_subject,
         w4_target,
     })
 }
 
-fn functional_refinement_identity_v5(
+fn validate_source_functional_roster_v5(
     proof_lineage: &InertMultiRootProofLineageV3,
     final_graph: &VerifiedCanonicalKernelIrIdentityV13,
     final_epoch: u64,
-) -> Result<[u8; 32], ProductionWorkerHandoffError> {
+) -> Result<(), ProductionWorkerHandoffError> {
     let roster = proof_lineage.roster(MultiRootProofRosterKindV3::VerusExecution);
     if roster.neutral_kir().digest() != *final_graph.digest()
         || roster.neutral_kir().canonical_length() != final_graph.canonical_length()
@@ -458,7 +485,7 @@ fn functional_refinement_identity_v5(
             ));
         }
     }
-    Ok(Sha256::digest(roster.canonical_bytes()).into())
+    Ok(())
 }
 
 /// Extends one exact frozen V3 worker handoff with the native V13 capability carrier.
@@ -1015,7 +1042,8 @@ fn type_storage_alignment_v5(
         Type::Scalar(scalar) => scalar.bit_width().unwrap_or(pointer_width_bits),
         Type::Pointer(_) | Type::Slice(_) => pointer_width_bits,
         Type::Unit => 8,
-        Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_) => {
+        Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_)
+        | Type::ReusablePhaseToken(_) => {
             return Err(ProductionWorkerHandoffError::CapabilitySubjectMismatch(
                 "logical capability used as physical global element",
             ));
@@ -1060,8 +1088,9 @@ fn prepare_production_worker_handoff_inner(
         .semantic_kir()
         .canonical_kernel_ir_identity()
         .digest();
-    let compiler_module = retain_production_compiler_module_text_v1(&module, llvm_ir)
-        .map_err(ProductionWorkerHandoffError::CompilerModule)?;
+    let retained_output = llvm_ir.retain_compiler_module(target, &module)
+        .map_err(ProductionWorkerHandoffError::from)?;
+    let compiler_module = retained_output.compiler_module();
     let envelope = derive_production_compiler_ffi_envelope(
         target,
         &module,
@@ -1084,8 +1113,9 @@ fn prepare_production_worker_handoff_inner(
         &formal,
     )
     .map_err(ProductionWorkerHandoffError::CompilerDescriptor)?;
-    let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
-        .map_err(ProductionWorkerHandoffError::CompilerModule)?;
+    let descriptor_output = retained_output.bind_descriptor(&descriptor_source)
+        .map_err(ProductionWorkerHandoffError::from)?;
+    let compiler_module = descriptor_output.compiler_module();
     let symbol_manifest = construct_symbol_manifest(&compiler_module)
         .map_err(ProductionWorkerHandoffError::SymbolManifest)?;
     if let Some(final_v13_symbols) = final_v13_symbols {
@@ -1103,11 +1133,14 @@ fn prepare_production_worker_handoff_inner(
         compiler_module.llvm_ir().as_bytes(),
     )
     .map_err(ProductionWorkerHandoffError::Handoff)?;
+    let target_output = descriptor_output.bind_worker_input(&handoff, &descriptor_source)
+        .map_err(ProductionWorkerHandoffError::ProductionBackend)?;
     Ok(PreparedProductionWorkerHandoff {
         llvm_ir_sha256,
         handoff,
         compiler_descriptor_source: descriptor_source,
         generated_host_contract_identities,
+        target_output,
     })
 }
 
@@ -1358,6 +1391,15 @@ pub(crate) enum ProductionWorkerHandoffError {
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     SingleCodegenOwnership(String),
     Handoff(CompilerModuleHandoffErrorV2),
+}
+
+impl From<crate::production_backend_v1::ProductionBackendErrorV1> for ProductionWorkerHandoffError {
+    fn from(error: crate::production_backend_v1::ProductionBackendErrorV1) -> Self {
+        match error {
+            crate::production_backend_v1::ProductionBackendErrorV1::CompilerModule(error) => Self::CompilerModule(error),
+            error => Self::ProductionBackend(error),
+        }
+    }
 }
 
 impl fmt::Display for ProductionWorkerHandoffError {

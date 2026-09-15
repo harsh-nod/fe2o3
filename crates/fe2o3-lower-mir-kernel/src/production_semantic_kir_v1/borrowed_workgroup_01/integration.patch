@@ -1,0 +1,1283 @@
+--- a/crates/fe2o3-kernel-ir/src/execution_capability_v1.rs
++++ b/crates/fe2o3-kernel-ir/src/execution_capability_v1.rs
+@@ -7,6 +7,7 @@
+ use std::collections::BTreeSet;
+ 
+ mod subgroup_partition;
++mod borrowed_subgroup;
+ mod numerical_policy_math;
+ mod source_occurrence;
+ pub use source_occurrence::ExecutionCapabilitySourceOccurrenceV1;
+@@ -308,6 +309,11 @@
+ /// Logical SSA role. This is deliberately richer than the physical ABI.
+ #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+ pub enum ExecutionCapabilityRoleV1 {
++    BorrowedSubgroup {
++        workgroup_reference: ExecutionTypeIdentityV1,
++        workgroup: ExecutionTypeIdentityV1,
++        width: u32,
++    },
+     NumericalPolicyMathSource(NumericalPolicyMathBindingV1),
+     NumericalPolicyMathBound(NumericalPolicyMathBindingV1),
+     SubgroupPartition { width: u32, partition_width: u32 },
+@@ -363,6 +369,8 @@
+             Self::NumericalPolicy { policy, mode } => {
+                 policy.is_complete() && *mode == NumericalModeV1::StrictIeee
+             }
++            Self::BorrowedSubgroup { workgroup_reference, workgroup, width } =>
++                borrowed_subgroup::valid_pair(*workgroup_reference, *workgroup, *width),
+             Self::Subgroup { width } => *width != 0 && width.is_power_of_two(),
+             Self::Lds {
+                 element,
+@@ -428,6 +436,9 @@
+             && match self.role {
+                 ExecutionCapabilityRoleV1::NumericalPolicyMathSource(binding) => self.source_type == binding.math && self.workgroup_brand.is_none() && self.epoch.is_none(),
+                 ExecutionCapabilityRoleV1::NumericalPolicyMathBound(binding) => self.source_type == binding.bound && self.workgroup_brand.is_none() && self.epoch.is_none(),
++                ExecutionCapabilityRoleV1::BorrowedSubgroup { workgroup_reference, workgroup, .. } =>
++                    self.workgroup_brand.is_some() && self.epoch.is_some()
++                        && self.source_type != workgroup_reference && self.source_type != workgroup,
+                 ExecutionCapabilityRoleV1::SubgroupPartition { .. } => self.workgroup_brand.is_some() && self.epoch.is_some(),
+                 ExecutionCapabilityRoleV1::NumericalPolicy { policy, .. } => {
+                     self.source_type != policy
+@@ -448,6 +459,12 @@
+ /// never table ordinals from Semantic MIR.
+ #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+ pub enum ExecutionCapabilityOperationV1 {
++    SubgroupDeriveBorrowed {
++        workgroup_reference: ExecutionTypeIdentityV1,
++        workgroup: ExecutionTypeIdentityV1,
++        subgroup: ExecutionTypeIdentityV1,
++        width: u32,
++    },
+     NumericalPolicyMath(NumericalPolicyMathOperationV1),
+     SubgroupPartition(SubgroupPartitionOperationV1),
+     /// Strict IEEE policy ownership; all numerical proof obligations remain open.
+@@ -656,6 +673,8 @@
+             Op::NumericalPolicyMath(math) => math.type_references(),
+             Op::SubgroupPartition(partition) => partition.type_references(),
+             Op::NumericalPolicyIssue { context, capability, policy, .. } => vec![*context, *capability, *policy],
++            Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, .. } =>
++                vec![*workgroup_reference, *workgroup, *subgroup],
+             Op::WorkgroupDerive { context, workgroup } => vec![*context, *workgroup],
+             Op::SubgroupDerive {
+                 workgroup,
+@@ -911,6 +930,9 @@
+                     && capability != policy
+                     && *mode == NumericalModeV1::StrictIeee
+             }
++            Self::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } =>
++                borrowed_subgroup::valid_pair(*workgroup_reference, *workgroup, *width)
++                    && subgroup != workgroup_reference && subgroup != workgroup,
+             Self::WorkgroupDerive { .. } => true,
+             Self::SubgroupDerive { width, .. } | Self::SubgroupCollective { width, .. } => {
+                 matches!(width, 32 | 64)
+@@ -1109,6 +1131,8 @@
+             Self::NumericalPolicyMath(math) => math.signature_matches(signature),
+             Self::SubgroupPartition(partition) => partition.signature_matches(signature),
+             Self::NumericalPolicyIssue { context, capability, .. } => matches(&[*context], *capability),
++            Self::SubgroupDeriveBorrowed { workgroup_reference, subgroup, .. } =>
++                matches(&[*workgroup_reference], *subgroup),
+             Self::WorkgroupDerive { context, workgroup } => matches(&[*context], *workgroup),
+             Self::SubgroupDerive {
+                 workgroup,
+@@ -1319,6 +1343,7 @@
+             ],
+             Self::NumericalPolicyMath(_) | Self::SubgroupPartition(_) | Self::NumericalPolicyIssue { .. }
+             | Self::WorkgroupDerive { .. }
++            | Self::SubgroupDeriveBorrowed { .. }
+             | Self::SubgroupDerive { .. }
+             | Self::SubgroupCollective { .. }
+             | Self::MatrixAccess { .. }
+@@ -1332,7 +1357,8 @@
+         if let Self::NumericalPolicyMath(math) = self { return math.required_capabilities(); }
+         if let Self::SubgroupPartition(partition) = self { return partition.required_capabilities(); }
+         let mut required = BTreeSet::new();
+-        if let Self::SubgroupDerive { width, .. }
++        if let Self::SubgroupDeriveBorrowed { width, .. }
++        | Self::SubgroupDerive { width, .. }
+         | Self::SubgroupBarrier { width, .. }
+         | Self::SubgroupFence { width, .. }
+         | Self::SubgroupCollective { width, .. }
+@@ -1350,7 +1376,7 @@
+             ));
+         };
+         match self {
+-            Self::NumericalPolicyMath(_) | Self::SubgroupDerive { .. } | Self::SubgroupPartition(_) => {}
++            Self::SubgroupDeriveBorrowed { .. } | Self::NumericalPolicyMath(_) | Self::SubgroupDerive { .. } | Self::SubgroupPartition(_) => {}
+             Self::LdsAllocate {
+                 layout, elements, ..
+             }
+@@ -1649,6 +1675,7 @@
+                 .is_none_or(|identity| identity != [0; 32] && Some(identity) != self.epoch_before)
+             && self.obligations.bits() == required_execution_obligations_v1(&self.operation)
+             && match &self.operation {
++                ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. } => self.operands.len() == 1,
+                 ExecutionCapabilityOperationV1::NumericalPolicyMath(math) => self.operands.len() == math.operand_count(),
+                 ExecutionCapabilityOperationV1::SubgroupPartition(partition) => self.operands.len() == partition.operand_count(),
+                 ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } => {
+@@ -1680,6 +1707,7 @@
+         ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } => {
+             kernel | ExecutionSafetyObligationsV1::NUMERICAL_POLICY
+         }
++        ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. } => borrowed_subgroup::obligations(),
+         ExecutionCapabilityOperationV1::WorkgroupDerive { .. }
+         | ExecutionCapabilityOperationV1::SubgroupDerive { .. } => base,
+         ExecutionCapabilityOperationV1::LdsAllocate { .. } => {
+@@ -1829,7 +1857,7 @@
+         return None;
+     }
+     let mut writer = ContractWriter::default();
+-    let revision = if contract.source.occurrence.is_some() { 5 } else if matches!(contract.operation, ExecutionCapabilityOperationV1::NumericalPolicyMath(_)) { 4 } else if matches!(contract.operation, ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } | ExecutionCapabilityOperationV1::SubgroupPartition(_)) { 2 } else { 1 };
++    let revision = if contract.source.occurrence.is_some() { 5 } else { borrowed_subgroup::contract_revision(&contract.operation) };
+     writer.u8(revision);
+     encode_execution_operation(&mut writer, &contract.operation);
+     let arguments = contract.signature.arguments().collect::<Vec<_>>();
+@@ -1842,7 +1870,7 @@
+     writer.optional_digest(contract.workgroup_brand);
+     writer.optional_digest(contract.epoch_before);
+     writer.optional_digest(contract.epoch_after);
+-    if revision == 2 || revision == 4 || revision == 5 {
++    if revision != 1 {
+         writer.u32(contract.obligations.bits());
+     } else {
+         writer.u16(u16::try_from(contract.obligations.bits()).ok()?);
+@@ -1865,10 +1893,9 @@
+     }
+     let mut reader = ContractReader::new(bytes);
+     let revision = reader.u8()?;
+-    matches!(revision, 1 | 2 | 4 | 5).then_some(())?;
++    matches!(revision, 1 | 2 | 3 | 4 | 5).then_some(())?;
+     let operation = decode_execution_operation(&mut reader)?;
+-    (revision == 5 || (revision == 4) == matches!(operation, ExecutionCapabilityOperationV1::NumericalPolicyMath(_))).then_some(())?;
+-    (revision == 5 || (revision == 2) == matches!(operation, ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } | ExecutionCapabilityOperationV1::SubgroupPartition(_))).then_some(())?;
++    (revision == 5 || revision == borrowed_subgroup::contract_revision(&operation)).then_some(())?;
+     let count = usize::from(reader.u8()?);
+     (count <= MAX_EXECUTION_CAPABILITY_ARGUMENTS_V1).then_some(())?;
+     let mut arguments = Vec::with_capacity(count);
+@@ -1880,7 +1907,7 @@
+     let workgroup_brand = reader.optional_digest()?;
+     let epoch_before = reader.optional_digest()?;
+     let epoch_after = reader.optional_digest()?;
+-    let obligations = ExecutionSafetyObligationsV1::from_bits(if revision == 2 || revision == 4 || revision == 5 { reader.u32()? } else { u32::from(reader.u16()?) });
++    let obligations = ExecutionSafetyObligationsV1::from_bits(if revision != 1 { reader.u32()? } else { u32::from(reader.u16()?) });
+     let source = ExecutionCapabilitySourceV1 {
+         function: reader.digest()?,
+         operation: reader.digest()?,
+@@ -1909,7 +1936,7 @@
+         return None;
+     }
+     let mut writer = ContractWriter::default();
+-    writer.u8(if matches!(capability.role, ExecutionCapabilityRoleV1::NumericalPolicyMathSource(_) | ExecutionCapabilityRoleV1::NumericalPolicyMathBound(_)) { 4 } else if matches!(capability.role, ExecutionCapabilityRoleV1::NumericalPolicy { .. } | ExecutionCapabilityRoleV1::SubgroupPartition { .. }) { 2 } else { 1 });
++    writer.u8(borrowed_subgroup::type_revision(&capability.role));
+     writer.identity(capability.source_type);
+     encode_execution_provenance(&mut writer, &capability.provenance)?;
+     writer.optional_digest(capability.workgroup_brand);
+@@ -1924,7 +1951,7 @@
+     }
+     let mut reader = ContractReader::new(bytes);
+     let revision = reader.u8()?;
+-    matches!(revision, 1 | 2 | 4).then_some(())?;
++    matches!(revision, 1 | 2 | 3 | 4).then_some(())?;
+     let capability = ExecutionCapabilityTypeV1 {
+         source_type: reader.identity()?,
+         provenance: decode_execution_provenance(&mut reader)?,
+@@ -1933,8 +1960,7 @@
+         role: decode_execution_role(&mut reader)?,
+     };
+     (reader.finished() && capability.is_complete()
+-        && (revision == 4) == matches!(capability.role, ExecutionCapabilityRoleV1::NumericalPolicyMathSource(_) | ExecutionCapabilityRoleV1::NumericalPolicyMathBound(_))
+-        && (revision == 2) == matches!(capability.role, ExecutionCapabilityRoleV1::NumericalPolicy { .. } | ExecutionCapabilityRoleV1::SubgroupPartition { .. }))
++        && revision == borrowed_subgroup::type_revision(&capability.role))
+         .then_some(capability)
+ }
+ 
+@@ -2085,6 +2111,8 @@
+ 
+ fn encode_execution_role(writer: &mut ContractWriter, role: &ExecutionCapabilityRoleV1) {
+     match role {
++        ExecutionCapabilityRoleV1::BorrowedSubgroup { workgroup_reference, workgroup, width } =>
++            borrowed_subgroup::encode_role(writer, *workgroup_reference, *workgroup, *width),
+         ExecutionCapabilityRoleV1::NumericalPolicyMathSource(binding) => { writer.u8(13); binding.encode(writer); }
+         ExecutionCapabilityRoleV1::NumericalPolicyMathBound(binding) => { writer.u8(14); binding.encode(writer); }
+         ExecutionCapabilityRoleV1::SubgroupPartition { width, partition_width } => {
+@@ -2180,6 +2208,7 @@
+     Some(match reader.u8()? {
+         13 => ExecutionCapabilityRoleV1::NumericalPolicyMathSource(NumericalPolicyMathBindingV1::decode(reader)?),
+         14 => ExecutionCapabilityRoleV1::NumericalPolicyMathBound(NumericalPolicyMathBindingV1::decode(reader)?),
++        15 => borrowed_subgroup::decode_role(reader)?,
+         12 => ExecutionCapabilityRoleV1::SubgroupPartition { width: reader.u32()?, partition_width: reader.u32()? },
+         11 => ExecutionCapabilityRoleV1::NumericalPolicy {
+             policy: reader.identity()?,
+@@ -2251,6 +2280,13 @@
+             writer.identity(*context);
+             writer.identity(*workgroup);
+         }
++        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => {
++            writer.u8(25);
++            writer.identity(*workgroup_reference);
++            writer.identity(*workgroup);
++            writer.identity(*subgroup);
++            writer.u32(*width);
++        }
+         Op::SubgroupDerive {
+             workgroup,
+             subgroup,
+@@ -2640,6 +2676,12 @@
+             context: reader.identity()?,
+             workgroup: reader.identity()?,
+         },
++        25 => Op::SubgroupDeriveBorrowed {
++            workgroup_reference: reader.identity()?,
++            workgroup: reader.identity()?,
++            subgroup: reader.identity()?,
++            width: reader.u32()?,
++        },
+         1 => Op::SubgroupDerive {
+             workgroup: reader.identity()?,
+             subgroup: reader.identity()?,
+--- a/crates/fe2o3-kernel-ir/src/verify.rs
++++ b/crates/fe2o3-kernel-ir/src/verify.rs
+@@ -4,6 +4,7 @@
+ 
+ mod execution_source;
+ mod subgroup_partition;
++mod borrowed_subgroup;
+ mod numerical_policy_math;
+ 
+ use crate::{
+@@ -1819,6 +1820,12 @@
+     ) {
+         let current_block = location.block;
+         let current_operation = location.operation;
++        if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. })
++            && !self.valid_borrowed_subgroup_receiver(contract)
++        {
++            self.emit(location.clone(), DiagnosticCode::InvalidExecutionCapability,
++                "borrowed subgroup requires its exact issued Workgroup and shared source custody");
++        }
+         if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::NumericalPolicyMath(_))
+             && !self.valid_numerical_policy_math_custody(contract, &location)
+         {
+@@ -3643,6 +3650,7 @@
+ 
+ #[derive(Clone, Copy)]
+ enum ExecutionOperandContractV1 {
++    WorkgroupSharedBorrow { workgroup: crate::ExecutionTypeIdentityV1 },
+     PartitionEpochBorrow,
+     KernelContext,
+     Capability {
+@@ -3677,6 +3685,12 @@
+ 
+ #[derive(Clone, Copy)]
+ enum ExecutionRoleContractV1 {
++    PartitionSubgroup { width: u32 },
++    BorrowedSubgroup {
++        workgroup_reference: crate::ExecutionTypeIdentityV1,
++        workgroup: crate::ExecutionTypeIdentityV1,
++        width: u32,
++    },
+     NumericalPolicyMathSource(crate::NumericalPolicyMathBindingV1),
+     NumericalPolicyMathBound(crate::NumericalPolicyMathBindingV1),
+     SubgroupPartition { width: u32, partition_width: u32 },
+@@ -3790,7 +3804,7 @@
+             let (width, partition_width) = partition.widths();
+             match *partition {
+                 P::Derive { subgroup_reference, subgroup, .. } => vec![
+-                    capability(execution_sources(subgroup_reference, subgroup), ExecutionRoleContractV1::Subgroup { width }),
++                    capability(execution_sources(subgroup_reference, subgroup), ExecutionRoleContractV1::PartitionSubgroup { width }),
+                     ExecutionOperandContractV1::PartitionEpochBorrow,
+                 ],
+                 P::ReduceSumF32 { partition_reference, partition, .. }
+@@ -3801,6 +3815,9 @@
+                 }
+             }
+         }
++        Op::SubgroupDeriveBorrowed { workgroup, .. } => vec![
++            ExecutionOperandContractV1::WorkgroupSharedBorrow { workgroup: *workgroup },
++        ],
+         Op::WorkgroupDerive { .. } | Op::NumericalPolicyIssue { .. } => vec![ExecutionOperandContractV1::KernelContext],
+         Op::SubgroupDerive {
+             workgroup: source, ..
+@@ -4223,6 +4240,12 @@
+             *output,
+             ExecutionRoleContractV1::NumericalPolicy { policy: *policy, mode: *mode },
+         )],
++        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => vec![capability(
++            *subgroup,
++            ExecutionRoleContractV1::BorrowedSubgroup {
++                workgroup_reference: *workgroup_reference, workgroup: *workgroup, width: *width,
++            },
++        )],
+         Op::WorkgroupDerive {
+             workgroup: output, ..
+         } => vec![workgroup(*output)],
+@@ -4500,6 +4523,13 @@
+     contract: &ExecutionCapabilityOpV1,
+ ) -> bool {
+     match expected {
++        ExecutionOperandContractV1::WorkgroupSharedBorrow { workgroup } => matches!(actual,
++            Some(Type::ExecutionCapability(capability))
++                if capability.is_complete() && capability.source_type == workgroup
++                    && capability.role == ExecutionCapabilityRoleV1::Workgroup
++                    && capability.provenance == contract.provenance
++                    && capability.workgroup_brand == contract.workgroup_brand
++                    && capability.epoch == contract.epoch_before),
+         ExecutionOperandContractV1::PartitionEpochBorrow => matches!(actual,
+             Some(Type::ExecutionCapability(capability))
+             if capability.role == ExecutionCapabilityRoleV1::Workgroup
+@@ -4582,6 +4612,11 @@
+ ) -> bool {
+     use crate::ExecutionCapabilityRoleV1 as Role;
+     match (actual, expected) {
++        (Role::BorrowedSubgroup { workgroup_reference, workgroup, width },
++            ExecutionRoleContractV1::BorrowedSubgroup { workgroup_reference: reference, workgroup: owner, width: expected_width }) =>
++                *workgroup_reference == reference && *workgroup == owner && *width == expected_width,
++        (Role::Subgroup { width } | Role::BorrowedSubgroup { width, .. },
++            ExecutionRoleContractV1::PartitionSubgroup { width: expected_width }) => *width == expected_width,
+         (Role::SubgroupPartition { width, partition_width }, ExecutionRoleContractV1::SubgroupPartition { width: expected_width, partition_width: expected_partition }) => *width == expected_width && *partition_width == expected_partition,
+         (Role::NumericalPolicyMathSource(binding), ExecutionRoleContractV1::NumericalPolicyMathSource(expected))
+         | (Role::NumericalPolicyMathBound(binding), ExecutionRoleContractV1::NumericalPolicyMathBound(expected)) => *binding == expected,
+--- a/crates/fe2o3-kernel-ir/src/verify/subgroup_partition.rs
++++ b/crates/fe2o3-kernel-ir/src/verify/subgroup_partition.rs
+@@ -17,7 +17,8 @@
+                 let Some(issuer) = self.partition_value_issuer(*subgroup) else {
+                     return false;
+                 };
+-                matches!(issuer.operation, E::SubgroupDerive { width: issued, .. } if issued == width)
++                matches!(issuer.operation, E::SubgroupDerive { width: issued, .. } | E::SubgroupDeriveBorrowed { width: issued, .. } if issued == width)
++                    && (!matches!(issuer.operation, E::SubgroupDeriveBorrowed { .. }) || self.valid_borrowed_subgroup_receiver(issuer))
+                     && issuer.operands.as_slice() == [*workgroup]
+                     && same_partition_epoch(issuer, contract)
+             }
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01.rs
+@@ -1,5 +1,4 @@
+-// Mounted source-SSA resolver and tests; operation dispatch remains gated on the
+-// KIR/source-custody hooks in borrowed_workgroup_01/INTEGRATION.md.
++// Replayed source-SSA custody for shared Workgroup and epoch transport.
+ 
+ mod borrowed_workgroup_01 {
+     use super::*;
+@@ -7,7 +6,11 @@
+     use fe2o3_mir_model::semantic_mir_v1::{
+         SemanticDefinedCapabilityContractV1, SemanticWorkgroupEpochProjectionV1,
+     };
+-    use fe2o3_mir_model::{SemanticExpandedTerminatorOriginV1, SsaConstructionPlanV1, SsaEdgeIdV1};
++    use fe2o3_mir_model::SemanticExpandedTerminatorOriginV1;
++    use super::capability_ssa_graph_01::{
++        CapabilitySsaGraphV1 as Graph, CapabilityDefinitionSiteV1 as Site,
++        CapabilityLoanV1 as Loan,
++    };
+ 
+     type Result<T> = std::result::Result<T, ProductionSemanticKirErrorV1>;
+ 
+@@ -15,21 +18,6 @@
+         unsupported(0, None, None, detail)
+     }
+ 
+-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+-    struct Site {
+-        block: u32,
+-        statement: Option<u32>,
+-        local: u32,
+-    }
+-
+-    // A reference loan retains its actual storage definition, not just its type.
+-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+-    struct Loan {
+-        site: Site,
+-        referent: SsaValueV1,
+-        local: u32,
+-    }
+-
+     #[derive(Clone, Debug, Eq, PartialEq)]
+     struct Origin {
+         issuer: SsaValueV1,
+@@ -44,8 +32,7 @@
+         binding: SemanticExpandedDefinedCapabilityV1,
+     }
+ 
+-    /// Pending lowering, deliberately not a serializable KIR operation. The
+-    /// current owned-only SubgroupDerive cannot retain source_reference.
++    /// Nonserializable replay receipt. Wire source fields alone cannot create it.
+     #[derive(Clone)]
+     pub(super) struct BorrowedSubgroupLoweringV1 {
+         pub(super) source_contract: SemanticExecutionCapabilityContractV1,
+@@ -71,6 +58,9 @@
+         context: &'a RootKernelContextLoweringV1,
+         graph: Graph<'a>,
+         epochs: Vec<EpochOccurrence>,
++        epoch_transports: BTreeMap<u32, (SemanticTypeIdV1, SemanticPromotedBindingV1)>,
++        subgroups: BTreeMap<ValueId, BorrowedSubgroupLoweringV1>,
++        partitions: BTreeMap<ValueId, Option<BorrowedSubgroupLoweringV1>>,
+     }
+ 
+     impl<'a> BorrowedWorkgroupPlanV1<'a> {
+@@ -124,13 +114,14 @@
+                     binding,
+                 });
+             }
+-            Ok(Self {
+-                owner,
+-                view,
+-                context,
+-                epochs,
++            let mut result = Self {
++                owner, view, context, epochs,
+                 graph: Graph::new(view.body(), plan.plan(), max_work)?,
+-            })
++                epoch_transports: BTreeMap::new(),
++                subgroups: BTreeMap::new(), partitions: BTreeMap::new(),
++            };
++            result.prepare_epoch_transports()?;
++            Ok(result)
+         }
+ 
+         /// Resolve the actual source receiver before materializing an operation.
+@@ -228,8 +219,10 @@
+             let source = &self.view.block_origins()[block.index() as usize];
+             let mut result = owned.clone();
+             result.source_type = execution_type_identity_v1(lowering.types, subgroup)?;
+-            // A pending type skeleton only; no operation dispatch is mounted.
+-            result.role = ExecutionCapabilityRoleV1::Subgroup { width };
++            result.role = ExecutionCapabilityRoleV1::BorrowedSubgroup {
++                workgroup_reference: execution_type_identity_v1(lowering.types, workgroup_reference)?,
++                workgroup: execution_type_identity_v1(lowering.types, workgroup)?, width,
++            };
+             Ok(BorrowedSubgroupLoweringV1 {
+                 source_contract: contract,
+                 source_reference: workgroup_reference,
+@@ -288,7 +281,7 @@
+                 self.resolve_operand(block.index(), epoch, &[], subgroup.source_contract, 0)?;
+             self.check_live(&origin, block.index())?;
+             for loan in &subgroup.loans {
+-                self.graph.loan_live(*loan, block.index())?;
++                self.graph.loan_live(*loan, Site { block: block.index(), statement: None, local: 0 })?;
+             }
+             if origin.issuer != subgroup.owned_ssa || !origin.epoch_projection {
+                 return Err(reject(
+@@ -372,7 +365,7 @@
+             };
+             let mut projections = place.projections().to_vec();
+             projections.extend_from_slice(tail);
+-            let value = self.graph.unique_use(block, place.local().index())?;
++            let value = self.graph.use_value(block, place.local().index())?;
+             self.resolve(value, &projections, contract, depth + 1)
+         }
+ 
+@@ -522,7 +515,7 @@
+                         };
+                         let referent = self
+                             .graph
+-                            .unique_use(site.block, source_place.local().index())?;
++                            .use_value(site.block, source_place.local().index())?;
+                         let mut origin = self.resolve_operand(
+                             site.block,
+                             &SemanticOperandV1::Copy(source_place.clone()),
+@@ -535,9 +528,9 @@
+                         // the shared loan is against the owned referent's storage.
+                         if source_place.projections().is_empty() && source_place.ty() == workgroup {
+                             origin.loans.push(Loan {
+-                                site,
+-                                referent,
+-                                local: source_place.local().index(),
++                                borrow: site,
++                                owner_value: referent,
++                                owner_local: source_place.local().index(),
+                             });
+                         }
+                         Ok(origin)
+@@ -584,7 +577,7 @@
+ 
+         fn check_live(&mut self, origin: &Origin, consumer: u32) -> Result<()> {
+             for loan in &origin.loans {
+-                self.graph.loan_live(*loan, consumer)?;
++                self.graph.loan_live(*loan, Site { block: consumer, statement: None, local: 0 })?;
+             }
+             let issuer = self.graph.definition(origin.issuer)?;
+             for block in 0..self.graph.body.blocks().len() as u32 {
+@@ -638,260 +631,8 @@
+             && owned.epoch == source.epoch_before().map(|id| *id.as_bytes())
+     }
+ 
+-    struct Graph<'a> {
+-        body: &'a SemanticFunctionDeclV1,
+-        ssa: &'a SsaConstructionPlanV1,
+-        remaining: usize,
+-    }
+-
+-    impl<'a> Graph<'a> {
+-        fn new(
+-            body: &'a SemanticFunctionDeclV1,
+-            ssa: &'a SsaConstructionPlanV1,
+-            max_work: usize,
+-        ) -> Result<Self> {
+-            let mut graph = Self {
+-                body,
+-                ssa,
+-                remaining: max_work,
+-            };
+-            graph.charge(
+-                body.blocks()
+-                    .len()
+-                    .checked_add(body.locals().len())
+-                    .ok_or_else(|| reject("borrowed Workgroup resource limit"))?,
+-            )?;
+-            Ok(graph)
+-        }
+-
+-        fn charge(&mut self, units: usize) -> Result<()> {
+-            self.remaining = self
+-                .remaining
+-                .checked_sub(units)
+-                .ok_or_else(|| reject("borrowed Workgroup source work limit"))?;
+-            Ok(())
+-        }
+-
+-        // A bounded matcher: multiple uses are accepted only when the planner
+-        // resolved all of them to the same value, never by local/type equality.
+-        fn unique_use(&mut self, block: u32, local: u32) -> Result<SsaValueV1> {
+-            let events = self
+-                .ssa
+-                .resolved_events(SsaBlockIdV1::new(block))
+-                .ok_or_else(|| reject("borrowed Workgroup use is unreachable or unplanned"))?;
+-            self.charge(events.len())?;
+-            let mut found = None;
+-            for (_, event) in events {
+-                if let SsaResolvedEventV1::Use { variable, value } = event {
+-                    if variable.get() == local {
+-                        if found.is_some_and(|previous| previous != *value) {
+-                            return Err(reject(
+-                                "borrowed Workgroup local has different SSA uses in one block",
+-                            ));
+-                        }
+-                        found = Some(*value);
+-                    }
+-                }
+-            }
+-            found.ok_or_else(|| reject("borrowed Workgroup reference has no retained SSA use"))
+-        }
+-
+-        fn definition(&mut self, value: SsaValueV1) -> Result<Site> {
+-            let mut found = None;
+-            for block in self.ssa.reverse_postorder() {
+-                let source = &self.body.blocks()[block.get() as usize];
+-                let events = self
+-                    .ssa
+-                    .resolved_events(*block)
+-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+-                self.charge(events.len() + source.statements().len())?;
+-                for (_, event) in events {
+-                    let SsaResolvedEventV1::Define {
+-                        variable,
+-                        value: candidate,
+-                    } = event
+-                    else {
+-                        continue;
+-                    };
+-                    if *candidate != value {
+-                        continue;
+-                    }
+-                    let definitions = events
+-                        .iter()
+-                        .filter(|(_, event)| {
+-                            matches!(event,
+-                        SsaResolvedEventV1::Define { variable: v, .. } if v == variable)
+-                        })
+-                        .count();
+-                    let assignments = source
+-                        .statements()
+-                        .iter()
+-                        .enumerate()
+-                        .filter_map(|(index, statement)| match statement.kind() {
+-                            SemanticStatementKindV1::Assign(a)
+-                                if a.destination().local().index() == variable.get() =>
+-                            {
+-                                Some((index, a))
+-                            }
+-                            _ => None,
+-                        })
+-                        .collect::<Vec<_>>();
+-                    let [(statement, assignment)] = assignments.as_slice() else {
+-                        return Err(reject(
+-                            "Workgroup SSA definition has no unique source assignment",
+-                        ));
+-                    };
+-                    if definitions != 1 || !assignment.destination().projections().is_empty() {
+-                        return Err(reject(
+-                            "Workgroup SSA definition is overwritten or projected",
+-                        ));
+-                    }
+-                    if found
+-                        .replace(Site {
+-                            block: block.get(),
+-                            statement: Some(*statement as u32),
+-                            local: variable.get(),
+-                        })
+-                        .is_some()
+-                    {
+-                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+-                    }
+-                }
+-                for ordinal in 0..source.terminator().kind().edge_count() {
+-                    let definitions = self
+-                        .ssa
+-                        .edge_definitions(SsaEdgeIdV1::new(*block, ordinal as u32))
+-                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+-                    self.charge(definitions.len())?;
+-                    for definition in definitions {
+-                        if definition.value() != value {
+-                            continue;
+-                        }
+-                        let SemanticTerminatorKindV1::Call(call) = source.terminator().kind()
+-                        else {
+-                            return Err(reject(
+-                                "Workgroup SSA edge definition is not a call result",
+-                            ));
+-                        };
+-                        if ordinal != 0
+-                            || !call.destination().is_some_and(|destination| {
+-                                destination.place().local().index() == definition.variable().get()
+-                                    && destination.place().projections().is_empty()
+-                            })
+-                            || found
+-                                .replace(Site {
+-                                    block: block.get(),
+-                                    statement: None,
+-                                    local: definition.variable().get(),
+-                                })
+-                                .is_some()
+-                        {
+-                            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+-                        }
+-                    }
+-                }
+-            }
+-            found.ok_or_else(|| {
+-                reject(
+-                    "Workgroup cannot originate from an entry parameter or missing SSA definition",
+-                )
+-            })
+-        }
+-
+-        fn incoming(&mut self, target: u32, local: u32) -> Result<Vec<SsaValueV1>> {
+-            let mut incoming = Vec::new();
+-            for block in self.ssa.reverse_postorder() {
+-                let mut ordinal = 0;
+-                self.body.blocks()[block.get() as usize]
+-                    .terminator()
+-                    .kind()
+-                    .try_for_each_edge(|edge| {
+-                        self.charge(1)?;
+-                        if edge.target().index() == target {
+-                            let args =
+-                                self.ssa
+-                                    .edge_arguments(SsaEdgeIdV1::new(*block, ordinal))
+-                                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+-                            self.charge(args.len())?;
+-                            let values = args
+-                                .iter()
+-                                .filter(|arg| arg.variable().get() == local)
+-                                .map(|arg| arg.value())
+-                                .collect::<Vec<_>>();
+-                            let [value] = values.as_slice() else {
+-                                return Err(reject("Workgroup SSA edge lacks its exact argument"));
+-                            };
+-                            incoming.push(*value);
+-                        }
+-                        ordinal += 1;
+-                        Ok(())
+-                    })?;
+-            }
+-            Ok(incoming)
+-        }
+-
+-        fn reaches(&mut self, from: u32, to: u32) -> Result<bool> {
+-            let mut pending = vec![from];
+-            let mut seen = BTreeSet::new();
+-            while let Some(block) = pending.pop() {
+-                self.charge(1)?;
+-                if !self.ssa.is_reachable(SsaBlockIdV1::new(block)) || !seen.insert(block) {
+-                    continue;
+-                }
+-                if block == to {
+-                    return Ok(true);
+-                }
+-                let source = self
+-                    .body
+-                    .blocks()
+-                    .get(block as usize)
+-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+-                source
+-                    .terminator()
+-                    .kind()
+-                    .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
+-                        self.charge(1)?;
+-                        pending.push(edge.target().index());
+-                        Ok(())
+-                    })?;
+-            }
+-            Ok(false)
+-        }
+-
+-        fn loan_live(&mut self, loan: Loan, consumer: u32) -> Result<()> {
+-            if !self.reaches(loan.site.block, consumer)? {
+-                return Err(reject("Workgroup borrow does not reach this consumer"));
+-            }
+-            for block in self.ssa.reverse_postorder() {
+-                if !self.reaches(loan.site.block, block.get())?
+-                    || !self.reaches(block.get(), consumer)?
+-                {
+-                    continue;
+-                }
+-                let events = self
+-                    .ssa
+-                    .resolved_events(*block)
+-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+-                self.charge(events.len())?;
+-                for (_, event) in events {
+-                    match event {
+-                        SsaResolvedEventV1::Kill { variable, .. }
+-                            if variable.get() == loan.local =>
+-                        {
+-                            return Err(reject("Workgroup borrow crosses a storage kill or move"));
+-                        }
+-                        SsaResolvedEventV1::Define { variable, value }
+-                            if variable.get() == loan.local && *value != loan.referent =>
+-                        {
+-                            return Err(reject("Workgroup borrow crosses a referent overwrite"));
+-                        }
+-                        _ => {}
+-                    }
+-                }
+-            }
+-            Ok(())
+-        }
+-    }
++    include!("borrowed_workgroup_01/transport.rs");
++    include!("borrowed_workgroup_01/dispatch.rs");
+ 
+     #[cfg(test)]
+     #[path = "tests.rs"]
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01/tests.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01/tests.rs
+@@ -114,8 +114,8 @@
+     )]);
+     let plan = plan(&body);
+     let mut graph = Graph::new(&body, plan.plan(), 1000).unwrap();
+-    let first = graph.unique_use(0, 1).unwrap();
+-    let second = graph.unique_use(0, 2).unwrap();
++    let first = graph.use_value(0, 1).unwrap();
++    let second = graph.use_value(0, 2).unwrap();
+     assert_ne!(first, second);
+     assert_eq!(
+         graph.definition(first).unwrap(),
+@@ -149,7 +149,7 @@
+     )]);
+     let plan = plan(&body);
+     let mut graph = Graph::new(&body, plan.plan(), 1000).unwrap();
+-    assert!(graph.unique_use(0, 1).is_err());
++    assert!(graph.use_value(0, 1).is_err());
+ }
+ 
+ #[test]
+@@ -160,8 +160,8 @@
+     ]);
+     let plan = plan(&body);
+     let mut graph = Graph::new(&body, plan.plan(), 1000).unwrap();
+-    assert!(graph.unique_use(0, 1).is_err());
+-    assert!(graph.unique_use(1, 2).is_err());
++    assert!(graph.use_value(0, 1).is_err());
++    assert!(graph.use_value(1, 2).is_err());
+ }
+ 
+ #[test]
+@@ -183,18 +183,18 @@
+         ]);
+         let plan = plan(&body);
+         let mut graph = Graph::new(&body, plan.plan(), 10000).unwrap();
+-        let referent = graph.unique_use(1, 1).unwrap();
++        let referent = graph.use_value(1, 1).unwrap();
+         // This private matcher input tests lifetime rejection, not authentication.
+         let loan = Loan {
+-            site: Site {
++            borrow: Site {
+                 block: 1,
+                 statement: Some(0),
+                 local: 3,
+             },
+-            referent,
+-            local: 1,
++            owner_value: referent,
++            owner_local: 1,
+         };
+-        assert_eq!(graph.loan_live(loan, 3).is_ok(), !kill);
++        assert_eq!(graph.loan_live(loan, Site { block: 3, statement: None, local: 0 }).is_ok(), !kill);
+     }
+ }
+ 
+@@ -208,20 +208,20 @@
+     ]);
+     let plan = plan(&body);
+     let mut graph = Graph::new(&body, plan.plan(), 10000).unwrap();
+-    let referent = graph.unique_use(1, 1).unwrap();
++    let referent = graph.use_value(1, 1).unwrap();
+     assert!(
+         graph
+             .loan_live(
+                 Loan {
+-                    site: Site {
++                    borrow: Site {
+                         block: 1,
+                         statement: Some(0),
+                         local: 3
+                     },
+-                    referent,
+-                    local: 1
++                    owner_value: referent,
++                    owner_local: 1
+                 },
+-                3
++                Site { block: 3, statement: None, local: 0 }
+             )
+             .is_err()
+     );
+@@ -235,7 +235,14 @@
+     assert!(Graph::new(&body, plan.plan(), minimum - 1).is_err());
+     let mut graph = Graph::new(&body, plan.plan(), minimum).unwrap();
+     assert!(graph.charge(0).is_ok());
+-    assert!(graph.reaches(0, 0).is_err());
++    assert!(matches!(
++        graph.reaches(0, 0),
++        Err(ProductionSemanticKirErrorV1::ResourceLimit {
++            resource: ProductionSemanticKirResourceV1::AnalysisWork,
++            actual,
++            limit,
++        }) if limit == minimum && actual == minimum + 1
++    ));
+     let mut graph = Graph::new(&body, plan.plan(), minimum + 1).unwrap();
+     assert!(graph.reaches(0, 0).unwrap());
+ }
+@@ -277,7 +284,7 @@
+     let plan = plan(&body);
+     let mut graph = Graph::new(&body, plan.plan(), 10000).unwrap();
+     assert!(matches!(
+-        graph.unique_use(3, 1).unwrap(),
++        graph.use_value(3, 1).unwrap(),
+         SsaValueV1::BlockArgument { .. }
+     ));
+     let incoming = graph.incoming(3, 1).unwrap();
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1.rs
+@@ -10218,6 +10218,12 @@
+         Some(MathSsaLoweringPlanV1::new(owner, function,
+             kernel_context.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?, max_operations)?)
+     } else { None };
++    let borrowed_workgroup = if BorrowedWorkgroupPlanV1::needed(owner, plan.correspondence_owner) {
++        Some(BorrowedWorkgroupPlanV1::new(
++            owner, kernel_context.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
++            max_operations,
++        )?)
++    } else { None };
+     let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
+         semantic.types(),
+         semantic.callables(),
+@@ -10244,6 +10250,7 @@
+         semantic.target().object_size_bound_bytes(),
+         max_operations,
+         math_ssa,
++        borrowed_workgroup,
+     )?;
+     lowering.execution_expansion_identity = execution_expansion_identity;
+     lowering.execution_source_expansion_identity = execution_expansion_identity_v1(owner);
+@@ -11859,6 +11866,7 @@
+ include!("production_semantic_kir_v1/semantic_execution_capability_01.rs");
+ include!("production_semantic_kir_v1/subgroup_partition_01.rs");
+ include!("production_semantic_kir_v1/borrowed_workgroup_01.rs");
++use borrowed_workgroup_01::{BorrowedWorkgroupPlanV1, BorrowedSubgroupTransportV1};
+ include!("production_semantic_kir_v1/capability_ssa_graph_01.rs");
+ include!("production_semantic_kir_v1/numerical_policy_01.rs");
+ include!("production_semantic_kir_v1/numerical_policy_math_01.rs");
+@@ -11876,6 +11884,7 @@
+     execution_source_expansion_identity: Option<[u8; 32]>,
+     execution_source_carrier: Option<CheckedExecutionSourceCarrierV1>,
+     math_ssa: Option<MathSsaLoweringPlanV1>,
++    borrowed_workgroup: Option<BorrowedWorkgroupPlanV1<'a>>,
+     correspondence_owner: SemanticFunctionIdV1,
+     semantic_function: SemanticFunctionIdV1,
+     defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
+@@ -11970,6 +11979,7 @@
+             1 << 61,
+             max_operations,
+             None,
++            None,
+         )
+     }
+ 
+@@ -11995,6 +12005,7 @@
+         target_object_size_bound_bytes: u64,
+         max_operations: usize,
+         math_ssa: Option<MathSsaLoweringPlanV1>,
++        borrowed_workgroup: Option<BorrowedWorkgroupPlanV1<'a>>,
+     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+         let mut locals = vec![None; function.locals().len()];
+         let option_producers = semantic_option_producers_v1(function, callables)
+@@ -12076,6 +12087,7 @@
+             max_operations,
+             max_operations,
+             math_ssa.as_ref().map(|plan| &plan.custody.transports),
++            borrowed_workgroup.as_ref(),
+         )?;
+         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
+             types,
+@@ -12162,6 +12174,7 @@
+             execution_source_expansion_identity: None,
+             execution_source_carrier: None,
+             math_ssa,
++            borrowed_workgroup,
+             correspondence_owner,
+             semantic_function,
+             defined_function_ids,
+@@ -13000,6 +13013,9 @@
+         value: &SemanticRvalueKindV1,
+         operations: &mut Vec<Operation>,
+     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
++        if let Some(binding) = self.lower_epoch_projection_v1(block, statement, result_type, value)? {
++            return Ok(binding);
++        }
+         match value {
+             SemanticRvalueKindV1::Use(operand) => {
+                 self.lower_operand(block, statement, operand, operations)
+@@ -24722,6 +24738,7 @@
+                             | SemanticPromotedBindingV1::GlobalCapability { .. }
+                             | SemanticPromotedBindingV1::NumericalPolicy { .. }
+                             | SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. }
++                            | SemanticPromotedBindingV1::BorrowedSubgroup(_)
+                             | SemanticPromotedBindingV1::MathContext
+                             | SemanticPromotedBindingV1::CollectiveContext
+                             | SemanticPromotedBindingV1::WorkgroupLdsScope
+@@ -29542,6 +29559,7 @@
+             usize::MAX,
+             usize::MAX,
+             None,
++            None,
+         )
+         .expect("linear dominating definitions need no Kernel IR block parameters");
+         assert!(plan.promoted.is_empty());
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_plan_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_plan_01.rs
+@@ -193,6 +193,7 @@
+         max_analysis_work: usize,
+         max_analysis_storage: usize,
+         math_transports: Option<&BTreeMap<u32, MathTransportV1>>,
++        borrowed_workgroup: Option<&BorrowedWorkgroupPlanV1<'_>>,
+     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+         if semantic_ssa.function() != semantic_function
+             || semantic_ssa.function_identity() != function.identity()
+@@ -325,6 +326,8 @@
+                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+             let (transport_semantic_type, binding) = if let Some(transport) = math_transports.and_then(|transports| transports.get(&local)) {
+                 (transport.semantic_type(), SemanticPromotedTransportV1::NumericalPolicyMath(*transport))
++            } else if let Some(transport) = borrowed_workgroup.and_then(|plan| plan.epoch_transport(local)) {
++                transport
+             } else { promoted_transport_descriptor_v1(
+                 types,
+                 function,
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/subgroup_partition_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/subgroup_partition_01.rs
+@@ -188,6 +188,7 @@
+                 matches!(
+                     partition.operation(),
+                     SemanticExecutionCapabilityOperationV1::SubgroupPartition(_)
++                        | SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }
+                 ) && partition.provenance() == contract.provenance()
+                     && partition.workgroup_brand() == contract.workgroup_brand()
+                     && partition.epoch_before() == contract.epoch_before()
+@@ -205,7 +206,7 @@
+             },
+         )?;
+     }
+-    Ok(())
++    BorrowedSubgroupTransportV1::register(types, callables, bindings)
+ }
+ 
+ #[cfg(test)]
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_execution_capability_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_execution_capability_01.rs
+@@ -646,6 +646,11 @@
+             *subgroup,
+             ExecutionCapabilityRoleV1::Subgroup { width: *width },
+         )],
++        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => vec![cap(
++            *subgroup, ExecutionCapabilityRoleV1::BorrowedSubgroup {
++                workgroup_reference: *workgroup_reference, workgroup: *workgroup, width: *width,
++            },
++        )],
+         Op::LdsAllocate {
+             lds: lds_source,
+             element,
+@@ -1038,6 +1043,9 @@
+             ));
+         }
+ 
++        if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }) {
++            return self.lower_borrowed_subgroup_v1(block, source, operations);
++        }
+         let raw_memory = matches!(
+             contract.operation(),
+             SemanticExecutionCapabilityOperationV1::RawMemoryBind { .. }
+@@ -1157,6 +1165,7 @@
+                 None
+             };
+ 
++        let borrowed_partition = self.check_borrowed_partition_v1(block, call, contract, &operands, &operand_types)?;
+         let operation =
+             lower_execution_operation_v1(self.types, contract.operation(), dynamic_extent)?;
+         let provenance = ExecutionCapabilityProvenanceV1 {
+@@ -1227,6 +1236,7 @@
+             result_types,
+             OperationKind::ExecutionCapability(kir_contract),
+         )?;
++        self.retain_borrowed_partition_v1(contract.operation(), &results, borrowed_partition)?;
+         self.execution_result_binding_v1(
+             block,
+             operations,
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_01.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_01.rs
+@@ -17,6 +17,7 @@
+ enum SemanticPromotedBindingV1 {
+     Ordinary,
+     KernelContext,
++    BorrowedSubgroup(BorrowedSubgroupTransportV1),
+     SubgroupPartitionAuthority {
+         contract: SemanticExecutionCapabilityContractV1,
+         source_type: ExecutionTypeIdentityV1,
+@@ -175,6 +176,7 @@
+         kernel_context_type: Option<&KernelContextTypeV1>,
+     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
+         let transport = match self {
++            Self::BorrowedSubgroup(transport) => transport.types(types, semantic_type, kernel_context_type)?,
+             Self::SubgroupPartitionAuthority { contract, .. } => vec![subgroup_partition_transport_type_v1(
+                 types, semantic_type, contract, kernel_context_type,
+             )?],
+@@ -309,6 +311,7 @@
+             | Self::KernelContext
+             | Self::NumericalPolicy { .. }
+             | Self::SubgroupPartitionAuthority { .. }
++            | Self::BorrowedSubgroup(_)
+             | Self::GlobalCapability { .. }
+             | Self::MathContext
+             | Self::CollectiveContext
+@@ -340,6 +343,7 @@
+         binding: &SemanticValueBindingV1,
+     ) -> Result<Vec<(ValueId, Type)>, &'static str> {
+         match (self, binding) {
++            (Self::BorrowedSubgroup(transport), binding) => transport.values(binding),
+             (
+                 Self::SubgroupPartitionAuthority { contract, source_type },
+                 SemanticValueBindingV1::Value { id, ty: Type::ExecutionCapability(capability) },
+@@ -674,6 +678,9 @@
+         if matches!(self, Self::Ordinary) {
+             return binding_from_value_defs(types, semantic_type, values);
+         }
++        if let Self::BorrowedSubgroup(transport) = self {
++            return transport.restore(types, semantic_type, values);
++        }
+         if let Self::SubgroupPartitionAuthority { contract, source_type } = self {
+             let [ValueDef { id, ty: Type::ExecutionCapability(capability) }] = values else {
+                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+@@ -732,6 +739,7 @@
+             Self::Ordinary => binding_from_value_defs(types, semantic_type, values),
+             Self::NumericalPolicy { .. } => unreachable!("handled exact numerical policy above"),
+             Self::SubgroupPartitionAuthority { .. } => unreachable!("handled exact partition authority above"),
++            Self::BorrowedSubgroup(_) => unreachable!("handled exact borrowed authority above"),
+             Self::KernelContext => {
+                 let [
+                     ValueDef {
+@@ -975,7 +983,7 @@
+                 }
+                 Ok(values)
+             }
+-            Self::Semantic(semantic @ SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. }) => {
++            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_))) => {
+                 let values = semantic.transport_values(binding)?;
+                 if values.iter().map(|(_, ty)| ty).ne(expected.iter()) {
+                     return Err("subgroup partition SSA transport changed root, brand, epoch, or nominal type");
+@@ -1013,7 +1021,7 @@
+                 }
+                 semantic.binding_from_transport(types, semantic_type, values)
+             }
+-            Self::Semantic(semantic @ SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. }) => {
++            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_))) => {
+                 if values.iter().map(|value| &value.ty).ne(expected.iter()) {
+                     return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                 }
+--- a/crates/fe2o3-amdgcn-model/src/lowering/v13.rs
++++ b/crates/fe2o3-amdgcn-model/src/lowering/v13.rs
+@@ -1580,7 +1580,7 @@
+             erase_capability_results(module, operation, aliases)
+         }
+         Op::WorkgroupDerive { .. } => erase_capability_results(module, operation, aliases),
+-        Op::SubgroupDerive { width, .. } => {
++        Op::SubgroupDerive { width, .. } | Op::SubgroupDeriveBorrowed { width, .. } => {
+             require_wave(module, *width, wave_width)?;
+             erase_capability_results(module, operation, aliases)
+         }
+@@ -2966,6 +2966,7 @@
+             ExecutionCapabilityRoleV1::KernelAuthority
+             | ExecutionCapabilityRoleV1::Workgroup
+             | ExecutionCapabilityRoleV1::Subgroup { .. }
++            | ExecutionCapabilityRoleV1::BorrowedSubgroup { .. }
+             | ExecutionCapabilityRoleV1::Matrix { .. }
+             | ExecutionCapabilityRoleV1::WorkgroupMemoryIndex
+             | ExecutionCapabilityRoleV1::EpochTransition
+--- a/crates/fe2o3-amdgcn-model/src/lowering/v13/subgroup_partition.rs
++++ b/crates/fe2o3-amdgcn-model/src/lowering/v13/subgroup_partition.rs
+@@ -58,7 +58,10 @@
+         };
+         if !matches!(aliases.get(subgroup), Some(ExecutionAliasV1::Erased))
+             || !matches!(aliases.get(workgroup), Some(ExecutionAliasV1::Erased))
+-            || !matches_role(subgroup, ExecutionCapabilityRoleV1::Subgroup { width })
++            || !(matches_role(subgroup, ExecutionCapabilityRoleV1::Subgroup { width })
++                || matches!(original_types.get(subgroup), Some(Type::ExecutionCapability(c))
++                    if matches!(c.role, ExecutionCapabilityRoleV1::BorrowedSubgroup { width: w, .. } if w == width)
++                        && matches_role(subgroup, c.role.clone())))
+             || !matches_role(workgroup, ExecutionCapabilityRoleV1::Workgroup)
+         {
+             return Err(reject());
+--- a/crates/fe2o3-kir-sim/src/execution_capability_v13/subgroup_partition.rs
++++ b/crates/fe2o3-kir-sim/src/execution_capability_v13/subgroup_partition.rs
+@@ -70,7 +70,10 @@
+         let [subgroup, workgroup] = contract.operands.as_slice() else {
+             return Err(incomplete());
+         };
+-        if !matches_role(subgroup, Role::Subgroup { width })
++        if !(matches_role(subgroup, Role::Subgroup { width })
++            || matches!(types.get(subgroup), Some(Type::ExecutionCapability(c))
++                if matches!(c.role, Role::BorrowedSubgroup { width: w, .. } if w == width)
++                    && matches_role(subgroup, c.role.clone())))
+             || !matches_role(workgroup, Role::Workgroup)
+         {
+             return Err(incomplete());
+--- a/crates/fe2o3-kir-sim/src/execution_capability_v13.rs
++++ b/crates/fe2o3-kir-sim/src/execution_capability_v13.rs
+@@ -47,6 +47,7 @@
+     MemoryStore,
+     NumericalPolicyIssue,
+     NumericalPolicyMath,
++    SubgroupDeriveBorrowed,
+ }
+ 
+ impl SimulationExecutionCapabilityFamilyV13 {
+@@ -65,6 +66,7 @@
+             Operation::NumericalPolicyIssue { .. } => Self::NumericalPolicyIssue,
+             Operation::WorkgroupDerive { .. } => Self::WorkgroupDerive,
+             Operation::SubgroupDerive { .. } => Self::SubgroupDerive,
++            Operation::SubgroupDeriveBorrowed { .. } => Self::SubgroupDeriveBorrowed,
+             Operation::LdsAllocate { .. } => Self::LdsAllocate,
+             Operation::LdsInitializeByInvocation { .. } => Self::LdsInitializeByInvocation,
+             Operation::LdsPublish { .. } => Self::LdsPublish,
+@@ -844,7 +846,8 @@
+             require_only_logical_results(&results)?;
+             Ok(Vec::new())
+         }
+-        Capability::WorkgroupDerive { .. } | Capability::SubgroupDerive { .. } => {
++        Capability::WorkgroupDerive { .. } | Capability::SubgroupDerive { .. }
++        | Capability::SubgroupDeriveBorrowed { .. } => {
+             require_only_logical_results(&results)?;
+             Ok(Vec::new())
+         }
+--- a/crates/fe2o3-kernel-analysis/src/uniformity.rs
++++ b/crates/fe2o3-kernel-analysis/src/uniformity.rs
+@@ -1265,6 +1265,7 @@
+         | Capability::WorkgroupMemoryAllocate { .. }
+         | Capability::WorkgroupMemoryPublish { .. } => Variation::WorkgroupUniform,
+         Capability::SubgroupDerive { .. }
++        | Capability::SubgroupDeriveBorrowed { .. }
+         | Capability::SubgroupBarrier { .. }
+         | Capability::SubgroupFence { .. } => Variation::SubgroupUniform,
+         Capability::SubgroupCollective {
+--- a/crates/fe2o3-amdgcn-model/src/production_target_capabilities_v1.rs
++++ b/crates/fe2o3-amdgcn-model/src/production_target_capabilities_v1.rs
+@@ -1891,7 +1891,7 @@
+                 ));
+             }
+         }
+-        Op::SubgroupDerive { width, .. } | Op::MatrixAccess { width, .. } => {
++        Op::SubgroupDerive { width, .. } | Op::SubgroupDeriveBorrowed { width, .. } | Op::MatrixAccess { width, .. } => {
+             requirements.insert(TargetCapabilityRequirementV1::SubgroupSize(
+                 u16::try_from(*width).unwrap_or(u16::MAX),
+             ));
+@@ -2178,6 +2178,7 @@
+         Op::NumericalPolicyIssue { .. } => "numerical-policy-issue",
+         Op::WorkgroupDerive { .. } => "workgroup-derive",
+         Op::SubgroupDerive { .. } => "subgroup-derive",
++        Op::SubgroupDeriveBorrowed { .. } => "subgroup-derive-borrowed",
+         Op::LdsAllocate { .. } => "lds-allocate",
+         Op::LdsInitializeByInvocation { .. } => "lds-initialize-by-invocation",
+         Op::LdsPublish { .. } => "lds-publish",
+--- a/crates/fe2o3-amdgcn-model/src/lowering/operational_translation_v1.rs
++++ b/crates/fe2o3-amdgcn-model/src/lowering/operational_translation_v1.rs
+@@ -64,6 +64,8 @@
+     MemoryLoad,
+     /// Capability-governed memory store.
+     MemoryStore,
++    /// Derive subgroup authority while retaining a shared Workgroup source borrow.
++    SubgroupDeriveBorrowed,
+ }
+ 
+ /// Closed KIR operation family awaiting complete operational translation evidence.
+@@ -281,6 +283,7 @@
+         Operation::NumericalPolicyIssue { .. } => Kind::NumericalPolicyIssue,
+         Operation::WorkgroupDerive { .. } => Kind::WorkgroupDerive,
+         Operation::SubgroupDerive { .. } => Kind::SubgroupDerive,
++        Operation::SubgroupDeriveBorrowed { .. } => Kind::SubgroupDeriveBorrowed,
+         Operation::LdsAllocate { .. } => Kind::LdsAllocate,
+         Operation::LdsInitializeByInvocation { .. } => Kind::LdsInitializeByInvocation,
+         Operation::LdsPublish { .. } => Kind::LdsPublish,
+--- a/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/workgroup_source_v1/canonical_transport_v1/import_tests.rs
++++ b/crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/subgroup_partition_v1/workgroup_source_v1/canonical_transport_v1/import_tests.rs
+@@ -75,6 +75,7 @@
+             target,
+         )
+         .expect("collect registered Workgroup kernel with original nested getter bodies");
++        let typed_roots = closure.rederive_typed_descriptor_roots(tcx).unwrap();
+         let epoch_instances = closure
+             .collection
+             .functions
+@@ -381,11 +382,15 @@
+                 workgroup_reference
+             );
+         }
++        lowering_tests::check(imported, typed_roots);
+         self.completed = true;
+         Compilation::Stop
+     }
+ }
+ 
++#[path = "lowering_tests.rs"]
++mod lowering_tests;
++
+ const CRATE_NAME: &str = "workgroup_import_source";
+ const METADATA: &str = "fe2o3-workgroup-import-v20";
+ const CHILD_ENV: &str = "FE2O3_WORKGROUP_IMPORT_CHILD";
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_01_tests.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_ssa_transport_01_tests.rs
+@@ -995,6 +995,7 @@
+             usize::MAX,
+             usize::MAX,
+             None,
++            None,
+         )
+         .unwrap();
+         (types, function, plan)
+--- a/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_frame_initialization_01_tests.rs
++++ b/crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_frame_initialization_01_tests.rs
+@@ -378,6 +378,7 @@
+             owner.source_semantic().target().object_size_bound_bytes(),
+             65_536,
+             None,
++            None,
+         )
+         .unwrap()
+     }

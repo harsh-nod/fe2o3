@@ -192,6 +192,30 @@ impl SemanticControlFlowSsaPlanV1 {
         kernel_context_type: Option<&KernelContextTypeV1>,
         max_analysis_work: usize,
         max_analysis_storage: usize,
+        math_transports: Option<&BTreeMap<u32, MathTransportV1>>,
+        borrowed_workgroup: Option<&BorrowedWorkgroupPlanV1<'_>>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::analyze_with_phase(types, callables, function, semantic_function, semantic_ssa,
+            option_dominance, direct_parameters, kernel_context_type, max_analysis_work,
+            max_analysis_storage, math_transports, borrowed_workgroup, None, &mut 0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn analyze_with_phase(
+        types: &[SemanticTypeDeclV1],
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+        semantic_function: SemanticFunctionIdV1,
+        semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
+        option_dominance: &SemanticOptionDominanceV1,
+        direct_parameters: &BTreeMap<u32, Type>,
+        kernel_context_type: Option<&KernelContextTypeV1>,
+        max_analysis_work: usize,
+        max_analysis_storage: usize,
+        math_transports: Option<&BTreeMap<u32, MathTransportV1>>,
+        borrowed_workgroup: Option<&BorrowedWorkgroupPlanV1<'_>>,
+        phase_emission: Option<&reusable_phase_lowering_01::Runtime<'_>>,
+        phase_work: &mut usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         if semantic_ssa.function() != semantic_function
             || semantic_ssa.function_identity() != function.identity()
@@ -206,11 +230,15 @@ impl SemanticControlFlowSsaPlanV1 {
             .iter()
             .map(|local| local.get())
             .collect::<BTreeSet<_>>();
-        let shared_promoted = shared
-            .promoted_variables()
-            .iter()
-            .map(|variable| variable.get())
-            .collect::<BTreeSet<_>>();
+        let mut shared_promoted = BTreeSet::new();
+        for variable in shared.promoted_variables() {
+            if let Some(phase) = phase_emission
+                && phase.is_relay(variable.get(), phase_work)?
+            {
+                continue;
+            }
+            shared_promoted.insert(variable.get());
+        }
         let private_slot_candidates =
             private_slot_candidate_locals_v1(function, &shared_promoted, &retained_cross_edge);
         let mut retained_local_slots = BTreeMap::new();
@@ -322,7 +350,11 @@ impl SemanticControlFlowSsaPlanV1 {
                 .locals()
                 .get(local as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            let (transport_semantic_type, binding) = promoted_transport_descriptor_v1(
+            let (transport_semantic_type, binding) = if let Some(transport) = math_transports.and_then(|transports| transports.get(&local)) {
+                (transport.semantic_type(), SemanticPromotedTransportV1::NumericalPolicyMath(*transport))
+            } else if let Some(transport) = borrowed_workgroup.and_then(|plan| plan.epoch_transport(local)) {
+                transport
+            } else { promoted_transport_descriptor_v1(
                 types,
                 function,
                 local,
@@ -330,7 +362,7 @@ impl SemanticControlFlowSsaPlanV1 {
                 &shared_promoted,
                 &mut capability_origins,
                 direct_parameters,
-            )?;
+            )? };
             let kernel_types = binding.transport_types(
                 types,
                 transport_semantic_type,

@@ -8,6 +8,13 @@ use fe2o3_kernel_ir::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[cfg(test)]
+#[path = "uniformity/ordered_max_tests.rs"]
+mod ordered_max_tests;
+#[cfg(test)]
+#[path = "uniformity/borrowed_lds_tests.rs"]
+mod borrowed_lds_tests;
+
 /// Conservatively classifies SSA values and barrier control in one function.
 ///
 /// The caller should run the kernel IR verifier first. This function still
@@ -779,6 +786,8 @@ impl<'a> Analyzer<'a> {
     fn operation_variation(&self, operation: &Operation) -> Variation {
         match &operation.kind {
             OperationKind::Constant(_) => Variation::GridUniform,
+            // Erased phase authority does not establish a uniform value.
+            OperationKind::ReusablePhase(_) => Variation::Varying,
             // A context is provenance, not a runtime value from which this
             // analysis may infer uniform control or memory behavior.
             OperationKind::KernelContextIssue(_) => Variation::Varying,
@@ -854,39 +863,39 @@ impl<'a> Analyzer<'a> {
                     subgroup_collective_variation(self.value(predicate))
                 }
                 WaveOperationKind::ShuffleIndex {
-                    value, source_lane, ..
+                    value, source_lane, tile_width,
                 } => {
                     let value = self.value(value);
                     if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
                         value
-                    } else if self
-                        .value(source_lane)
-                        .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
+                    } else if tile_width == wave.width.lanes()
+                        && self.value(source_lane)
+                            .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
                     {
                         Variation::SubgroupUniform
                     } else {
                         Variation::Varying
                     }
                 }
-                WaveOperationKind::ReduceF32 {
-                    value, tile_width, ..
-                } => {
+                WaveOperationKind::ReduceF32 { value, .. } => {
                     let value = self.value(value);
                     if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
                         value
-                    } else if tile_width == wave.width.lanes() {
-                        Variation::SubgroupUniform
                     } else {
+                        // Sum does not prove identical NaN bits; ordered Maximum also retains ties.
                         Variation::Varying
                     }
                 }
                 WaveOperationKind::BroadcastF32 {
-                    value, tile_width, ..
+                    value, source_lane, tile_width,
                 } => {
                     let value = self.value(value);
                     if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
                         value
-                    } else if tile_width == wave.width.lanes() {
+                    } else if tile_width == wave.width.lanes()
+                        && self.value(source_lane)
+                            .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
+                    {
                         Variation::SubgroupUniform
                     } else {
                         Variation::Varying
@@ -1101,6 +1110,22 @@ impl<'a> Analyzer<'a> {
     }
 
     fn operation_result_variation(&self, operation: &Operation, result: ValueId) -> Variation {
+        if let OperationKind::ExecutionCapability(contract) = &operation.kind
+            && matches!(contract.operation,
+                fe2o3_kernel_ir::ExecutionCapabilityOperationV1::WorkgroupCollective {
+                    kind: fe2o3_kernel_ir::ExecutionCollectiveKindV1::InclusiveScanSum
+                        | fe2o3_kernel_ir::ExecutionCollectiveKindV1::ExclusiveScanSum,
+                    ..
+                })
+        {
+            // Verified result order is transitioned Workgroup, LDS, scalar prefix.
+            return match operation.results.as_slice() {
+                [workgroup, lds, _] if result == workgroup.id || result == lds.id => {
+                    Variation::WorkgroupUniform
+                }
+                _ => Variation::Varying,
+            };
+        }
         if self.proven_no_overflow.contains(&result) {
             Variation::GridUniform
         } else {
@@ -1241,35 +1266,59 @@ fn execution_capability_variation(
         ExecutionCollectiveKindV1 as Collective,
     };
     match operation {
+        Capability::LdsAllocateBorrowed { .. } => Variation::WorkgroupUniform.join(operand_variation(0)),
+        Capability::ReusableLdsConversion(_) => operand_variation(0),
+        Capability::NumericalPolicyMath(math) => (0..math.operand_count())
+            .map(operand_variation)
+            .fold(Variation::GridUniform, Variation::join),
+        Capability::SubgroupPartition(partition) => {
+            use fe2o3_kernel_ir::SubgroupPartitionOperationV1 as P;
+            match partition {
+                P::Derive { .. } => operand_variation(0).join(operand_variation(1)),
+                // Distinct partitions need not agree, nor need broadcast lane selectors.
+                P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => Variation::Varying,
+            }
+        }
+        Capability::NumericalPolicyIssue { .. } => operand_variation(0),
         Capability::WorkgroupDerive { .. }
         | Capability::LdsAllocate { .. }
         | Capability::LdsInitializeByInvocation { .. }
         | Capability::LdsPublish { .. }
         | Capability::WorkgroupBarrier { .. }
         | Capability::WorkgroupFence { .. }
-        | Capability::WorkgroupCollective { .. }
+        | Capability::WorkgroupCollective { kind: Collective::ReduceSum, .. }
         | Capability::AsyncCopy { .. }
         | Capability::AsyncWait { .. }
         | Capability::WorkgroupMemoryAllocate { .. }
         | Capability::WorkgroupMemoryPublish { .. } => Variation::WorkgroupUniform,
         Capability::SubgroupDerive { .. }
+        | Capability::SubgroupDeriveBorrowed { .. }
         | Capability::SubgroupBarrier { .. }
         | Capability::SubgroupFence { .. } => Variation::SubgroupUniform,
         Capability::SubgroupCollective {
             kind: Collective::ReduceSum,
+            value_type,
             ..
-        } => Variation::SubgroupUniform,
+        } => {
+            if value_type.is_float() {
+                let value = operand_variation(1);
+                if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
+                    value
+                } else {
+                    Variation::Varying
+                }
+            } else {
+                Variation::SubgroupUniform
+            }
+        }
         Capability::SubgroupCollective {
             kind: Collective::InclusiveScanSum | Collective::ExclusiveScanSum,
             ..
-        } => {
-            if operand_variation(2).is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
-            {
-                Variation::SubgroupUniform
-            } else {
-                Variation::Varying
-            }
         }
+        | Capability::WorkgroupCollective {
+            kind: Collective::InclusiveScanSum | Collective::ExclusiveScanSum,
+            ..
+        } => Variation::Varying,
         Capability::LdsReadPublished { .. }
         | Capability::Atomic {
             kind:
@@ -1285,6 +1334,8 @@ fn execution_capability_variation(
         | Capability::RawMemoryBind { .. }
         | Capability::PrivateMemoryAllocate { .. }
         | Capability::WorkgroupMemoryIndex { .. }
+        | Capability::WorkgroupMemoryIndexV2 { .. }
+        | Capability::WorkgroupMemoryIndexIntoDisjoint { .. }
         | Capability::MemoryLoad { .. }
         | Capability::MemoryStore { .. } => Variation::Varying,
     }
@@ -3432,6 +3483,10 @@ fn immediate_postdominator(
 }
 
 #[cfg(test)]
+#[path = "uniformity/phase_compile_closure_tests.rs"]
+mod phase_compile_closure_tests;
+
+#[cfg(test)]
 mod execution_capability_tests {
     use super::*;
     use fe2o3_kernel_ir::{
@@ -3735,6 +3790,51 @@ mod execution_capability_tests {
     }
 
     #[test]
+    fn policy_math_variation_retains_every_operand() {
+        use fe2o3_kernel_ir::{
+            ExecutionCapabilityOperationV1, ExecutionTypeIdentityV1, F32MathFunction,
+            NumericalModeV1, NumericalPolicyMathBindingV1, NumericalPolicyMathOperationV1,
+        };
+        let identity = |tag| ExecutionTypeIdentityV1::new([tag; 32]);
+        let binding = NumericalPolicyMathBindingV1 {
+            math_reference: identity(1),
+            math: identity(2),
+            policy_reference: identity(3),
+            capability: identity(4),
+            bound: identity(5),
+            bound_reference: identity(7),
+            policy: identity(6),
+            kernel_brand: identity(9),
+            mode: NumericalModeV1::StrictIeee,
+        };
+        for math in [
+            NumericalPolicyMathOperationV1::MathDerive { context: identity(10), binding },
+            NumericalPolicyMathOperationV1::Bind { binding },
+            NumericalPolicyMathOperationV1::F32 {
+                binding,
+                bound_reference: identity(7),
+                element: identity(8),
+                function: F32MathFunction::FusedMultiplyAdd,
+            },
+        ] {
+            assert!(math.is_well_formed());
+            let operation = ExecutionCapabilityOperationV1::NumericalPolicyMath(math);
+            assert_eq!(
+                execution_capability_variation(&operation, |_| Variation::GridUniform),
+                Variation::GridUniform,
+            );
+            for varying in 0..math.operand_count() {
+                assert_eq!(
+                    execution_capability_variation(&operation, |ordinal| {
+                        if ordinal == varying { Variation::Varying } else { Variation::GridUniform }
+                    }),
+                    Variation::Varying,
+                );
+            }
+        }
+    }
+
+    #[test]
     fn closed_execution_capability_roster_has_sound_variation() {
         let roster = operation_roster();
         assert_eq!(roster.len(), 23);
@@ -3748,7 +3848,7 @@ mod execution_capability_tests {
     }
 
     #[test]
-    fn subgroup_scan_requires_subgroup_uniform_input() {
+    fn subgroup_scan_uniform_input_does_not_make_prefix_uniform() {
         let mut scan = operation_roster().remove(12).0;
         if let Op::SubgroupCollective { kind, .. } = &mut scan {
             *kind = Collective::InclusiveScanSum;
@@ -3761,17 +3861,21 @@ mod execution_capability_tests {
         );
         assert_eq!(
             execution_capability_variation(&scan, |ordinal| {
-                if ordinal == 2 {
+                if ordinal == 1 {
                     Variation::SubgroupUniform
                 } else {
                     Variation::Varying
                 }
             }),
-            Variation::SubgroupUniform
+            Variation::Varying
         );
         if let Op::SubgroupCollective { kind, .. } = &mut scan {
             *kind = Collective::ExclusiveScanSum;
         }
+        assert_eq!(
+            execution_capability_variation(&scan, |_| Variation::GridUniform),
+            Variation::Varying
+        );
         assert_eq!(
             execution_capability_variation(&scan, |_| Variation::Varying),
             Variation::Varying

@@ -994,6 +994,8 @@
             None,
             usize::MAX,
             usize::MAX,
+            None,
+            None,
         )
         .unwrap();
         (types, function, plan)

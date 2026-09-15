@@ -5,11 +5,20 @@
 
 use std::{error::Error, fmt};
 
+mod arithmetic_identity_calls_v1;
+mod arithmetic_provenance;
+mod unsigned_underflow_v1;
+
+use arithmetic_identity_calls_v1::ArithmeticIdentityCallsV1;
+use arithmetic_provenance::{
+    ArithmeticConditionSourceV1, ArithmeticProvenanceV1, ArithmeticSiteV1,
+};
+
 use crate::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
     SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
-    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1, SemanticUncheckedBinaryOpV1,
+    SemanticPlaceV1, SemanticRvalueKindV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
+    SemanticTypeDeclV1, SemanticTypeShapeV1, SemanticUncheckedBinaryOpV1,
 };
 
 /// Maximum charged CFG, statement, definition, and dominator work.
@@ -507,6 +516,14 @@ impl SemanticEnumPayloadDominanceV1 {
         })
     }
 
+    /// O(1) upper bound for the local lookup and candidate scan in `availability`.
+    /// Callers must also budget this metadata read and any `allows` query.
+    pub fn availability_lookup_work_units(&self, local: SemanticLocalIdV1) -> usize {
+        self.availability_by_local
+            .get(local.index() as usize)
+            .map_or(1, |candidates| 1usize.saturating_add(candidates.len()))
+    }
+
     /// Returns the exact branch identity for one enum local and variant.
     pub fn availability(
         &self,
@@ -587,27 +604,87 @@ impl SemanticUncheckedArithmeticViolationV1 {
 
 #[derive(Clone, Copy)]
 struct CheckedArithmeticProducerV1<'a> {
-    local: SemanticLocalIdV1,
     operation: crate::semantic_mir_v1::SemanticCheckedBinaryOpV1,
     left: &'a SemanticOperandV1,
     right: &'a SemanticOperandV1,
-    block: usize,
+    site: ArithmeticSiteV1,
+    condition: ArithmeticConditionSourceV1,
 }
 
 /// Verifies rustc's general safe-checked-arithmetic refinement pattern.
 ///
 /// An unchecked add, subtract, or multiply is admitted only when the same
-/// operands were used by the corresponding checked operation and the exact
+/// typed operand values were used by the corresponding checked operation and the exact
 /// zero-overflow switch edge dominates the unchecked operation. The zero edge
 /// must have the switch as its unique predecessor, so a join cannot forge the
-/// precondition.
+/// precondition. Copy/move provenance is resolved at each use, not by local name.
 pub fn semantic_unchecked_arithmetic_violation_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
-    let mut budget = WorkBudgetV1::default();
-    let definitions = local_definition_counts(function, &mut budget)?;
-    let dominators = DominatorIntervalsV1::analyze(function, &mut budget)?;
-    let mut aliases = vec![None; function.locals().len()];
+    unchecked_arithmetic_violation_with_calls(function, None, None, &mut WorkBudgetV1::default())
+}
+
+/// Adds the exact unsigned `lhs < rhs` underflow proof using the retained type
+/// table. Unlike the conservative untyped API, this can distinguish unsigned
+/// subtraction from signed subtraction. It neither validates the entire MIR
+/// schema nor grants source-safety authority; callers retain those obligations.
+pub fn semantic_unchecked_arithmetic_violation_with_types_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
+    unchecked_arithmetic_violation_with_calls(
+        function,
+        Some(types),
+        None,
+        &mut WorkBudgetV1::default(),
+    )
+}
+
+/// Preserves arithmetic facts across exact retained boolean-identity bodies.
+/// The complete source tables are required; no callee-name or external-summary
+/// trust is used. This does not authorize source unsafe code or rewrite MIR.
+#[cfg(test)]
+fn semantic_unchecked_arithmetic_violation_with_calls_v1(
+    types: &[SemanticTypeDeclV1],
+    functions: &[SemanticFunctionDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    function: crate::semantic_mir_v1::SemanticFunctionIdV1,
+) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
+    semantic_unchecked_arithmetic_violation_with_budget_v1(
+        types,
+        functions,
+        callables,
+        function,
+        &mut WorkBudgetV1::default(),
+    )
+}
+
+/// Canonical admission shares this budget across all structurally validated functions.
+pub(crate) fn semantic_unchecked_arithmetic_violation_with_budget_v1(
+    types: &[SemanticTypeDeclV1],
+    functions: &[SemanticFunctionDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    function: crate::semantic_mir_v1::SemanticFunctionIdV1,
+    budget: &mut WorkBudgetV1,
+) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
+    let function = functions.get(function.index() as usize).ok_or(
+        SemanticOptionDominanceErrorV1::InvalidControlFlow(
+            "an arithmetic function is outside its retained source table",
+        ),
+    )?;
+    let calls = ArithmeticIdentityCallsV1::analyze(types, functions, callables, function, budget)?;
+    unchecked_arithmetic_violation_with_calls(function, Some(types), Some(&calls), budget)
+}
+
+fn unchecked_arithmetic_violation_with_calls(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    calls: Option<&ArithmeticIdentityCallsV1<'_>>,
+    budget: &mut WorkBudgetV1,
+) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
+    let dominators = DominatorIntervalsV1::analyze(function, budget)?;
+    let mut provenance =
+        ArithmeticProvenanceV1::new_with_calls(function, &dominators, calls, budget)?;
     let mut producers = Vec::new();
     producers
         .try_reserve(function.locals().len())
@@ -615,44 +692,47 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
 
     for (block_index, block) in function.blocks().iter().enumerate() {
         budget.charge(block.statements().len())?;
-        for statement in block.statements() {
+        for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
             let destination = assignment.destination();
-            if destination.projections().is_empty()
-                && definitions
-                    .get(destination.local().index() as usize)
-                    .copied()
-                    == Some(1)
-            {
-                if let SemanticRvalueKindV1::Use(
-                    SemanticOperandV1::Copy(source) | SemanticOperandV1::Move(source),
-                ) = assignment.value().kind()
-                {
-                    aliases[destination.local().index() as usize] = Some(source);
-                }
+            if !destination.projections().is_empty() {
+                continue;
+            }
+            let site = ArithmeticSiteV1 {
+                block: block_index,
+                statement: statement_index,
+            };
+            let producer =
                 if let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() {
-                    producers.push(CheckedArithmeticProducerV1 {
-                        local: destination.local(),
+                    CheckedArithmeticProducerV1 {
                         operation: checked.operation(),
                         left: checked.left(),
                         right: checked.right(),
-                        block: block_index,
-                    });
-                }
-            }
+                        site,
+                        condition: ArithmeticConditionSourceV1::Overflow(site),
+                    }
+                } else if let Some((left, right)) = types.and_then(|types| {
+                    unsigned_underflow_v1::comparison_operands(types, function, assignment)
+                }) {
+                    CheckedArithmeticProducerV1 {
+                        operation: crate::semantic_mir_v1::SemanticCheckedBinaryOpV1::Subtract,
+                        left,
+                        right,
+                        site,
+                        condition: ArithmeticConditionSourceV1::Definition(site),
+                    }
+                } else {
+                    continue;
+                };
+            producers
+                .try_reserve(1)
+                .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+            producers.push(producer);
         }
     }
 
-    let mut producer_by_local = Vec::new();
-    producer_by_local
-        .try_reserve_exact(function.locals().len())
-        .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
-    producer_by_local.resize(function.locals().len(), None);
-    for (producer_index, producer) in producers.iter().enumerate() {
-        producer_by_local[producer.local.index() as usize] = Some(producer_index);
-    }
     let mut safe_targets_by_producer = Vec::new();
     safe_targets_by_producer
         .try_reserve_exact(producers.len())
@@ -667,24 +747,26 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
             continue;
         };
         budget.charge(targets.values().len().saturating_add(1))?;
-        let Some(overflow_place) = resolve_alias_place(discriminant, &aliases, &mut budget)? else {
+        let Some(condition) = provenance.condition_source(
+            discriminant,
+            ArithmeticSiteV1 {
+                block: switch_block,
+                statement: block.statements().len(),
+            },
+            budget,
+        )?
+        else {
             continue;
         };
-        let [overflow_projection] = overflow_place.projections() else {
-            continue;
-        };
-        if overflow_projection.kind() != SemanticProjectionKindV1::Field(1) {
-            continue;
-        }
-        let Some(producer_index) = producer_by_local
-            .get(overflow_place.local().index() as usize)
-            .copied()
-            .flatten()
+        budget.charge(producers.len())?;
+        let Some(producer_index) = producers
+            .iter()
+            .position(|producer| producer.condition == condition)
         else {
             continue;
         };
         let producer = producers[producer_index];
-        if !dominators.dominates(producer.block, switch_block) {
+        if !dominators.dominates(producer.site.block, switch_block) {
             continue;
         }
         let only_boolean_values = targets
@@ -709,7 +791,16 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
         let Some(zero_target) = zero_target else {
             continue;
         };
-        if dominators.is_reachable(zero_target.index() as usize)
+        let one_target = targets
+            .values()
+            .iter()
+            .find(|target| target.value() == 1)
+            .map_or_else(
+                || targets.otherwise().target(),
+                |target| target.edge().target(),
+            );
+        if one_target != zero_target
+            && dominators.is_reachable(zero_target.index() as usize)
             && dominators.has_unique_predecessor(zero_target.index() as usize, switch_block)
         {
             safe_targets_by_producer[producer_index]
@@ -720,6 +811,7 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
     }
 
     for (block_index, block) in function.blocks().iter().enumerate() {
+        budget.charge(block.statements().len())?;
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
@@ -730,20 +822,51 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
             let mut proved = false;
             for (producer_index, producer) in producers.iter().enumerate() {
                 budget.charge(1)?;
-                if producer.operation != unchecked.operation().checked()
-                    || !same_operand_value(producer.left, unchecked.left())
-                    || !same_operand_value(producer.right, unchecked.right())
-                {
+                if producer.operation != unchecked.operation().checked() {
                     continue;
                 }
+                if matches!(
+                    producer.condition,
+                    ArithmeticConditionSourceV1::Definition(_)
+                ) && !types.is_some_and(|types| {
+                    unsigned_underflow_v1::matches_subtraction(
+                        types,
+                        function,
+                        assignment,
+                        producer.left.ty(),
+                    )
+                }) {
+                    continue;
+                }
+                let mut safe_edge_dominates = false;
                 for safe_target in &safe_targets_by_producer[producer_index] {
                     budget.charge(1)?;
                     if dominators.dominates(safe_target.index() as usize, block_index) {
-                        proved = true;
+                        safe_edge_dominates = true;
                         break;
                     }
                 }
-                if proved {
+                if !safe_edge_dominates {
+                    continue;
+                }
+                let use_site = ArithmeticSiteV1 {
+                    block: block_index,
+                    statement: statement_index,
+                };
+                if provenance.same_value(
+                    producer.left,
+                    producer.site,
+                    unchecked.left(),
+                    use_site,
+                    budget,
+                )? && provenance.same_value(
+                    producer.right,
+                    producer.site,
+                    unchecked.right(),
+                    use_site,
+                    budget,
+                )? {
+                    proved = true;
                     break;
                 }
             }
@@ -759,59 +882,41 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
     Ok(None)
 }
 
-fn resolve_alias_place<'a>(
-    operand: &'a SemanticOperandV1,
-    aliases: &[Option<&'a SemanticPlaceV1>],
-    budget: &mut WorkBudgetV1,
-) -> Result<Option<&'a SemanticPlaceV1>, SemanticOptionDominanceErrorV1> {
-    let mut place = match operand {
-        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
-        SemanticOperandV1::Constant(_) => return Ok(None),
-    };
-    for _ in 0..=aliases.len() {
-        budget.charge(1)?;
-        if !place.projections().is_empty() {
-            return Ok(Some(place));
-        }
-        let Some(Some(source)) = aliases.get(place.local().index() as usize) else {
-            return Ok(Some(place));
-        };
-        place = source;
-    }
-    // A cycle cannot establish a proof, but it may be unrelated to the
-    // unchecked operation being verified. Treat it as an inexact candidate.
-    Ok(None)
-}
-
-fn same_operand_value(left: &SemanticOperandV1, right: &SemanticOperandV1) -> bool {
-    match (left, right) {
-        (
-            SemanticOperandV1::Copy(left) | SemanticOperandV1::Move(left),
-            SemanticOperandV1::Copy(right) | SemanticOperandV1::Move(right),
-        ) => left == right,
-        (SemanticOperandV1::Constant(left), SemanticOperandV1::Constant(right)) => left == right,
-        _ => false,
-    }
-}
-
-#[derive(Default)]
-struct WorkBudgetV1 {
+pub(crate) struct WorkBudgetV1 {
     used: usize,
+    limit: usize,
+}
+
+impl Default for WorkBudgetV1 {
+    fn default() -> Self {
+        Self::with_limit(MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1)
+    }
 }
 
 impl WorkBudgetV1 {
+    pub(crate) fn with_limit(limit: usize) -> Self {
+        Self {
+            used: 0,
+            limit: limit.min(MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1),
+        }
+    }
+
+    pub(crate) fn used(&self) -> usize {
+        self.used
+    }
+
     fn charge(&mut self, amount: usize) -> Result<(), SemanticOptionDominanceErrorV1> {
         self.used =
             self.used
                 .checked_add(amount)
                 .ok_or(SemanticOptionDominanceErrorV1::WorkLimit {
                     actual: usize::MAX,
-                    limit: MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1,
+                    limit: self.limit,
                 })?;
-        if self.used > MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1 {
+        if self.used > self.limit {
             return Err(SemanticOptionDominanceErrorV1::WorkLimit {
                 actual: self.used,
-                limit: MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1,
+                limit: self.limit,
             });
         }
         Ok(())

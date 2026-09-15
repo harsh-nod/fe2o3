@@ -1,5 +1,7 @@
 use std::{error::Error, fmt};
 
+use crate::semantic_contract::SemanticScalarType;
+
 use pliron::{
     builtin::{
         ATTR_KEY_DEBUG_INFO,
@@ -1315,7 +1317,7 @@ impl Verify for DimensionOp {
     }
 }
 
-/// Target-neutral indexed memory access. Operand 0 is the view; the rest are indices.
+/// Target-neutral access: view, rank indices, optional stored value, optional checked success.
 #[pliron_op(
     name = "kernel.access",
     format,
@@ -1338,7 +1340,21 @@ impl RankedAccessOp {
         if kind.is_atomic() {
             return Err(RankedMemoryError::MissingAtomicContract);
         }
-        Self::build(context, kind, None, None, view, indices, None)
+        Self::build(context, kind, None, None, view, indices, None, None)
+    }
+
+    /// Preserves the actual write RHS; this alone establishes no refinement proof.
+    pub fn new_value(
+        context: &mut Context,
+        kind: AccessKindAttr,
+        view: Value,
+        indices: Vec<Value>,
+        value: Value,
+    ) -> Result<Self, RankedMemoryError> {
+        if kind.is_atomic() {
+            return Err(RankedMemoryError::MissingAtomicContract);
+        }
+        Self::build(context, kind, None, None, view, indices, Some(value), None)
     }
 
     pub fn new_atomic(
@@ -1360,6 +1376,33 @@ impl RankedAccessOp {
             view,
             indices,
             None,
+            None,
+        )
+    }
+
+    /// Preserves the atomic RHS operand, not the result of the read-modify-write.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_atomic_value(
+        context: &mut Context,
+        kind: AccessKindAttr,
+        ordering: AtomicOrderingAttr,
+        scope: AtomicScopeAttr,
+        view: Value,
+        indices: Vec<Value>,
+        value: Value,
+    ) -> Result<Self, RankedMemoryError> {
+        if !kind.is_atomic() {
+            return Err(RankedMemoryError::UnexpectedAtomicContract);
+        }
+        Self::build(
+            context,
+            kind,
+            Some(ordering),
+            Some(scope),
+            view,
+            indices,
+            Some(value),
+            None,
         )
     }
 
@@ -1377,9 +1420,19 @@ impl RankedAccessOp {
             return Err(RankedMemoryError::MissingAtomicContract);
         }
         validate_predicated_access(context, view, index, success)?;
-        Self::build(context, kind, None, None, view, vec![index], Some(success))
+        Self::build(
+            context,
+            kind,
+            None,
+            None,
+            view,
+            vec![index],
+            None,
+            Some(success),
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build(
         context: &mut Context,
         kind: AccessKindAttr,
@@ -1387,6 +1440,7 @@ impl RankedAccessOp {
         scope: Option<AtomicScopeAttr>,
         view: Value,
         indices: Vec<Value>,
+        value: Option<Value>,
         success: Option<Value>,
     ) -> Result<Self, RankedMemoryError> {
         let view_type =
@@ -1404,9 +1458,15 @@ impl RankedAccessOp {
         if kind.writes_memory() && !writable {
             return Err(RankedMemoryError::WriteThroughReadOnlyView);
         }
-        let mut operands = Vec::with_capacity(indices.len() + 1 + usize::from(success.is_some()));
+        if let Some(value) = value {
+            validate_stored_value(context, kind, value)?;
+        }
+        let mut operands = Vec::with_capacity(
+            indices.len() + 1 + usize::from(value.is_some()) + usize::from(success.is_some()),
+        );
         operands.push(view);
         operands.extend(indices);
+        operands.extend(value);
         operands.extend(success);
         let operation = Operation::new(
             context,
@@ -1450,10 +1510,25 @@ impl RankedAccessOp {
         let operation = operation.deref(context);
         let end = operation
             .get_num_operands()
-            .saturating_sub(usize::from(self.checked_success(context).is_some()));
+            .saturating_sub(usize::from(self.checked_success(context).is_some()))
+            .saturating_sub(usize::from(self.stored_value(context).is_some()));
         (1..end)
             .map(|operand| operation.get_operand(operand))
             .collect()
+    }
+
+    /// The fixed-position RHS candidate. Local verification checks its type and write kind.
+    pub fn stored_value(&self, context: &Context) -> Option<Value> {
+        let operation = self.get_operation().deref(context);
+        if operation.get_num_operands() == 0 {
+            return None;
+        }
+        let rank = ranked_view_type(self.view(context), context)?
+            .deref(context)
+            .rank();
+        let end =
+            operation.get_num_operands() - usize::from(self.checked_success(context).is_some());
+        (end == rank + 2).then(|| operation.get_operand(rank + 1))
     }
 
     pub fn checked_success(&self, context: &Context) -> Option<Value> {
@@ -1483,7 +1558,11 @@ impl Verify for RankedAccessOp {
         };
         let view_type = view_type.deref(context);
         let success = self.checked_success(context);
-        let actual = operation.get_num_operands() - 1 - usize::from(success.is_some());
+        let value = self.stored_value(context);
+        let actual = operation.get_num_operands()
+            - 1
+            - usize::from(success.is_some())
+            - usize::from(value.is_some());
         if actual != view_type.rank() {
             return verify_err!(
                 self.loc(context),
@@ -1506,6 +1585,11 @@ impl Verify for RankedAccessOp {
         for operand in 1..=actual {
             require_index_operand(self, context, operand)?;
         }
+        if let Some(value) = value
+            && let Err(error) = validate_stored_value(context, self.kind(context).unwrap(), value)
+        {
+            return verify_err!(self.loc(context), error);
+        }
         if let Some(success) = success {
             if self.kind(context).is_none_or(AccessKindAttr::is_atomic) || actual != 1 {
                 return verify_err!(
@@ -1526,6 +1610,24 @@ impl Verify for RankedAccessOp {
         }
         Ok(())
     }
+}
+
+fn validate_stored_value(
+    context: &Context,
+    kind: AccessKindAttr,
+    value: Value,
+) -> Result<(), RankedMemoryError> {
+    if !kind.writes_memory()
+        || !value
+            .get_type(context)
+            .deref(context)
+            .is::<SemanticScalarType>()
+    {
+        return Err(RankedMemoryError::MalformedPayload(
+            "stored value requires a write access and a semantic scalar RHS",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_predicated_access(

@@ -23,6 +23,18 @@ use pliron::{
 const MAX_FIXTURE_BYTES: u64 = 64 * 1024;
 
 #[test]
+fn stored_value_effect_refinement_textual_fixtures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lit");
+    for fixture in [
+        "effect_refinement_match.pliron",
+        "effect_refinement_value_mismatch.pliron",
+        "effect_refinement_unmodeled_write.pliron",
+    ] {
+        run_fixture(&root.join(fixture));
+    }
+}
+
+#[test]
 fn textual_pliron_lit_suite() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lit");
     let mut fixtures = fs::read_dir(&root)

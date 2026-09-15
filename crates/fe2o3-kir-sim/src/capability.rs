@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_846_425;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_878_943;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -117,16 +117,18 @@ pub enum SimulationKirWireVersionV1 {
     V11,
     V12,
     V13,
+    V14,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::V7,
         Self::V9,
         Self::V10,
         Self::V11,
         Self::V12,
         Self::V13,
+        Self::V14,
     ];
     const COUNT: usize = Self::ALL.len();
 }
@@ -173,10 +175,11 @@ pub enum SimulationOperationSurfaceV1 {
     GlobalCapabilityBind = 34,
     GlobalCapabilityIndex = 35,
     ExecutionCapability = 36,
+    ReusablePhase = 37,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 37] = [
+    const ALL: [Self; 38] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -214,8 +217,9 @@ impl SimulationOperationSurfaceV1 {
         Self::GlobalCapabilityBind,
         Self::GlobalCapabilityIndex,
         Self::ExecutionCapability,
+        Self::ReusablePhase,
     ];
-    const COUNT: usize = Self::ExecutionCapability as usize + 1;
+    const COUNT: usize = Self::ReusablePhase as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -643,19 +647,23 @@ fn top_level_capability(
         | Surface::GlobalCapabilityIndex
             if matches!(
                 kir_wire_version,
-                SimulationKirWireVersionV1::V12 | SimulationKirWireVersionV1::V13
+                SimulationKirWireVersionV1::V12 | SimulationKirWireVersionV1::V13 | SimulationKirWireVersionV1::V14
             ) =>
         {
             owned(Owner::CapabilityProjection, &[])
         }
-        Surface::ExecutionCapability if kir_wire_version == SimulationKirWireVersionV1::V13 => {
+        Surface::ExecutionCapability if matches!(kir_wire_version, SimulationKirWireVersionV1::V13 | SimulationKirWireVersionV1::V14) => {
             owned(Owner::CapabilityProjection, &[])
         }
+        Surface::ReusablePhase if kir_wire_version == SimulationKirWireVersionV1::V14 => {
+            owned(Owner::CapabilityProjection, &[Reason::NonScalarMemory])
+        }
+        Surface::ReusablePhase => unsupported(Reason::LogicalCapabilityWireVersion),
         Surface::KernelContextIssue
         | Surface::GlobalCapabilityBind
         | Surface::GlobalCapabilityIndex
         | Surface::ExecutionCapability => unsupported(Reason::LogicalCapabilityWireVersion),
-        Surface::Matrix if kir_wire_version == SimulationKirWireVersionV1::V13 => {
+        Surface::Matrix if matches!(kir_wire_version, SimulationKirWireVersionV1::V13 | SimulationKirWireVersionV1::V14) => {
             owned(Owner::WaveCooperative, &[])
         }
         Surface::Matrix => owned(
@@ -718,6 +726,7 @@ pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOpera
             SimulationOperationSurfaceV1::GlobalCapabilityIndex
         }
         OperationKind::ExecutionCapability(_) => SimulationOperationSurfaceV1::ExecutionCapability,
+        OperationKind::ReusablePhase(_) => SimulationOperationSurfaceV1::ReusablePhase,
     }
 }
 

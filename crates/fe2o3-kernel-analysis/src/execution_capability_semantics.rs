@@ -9,6 +9,7 @@ use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
     BlockId, ExecutionAtomicKindV1, ExecutionCapabilityOpV1, ExecutionCapabilityOperationV1,
+    ExecutionCapabilityRoleV1,
     ExecutionCapabilitySourceV1, ExecutionLdsStateV1, ExecutionMemoryAccessV1,
     ExecutionMemoryAddressSpaceV1, ExecutionMemoryInitializationV1, ExecutionMemoryOrderingV1,
     ExecutionMemoryScopeV1, ExecutionMemorySpacesV1, Function, FunctionId, Kernel, KernelId,
@@ -19,6 +20,13 @@ use fe2o3_kernel_ir::{
 
 use crate::uniformity::analyze_function_with_root_inputs;
 use crate::{KernelCheckStatusV1, ProductionCapabilityAnalysisKindV1, Variation};
+
+#[cfg(test)]
+#[path = "execution_capability_semantics/subgroup_partition_tests.rs"]
+mod subgroup_partition_tests;
+#[cfg(test)]
+#[path = "execution_capability_semantics/borrowed_lds_tests.rs"]
+mod borrowed_lds_tests;
 
 pub const EXECUTION_CAPABILITY_FINAL_GRAPH_SEMANTICS_VERSION_V1: u16 = 1;
 pub const MAX_EXECUTION_SEMANTIC_ROOTS_V1: usize = 1_024;
@@ -116,6 +124,8 @@ pub enum ExecutionCapabilitySemanticReasonV1 {
     ConflictingEffects,
     ConflictingAccessCorrespondenceUnavailable,
     UnsupportedMemoryEffect,
+    /// A policy use has no exact consumer adapter; issuance alone is effect-free.
+    NumericalPolicyRefinementUnavailable,
 }
 
 /// One bounded rejection or incomplete obligation.
@@ -363,6 +373,7 @@ pub(crate) fn analyze_execution_capability_final_graph_with_composed_conflicts_v
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum LdsPhase {
     Uninitialized,
+    ReusableDormant,
     InvocationInitialized,
     Published,
     Consumed,
@@ -372,6 +383,7 @@ impl LdsPhase {
     const fn name(self) -> &'static str {
         match self {
             Self::Uninitialized => "uninitialized",
+            Self::ReusableDormant => "reusable-dormant",
             Self::InvocationInitialized => "invocation-initialized",
             Self::Published => "published",
             Self::Consumed => "consumed",
@@ -1228,6 +1240,11 @@ impl Analyzer<'_> {
                     contract.operation,
                     ExecutionCapabilityOperationV1::WorkgroupCollective { .. }
                         | ExecutionCapabilityOperationV1::SubgroupCollective { .. }
+                        | ExecutionCapabilityOperationV1::SubgroupPartition(
+                            fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceSumF32 { .. }
+                            | fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceMaxF32 { .. }
+                            | fe2o3_kernel_ir::SubgroupPartitionOperationV1::BroadcastF32 { .. }
+                        )
                 );
                 if is_collective {
                     self.checked_collective_sites = self.checked_collective_sites.saturating_add(1);
@@ -1283,7 +1300,12 @@ impl Analyzer<'_> {
                         _ => {}
                     },
                     ExecutionCapabilityOperationV1::SubgroupCollective { width, .. }
-                    | ExecutionCapabilityOperationV1::SubgroupBarrier { width, .. } => {
+                    | ExecutionCapabilityOperationV1::SubgroupBarrier { width, .. }
+                    | ExecutionCapabilityOperationV1::SubgroupPartition(
+                        fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceSumF32 { width, .. }
+                        | fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceMaxF32 { width, .. }
+                        | fe2o3_kernel_ir::SubgroupPartitionOperationV1::BroadcastF32 { width, .. }
+                    ) => {
                         match workgroup_size {
                             Some(participants)
                                 if participants < u64::from(*width)
@@ -1323,6 +1345,10 @@ impl Analyzer<'_> {
         let Some(entry) = body.blocks.first() else {
             return;
         };
+        let used_values = body.blocks.iter().flat_map(|block| {
+            block.operations.iter().flat_map(Operation::operands)
+                .chain(block.terminator.iter().flat_map(Terminator::operands))
+        }).collect::<BTreeSet<_>>();
         let mut input = FlowState::default();
         seed_types(
             &mut input,
@@ -1377,6 +1403,21 @@ impl Analyzer<'_> {
                     operation_index,
                     Some(contract.source),
                 );
+                if matches!(contract.operation, ExecutionCapabilityOperationV1::NumericalPolicyMath(_))
+                    || (matches!(
+                        contract.operation,
+                        ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. }
+                    ) && operation.results.iter().any(|result| used_values.contains(&result.id)))
+                {
+                    // Retaining policy types does not prove the consumer's numerical semantics.
+                    self.push(
+                        ProductionCapabilityAnalysisKindV1::SemanticRefinement,
+                        KernelCheckStatusV1::Incomplete,
+                        site.clone(),
+                        None,
+                        ExecutionCapabilitySemanticReasonV1::NumericalPolicyRefinementUnavailable,
+                    );
+                }
                 self.apply_epoch(contract, &site, &mut state);
                 self.apply_lifecycle(contract, operation, &site, &mut state);
                 self.apply_memory(kernel, contract, &site, &mut state, workgroup_size);
@@ -1469,12 +1510,26 @@ impl Analyzer<'_> {
     ) {
         use ExecutionCapabilityOperationV1 as Op;
         match &contract.operation {
-            Op::LdsAllocate { .. } => {
+            Op::LdsAllocateBorrowed { .. } | Op::LdsAllocate { .. } => {
                 if let Some(value) = lds_result(operation, ExecutionLdsStateV1::Uninitialized) {
                     state
                         .lds
                         .insert(value, BTreeSet::from([LdsPhase::Uninitialized]));
                 }
+            }
+            Op::ReusableLdsConversion(_) => {
+                let output = operation.results.iter().find_map(|result| match &result.ty {
+                    Type::ExecutionCapability(capability)
+                        if matches!(capability.role, ExecutionCapabilityRoleV1::ReusableLds { .. }) =>
+                    {
+                        Some(result.id)
+                    }
+                    _ => None,
+                });
+                self.transition_lds(
+                    contract.operands.first().copied(), output,
+                    LdsPhase::Uninitialized, LdsPhase::ReusableDormant, location, state,
+                );
             }
             Op::LdsInitializeByInvocation { .. } => {
                 self.transition_lds(
@@ -1885,6 +1940,11 @@ fn convergence_scope(operation: &ExecutionCapabilityOperationV1) -> Option<Synch
         }
         ExecutionCapabilityOperationV1::SubgroupBarrier { .. }
         | ExecutionCapabilityOperationV1::SubgroupCollective { .. }
+        | ExecutionCapabilityOperationV1::SubgroupPartition(
+            fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceSumF32 { .. }
+            | fe2o3_kernel_ir::SubgroupPartitionOperationV1::ReduceMaxF32 { .. }
+            | fe2o3_kernel_ir::SubgroupPartitionOperationV1::BroadcastF32 { .. }
+        )
         | ExecutionCapabilityOperationV1::MatrixAccess { .. } => {
             Some(SynchronizationScope::Subgroup)
         }
@@ -2185,6 +2245,7 @@ mod tests {
                     function: [0x71; 32],
                     operation: [source_operation; 32],
                     block: u32::from(source_operation),
+                    occurrence: None,
                 },
                 operation,
             }),

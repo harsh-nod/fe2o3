@@ -30,6 +30,8 @@
             0,
             &[],
             &semantic_statement,
+            &ProjectedGlobalSemanticUsesV1::default(),
+            None,
             &[None; 4],
             &local_contracts,
             &[],
@@ -394,6 +396,7 @@
         };
         let mut state = HashMap::new();
         transfer_capability_terminator_v1(
+            &projection_types(),
             &[callable.clone()],
             &function,
             0,
@@ -423,6 +426,7 @@
         for noalias_class in [0, 2] {
             let mut rejected = HashMap::new();
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[callable.clone()],
                 &function,
                 0,
@@ -454,6 +458,7 @@
             ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadView(view)),
         )]);
         let effects = transfer_capability_terminator_v1(
+            &projection_types(),
             &[strided_read_callable()],
             &function,
             0,
@@ -483,6 +488,7 @@
         let mut invalid = HashMap::from([(0, ProjectedCapabilityValueV1::Invalid)]);
         assert!(matches!(
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[strided_read_callable()],
                 &function,
                 0,
@@ -550,6 +556,7 @@
         ));
         let mut state = authenticated_tensor_load_state();
         let effects = transfer_capability_terminator_v1(
+            &projection_types(),
             &[zero_filled_tensor_load_callable()],
             &function,
             0,
@@ -613,6 +620,7 @@
         let mut merged_state = authenticated_tensor_load_state();
         assert!(merge_capability_states_v1(&mut merged_state, &HashMap::new()).unwrap());
         let error = transfer_capability_terminator_v1(
+            &projection_types(),
             &[zero_filled_tensor_load_callable()],
             &function,
             0,
@@ -635,6 +643,7 @@
         invalid_lane.insert(1, ProjectedCapabilityValueV1::Invalid);
         assert!(matches!(
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[zero_filled_tensor_load_callable()],
                 &function,
                 0,
@@ -656,6 +665,7 @@
         let function = tensor_load_function(None);
         assert!(matches!(
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[zero_filled_tensor_load_callable()],
                 &function,
                 0,
@@ -682,6 +692,7 @@
         let function = tensor_load_function(Some(projected));
         assert!(matches!(
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[zero_filled_tensor_load_callable()],
                 &function,
                 0,
@@ -773,6 +784,7 @@
         let function = tensor_load_function(None);
         assert!(matches!(
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[legacy_tensor_load_callable()],
                 &function,
                 0,
@@ -806,7 +818,7 @@
                     ProjectedMfmaOperandV1 {
                         contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
                         storage_layout: lhs_storage,
-                        lane_root: 20,
+                        lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                         allocation: tensor_test_allocation(),
                     },
                 )),
@@ -817,7 +829,7 @@
                     ProjectedMfmaOperandV1 {
                         contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
                         storage_layout: rhs_storage,
-                        lane_root: 20,
+                        lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                         allocation: tensor_test_allocation(),
                     },
                 )),
@@ -827,7 +839,7 @@
                 ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                     ProjectedMfmaAccumulatorV1 {
                         contract: mfma_accumulator_contract(),
-                        lane_root: 20,
+                        lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                         value_root: 30,
                         flow_root: 30,
                     },
@@ -865,7 +877,10 @@
             contract.tail_mask,
             fe2o3_kernel_ir::TensorTailMaskV1::ZeroFilledPredicateInputs
         );
-        assert_eq!(authenticated.context_root, 10);
+        assert_eq!(
+            authenticated.context_root,
+            scoped_matrix_use_v1::Issuer::Legacy(10)
+        );
         assert_eq!(authenticated.accumulator.value_root, 30);
         assert_ne!(
             tensor_operand_root_v1(authenticated.lhs),
@@ -926,7 +941,7 @@
                     ProjectedMfmaOperandV1 {
                         contract: lhs_contract,
                         storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                        lane_root: 20,
+                        lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                         allocation: tensor_test_allocation(),
                     },
                 )),
@@ -937,7 +952,7 @@
                     ProjectedMfmaOperandV1 {
                         contract: rhs_contract,
                         storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                        lane_root: 20,
+                        lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                         allocation: tensor_test_allocation(),
                     },
                 )),
@@ -947,7 +962,7 @@
                 ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                     ProjectedMfmaAccumulatorV1 {
                         contract: accumulator_contract,
-                        lane_root: 20,
+                        lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                         value_root: 30,
                         flow_root: 30,
                     },

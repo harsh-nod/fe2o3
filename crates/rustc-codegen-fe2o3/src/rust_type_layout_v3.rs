@@ -28,6 +28,7 @@ const SLICE_BYTES: u64 = 16;
 pub(crate) enum GeneralTypedArgumentKindV3 {
     Scalar(RustScalarElementTypeV1),
     SharedSlice(RustScalarElementTypeV1),
+    MutableSlice(RustScalarElementTypeV1),
     WriteOnlyDisjointSlice(RustScalarElementTypeV1),
     DisjointSlice(RustScalarElementTypeV1),
     GlobalMutPointer(RustScalarElementTypeV1),
@@ -39,6 +40,7 @@ impl GeneralTypedArgumentKindV3 {
         match self {
             Self::Scalar(scalar)
             | Self::SharedSlice(scalar)
+            | Self::MutableSlice(scalar)
             | Self::WriteOnlyDisjointSlice(scalar)
             | Self::DisjointSlice(scalar)
             | Self::GlobalMutPointer(scalar) => Some(scalar),
@@ -267,12 +269,13 @@ fn extract_argument<'tcx>(
         ));
     }
 
-    if let TyKind::Ref(_, pointee, HirMutability::Not) = *ty.kind()
+    if let TyKind::Ref(_, pointee, mutability) = *ty.kind()
         && let TyKind::Slice(element) = *pointee.kind()
     {
+        let mutable = mutability == HirMutability::Mut;
         let scalar = scalar_type(element).ok_or_else(|| {
             GeneralTypedExtractError::new(format!(
-                "{} has unsupported shared-slice element type `{element}`",
+                "{} has unsupported slice element type `{element}`",
                 argument()
             ))
         })?;
@@ -280,12 +283,20 @@ fn extract_argument<'tcx>(
             layout_cx,
             ty,
             scalar,
-            false,
-            RustSourceTypeShapeV1::shared_slice(scalar),
+            mutable,
+            if mutable {
+                RustSourceTypeShapeV1::mutable_slice(scalar)
+            } else {
+                RustSourceTypeShapeV1::shared_slice(scalar)
+            },
             &argument(),
         )?;
         return Ok(GeneralTypedArgumentV3::from_layout(
-            GeneralTypedArgumentKindV3::SharedSlice(scalar),
+            if mutable {
+                GeneralTypedArgumentKindV3::MutableSlice(scalar)
+            } else {
+                GeneralTypedArgumentKindV3::SharedSlice(scalar)
+            },
             layout,
         ));
     }
@@ -366,7 +377,7 @@ fn extract_argument<'tcx>(
     }
 
     Err(GeneralTypedExtractError::new(format!(
-        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, genuine DisjointSlice or WriteOnlyDisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
+        "{} has unsupported type `{ty}`; only bounded scalars, shared or mutable slices, genuine DisjointSlice or WriteOnlyDisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
         argument()
     )))
 }
@@ -901,7 +912,8 @@ fn build_abi_field(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
-            GeneralTypedArgumentKindV3::DisjointSlice(_) => (
+            GeneralTypedArgumentKindV3::MutableSlice(_)
+            | GeneralTypedArgumentKindV3::DisjointSlice(_) => (
                 SLICE_BYTES,
                 POINTER_ALIGNMENT,
                 AbiKind::Slice {
@@ -970,6 +982,7 @@ fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
             (scalar.size_bytes(), scalar.size_bytes() as u32)
         }
         GeneralTypedArgumentKindV3::SharedSlice(_)
+        | GeneralTypedArgumentKindV3::MutableSlice(_)
         | GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
         | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
         GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (POINTER_BYTES, POINTER_ALIGNMENT),
@@ -1069,6 +1082,10 @@ fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralType
 }
 
 #[cfg(test)]
+#[path = "rust_type_layout_v3/mutable_slice_tests.rs"]
+mod mutable_slice_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_artifacts::{DigestBytes, Dimensions, derive_generated_host_contract_identity_v1};
@@ -1106,6 +1123,13 @@ mod tests {
             GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
             | GeneralTypedArgumentKindV3::DisjointSlice(_) => (
                 RustSourceTypeShapeV1::disjoint_slice(scalar, RustDisjointIndexSpaceV1::Index1D),
+                RustcAbiClassV1::ScalarPair,
+                16,
+                8,
+                slice_components(scalar, RustPointerMutabilityV1::Mut),
+            ),
+            GeneralTypedArgumentKindV3::MutableSlice(_) => (
+                RustSourceTypeShapeV1::mutable_slice(scalar),
                 RustcAbiClassV1::ScalarPair,
                 16,
                 8,

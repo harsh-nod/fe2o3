@@ -9,13 +9,27 @@ struct SemanticPromotedLocalV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SemanticPromotedTransportV1 {
     Semantic(SemanticPromotedBindingV1),
+    NumericalPolicyMath(MathTransportV1),
     DirectParameter { parameter_local: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SemanticPromotedBindingV1 {
+    GlobalBf16MatrixView {
+        contract: SemanticGlobalBf16MatrixLoadV1,
+    },
     Ordinary,
     KernelContext,
+    BorrowedSubgroup(BorrowedSubgroupTransportV1),
+    WorkgroupIndex(WorkgroupIndexTransportV1),
+    SubgroupPartitionAuthority {
+        contract: SemanticExecutionCapabilityContractV1,
+        source_type: ExecutionTypeIdentityV1,
+    },
+    NumericalPolicy {
+        contract: SemanticExecutionCapabilityContractV1,
+        source_type: ExecutionTypeIdentityV1,
+    },
     GlobalCapability {
         element: SemanticTypeIdV1,
         contract: SemanticCapabilityMemoryContractV1,
@@ -166,6 +180,17 @@ impl SemanticPromotedBindingV1 {
         kernel_context_type: Option<&KernelContextTypeV1>,
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
         let transport = match self {
+            Self::GlobalBf16MatrixView { contract } => global_bf16_view_transport_types_v1(
+                types, semantic_type, contract, kernel_context_type,
+            )?,
+            Self::BorrowedSubgroup(transport) => transport.types(types, semantic_type, kernel_context_type)?,
+            Self::WorkgroupIndex(transport) => transport.types(types, semantic_type, kernel_context_type)?,
+            Self::SubgroupPartitionAuthority { contract, .. } => vec![subgroup_partition_transport_type_v1(
+                types, semantic_type, contract, kernel_context_type,
+            )?],
+            Self::NumericalPolicy { contract, .. } => vec![numerical_policy_transport_type_v1(
+                types, semantic_type, contract, kernel_context_type,
+            )?],
             Self::Ordinary => lower_ssa_value_types(types, semantic_type)?,
             Self::KernelContext => vec![Type::KernelContext(
                 kernel_context_type
@@ -292,7 +317,12 @@ impl SemanticPromotedBindingV1 {
         match self {
             Self::Ordinary
             | Self::KernelContext
+            | Self::NumericalPolicy { .. }
+            | Self::SubgroupPartitionAuthority { .. }
+            | Self::BorrowedSubgroup(_)
+            | Self::WorkgroupIndex(_)
             | Self::GlobalCapability { .. }
+            | Self::GlobalBf16MatrixView { .. }
             | Self::MathContext
             | Self::CollectiveContext
             | Self::WorkgroupLdsScope
@@ -323,6 +353,28 @@ impl SemanticPromotedBindingV1 {
         binding: &SemanticValueBindingV1,
     ) -> Result<Vec<(ValueId, Type)>, &'static str> {
         match (self, binding) {
+            (Self::GlobalBf16MatrixView { contract }, binding) => {
+                global_bf16_view_transport_values_v1(contract, binding)
+            }
+            (Self::BorrowedSubgroup(transport), binding) => transport.values(binding),
+            (Self::WorkgroupIndex(transport), binding) => transport.values(binding),
+            (
+                Self::SubgroupPartitionAuthority { contract, source_type },
+                SemanticValueBindingV1::Value { id, ty: Type::ExecutionCapability(capability) },
+            ) if capability.source_type == source_type
+                && subgroup_partition_transport_matches_v1(contract, capability) => {
+                Ok(vec![(*id, Type::ExecutionCapability(capability.clone()))])
+            }
+            (Self::SubgroupPartitionAuthority { .. }, _) => {
+                Err("promoted partition authority lacks its exact subgroup, brand, or epoch")
+            }
+            (
+                Self::NumericalPolicy { contract, source_type },
+                SemanticValueBindingV1::Value { id, ty: Type::ExecutionCapability(capability) },
+            ) if capability.source_type == source_type
+                && numerical_policy_transport_matches_v1(contract, capability) => {
+                Ok(vec![(*id, Type::ExecutionCapability(capability.clone()))])
+            }
             (Self::Ordinary, binding) => binding.values(),
             (Self::KernelContext, SemanticValueBindingV1::KernelContext { value, context }) => {
                 Ok(vec![(*value, Type::KernelContext(context.clone()))])
@@ -611,6 +663,9 @@ impl SemanticPromotedBindingV1 {
             (Self::KernelContext, _) => {
                 Err("promoted kernel context lacks compiler-issued authority")
             }
+            (Self::NumericalPolicy { .. }, _) => {
+                Err("promoted numerical policy lacks its exact compiler-issued authority")
+            }
             (Self::GlobalCapability { .. }, _) => {
                 Err("promoted global capability lacks its authenticated bind contract")
             }
@@ -637,6 +692,43 @@ impl SemanticPromotedBindingV1 {
         if matches!(self, Self::Ordinary) {
             return binding_from_value_defs(types, semantic_type, values);
         }
+        if let Self::BorrowedSubgroup(transport) = self {
+            return transport.restore(types, semantic_type, values);
+        }
+        if let Self::WorkgroupIndex(transport) = self {
+            return transport.restore(types, semantic_type, values);
+        }
+        if let Self::SubgroupPartitionAuthority { contract, source_type } = self {
+            let [ValueDef { id, ty: Type::ExecutionCapability(capability) }] = values else {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            };
+            let context = KernelContextTypeV1::new(
+                capability.provenance.root.clone(), capability.provenance.kernel_marker,
+                capability.provenance.target_brand, capability.provenance.launch_brand,
+            );
+            let expected = subgroup_partition_transport_type_v1(types, semantic_type, contract, Some(&context))?;
+            if capability.source_type != source_type || expected != Type::ExecutionCapability(capability.clone()) {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            return Ok(SemanticValueBindingV1::Value { id: *id, ty: expected });
+        }
+        if let Self::NumericalPolicy { contract, source_type } = self {
+            let [ValueDef { id, ty: Type::ExecutionCapability(capability) }] = values else {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            };
+            let context = KernelContextTypeV1::new(
+                capability.provenance.root.clone(),
+                capability.provenance.kernel_marker,
+                capability.provenance.target_brand,
+                capability.provenance.launch_brand,
+            );
+            let expected = numerical_policy_transport_type_v1(types, semantic_type, contract, Some(&context))?;
+            if capability.source_type != source_type
+                || expected != Type::ExecutionCapability(capability.clone()) {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            return Ok(SemanticValueBindingV1::Value { id: *id, ty: expected });
+        }
         let kernel_context_type = values.first().and_then(|value| match &value.ty {
             Type::KernelContext(context) => Some(context),
             Type::GlobalCapability(capability) => Some(capability.context()),
@@ -662,6 +754,11 @@ impl SemanticPromotedBindingV1 {
             .collect();
         match self {
             Self::Ordinary => binding_from_value_defs(types, semantic_type, values),
+            Self::GlobalBf16MatrixView { contract } => global_bf16_view_from_transport_v1(contract, values),
+            Self::NumericalPolicy { .. } => unreachable!("handled exact numerical policy above"),
+            Self::SubgroupPartitionAuthority { .. } => unreachable!("handled exact partition authority above"),
+            Self::BorrowedSubgroup(_) => unreachable!("handled exact borrowed authority above"),
+            Self::WorkgroupIndex(_) => unreachable!("handled scoped index transport above"),
             Self::KernelContext => {
                 let [
                     ValueDef {
@@ -882,6 +979,7 @@ impl SemanticPromotedTransportV1 {
             Self::Semantic(binding) => {
                 binding.transport_types(types, semantic_type, kernel_context_type)
             }
+            Self::NumericalPolicyMath(binding) => binding.kernel_types(types, semantic_type, kernel_context_type),
             Self::DirectParameter { parameter_local } => direct_parameters
                 .get(&parameter_local)
                 .cloned()
@@ -896,6 +994,21 @@ impl SemanticPromotedTransportV1 {
         expected: &[Type],
     ) -> Result<Vec<(ValueId, Type)>, &'static str> {
         match self {
+            Self::NumericalPolicyMath(transport) => transport.values(binding, expected),
+            Self::Semantic(semantic @ SemanticPromotedBindingV1::NumericalPolicy { .. }) => {
+                let values = semantic.transport_values(binding)?;
+                if values.iter().map(|(_, ty)| ty).ne(expected.iter()) {
+                    return Err("numerical-policy SSA transport changed root or nominal authority type");
+                }
+                Ok(values)
+            }
+            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_) | SemanticPromotedBindingV1::WorkgroupIndex(_))) => {
+                let values = semantic.transport_values(binding)?;
+                if values.iter().map(|(_, ty)| ty).ne(expected.iter()) {
+                    return Err("subgroup partition SSA transport changed root, brand, epoch, or nominal type");
+                }
+                Ok(values)
+            }
             Self::Semantic(semantic) => semantic.transport_values(binding),
             Self::DirectParameter { .. } => match (binding, expected) {
                 (SemanticValueBindingV1::Value { id, ty }, [expected]) if ty == expected => {
@@ -920,6 +1033,19 @@ impl SemanticPromotedTransportV1 {
         expected: &[Type],
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         match self {
+            Self::NumericalPolicyMath(transport) => transport.from_values(types, semantic_type, values, expected),
+            Self::Semantic(semantic @ SemanticPromotedBindingV1::NumericalPolicy { .. }) => {
+                if values.iter().map(|value| &value.ty).ne(expected.iter()) {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                semantic.binding_from_transport(types, semantic_type, values)
+            }
+            Self::Semantic(semantic @ (SemanticPromotedBindingV1::SubgroupPartitionAuthority { .. } | SemanticPromotedBindingV1::BorrowedSubgroup(_) | SemanticPromotedBindingV1::WorkgroupIndex(_))) => {
+                if values.iter().map(|value| &value.ty).ne(expected.iter()) {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                semantic.binding_from_transport(types, semantic_type, values)
+            }
             Self::Semantic(semantic) => {
                 semantic.binding_from_transport(types, semantic_type, values)
             }

@@ -23,6 +23,11 @@ use crate::reference_effect_v1::{
 const MAX_BOUND_NODES_V2: usize = 8_192;
 const MAX_BOUND_DEPTH_V2: usize = 64;
 
+mod output_slice_v1;
+#[cfg(test)]
+#[path = "production_reference_bounds_v2/compact_row_tests.rs"]
+mod compact_row_tests;
+
 pub(crate) struct CompilerOwnedOutputDomainV2<'a> {
     pub(crate) reference: &'a ReferenceOutputWriteV1,
     pub(crate) ranked_view: ProductionRankedValueV1,
@@ -119,6 +124,7 @@ struct IntervalV2 {
 
 /// Discharges every retained slice check from the ranked point domain or its
 /// own CPU block-entry predicate. Bounds assertions never supply assumptions.
+#[cfg(test)]
 pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
     kernel: &ProductionRankedKernelV1,
     effect_ir: &ReferenceEffectIrV1,
@@ -132,7 +138,7 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
     )
 }
 
-fn discharge_reference_bounds_with_budget_v2(
+pub(crate) fn discharge_reference_bounds_with_budget_v2(
     kernel: &ProductionRankedKernelV1,
     effect_ir: &ReferenceEffectIrV1,
     outputs: &[CompilerOwnedOutputDomainV2<'_>],
@@ -154,7 +160,25 @@ fn discharge_reference_bounds_with_budget_v2(
             &mut nodes,
             0,
         )?;
-        if let ReferenceOutputCoordinateV1::Dynamic(index) = &output.reference.coordinate {
+        if let ReferenceOutputCoordinateV1::CompactRowsUsize1D(mapping) = &output.reference.coordinate {
+            work.charge_v2(effect_ir.relations.len())
+                .map_err(|_| bounds_work_error_v2(output.reference.block))?;
+            if !effect_ir.relations.iter().any(|relation| matches!(relation,
+                ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { argument, .. }
+                    if *argument == output.reference.argument
+            )) {
+                return Err(ReferenceBoundsDischargeErrorV2::new(output.reference.block,
+                    "compact row bounds require an exclusive primitive output relation"));
+            }
+            let index = mapping.expression(work)
+                .map_err(|_| bounds_work_error_v2(output.reference.block))?;
+            accesses.push(SliceAccessV2 {
+                block: output.reference.block,
+                reference_argument: effect_ir.reference_argument_for_kernel_argument_v1(output.reference.argument)
+                    .map_err(|_| bounds_work_error_v2(output.reference.block))?,
+                index,
+            });
+        } else if let ReferenceOutputCoordinateV1::Dynamic(index) = &output.reference.coordinate {
             collect_accesses(output.reference.block, index, &mut accesses, &mut nodes, 0)?;
             accesses.push(SliceAccessV2 {
                 block: output.reference.block,
@@ -168,10 +192,39 @@ fn discharge_reference_bounds_with_budget_v2(
                     })?,
                 index: index.clone(),
             });
+        } else if effect_ir.relations.iter().any(|relation| matches!(relation,
+            ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { argument, .. }
+            | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { argument, .. }
+                if *argument == output.reference.argument
+        )) {
+            let ReferenceOutputCoordinateV1::LogicalPoint(axes) = &output.reference.coordinate else {
+                return Err(ReferenceBoundsDischargeErrorV2::new(output.reference.block,
+                    "invocation output slice has no exact logical point"));
+            };
+            let [index @ ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }] = axes.as_ref() else {
+                return Err(ReferenceBoundsDischargeErrorV2::new(output.reference.block,
+                    "invocation output slice is not rank one at its source point"));
+            };
+            accesses.push(SliceAccessV2 {
+                block: output.reference.block,
+                reference_argument: effect_ir.reference_argument_for_kernel_argument_v1(output.reference.argument)
+                    .map_err(|_| bounds_work_error_v2(output.reference.block))?,
+                index: index.clone(),
+            });
         }
     }
     let definitions = definitions(kernel)?;
     let domains = point_domains(kernel, outputs, &definitions, work)?;
+    // A guarded mutable-slice reference describes arbitrary point arguments,
+    // including invocations that leave the complete output frame unchanged.
+    // Its own write/view extent must not bootstrap safe reference bounds.
+    let require_cpu_path = effect_ir.relations.iter().any(|relation| {
+        matches!(
+            relation,
+            ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { .. }
+            | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { .. }
+        )
+    });
     if accesses.is_empty() && checks.is_empty() {
         return Ok(());
     }
@@ -225,7 +278,13 @@ fn discharge_reference_bounds_with_budget_v2(
                 block: check.block,
                 ..access.clone()
             };
-            if let Err(domain_error) = prove_bound(&checked_access, &extent, &domains, work) {
+            let ranked_bound = if require_cpu_path {
+                Err(ReferenceBoundsDischargeErrorV2::new(check.block,
+                    "guarded output-slice reference requires a preceding CPU bounds predicate"))
+            } else {
+                prove_bound(&checked_access, &extent, &domains, work)
+            };
+            if let Err(domain_error) = ranked_bound {
                 if cpu_paths.is_none() {
                     cpu_paths = Some(reference_block_path_predicates_with_budget_v1(effect_ir, work)
                         .map_err(|_| ReferenceBoundsDischargeErrorV2::new(
@@ -271,7 +330,7 @@ fn bounds_work_error_v2(block: u32) -> ReferenceBoundsDischargeErrorV2 {
     )
 }
 
-fn cpu_path_proves_bound_v2(
+pub(crate) fn cpu_path_proves_bound_v2(
     path: &ReferencePathPredicateV1,
     check: &ResolvedReferenceBoundsCheckV1,
     work: &mut ReferenceSymbolicWorkBudgetV2,
@@ -283,10 +342,14 @@ fn cpu_path_proves_bound_v2(
     let expected = reference_boolean_guard_atom_v1(check.condition.clone(), true);
     // Empty DNF is unreachable. Every other clause needs the exact positive
     // comparison, not a guard at a later output or another bounds assertion.
-    Ok(path
-        .clauses
-        .iter()
-        .all(|clause| clause.atoms.contains(&expected)))
+    for clause in &path.clauses {
+        if !clause.atoms.contains(&expected)
+            && !output_slice_v1::equal_length_bound(clause, check, work)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn validate_check(
@@ -405,6 +468,14 @@ fn point_domains(
             output.reference.block,
             work,
         )?;
+        if matches!(output.reference.coordinate, ReferenceOutputCoordinateV1::CompactRowsUsize1D(_)) {
+            if shape.len() != 1 {
+                return Err(ReferenceBoundsDischargeErrorV2::new(output.reference.block,
+                    "compact row output requires a rank-1 view"));
+            }
+            // The output coordinate is not the physical point domain.
+            continue;
+        }
         if let ReferenceOutputCoordinateV1::Dynamic(
             ReferenceEffectExpressionV1::PointCoordinate { axis },
         ) = &output.reference.coordinate
@@ -501,6 +572,8 @@ fn slice_extent(
         .filter_map(|relation| match relation {
             ReferenceArgumentRelationV1::SharedSliceInput { argument, .. }
             | ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
+            | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { argument, .. }
+            | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { argument, .. }
                 if effect_ir
                     .reference_argument_for_kernel_argument_v1(*argument)
                     .is_ok_and(|actual| actual == reference_argument) =>

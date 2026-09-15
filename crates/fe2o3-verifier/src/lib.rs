@@ -207,6 +207,8 @@ pub use production_final_graph_functional_refinement_v1::{
     ProductionFinalGraphFunctionalRefinementErrorV1,
     ProductionFinalGraphFunctionalRefinementExecutionV2,
     ProductionFinalGraphFunctionalRefinementV1, ProductionFinalGraphFunctionalReportV1,
+    ProductionPreparedFinalGraphFunctionalExecutionV1,
+    ProductionPreparedFinalGraphFunctionalSubjectV1,
     bind_effect_ir_derived_functional_refinement_to_borrowed_final_graph_v2,
     bind_ir_derived_functional_refinement_to_final_graph_v1,
 };

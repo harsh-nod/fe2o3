@@ -81,6 +81,7 @@ impl TypedDescriptorRootV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum DescriptorArgumentKindV1 {
     SharedSlice(ScalarTypeV1),
+    MutableSlice(ScalarTypeV1),
     DisjointSlice(ScalarTypeV1),
     GlobalMutPointer(ScalarTypeV1),
     Scalar(ScalarTypeV1),
@@ -208,6 +209,7 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                         AccessMode::WriteOnly
                                     }
                                     GeneralTypedArgumentKindV3::DisjointSlice(_)
+                                    | GeneralTypedArgumentKindV3::MutableSlice(_)
                                     | GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
                                         AccessMode::ReadWrite
                                     }
@@ -317,6 +319,9 @@ fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgum
         }
         GeneralTypedArgumentKindV3::SharedSlice(_) => {
             DescriptorArgumentKindV1::SharedSlice(scalar.expect("slice kind has a scalar"))
+        }
+        GeneralTypedArgumentKindV3::MutableSlice(_) => {
+            DescriptorArgumentKindV1::MutableSlice(scalar.expect("slice kind has a scalar"))
         }
         GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
             DescriptorArgumentKindV1::DisjointSlice(scalar.expect("slice kind has a scalar"))
@@ -702,6 +707,7 @@ fn validate_production_v1_descriptor_root_evidence(
             matches!(
                 argument.kind,
                 DescriptorArgumentKindV1::SharedSlice(_)
+                    | DescriptorArgumentKindV1::MutableSlice(_)
                     | DescriptorArgumentKindV1::DisjointSlice(_)
                     | DescriptorArgumentKindV1::GlobalMutPointer(_)
             )
@@ -733,12 +739,14 @@ fn validate_production_v1_descriptor_root_evidence(
                     ));
                 }
             },
-            DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
+            DescriptorArgumentKindV1::MutableSlice(_)
+            | DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
             DescriptorArgumentKindV1::Scalar(_)
             | DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(),
         };
         let expected_kind = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_)
+            | DescriptorArgumentKindV1::MutableSlice(_)
             | DescriptorArgumentKindV1::DisjointSlice(_) => FormalParameterKind::Slice,
             DescriptorArgumentKindV1::GlobalMutPointer(_) => FormalParameterKind::Pointer,
             DescriptorArgumentKindV1::Scalar(_)
@@ -814,6 +822,12 @@ fn production_descriptor_argument_matches_kernel_type_v1(
                         AccessMode::ReadWrite => KirAccessMode::ReadWrite,
                         _ => return false,
                     }
+                && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+        }
+        (DescriptorArgumentKindV1::MutableSlice(scalar), KirType::Slice(actual)) => {
+            descriptor_access == AccessMode::ReadWrite
+                && actual.address_space == AddressSpace::Global
+                && actual.access == KirAccessMode::ReadWrite
                 && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
         }
         (DescriptorArgumentKindV1::GlobalMutPointer(scalar), KirType::Pointer(actual)) => {
@@ -962,6 +976,9 @@ fn validate_production_v1_semantic_root_ownership_evidence(
             DescriptorArgumentKindV1::DisjointSlice(_) => {
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner
             }
+            DescriptorArgumentKindV1::MutableSlice(_) => {
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            }
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner
             }
@@ -1015,8 +1032,10 @@ fn rust_ownership_discharges_runtime_alias_v1(
         return false;
     };
     matches!(left, DescriptorArgumentKindV1::DisjointSlice(_))
+        || matches!(left, DescriptorArgumentKindV1::MutableSlice(_))
         || matches!(left, DescriptorArgumentKindV1::GlobalMutPointer(_))
         || matches!(right, DescriptorArgumentKindV1::DisjointSlice(_))
+        || matches!(right, DescriptorArgumentKindV1::MutableSlice(_))
         || matches!(right, DescriptorArgumentKindV1::GlobalMutPointer(_))
 }
 
@@ -1192,6 +1211,13 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
                         device_layout,
                         argument.offset,
                     ),
+                    DescriptorArgumentKindV1::MutableSlice(_) => LogicalArgumentV1::mutable_slice(
+                        source_index,
+                        name,
+                        source_type,
+                        device_layout,
+                        argument.offset,
+                    ),
                     DescriptorArgumentKindV1::DisjointSlice(_) => {
                         LogicalArgumentV1::disjoint_slice(
                             source_index,
@@ -1310,6 +1336,10 @@ fn descriptor_records(
         DescriptorArgumentKindV1::DisjointSlice(scalar) => (
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(scalar)),
             DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(scalar)),
+        ),
+        DescriptorArgumentKindV1::MutableSlice(scalar) => (
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::mutable_slice(scalar)),
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::mutable_slice(scalar)),
         ),
         DescriptorArgumentKindV1::GlobalMutPointer(scalar) => (
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(scalar)),
@@ -1870,6 +1900,19 @@ mod tests {
             DescriptorArgumentKindV1::Scalar(_) => (scalar_layout(), AccessMode::ByValue),
             DescriptorArgumentKindV1::SharedSlice(_) => (layout(false), AccessMode::ReadOnly),
             DescriptorArgumentKindV1::DisjointSlice(_) => (layout(true), AccessMode::ReadWrite),
+            DescriptorArgumentKindV1::MutableSlice(_) => {
+                let disjoint = layout(true);
+                (RustLayoutEvidenceV1::new(
+                    RustTypeEvidenceV1::new(RustSourceTypeShapeV1::mutable_slice(
+                        RustScalarElementTypeV1::F32,
+                    )),
+                    disjoint.abi_class(),
+                    disjoint.pointer_width(),
+                    disjoint.size(),
+                    disjoint.abi_alignment(),
+                    disjoint.components().to_vec(),
+                ).unwrap(), AccessMode::ReadWrite)
+            }
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 (global_mut_pointer_layout(), AccessMode::ReadWrite)
             }
@@ -2010,6 +2053,11 @@ mod tests {
                 DescriptorArgumentKindV1::GlobalMutPointer(ScalarTypeV1::F32),
                 56,
             ),
+            descriptor_argument(
+                5,
+                DescriptorArgumentKindV1::MutableSlice(ScalarTypeV1::F32),
+                64,
+            ),
         ];
 
         assert!(!rust_ownership_discharges_runtime_alias_v1(
@@ -2022,6 +2070,11 @@ mod tests {
         ));
         assert!(rust_ownership_discharges_runtime_alias_v1(0, 4, &arguments));
         assert!(rust_ownership_discharges_runtime_alias_v1(4, 1, &arguments));
+        assert!(rust_ownership_discharges_runtime_alias_v1(0, 5, &arguments));
+        assert!(rust_ownership_discharges_runtime_alias_v1(5, 1, &arguments));
+        assert!(!rust_ownership_discharges_runtime_alias_v1(
+            5, 5, &arguments
+        ));
         assert!(!rust_ownership_discharges_runtime_alias_v1(
             2, 2, &arguments
         ));
@@ -2079,6 +2132,65 @@ mod tests {
                 &hostile
             ));
         }
+    }
+
+    #[test]
+    fn mutable_descriptor_requires_exact_read_write_slice_correspondence() {
+        use fe2o3_kernel_ir::{
+            AccessMode as KirAccess, AddressSpace, ScalarType as KirScalar, Type,
+        };
+        let descriptor = DescriptorArgumentKindV1::MutableSlice(ScalarTypeV1::F32);
+        let exact = Type::slice(
+            Type::Scalar(KirScalar::F32),
+            AddressSpace::Global,
+            KirAccess::ReadWrite,
+        );
+        assert!(production_descriptor_argument_matches_kernel_type_v1(
+            descriptor,
+            AccessMode::ReadWrite,
+            &exact
+        ));
+        assert!(!production_descriptor_argument_matches_kernel_type_v1(
+            descriptor,
+            AccessMode::WriteOnly,
+            &exact
+        ));
+        for substituted in [
+            Type::slice(
+                Type::Scalar(KirScalar::I32),
+                AddressSpace::Global,
+                KirAccess::ReadWrite,
+            ),
+            Type::slice(
+                Type::Scalar(KirScalar::F32),
+                AddressSpace::Global,
+                KirAccess::ReadOnly,
+            ),
+            Type::slice(
+                Type::Scalar(KirScalar::F32),
+                AddressSpace::Workgroup,
+                KirAccess::ReadWrite,
+            ),
+            Type::pointer(
+                Type::Scalar(KirScalar::F32),
+                AddressSpace::Global,
+                KirAccess::ReadWrite,
+            ),
+        ] {
+            assert!(!production_descriptor_argument_matches_kernel_type_v1(
+                descriptor,
+                AccessMode::ReadWrite,
+                &substituted
+            ));
+        }
+        let (source, layout) = descriptor_records(descriptor);
+        assert!(source.descriptor().is_mutable_slice());
+        assert!(!source.descriptor().is_disjoint_slice());
+        assert_eq!(layout.descriptor().size_bytes(), 16);
+        let (disjoint_source, disjoint_layout) =
+            descriptor_records(DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32));
+        assert_ne!(source.identity(), disjoint_source.identity());
+        assert_ne!(layout.identity(), disjoint_layout.identity());
     }
 
     fn module() -> Module {

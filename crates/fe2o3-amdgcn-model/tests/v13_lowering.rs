@@ -73,6 +73,7 @@ fn module_with_capability(width: Option<u32>, module_name: &str) -> Module {
             function: [9; 32],
             operation: [10; 32],
             block: 0,
+            occurrence: None,
         },
         operation: workgroup_operation,
     };
@@ -105,6 +106,7 @@ fn module_with_capability(width: Option<u32>, module_name: &str) -> Module {
                 function: [9; 32],
                 operation: [11; 32],
                 block: 0,
+                occurrence: None,
             },
             operation: subgroup_operation,
         };

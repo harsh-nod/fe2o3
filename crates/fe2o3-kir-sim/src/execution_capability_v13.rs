@@ -14,9 +14,23 @@ use fe2o3_kernel_ir::{
 
 use crate::IncompleteExecutionCapabilityOperationV13;
 
+mod subgroup_partition;
+mod reusable_lds;
+mod reusable_phase;
+mod declared_receipt;
+pub use declared_receipt::{SimulationCapabilityProjectionReceiptV1, SimulationPhaseCoordinateV1, SimulationPhaseFamilyV1};
+pub(crate) use declared_receipt::record_projection_coordinates;
+#[cfg(test)]
+mod borrowed_lds_tests;
+mod workgroup_memory_index_v2;
+
 /// Closed V13 execution-capability family recorded before logical erasure.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SimulationExecutionCapabilityFamilyV13 {
+    ReusableLdsConversion,
+    SubgroupPartitionDerive,
+    SubgroupPartitionReduceSumF32,
+    SubgroupPartitionBroadcastF32,
     WorkgroupDerive,
     SubgroupDerive,
     LdsAllocate,
@@ -36,18 +50,39 @@ pub enum SimulationExecutionCapabilityFamilyV13 {
     RawMemoryBind,
     PrivateMemoryAllocate,
     WorkgroupMemoryIndex,
+    WorkgroupMemoryIndexV2,
+    WorkgroupMemoryIndexIntoDisjoint,
     WorkgroupMemoryAllocate,
     WorkgroupMemoryPublish,
     MemoryLoad,
     MemoryStore,
+    NumericalPolicyIssue,
+    NumericalPolicyMath,
+    SubgroupDeriveBorrowed,
+    SubgroupPartitionReduceMaxF32,
+    LdsAllocateBorrowed,
 }
 
 impl SimulationExecutionCapabilityFamilyV13 {
     pub const fn of(operation: &ExecutionCapabilityOperationV1) -> Self {
         use ExecutionCapabilityOperationV1 as Operation;
         match operation {
+            Operation::ReusableLdsConversion(_) => Self::ReusableLdsConversion,
+            Operation::NumericalPolicyMath(_) => Self::NumericalPolicyMath,
+            Operation::SubgroupPartition(partition) => {
+                use fe2o3_kernel_ir::SubgroupPartitionOperationV1 as P;
+                match partition {
+                    P::Derive { .. } => Self::SubgroupPartitionDerive,
+                    P::ReduceSumF32 { .. } => Self::SubgroupPartitionReduceSumF32,
+                    P::ReduceMaxF32 { .. } => Self::SubgroupPartitionReduceMaxF32,
+                    P::BroadcastF32 { .. } => Self::SubgroupPartitionBroadcastF32,
+                }
+            }
+            Operation::NumericalPolicyIssue { .. } => Self::NumericalPolicyIssue,
             Operation::WorkgroupDerive { .. } => Self::WorkgroupDerive,
             Operation::SubgroupDerive { .. } => Self::SubgroupDerive,
+            Operation::SubgroupDeriveBorrowed { .. } => Self::SubgroupDeriveBorrowed,
+            Operation::LdsAllocateBorrowed { .. } => Self::LdsAllocateBorrowed,
             Operation::LdsAllocate { .. } => Self::LdsAllocate,
             Operation::LdsInitializeByInvocation { .. } => Self::LdsInitializeByInvocation,
             Operation::LdsPublish { .. } => Self::LdsPublish,
@@ -65,6 +100,8 @@ impl SimulationExecutionCapabilityFamilyV13 {
             Operation::RawMemoryBind { .. } => Self::RawMemoryBind,
             Operation::PrivateMemoryAllocate { .. } => Self::PrivateMemoryAllocate,
             Operation::WorkgroupMemoryIndex { .. } => Self::WorkgroupMemoryIndex,
+            Operation::WorkgroupMemoryIndexV2 { .. } => Self::WorkgroupMemoryIndexV2,
+            Operation::WorkgroupMemoryIndexIntoDisjoint { .. } => Self::WorkgroupMemoryIndexIntoDisjoint,
             Operation::WorkgroupMemoryAllocate { .. } => Self::WorkgroupMemoryAllocate,
             Operation::WorkgroupMemoryPublish { .. } => Self::WorkgroupMemoryPublish,
             Operation::MemoryLoad { .. } => Self::MemoryLoad,
@@ -210,6 +247,17 @@ pub(crate) fn record_projection_coordinates_v13(
     module: &Module,
 ) -> Result<(SimulationCapabilityProjectionReceiptV13, usize), ExecutionCapabilityProjectionErrorV13>
 {
+    if reusable_phase::requires_v14(module) {
+        return Err(ExecutionCapabilityProjectionErrorV13::Invalid(
+            "V13 projection receipt cannot describe V14 phase custody",
+        ));
+    }
+    record_projection_coordinates_base(module)
+}
+
+fn record_projection_coordinates_base(
+    module: &Module,
+) -> Result<(SimulationCapabilityProjectionReceiptV13, usize), ExecutionCapabilityProjectionErrorV13> {
     let mut coordinates = Vec::new();
     let mut maximum_scratch_bytes = 0;
     for (function_ordinal, function) in module.functions.iter().enumerate() {
@@ -460,6 +508,8 @@ const fn logical_kind(ty: &Type) -> Option<SimulationLogicalCapabilityKindV13> {
         Type::KernelContext(_) => Some(SimulationLogicalCapabilityKindV13::KernelContext),
         Type::GlobalCapability(_) => Some(SimulationLogicalCapabilityKindV13::GlobalMemory),
         Type::ExecutionCapability(_) => Some(SimulationLogicalCapabilityKindV13::Execution),
+        // The exact V13 receipt entry rejects these before walking definitions.
+        Type::ReusablePhaseToken(_) => None,
         Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_) => None,
     }
 }
@@ -484,22 +534,67 @@ fn operation_execution_coordinate(
 pub(crate) fn project_execution_capabilities_v13(
     module: &mut Module,
 ) -> Result<ExecutionCapabilityProjectionV13, ExecutionCapabilityProjectionErrorV13> {
+    project_execution_capabilities_v1(module, fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13,
+        fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1::DEFAULT)
+}
+
+pub(crate) fn project_execution_capabilities_v1(
+    module: &mut Module,
+    declared_version: fe2o3_kernel_ir::CanonicalKernelIrVersionV1,
+    phase_limits: fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1,
+) -> Result<ExecutionCapabilityProjectionV13, ExecutionCapabilityProjectionErrorV13> {
+    if declared_version == fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13
+        && reusable_phase::requires_v14(module)
+    {
+        return Err(ExecutionCapabilityProjectionErrorV13::Invalid(
+            "V13 execution projection cannot consume V14 phase custody",
+        ));
+    }
     let mut report = ExecutionCapabilityProjectionV13::default();
     let kernel_workgroups = kernel_workgroups(module)?;
     let mut module_requirements = BTreeSet::new();
+    let mut phase_limits = fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1 {
+        work: phase_limits.work.min(fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1::DEFAULT.work),
+        temporary_bytes: phase_limits.temporary_bytes.min(fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1::DEFAULT.temporary_bytes),
+    };
 
     for function in &mut module.functions {
+        let mut phase = reusable_phase::prepare(function, declared_version, phase_limits)?;
         let signature = function.signature.clone();
         let function_id = function.id.clone();
         let Some(body) = function.body.as_mut() else {
             continue;
         };
         let types = value_types(&signature, body)?;
+        let mut used_values = Vec::new();
+        for block in &body.blocks {
+            for operands in block.operations.iter().map(Operation::operands)
+                .chain(block.terminator.iter().map(fe2o3_kernel_ir::Terminator::operands))
+            {
+                for value in operands {
+                    if matches!(types.get(&value), Some(Type::ExecutionCapability(capability))
+                        if matches!(capability.role, fe2o3_kernel_ir::ExecutionCapabilityRoleV1::NumericalPolicy { .. }))
+                    {
+                        used_values.try_reserve(1)
+                            .map_err(|_| ExecutionCapabilityProjectionErrorV13::AllocationFailure)?;
+                        used_values.push(value);
+                    }
+                }
+            }
+        }
+        used_values.sort_unstable();
+        used_values.dedup();
+        report.scratch_bytes = report.scratch_bytes.checked_add(
+            used_values.capacity().checked_mul(size_of::<ValueId>())
+                .ok_or(ExecutionCapabilityProjectionErrorV13::AllocationFailure)?,
+        ).ok_or(ExecutionCapabilityProjectionErrorV13::AllocationFailure)?;
         let scalar_identities = scalar_identities(body, &types)?;
         let mut aliases = global_aliases(body)?;
         let mut promoted = BTreeMap::new();
+        workgroup_memory_index_v2::prepare_parameters(body, &mut promoted);
         let mut dynamic_extents = BTreeMap::new();
         let mut pending_async_copies = BTreeMap::new();
+        let mut partitions = subgroup_partition::Bindings::default();
         let mut next_value = next_value_id(body)?;
         let workgroup = kernel_workgroups.get(&function_id).copied().flatten();
 
@@ -509,7 +604,14 @@ pub(crate) fn project_execution_capabilities_v13(
             projected
                 .try_reserve(source.len())
                 .map_err(|_| ExecutionCapabilityProjectionErrorV13::AllocationFailure)?;
-            for operation in source {
+            for (operation_index, operation) in source.into_iter().enumerate() {
+                if matches!(operation.kind, OperationKind::ReusablePhase(_)) {
+                    phase.as_mut().ok_or(ExecutionCapabilityProjectionErrorV13::Invalid(
+                        "phase operation lacks its complete physical audit",
+                    ))?.project(block.id, operation_index, &operation, &scalar_identities,
+                        &mut aliases, &mut promoted)?;
+                    continue;
+                }
                 let OperationKind::ExecutionCapability(contract) = operation.kind else {
                     projected.push(operation);
                     continue;
@@ -518,11 +620,13 @@ pub(crate) fn project_execution_capabilities_v13(
                     operation.results,
                     contract,
                     &types,
+                    &used_values,
                     &scalar_identities,
                     &mut aliases,
                     &mut promoted,
                     &mut dynamic_extents,
                     &mut pending_async_copies,
+                    &mut partitions,
                     &mut next_value,
                     workgroup,
                 )?;
@@ -533,11 +637,22 @@ pub(crate) fn project_execution_capabilities_v13(
             }
             block.operations = projected;
         }
+        if let Some(phase) = phase {
+            let usage = phase.finish()?;
+            phase_limits.work = phase_limits.work.checked_sub(usage.work)
+                .ok_or(ExecutionCapabilityProjectionErrorV13::Invalid("phase module projection work exceeded"))?;
+            report.scratch_bytes = report.scratch_bytes.checked_add(
+                usage.peak_temporary_bytes,
+            ).ok_or(ExecutionCapabilityProjectionErrorV13::AllocationFailure)?;
+        }
         if !pending_async_copies.is_empty() {
             return Err(ExecutionCapabilityProjectionErrorV13::Incomplete(
                 IncompleteExecutionCapabilityOperationV13::AsyncWait,
             ));
         }
+
+        report.scratch_bytes = report.scratch_bytes.checked_add(partitions.scratch_bytes()?)
+            .ok_or(ExecutionCapabilityProjectionErrorV13::AllocationFailure)?;
 
         let generated = body
             .blocks
@@ -768,11 +883,13 @@ fn project_operation(
     results: Vec<ValueDef>,
     contract: ExecutionCapabilityOpV1,
     types: &BTreeMap<ValueId, Type>,
+    used_values: &[ValueId],
     scalar_identities: &BTreeMap<fe2o3_kernel_ir::ExecutionTypeIdentityV1, ScalarType>,
     aliases: &mut Vec<(ValueId, ValueId)>,
     promoted: &mut BTreeMap<ValueId, Type>,
     dynamic_extents: &mut BTreeMap<ValueId, ValueId>,
     pending_async_copies: &mut BTreeMap<ValueId, PendingAsyncCopyProjectionV13>,
+    partitions: &mut subgroup_partition::Bindings,
     next_value: &mut u32,
     workgroup: Option<fe2o3_kernel_ir::WorkgroupSize>,
 ) -> Result<Vec<Operation>, ExecutionCapabilityProjectionErrorV13> {
@@ -781,11 +898,32 @@ fn project_operation(
 
     let operation = contract.operation.clone();
     match operation {
-        Capability::WorkgroupDerive { .. } | Capability::SubgroupDerive { .. } => {
+        Capability::ReusableLdsConversion(conversion) => reusable_lds::project(
+            results, &contract, conversion, types, aliases, promoted,
+        ),
+        Capability::NumericalPolicyMath(_) => Err(ExecutionCapabilityProjectionErrorV13::Incomplete(
+            Incomplete::NumericalPolicyMath,
+        )),
+        Capability::SubgroupPartition(partition) => subgroup_partition::project(
+            results, &contract, partition, types, aliases, promoted, partitions, workgroup,
+        ),
+        Capability::NumericalPolicyIssue { .. } => {
+            if results.iter().any(|result| used_values.binary_search(&result.id).is_ok()) {
+                return Err(ExecutionCapabilityProjectionErrorV13::Incomplete(
+                    Incomplete::NumericalPolicyIssue,
+                ));
+            }
+            // Exact canonical custody and definition/source coordinates precede projection.
             require_only_logical_results(&results)?;
             Ok(Vec::new())
         }
-        Capability::LdsAllocate {
+        Capability::WorkgroupDerive { .. } | Capability::SubgroupDerive { .. }
+        | Capability::SubgroupDeriveBorrowed { .. } => {
+            require_only_logical_results(&results)?;
+            Ok(Vec::new())
+        }
+        Capability::LdsAllocateBorrowed { element, layout, elements, .. }
+        | Capability::LdsAllocate {
             element,
             layout,
             elements,
@@ -925,6 +1063,12 @@ fn project_operation(
         Capability::WorkgroupMemoryIndex { .. } => {
             project_workgroup_index(results, promoted, next_value)
         }
+        Capability::WorkgroupMemoryIndexV2 { .. } => workgroup_memory_index_v2::issue(
+            results, workgroup, promoted, next_value,
+        ),
+        Capability::WorkgroupMemoryIndexIntoDisjoint { .. } => workgroup_memory_index_v2::into_disjoint(
+            results, &contract, types, aliases, promoted, next_value,
+        ),
         Capability::MemoryLoad {
             layout,
             space,
@@ -1025,7 +1169,10 @@ fn require_only_logical_results(
 ) -> Result<(), ExecutionCapabilityProjectionErrorV13> {
     if results
         .iter()
-        .all(|result| result.ty.contains_logical_capability())
+        .all(|result| result.ty.contains_logical_capability() && !matches!(
+            &result.ty, Type::ExecutionCapability(capability)
+                if matches!(capability.role, fe2o3_kernel_ir::ExecutionCapabilityRoleV1::ReusableLds { .. })
+        ))
     {
         Ok(())
     } else {
@@ -1247,6 +1394,13 @@ fn alias_logical_results_to_first_physical_operand(
             return Err(ExecutionCapabilityProjectionErrorV13::Invalid(
                 "synchronization capability carried an unexpected physical result",
             ));
+        }
+        // A new epoch's Workgroup is not the memory handle published beside it.
+        // Giving it that pointer would couple subsequent independent LDS views.
+        if matches!(&result.ty, Type::ExecutionCapability(capability)
+            if capability.role == fe2o3_kernel_ir::ExecutionCapabilityRoleV1::Workgroup)
+        {
+            continue;
         }
         if let Some(backing) = backing {
             aliases.push((result.id, backing));

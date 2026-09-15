@@ -385,7 +385,8 @@ fn budget_request() -> InertSemanticMirRequestV1 {
 
 #[test]
 fn local_and_block_identity_scans_have_an_exact_validation_work_boundary() {
-    const EXACT_VALIDATION_WORK: u64 = 49;
+    // The final arithmetic pass still visits the fixture's one empty function.
+    const EXACT_VALIDATION_WORK: u64 = 49 + 1;
 
     let exact = SemanticMirLimitsV1::default()
         .with_limit(SemanticMirResourceV1::ValidationWork, EXACT_VALIDATION_WORK)

@@ -2,6 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+mod execution_source;
+mod subgroup_partition;
+mod borrowed_subgroup;
+mod borrowed_lds;
+mod numerical_policy_math;
+mod reusable_lds;
+
 use crate::{
     AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
     AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
@@ -158,6 +165,17 @@ pub struct VerificationErrors {
 }
 
 impl VerificationErrors {
+    /// Reports deterministic exhaustion in a verification or analysis consumer.
+    pub fn resource_limit(module: &Module, resource: &str, limit: usize) -> Self {
+        Self {
+            diagnostics: vec![Diagnostic {
+                location: DiagnosticLocation::module(module),
+                code: DiagnosticCode::ResourceLimit,
+                message: format!("{resource} exceeds the deterministic limit {limit}"),
+            }],
+        }
+    }
+
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
@@ -871,6 +889,7 @@ struct DefInfo {
 }
 
 struct FunctionVerifier<'a, 'module> {
+    reusable_lds_work_remaining: usize,
     module: &'module Module,
     function: &'module Function,
     functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
@@ -884,7 +903,7 @@ struct FunctionVerifier<'a, 'module> {
     kernel_context_issuances: usize,
     kernel_context_authority: Option<DefInfo>,
     bound_physical_globals: BTreeSet<ValueId>,
-    execution_source_locations: BTreeSet<([u8; 32], u32)>,
+    execution_source_locations: execution_source::SourceLocations,
 }
 
 impl<'a, 'module> FunctionVerifier<'a, 'module> {
@@ -897,6 +916,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         control_flow: Option<IndexedControlFlow>,
     ) -> Self {
         Self {
+            reusable_lds_work_remaining: 1_048_576,
             module,
             function,
             functions,
@@ -910,7 +930,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             kernel_context_issuances: 0,
             kernel_context_authority: None,
             bound_physical_globals: BTreeSet::new(),
-            execution_source_locations: BTreeSet::new(),
+            execution_source_locations: execution_source::SourceLocations::default(),
         }
     }
 
@@ -1116,7 +1136,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 if execution_operand
                     && !matches!(
                         operation.kind,
-                        OperationKind::ExecutionCapability(_) | OperationKind::Call { .. }
+                        OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_) | OperationKind::Call { .. }
                     )
                 {
                     self.emit(
@@ -1142,6 +1162,11 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     self.verify_use(operand, block.id, None, location.clone());
                 }
                 self.verify_terminator(block, terminator, location);
+            }
+        }
+        if let Some(cfg) = &self.control_flow {
+            if let Err(error) = crate::verify_reusable_phase_function_v1(self.function, cfg, crate::ReusablePhaseCheckLimitsV1::DEFAULT) {
+                self.emit(base_location, DiagnosticCode::InvalidExecutionCapability, format!("reusable phase lifecycle: {error:?}"));
             }
         }
     }
@@ -1288,7 +1313,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 "only GlobalCapabilityBind may define global-capability SSA authority",
             );
         }
-        if !matches!(&operation.kind, OperationKind::ExecutionCapability(_))
+        if !matches!(&operation.kind, OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_))
             && operation
                 .results
                 .iter()
@@ -1790,6 +1815,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 }
                 self.expect_results(operation, &[Type::INDEX], location);
             }
+            OperationKind::ReusablePhase(_) => { /* checked by the bounded ordered whole-function pass */ }
             OperationKind::ExecutionCapability(contract) => {
                 self.verify_execution_capability(operation, contract, location)
             }
@@ -1804,6 +1830,36 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
     ) {
         let current_block = location.block;
         let current_operation = location.operation;
+        if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::ReusableLdsConversion(_))
+            && !self.valid_reusable_lds_receiver(contract)
+        {
+            self.emit(location.clone(), DiagnosticCode::InvalidExecutionCapability,
+                "reusable LDS requires one exact live allocation and preserves its brand, epoch, layout and source occurrence");
+        }
+        if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::LdsAllocateBorrowed { .. })
+            && !self.valid_borrowed_lds_receiver(contract, &location)
+        {
+            self.emit(location.clone(), DiagnosticCode::InvalidExecutionCapability,
+                "borrowed LDS allocation requires its exact dominating Workgroup issuer, kernel context and source custody");
+        }
+        if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. })
+            && !self.valid_borrowed_subgroup_receiver(contract)
+        {
+            self.emit(location.clone(), DiagnosticCode::InvalidExecutionCapability,
+                "borrowed subgroup requires its exact issued Workgroup and shared source custody");
+        }
+        if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::NumericalPolicyMath(_))
+            && !self.valid_numerical_policy_math_custody(contract, &location)
+        {
+            self.emit(location.clone(), DiagnosticCode::InvalidExecutionCapability,
+                "policy math requires its exact dominating root, math derivation, policy issuance, and shared constructor binding");
+        }
+        if matches!(contract.operation, crate::ExecutionCapabilityOperationV1::SubgroupPartition(_))
+            && !self.valid_subgroup_partition_receiver(contract)
+        {
+            self.emit(location.clone(), DiagnosticCode::InvalidExecutionCapability,
+                "subgroup partition receiver is not bound to its exact live subgroup and workgroup epoch");
+        }
         if !contract.is_complete() || contract.provenance.root != self.function.id {
             self.emit(
                 location.clone(),
@@ -1811,14 +1867,11 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 "execution contract is incomplete or names the wrong canonical root",
             );
         }
-        if !self
-            .execution_source_locations
-            .insert((contract.source.operation, contract.source.block))
-        {
+        if let Err(message) = self.execution_source_locations.insert(contract.source) {
             self.emit(
                 location.clone(),
                 DiagnosticCode::InvalidExecutionCapability,
-                "execution source operation identity/location was duplicated or replayed",
+                message,
             );
         }
         if operation.results.len() > crate::MAX_EXECUTION_CAPABILITY_RESULTS_V1 {
@@ -3619,6 +3672,8 @@ fn operation_requires_kernel_context(operation: &Operation) -> bool {
 
 #[derive(Clone, Copy)]
 enum ExecutionOperandContractV1 {
+    WorkgroupSharedBorrow { workgroup: crate::ExecutionTypeIdentityV1 },
+    PartitionEpochBorrow,
     KernelContext,
     Capability {
         source: [Option<crate::ExecutionTypeIdentityV1>; 2],
@@ -3652,6 +3707,20 @@ enum ExecutionResultContractV1 {
 
 #[derive(Clone, Copy)]
 enum ExecutionRoleContractV1 {
+    ReusableLds { element: crate::ExecutionTypeIdentityV1, layout: crate::ExecutionElementLayoutV1, elements: u64 },
+    PartitionSubgroup { width: u32 },
+    BorrowedSubgroup {
+        workgroup_reference: crate::ExecutionTypeIdentityV1,
+        workgroup: crate::ExecutionTypeIdentityV1,
+        width: u32,
+    },
+    NumericalPolicyMathSource(crate::NumericalPolicyMathBindingV1),
+    NumericalPolicyMathBound(crate::NumericalPolicyMathBindingV1),
+    SubgroupPartition { width: u32, partition_width: u32 },
+    NumericalPolicy {
+        policy: crate::ExecutionTypeIdentityV1,
+        mode: crate::NumericalModeV1,
+    },
     Workgroup,
     Subgroup {
         width: u32,
@@ -3752,7 +3821,30 @@ fn execution_operand_contract(
     };
 
     match operation {
-        Op::WorkgroupDerive { .. } => vec![ExecutionOperandContractV1::KernelContext],
+        Op::ReusableLdsConversion(value) => reusable_lds::operand_contract(*value),
+        Op::NumericalPolicyMath(math) => numerical_policy_math::operand_contract(*math),
+        Op::SubgroupPartition(partition) => {
+            use crate::SubgroupPartitionOperationV1 as P;
+            let (width, partition_width) = partition.widths();
+            match *partition {
+                P::Derive { subgroup_reference, subgroup, .. } => vec![
+                    capability(execution_sources(subgroup_reference, subgroup), ExecutionRoleContractV1::PartitionSubgroup { width }),
+                    ExecutionOperandContractV1::PartitionEpochBorrow,
+                ],
+                P::ReduceSumF32 { partition_reference, partition, .. }
+                | P::ReduceMaxF32 { partition_reference, partition, .. }
+                | P::BroadcastF32 { partition_reference, partition, .. } => {
+                    let mut operands = vec![capability(execution_sources(partition_reference, partition), ExecutionRoleContractV1::SubgroupPartition { width, partition_width }), ExecutionOperandContractV1::Scalar(ScalarType::F32)];
+                    if matches!(operation, Op::SubgroupPartition(P::BroadcastF32 { .. })) { operands.push(ExecutionOperandContractV1::Scalar(ScalarType::U32)); }
+                    operands
+                }
+            }
+        }
+        Op::LdsAllocateBorrowed { workgroup, .. }
+        | Op::SubgroupDeriveBorrowed { workgroup, .. } => vec![
+            ExecutionOperandContractV1::WorkgroupSharedBorrow { workgroup: *workgroup },
+        ],
+        Op::WorkgroupDerive { .. } | Op::NumericalPolicyIssue { .. } => vec![ExecutionOperandContractV1::KernelContext],
         Op::SubgroupDerive {
             workgroup: source, ..
         }
@@ -3772,6 +3864,10 @@ fn execution_operand_contract(
         | Op::WorkgroupMemoryAllocate {
             workgroup: source, ..
         } => vec![workgroup(*source)],
+        Op::WorkgroupMemoryIndexV2 { workgroup: source, .. } => vec![workgroup(*source)],
+        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, .. } => vec![capability(
+            execution_source(*input_witness), ExecutionRoleContractV1::WorkgroupMemoryIndex,
+        )],
         Op::LdsInitializeByInvocation {
             input_lds,
             workgroup: workgroup_source,
@@ -3859,12 +3955,14 @@ fn execution_operand_contract(
             scope,
             ..
         } => match kind {
+            // The physical entry owns a mutable allocation borrow; this does not
+            // grant ordinary load/store authority to the logical atomic result.
             Atomic::BindGlobalView => vec![
                 ExecutionOperandContractV1::KernelContext,
                 ExecutionOperandContractV1::Slice {
                     scalar: *value_type,
                     space: AddressSpace::Global,
-                    access: AccessMode::ReadOnly,
+                    access: AccessMode::ReadWrite,
                 },
             ],
             Atomic::BindGlobalLocation => vec![
@@ -4162,6 +4260,25 @@ fn execution_result_contract(
     };
 
     match operation {
+        Op::ReusableLdsConversion(value) => reusable_lds::result_contract(*value),
+        Op::NumericalPolicyMath(math) => numerical_policy_math::result_contract(*math),
+        Op::SubgroupPartition(partition) => {
+            use crate::SubgroupPartitionOperationV1 as P;
+            match *partition {
+                P::Derive { partition, width, partition_width, .. } => vec![capability(partition, ExecutionRoleContractV1::SubgroupPartition { width, partition_width })],
+                P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => vec![ExecutionResultContractV1::Scalar(ScalarType::F32)],
+            }
+        }
+        Op::NumericalPolicyIssue { capability: output, policy, mode, .. } => vec![capability(
+            *output,
+            ExecutionRoleContractV1::NumericalPolicy { policy: *policy, mode: *mode },
+        )],
+        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => vec![capability(
+            *subgroup,
+            ExecutionRoleContractV1::BorrowedSubgroup {
+                workgroup_reference: *workgroup_reference, workgroup: *workgroup, width: *width,
+            },
+        )],
         Op::WorkgroupDerive {
             workgroup: output, ..
         } => vec![workgroup(*output)],
@@ -4173,7 +4290,10 @@ fn execution_result_contract(
             *output,
             ExecutionRoleContractV1::Subgroup { width: *width },
         )],
-        Op::LdsAllocate {
+        Op::LdsAllocateBorrowed {
+            lds: output_lds, element, layout, elements, ..
+        }
+        | Op::LdsAllocate {
             lds: output_lds,
             element,
             layout,
@@ -4372,9 +4492,13 @@ fn execution_result_contract(
                 atomic_scope: None,
             },
         )],
-        Op::WorkgroupMemoryIndex { witness, .. } => vec![capability(
+        Op::WorkgroupMemoryIndex { witness, .. }
+        | Op::WorkgroupMemoryIndexV2 { witness, .. } => vec![capability(
             *witness,
             ExecutionRoleContractV1::WorkgroupMemoryIndex,
+        )],
+        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => vec![capability(
+            *output_witness, ExecutionRoleContractV1::WorkgroupMemoryIndex,
         )],
         Op::WorkgroupMemoryAllocate {
             view,
@@ -4439,6 +4563,19 @@ fn execution_operand_type_matches(
     contract: &ExecutionCapabilityOpV1,
 ) -> bool {
     match expected {
+        ExecutionOperandContractV1::WorkgroupSharedBorrow { workgroup } => matches!(actual,
+            Some(Type::ExecutionCapability(capability))
+                if capability.is_complete() && capability.source_type == workgroup
+                    && capability.role == ExecutionCapabilityRoleV1::Workgroup
+                    && capability.provenance == contract.provenance
+                    && capability.workgroup_brand == contract.workgroup_brand
+                    && capability.epoch == contract.epoch_before),
+        ExecutionOperandContractV1::PartitionEpochBorrow => matches!(actual,
+            Some(Type::ExecutionCapability(capability))
+            if capability.role == ExecutionCapabilityRoleV1::Workgroup
+                && capability.provenance == contract.provenance
+                && capability.workgroup_brand == contract.workgroup_brand
+                && capability.epoch == contract.epoch_before),
         ExecutionOperandContractV1::KernelContext => matches!(
             actual,
             Some(Type::KernelContext(context))
@@ -4515,6 +4652,19 @@ fn execution_role_matches(
 ) -> bool {
     use crate::ExecutionCapabilityRoleV1 as Role;
     match (actual, expected) {
+        (actual @ Role::ReusableLds { .. }, expected @ ExecutionRoleContractV1::ReusableLds { .. }) =>
+            reusable_lds::matches_role(&expected, actual),
+        (Role::BorrowedSubgroup { workgroup_reference, workgroup, width },
+            ExecutionRoleContractV1::BorrowedSubgroup { workgroup_reference: reference, workgroup: owner, width: expected_width }) =>
+                *workgroup_reference == reference && *workgroup == owner && *width == expected_width,
+        (Role::Subgroup { width } | Role::BorrowedSubgroup { width, .. },
+            ExecutionRoleContractV1::PartitionSubgroup { width: expected_width }) => *width == expected_width,
+        (Role::SubgroupPartition { width, partition_width }, ExecutionRoleContractV1::SubgroupPartition { width: expected_width, partition_width: expected_partition }) => *width == expected_width && *partition_width == expected_partition,
+        (Role::NumericalPolicyMathSource(binding), ExecutionRoleContractV1::NumericalPolicyMathSource(expected))
+        | (Role::NumericalPolicyMathBound(binding), ExecutionRoleContractV1::NumericalPolicyMathBound(expected)) => *binding == expected,
+        (Role::NumericalPolicy { policy, mode }, ExecutionRoleContractV1::NumericalPolicy { policy: expected_policy, mode: expected_mode }) => {
+            *policy == expected_policy && *mode == expected_mode
+        }
         (Role::Workgroup, ExecutionRoleContractV1::Workgroup)
         | (Role::WorkgroupMemoryIndex, ExecutionRoleContractV1::WorkgroupMemoryIndex) => true,
         (

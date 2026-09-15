@@ -105,6 +105,7 @@ fn raw_bind_module() -> Module {
             function: [13; 32],
             operation: [14; 32],
             block: 0,
+            occurrence: None,
         },
     };
 

@@ -499,6 +499,7 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::GlobalCapabilityBind(_) => "global-capability-bind",
         OperationKind::GlobalCapabilityIndex(_) => "global-capability-index",
         OperationKind::ExecutionCapability(_) => "execution-capability",
+        OperationKind::ReusablePhase(_) => "reusable-phase",
     }
 }
 

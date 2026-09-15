@@ -1,34 +1,8 @@
 fn runtime_v7_semantic_fixture() -> (Vec<u8>, u16, [u8; 32], [u8; 32]) {
     let target_layout = [0x71; 32];
     let abi_identity = [0x72; 32];
-    let mut types = owned_region_slice_semantic_types(
-        [
-            SemanticTypeIdV1::from_index(1),
-            SemanticTypeIdV1::from_index(2),
-            SemanticTypeIdV1::from_index(3),
-        ],
-        Some(u64::MAX),
-    );
-    types[3] = SemanticTypeDeclV1::new(
-        SemanticTypeIdentityV1::from_sha256([0x84; 32]),
-        SemanticLayoutIdentityV1::from_sha256([0x85; 32]),
-        SemanticTypeLayoutV1::with_exact_rustc_layout(
-            0,
-            1,
-            SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
-            SemanticRustcVariantsV1::Single { index: 0 },
-            SemanticBackendReprV1::memory(true),
-            None,
-            false,
-            None,
-            1,
-            0,
-            SemanticTypeLayoutDetailsV1::None,
-        )
-        .unwrap(),
-        SemanticTypeShapeV1::Unit,
-    );
-    let unit = SemanticTypeIdV1::from_index(5);
+    let mut types = shared_region_slice_semantic_types();
+    let unit = SemanticTypeIdV1::from_index(3);
     let unit_type = SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([0x88; 32]),
         SemanticLayoutIdentityV1::from_sha256([0x89; 32]),
@@ -56,7 +30,7 @@ fn runtime_v7_semantic_fixture() -> (Vec<u8>, u16, [u8; 32], [u8; 32]) {
         false,
         false,
         1,
-        vec![owned_region_slice_physical()],
+        vec![shared_region_slice_physical()],
         SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
     )
     .unwrap()
@@ -94,7 +68,7 @@ fn runtime_v7_semantic_fixture() -> (Vec<u8>, u16, [u8; 32], [u8; 32]) {
             ),
             SemanticLocalDeclV1::new(
                 SemanticLocalIdentityV1::from_sha256([0x7d; 32]),
-                SemanticTypeIdV1::from_index(4),
+                SemanticTypeIdV1::from_index(2),
                 SemanticLocalRoleV1::Argument(0),
                 SemanticSourceProvenanceV1::unavailable(),
             ),
@@ -283,7 +257,7 @@ fn runtime_v7_bundle_fixture() -> (VerifiedSimulationBundleV7, [u8; 32]) {
             vec![SemanticArgumentStorageV1::new(
                 0,
                 1,
-                4,
+                2,
                 SemanticArgumentOwnershipV1::SharedBorrow,
                 SemanticStorageBindingV1::ExactKirParameter {
                     kir_parameter_ordinal: 0,
@@ -308,7 +282,7 @@ fn runtime_v7_bundle_fixture() -> (VerifiedSimulationBundleV7, [u8; 32]) {
             vec![SemanticArgumentStorageV2::new(
                 0,
                 1,
-                4,
+                2,
                 SemanticArgumentOwnershipV1::SharedBorrow,
                 SemanticComponentStorageBindingV2::exact(vec![owned_region_slice_component(
                     Vec::new(),

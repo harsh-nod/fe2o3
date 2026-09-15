@@ -186,6 +186,15 @@ pub enum ProductionSemanticCastV2 {
     FloatToIntegerSaturating,
 }
 
+/// Source read semantics retained independently of its address and scalar type.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ProductionSemanticReadModeV2 {
+    /// An ordinary, unordered read; memory stability still requires proof.
+    UnorderedNonVolatile,
+    /// An observable volatile read, never interchangeable with an ordinary read.
+    UnorderedVolatile,
+}
+
 /// One compiler-owned scalar load leaf tied to an exact live ranked read.
 /// The ranked-kernel validator independently reconciles every field before
 /// this expression can participate in functional refinement.
@@ -194,6 +203,7 @@ pub struct ProductionSemanticLoadV2 {
     pub block: u32,
     pub operation: u32,
     pub scalar: ProductionSemanticScalarTypeV2,
+    pub read_mode: ProductionSemanticReadModeV2,
     pub allocation_origin: u64,
     pub view: ProductionRankedValueV1,
     pub indices: Box<[ProductionRankedValueV1]>,
@@ -202,9 +212,9 @@ pub struct ProductionSemanticLoadV2 {
 impl ProductionSemanticLoadV2 {
     /// Collision-free symbol within the production ranked resource limits.
     ///
-    /// Typed PLIRON expressions materialize a load leaf as this symbol. The
-    /// ranked-kernel validator separately binds the symbol's block and
-    /// operation to the full allocation, view, and index metadata above.
+    /// The actual typed read carries this commitment label. It is not a free
+    /// expression symbol: its source access, metadata, and memory version must
+    /// be independently checked against the retained live graph.
     pub const fn proof_symbol(&self) -> u32 {
         PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 | (self.block << 16) | self.operation
     }
@@ -866,7 +876,10 @@ fn hash_expression(
         }
         ProductionSemanticExpressionV2::Load(load) => match load_mode {
             LoadCommitmentModeV2::CompleteMetadata => {
-                digest.update([7]);
+                digest.update([match load.read_mode {
+                    ProductionSemanticReadModeV2::UnorderedNonVolatile => 7,
+                    ProductionSemanticReadModeV2::UnorderedVolatile => 8,
+                }]);
                 digest.update(scalar_tag(load.scalar));
                 digest.update(load.block.to_le_bytes());
                 digest.update(load.operation.to_le_bytes());
@@ -1385,6 +1398,7 @@ mod tests {
                 block,
                 operation: 7,
                 scalar,
+                read_mode: ProductionSemanticReadModeV2::UnorderedNonVolatile,
                 allocation_origin,
                 view: ProductionRankedValueV1::Argument(view),
                 indices: vec![ProductionRankedValueV1::Argument(index)].into_boxed_slice(),
@@ -1392,6 +1406,28 @@ mod tests {
         };
         let base = expression(2, 11, 0, 1);
         assert!(base.validate().is_ok());
+
+        let mut volatile = base.clone();
+        let ProductionSemanticExpressionV2::Load(load) = &mut volatile else { unreachable!() };
+        load.read_mode = ProductionSemanticReadModeV2::UnorderedVolatile;
+        assert_ne!(base.canonical_transcript_sha256(contract), volatile.canonical_transcript_sha256(contract));
+        assert_eq!(base.materialized_pliron_transcript_sha256(contract), volatile.materialized_pliron_transcript_sha256(contract));
+
+        // Preserve the complete historical nonvolatile load encoding, including
+        // tag 7. Materialized labels intentionally are not standalone evidence.
+        let ProductionSemanticExpressionV2::Load(load) = &base else { unreachable!() };
+        let mut legacy = Sha256::new();
+        legacy.update([7]);
+        legacy.update(scalar_tag(load.scalar));
+        legacy.update(load.block.to_le_bytes());
+        legacy.update(load.operation.to_le_bytes());
+        legacy.update(load.allocation_origin.to_le_bytes());
+        hash_ranked_value(&mut legacy, load.view);
+        legacy.update((load.indices.len() as u64).to_le_bytes());
+        for index in &load.indices { hash_ranked_value(&mut legacy, *index); }
+        let mut current = Sha256::new();
+        hash_expression(&mut current, &base, LoadCommitmentModeV2::CompleteMetadata);
+        assert_eq!(legacy.finalize(), current.finalize());
 
         for metadata_mutation in [
             expression(2, 12, 0, 1),

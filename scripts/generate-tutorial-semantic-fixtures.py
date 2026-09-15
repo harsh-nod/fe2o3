@@ -226,30 +226,6 @@ def _git_snapshot(
     return environment, candidate, repository
 
 
-def _trust_policy(producer: Any, path: Path) -> None:
-    public_key = ROOT / "scripts/tests/fixtures/evidence-test-attestor-public.pem"
-    document = producer.hardware_receipt_contract.trust_policy_document(
-        [
-            {
-                "attestorIdentity": "fixture-probe-attestor-v1",
-                "lane": "mi300x",
-                "publicKeyPath": str(public_key),
-                "reservationIdentity": "fixture-probe-mi300x",
-                "target": "gfx942",
-            },
-            {
-                "attestorIdentity": "fixture-probe-attestor-v1",
-                "lane": "mi350",
-                "publicKeyPath": str(public_key),
-                "reservationIdentity": "fixture-probe-mi350",
-                "target": "gfx950",
-            },
-        ]
-    )
-    path.write_bytes(producer._canonical(document) + b"\n")
-    path.chmod(0o600)
-
-
 def _build_producer(
     producer: Any, target_directory: Path, repository: Path
 ) -> tuple[Path, Path]:
@@ -280,7 +256,7 @@ def _build_producer(
     result = _run(
         [
             cargo,
-            "rustc",
+            "build",
             "--offline",
             "--locked",
             "--package",
@@ -288,8 +264,6 @@ def _build_producer(
             "--bin",
             producer.TRANSACTION_EXPORT_BINARY,
             "--message-format=short",
-            "--",
-            "-Zcrate-attr=feature(rustc_private)",
         ],
         cwd=repository,
         environment=environment,
@@ -330,9 +304,13 @@ def _build_producer(
     return binary, cargo_fe2o3
 
 
-def _available_export(export_root: Path, fixture_id: str, target: str) -> dict[str, Any]:
-    envelope = json.loads((export_root / "transaction-export-v1.json").read_bytes())
-    record = envelope["record"]
+def _available_export(
+    producer: Any, export_root: Path, request: dict[str, Any]
+) -> dict[str, Any]:
+    # Coordinates describe compiler output, not a completed hardware qualification.
+    record = producer.validate_pre_hardware_export(export_root, request)
+    fixture_id = request["fixture"]["fixtureId"]
+    target = request["fixture"]["target"]
     graph = record["graph"]
     evidence = record["productionEvidence"]
     simulator = record["simulator"]
@@ -474,9 +452,6 @@ def probe_production_exports(
             loader.append(clean_environment["LD_LIBRARY_PATH"])
         clean_environment["LD_LIBRARY_PATH"] = os.pathsep.join(loader)
         environment = clean_environment
-        policy = temporary / "hardware-policy-v1.json"
-        _trust_policy(producer, policy)
-
         def probe(fixture_id: str) -> dict[str, Any]:
             fixture = fixtures[fixture_id]
             reservation = f"fixture-probe-{'mi300x' if fixture['target'] == 'gfx942' else 'mi350'}"
@@ -497,10 +472,10 @@ def probe_production_exports(
             result = _run(
                 [
                     str(binary),
+                    "--phase",
+                    "prepare",
                     "--cargo-fe2o3",
                     str(cargo_fe2o3),
-                    "--hardware-trust-policy",
-                    str(policy),
                     "--request",
                     str(request_path),
                     "--output-directory",
@@ -510,7 +485,9 @@ def probe_production_exports(
                 environment=environment,
             )
             if result.returncode == 0:
-                return _available_export(export_root, fixture_id, fixture["target"])
+                if result.stdout:
+                    raise ValueError("compiler phase must publish evidence, not stdout authority")
+                return _available_export(producer, export_root, request)
             return _blocked_export(result.stderr)
 
         first_id = ordered[0]

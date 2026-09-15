@@ -5,6 +5,9 @@ use fe2o3_mir_model::{
     plan_ssa_with_limits_v1,
 };
 
+#[path = "ssa_planner/storage_first_charge_v1.rs"]
+mod storage_first_charge_v1;
+
 fn v(identity: u32) -> SsaVariableIdV1 {
     SsaVariableIdV1::new(identity)
 }

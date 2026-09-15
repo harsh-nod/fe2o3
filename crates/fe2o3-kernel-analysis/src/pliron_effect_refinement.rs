@@ -10,8 +10,8 @@ use std::{
 };
 
 use dialect_kernel::{
-    DYNAMIC_EXTENT, MemorySpaceAttr, OwnershipContractOp, RankedAccessOp, RankedViewOp,
-    ranked_view_type,
+    AccessKindAttr, DYNAMIC_EXTENT, MemorySpaceAttr, OwnershipContractOp, RankedAccessOp,
+    RankedViewOp, ranked_view_type,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
@@ -28,7 +28,9 @@ use crate::pliron_hierarchical_ownership::{
     HierarchicalOwnershipFindingV1, run_pliron_hierarchical_ownership_check_with_analyses_v1,
 };
 use crate::pliron_invocation_trace::PlironTraceLocationV1;
-use crate::pliron_semantic_refinement::SemanticExpressionTableV1;
+use crate::pliron_semantic_refinement::{
+    SemanticExpressionBuildErrorV1, SemanticExpressionTableV1,
+};
 
 pub const MAX_EFFECT_REFINEMENT_CONTRACTS_V1: usize = 4_096;
 
@@ -147,6 +149,18 @@ pub enum PlironEffectRefinementFindingV1 {
         component: &'static str,
         value: String,
     },
+    StoredValueBindingMismatch {
+        view: String,
+        write: EffectRefinementLocationV1,
+        contract: EffectRefinementLocationV1,
+        actual: Option<String>,
+        expected: String,
+    },
+    UnsupportedWriteSemantics {
+        view: String,
+        location: EffectRefinementLocationV1,
+        kind: AccessKindAttr,
+    },
     DomainMismatch {
         view: String,
         location: EffectRefinementLocationV1,
@@ -184,6 +198,9 @@ impl PlironEffectRefinementFindingV1 {
             | Self::PreconditionMismatch { .. }
             | Self::ValueMismatch { .. }
             | Self::UnmodeledWriteSite { .. }
+            | Self::StoredValueBindingMismatch {
+                actual: Some(_), ..
+            }
             | Self::OwnershipRejected { .. } => KernelCheckStatusV1::Rejected,
             Self::ResourceLimitExceeded { .. }
             | Self::MissingOwnershipContract { .. }
@@ -192,6 +209,8 @@ impl PlironEffectRefinementFindingV1 {
             | Self::UnmodeledWrite { .. }
             | Self::ReferenceProofIncomplete { .. }
             | Self::UnresolvedExpression { .. }
+            | Self::StoredValueBindingMismatch { actual: None, .. }
+            | Self::UnsupportedWriteSemantics { .. }
             | Self::TraceIncomplete { .. } => KernelCheckStatusV1::Incomplete,
         }
     }
@@ -304,6 +323,30 @@ impl fmt::Display for PlironEffectRefinementFindingV1 {
                 f,
                 "error[FE2O3-EFFECT-008]: cannot normalize {component} expression {value} for {view} at block {} op {}",
                 location.block, location.operation
+            ),
+            Self::StoredValueBindingMismatch {
+                view,
+                write,
+                contract,
+                actual,
+                expected,
+            } => write!(
+                f,
+                "error[FE2O3-EFFECT-010]: write to {view} at block {} op {} has RHS {}; effect contract at block {} op {} must name the exact stored SSA value `{expected}`",
+                write.block,
+                write.operation,
+                actual.as_deref().unwrap_or("<missing>"),
+                contract.block,
+                contract.operation,
+            ),
+            Self::UnsupportedWriteSemantics {
+                view,
+                location,
+                kind,
+            } => write!(
+                f,
+                "error[FE2O3-EFFECT-011]: final-value refinement for {kind:?} to {view} at block {} op {} is incomplete; its RHS operand does not establish the resulting stored value",
+                location.block, location.operation,
             ),
             Self::DomainMismatch {
                 view,
@@ -465,6 +508,8 @@ struct WriteSiteV1 {
     location: EffectRefinementLocationV1,
     view: Value,
     indices: Vec<Value>,
+    value: Option<Value>,
+    kind: AccessKindAttr,
 }
 
 pub(crate) fn clean_effect_refinement_report_v1() -> PlironEffectRefinementReportV1 {
@@ -514,9 +559,6 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         }
     };
     let (contracts, writes, ownership_views, obligations, evidence) = collect(context, &inventory);
-    if contracts.is_empty() {
-        return clean_effect_refinement_report_v1();
-    }
     if contracts.len() > MAX_EFFECT_REFINEMENT_CONTRACTS_V1 {
         return one(
             contracts.len(),
@@ -539,9 +581,13 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         return report(contracts.len(), 0, findings);
     }
 
-    let hierarchy =
-        run_pliron_hierarchical_ownership_check_with_analyses_v1(context, function, analyses);
-    if !hierarchy.is_clean() {
+    // An empty roster still needs write coverage, but has no ownership to prove.
+    let hierarchy = (!contracts.is_empty()).then(|| {
+        run_pliron_hierarchical_ownership_check_with_analyses_v1(context, function, analyses)
+    });
+    if let Some(hierarchy) = hierarchy
+        && !hierarchy.is_clean()
+    {
         let finding = hierarchy
             .findings()
             .first()
@@ -583,12 +629,12 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
     }
 
     let mut writes_by_signature =
-        HashMap::<(usize, Value, Vec<Value>), Vec<EffectRefinementLocationV1>>::new();
+        HashMap::<(usize, Value, Vec<Value>), Vec<&WriteSiteV1>>::new();
     for write in &writes {
         writes_by_signature
             .entry((write.location.block, write.view, write.indices.clone()))
             .or_default()
-            .push(write.location);
+            .push(write);
     }
     let mut by_write = HashMap::<EffectRefinementLocationV1, usize>::new();
     let mut write_by_contract = vec![None; contracts.len()];
@@ -619,10 +665,10 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         }
         let write = matching[0];
         write_by_contract[contract_index] = Some(write);
-        if let Some(first_index) = by_write.insert(write, contract_index) {
+        if let Some(first_index) = by_write.insert(write.location, contract_index) {
             findings.push(PlironEffectRefinementFindingV1::DuplicateEffectContract {
                 view: contract.view_name.clone(),
-                write,
+                write: write.location,
                 first: contracts[first_index].location,
                 second: contract.location,
             });
@@ -643,10 +689,18 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
     if !findings.is_empty() {
         return report(contracts.len(), 0, findings);
     }
+    if contracts.is_empty() {
+        return clean_effect_refinement_report_v1();
+    }
 
-    let expressions = match SemanticExpressionTableV1::from_inventory(context, &inventory) {
+    let expressions = match SemanticExpressionTableV1::from_inventory(context, function, &inventory) {
         Ok(expressions) => expressions,
-        Err(_) => {
+        Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(reason)) => {
+            return one(contracts.len(), PlironEffectRefinementFindingV1::TraceIncomplete {
+                detail: reason.to_owned(),
+            });
+        }
+        Err(SemanticExpressionBuildErrorV1::ResourceLimit) => {
             return one(
                 contracts.len(),
                 PlironEffectRefinementFindingV1::ResourceLimitExceeded {
@@ -661,7 +715,30 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         if !validate_proof(contract, &obligations, &evidence, &mut findings) {
             continue;
         }
-        let _write = write_by_contract[index].expect("correlated contract has write");
+        let write = write_by_contract[index].expect("correlated contract has write");
+        // Formula equivalence cannot substitute for binding the claim to the actual store.
+        if write.value != Some(contract.expressions[4]) {
+            findings.push(
+                PlironEffectRefinementFindingV1::StoredValueBindingMismatch {
+                    view: contract.view_name.clone(),
+                    write: write.location,
+                    contract: contract.location,
+                    actual: write
+                        .value
+                        .map(|value| value.unique_name(context).to_string()),
+                    expected: contract.expressions[4].unique_name(context).to_string(),
+                },
+            );
+            continue;
+        }
+        if write.kind == AccessKindAttr::AtomicReadModifyWrite {
+            findings.push(PlironEffectRefinementFindingV1::UnsupportedWriteSemantics {
+                view: contract.view_name.clone(),
+                location: write.location,
+                kind: write.kind,
+            });
+            continue;
+        }
         let witness = None;
         let mut pairs = contract
             .coordinates
@@ -730,6 +807,11 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         if valid {
             proved += 1;
         }
+    }
+    if let Err(error) = expressions.revalidate_live_reads() {
+        return one(contracts.len(), PlironEffectRefinementFindingV1::TraceIncomplete {
+            detail: format!("live source memory proof changed during effect comparison: {error:?}"),
+        });
     }
     report(contracts.len(), proved, findings)
 }
@@ -812,6 +894,8 @@ fn collect(
                     location,
                     view: access.view(context),
                     indices: access.indices(context),
+                    value: access.stored_value(context),
+                    kind: access.kind(context).expect("collected write has a known kind"),
                 });
             }
         } else if let Some(contract) = operation.downcast_ref::<OwnershipContractOp>() {

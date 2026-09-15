@@ -412,7 +412,8 @@ fn type_size_bytes(value: &Type) -> Result<u32, ProductionGeometryErrorV1> {
         | Type::Slice(_)
         | Type::KernelContext(_)
         | Type::GlobalCapability(_)
-        | Type::ExecutionCapability(_) => Err(ProductionGeometryErrorV1::UnsizedWorkgroupType),
+        | Type::ExecutionCapability(_)
+        | Type::ReusablePhaseToken(_) => Err(ProductionGeometryErrorV1::UnsizedWorkgroupType),
     }
 }
 

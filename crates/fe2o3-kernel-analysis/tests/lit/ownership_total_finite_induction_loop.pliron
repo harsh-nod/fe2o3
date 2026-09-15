@@ -1,6 +1,10 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: PASS
-// CHECK: PASS
+// EXPECT: REJECT
+// CHECK: error[FE2O3-EFFECT-008]
+// CHECK: has no exact effect-refinement contract
+// Ownership/progress positive only: W4 fixture tests retain exact independent
+// ownership evidence and a finite-progress certificate, but require production
+// rejection because the global write has no reference-effect contract.
 builtin.func @ownership_total_finite_induction_loop: builtin.function <() -> ()>
 {
   ^entry_block1v1():

@@ -13,12 +13,14 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp,
-    BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp,
+    BranchOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexUnknownOp, IndexUnsignedCastOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp,
     RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
+    common_traits::Verify,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
@@ -92,6 +94,14 @@ pub(crate) enum PlironTraceEventV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlironTraceBlockVisitV1 {
+    pub(crate) block: usize,
+    pub(crate) events: std::ops::Range<usize>,
+    pub(crate) successor: Option<usize>,
+    pub(crate) summarized: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlironInvocationTraceV1 {
     pub(crate) invocation: Vec<u64>,
     pub(crate) grid: u64,
@@ -99,6 +109,7 @@ pub(crate) struct PlironInvocationTraceV1 {
     pub(crate) subgroup: u64,
     pub(crate) lane: u64,
     pub(crate) events: Vec<PlironTraceEventV1>,
+    pub(crate) blocks: Vec<PlironTraceBlockVisitV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,6 +123,7 @@ pub(crate) enum PlironTraceFailureV1 {
     },
     UnresolvedBranch {
         block: usize,
+        detail: String,
     },
     ForeignView {
         block: usize,
@@ -186,7 +198,7 @@ pub(crate) fn pliron_execution_layout_with_inventory_v1(
         let Some(candidate) = operation.downcast_ref::<ExecutionLayoutOp>() else {
             continue;
         };
-        if site.block() != 0 || layout.is_some() {
+        if site.block() != 0 || layout.is_some() || candidate.verify(context).is_err() {
             return Err(PlironTraceFailureV1::InvalidExecutionLayout);
         }
         let (
@@ -205,20 +217,6 @@ pub(crate) fn pliron_execution_layout_with_inventory_v1(
         else {
             return Err(PlironTraceFailureV1::InvalidExecutionLayout);
         };
-        let workgroup_size = workgroup_extents
-            .into_iter()
-            .try_fold(1_u64, u64::checked_mul);
-        if workgroup_extents.contains(&0)
-            || workgroup_size.is_none()
-            || subgroup_size == 0
-            || (execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
-                && global_extents
-                    .iter()
-                    .zip(workgroup_extents)
-                    .any(|(global, workgroup)| *global != 0 && !global.is_multiple_of(workgroup)))
-        {
-            return Err(PlironTraceFailureV1::InvalidExecutionLayout);
-        }
         layout = Some(PlironExecutionLayoutV1 {
             grid,
             global_extents,
@@ -317,11 +315,14 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     for linear in 0..invocation_count {
         let invocation = decode_invocation(linear, &launch_extents);
         let mut events = Vec::new();
+        let mut block_visits = Vec::new();
         let mut block_index = 0_usize;
         let mut environment = HashMap::<Value, u64>::new();
         let mut visited = HashSet::<(usize, Vec<Option<u64>>)>::new();
         loop {
             charge_trace_work_v1(&mut total_steps, 1)?;
+            // The existing cumulative block charge also bounds this observation.
+            let event_start = events.len();
             let block = blocks
                 .get(block_index)
                 .copied()
@@ -518,6 +519,12 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
 
             let terminator = Operation::get_op_dyn(terminator, context);
             if terminator.downcast_ref::<ReturnOp>().is_some() {
+                block_visits.push(PlironTraceBlockVisitV1 {
+                    block: block_index,
+                    events: event_start..events.len(),
+                    successor: None,
+                    summarized: false,
+                });
                 break;
             }
             if terminator.downcast_ref::<TrapOp>().is_some() {
@@ -529,9 +536,17 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                         operation,
                     },
                 });
+                block_visits.push(PlironTraceBlockVisitV1 {
+                    block: block_index,
+                    events: event_start..events.len(),
+                    successor: None,
+                    summarized: false,
+                });
                 break;
             }
             let raw = terminator.get_operation().deref(context);
+            let mut selected_edge = 0;
+            let mut summarized = false;
             let (successor, edge_arguments) = if terminator.downcast_ref::<BranchOp>().is_some() {
                 (raw.successors().next(), Vec::new())
             } else if let Some(branch) = terminator.downcast_ref::<BranchArgsOp>() {
@@ -545,7 +560,15 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     branch.lhs(context),
                     0,
                 )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        "left comparison operand",
+                        branch.lhs(context),
+                    )
+                })?;
                 let rhs = evaluate_trace_value_v1(
                     context,
                     sparse,
@@ -554,8 +577,17 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     branch.rhs(context),
                     0,
                 )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                (raw.successors().nth(usize::from(lhs >= rhs)), Vec::new())
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        "right comparison operand",
+                        branch.rhs(context),
+                    )
+                })?;
+                selected_edge = usize::from(lhs >= rhs);
+                (raw.successors().nth(selected_edge), Vec::new())
             } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
                 let lhs = evaluate_trace_value_v1(
                     context,
@@ -575,23 +607,40 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 );
                 if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
                     let successor_index = usize::from(lhs >= rhs);
+                    selected_edge = successor_index;
                     let arguments = if successor_index == 0 {
                         branch.true_arguments(context)
                     } else {
                         branch.false_arguments(context)
                     };
                     (raw.successors().nth(successor_index), arguments)
-                } else if let Some(exit) = summarize_trace_silent_finite_loop_v1(
-                    context,
-                    sparse,
-                    &invocation,
-                    &environment,
-                    blocks[block_index],
-                    branch,
-                ) {
+                } else if let Some(exit) = {
+                    charge_trace_work_v1(&mut total_steps, 16)?;
+                    summarize_trace_silent_finite_loop_v1(
+                        context,
+                        sparse,
+                        &invocation,
+                        &environment,
+                        blocks[block_index],
+                        branch,
+                    )
+                } {
+                    selected_edge = 1;
+                    summarized = true;
                     (Some(exit), branch.false_arguments(context))
                 } else {
-                    return Err(PlironTraceFailureV1::UnresolvedBranch { block: block_index });
+                    let (role, value) = if lhs.is_none() {
+                        ("left comparison operand", branch.lhs(context))
+                    } else {
+                        ("right comparison operand", branch.rhs(context))
+                    };
+                    return Err(unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        role,
+                        value,
+                    ));
                 }
             } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
                 let lhs = evaluate_trace_value_v1(
@@ -602,7 +651,15 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     branch.lhs(context),
                     0,
                 )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        "left comparison operand",
+                        branch.lhs(context),
+                    )
+                })?;
                 let rhs = evaluate_trace_value_v1(
                     context,
                     sparse,
@@ -611,8 +668,17 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     branch.rhs(context),
                     0,
                 )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                (raw.successors().nth(usize::from(lhs != rhs)), Vec::new())
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        "right comparison operand",
+                        branch.rhs(context),
+                    )
+                })?;
+                selected_edge = usize::from(lhs != rhs);
+                (raw.successors().nth(selected_edge), Vec::new())
             } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
                 let lhs = evaluate_trace_value_v1(
                     context,
@@ -622,7 +688,15 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     branch.lhs(context),
                     0,
                 )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        "left comparison operand",
+                        branch.lhs(context),
+                    )
+                })?;
                 let rhs = evaluate_trace_value_v1(
                     context,
                     sparse,
@@ -631,8 +705,17 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     branch.rhs(context),
                     0,
                 )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        block_index,
+                        "right comparison operand",
+                        branch.rhs(context),
+                    )
+                })?;
                 let successor_index = usize::from(lhs != rhs);
+                selected_edge = successor_index;
                 let arguments = if successor_index == 0 {
                     branch.true_arguments(context)
                 } else {
@@ -650,6 +733,7 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
             bind_edge_arguments_v1(
                 context,
+                inventory,
                 sparse,
                 &invocation,
                 &mut environment,
@@ -657,6 +741,12 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 &edge_arguments,
                 block_index,
             )?;
+            block_visits.push(PlironTraceBlockVisitV1 {
+                block: block_index,
+                events: event_start..events.len(),
+                successor: Some(selected_edge),
+                summarized,
+            });
             block_index = next_block;
         }
         let (grid, workgroup, subgroup, lane) = if let Some(layout) = layout {
@@ -674,12 +764,13 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
             subgroup,
             lane,
             events,
+            blocks: block_visits,
         });
     }
     Ok(traces)
 }
 
-/// Summarize only a canonical machine-finite loop whose body cannot emit a
+/// Summarize only a canonical machine-finite loop whose header and body cannot emit a
 /// trace event. This lets the event analyses cross a dynamic induction-only
 /// loop without inventing a value for its external bound. Any extra operation,
 /// edge, carried value, or non-unit transition keeps the branch unresolved.
@@ -692,7 +783,11 @@ fn summarize_trace_silent_finite_loop_v1(
     branch: &IndexLessThanBranchArgsOp,
 ) -> Option<Ptr<BasicBlock>> {
     let header_block = header.deref(context);
-    if header_block.get_num_arguments() != 1
+    // The header repeats too; its first visit cannot stand for later events.
+    let mut header_operations = header_block.iter(context);
+    if header_operations.next() != Some(branch.get_operation())
+        || header_operations.next().is_some()
+        || header_block.get_num_arguments() != 1
         || branch.lhs(context) != header_block.get_argument(0)
         || branch.true_arguments(context).as_slice() != [branch.lhs(context)]
         || !branch.false_arguments(context).is_empty()
@@ -707,12 +802,14 @@ fn summarize_trace_silent_finite_loop_v1(
     if body_block.get_num_arguments() != 1 {
         return None;
     }
-    let operations = body_block.iter(context).collect::<Vec<_>>();
-    if operations.len() != 2 || body_block.get_terminator(context)? != operations[1] {
+    let mut operations = body_block.iter(context);
+    let increment = operations.next()?;
+    let backedge = operations.next()?;
+    if operations.next().is_some() || body_block.get_terminator(context)? != backedge {
         return None;
     }
 
-    let increment = Operation::get_op_dyn(operations[0], context);
+    let increment = Operation::get_op_dyn(increment, context);
     let increment = increment.downcast_ref::<IndexBinaryOp>()?;
     if increment.kind(context)? != IndexBinaryKindAttr::Add
         || increment.lhs(context) != body_block.get_argument(0)
@@ -728,13 +825,30 @@ fn summarize_trace_silent_finite_loop_v1(
         return None;
     }
 
-    let backedge = Operation::get_op_dyn(operations[1], context);
+    let backedge = Operation::get_op_dyn(backedge, context);
     let backedge = backedge.downcast_ref::<BranchArgsOp>()?;
     let arguments = backedge.arguments(context);
     if arguments.as_slice() != [increment.result(context)]
         || backedge.get_operation().deref(context).successors().next() != Some(header)
     {
         return None;
+    }
+    // Skipping iterations must not expose their initial values after the loop.
+    // Bound use-list cloning before inspecting the four recurrence operands.
+    for (value, user, count) in [
+        (branch.lhs(context), branch.get_operation(), 2),
+        (body_block.get_argument(0), increment.get_operation(), 1),
+        (increment.result(context), backedge.get_operation(), 1),
+    ] {
+        if value.num_uses(context) != count
+            || !value
+                .uses(context)
+                .into_iter()
+                .map(|usage| usage.user_op())
+                .eq(std::iter::repeat_n(user, count))
+        {
+            return None;
+        }
     }
     Some(exit)
 }
@@ -770,6 +884,20 @@ fn evaluate_trace_value_with_origin_v1(
     }
     let definition = value.defining_op()?;
     let operation = Operation::get_op_dyn(definition, context);
+    if let Some(cast) = operation.downcast_ref::<IndexUnsignedCastOp>() {
+        let (source, from_environment) = evaluate_trace_value_with_origin_v1(
+            context,
+            sparse,
+            invocation,
+            environment,
+            cast.source(context),
+            depth + 1,
+        )?;
+        return Some((
+            source & cast.inclusive_upper_bound(context)?,
+            from_environment,
+        ));
+    }
     let binary = operation.downcast_ref::<IndexBinaryOp>()?;
     let (lhs, lhs_from_environment) = evaluate_trace_value_with_origin_v1(
         context,
@@ -802,6 +930,7 @@ fn evaluate_trace_value_with_origin_v1(
 #[allow(clippy::too_many_arguments)]
 fn bind_edge_arguments_v1(
     context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
     sparse: &crate::SparseIndexAnalysisV1,
     invocation: &[u64],
     environment: &mut HashMap<Value, u64>,
@@ -817,18 +946,111 @@ fn bind_edge_arguments_v1(
     }
     let values = edge_arguments
         .iter()
-        .map(|argument| {
-            evaluate_trace_value_v1(context, sparse, invocation, environment, *argument, 0).ok_or(
-                PlironTraceFailureV1::UnresolvedBranch {
-                    block: source_block,
-                },
-            )
+        .enumerate()
+        .map(|(index, argument)| {
+            evaluate_trace_value_v1(context, sparse, invocation, environment, *argument, 0)
+                .ok_or_else(|| {
+                    unresolved_branch(
+                        context,
+                        inventory,
+                        source_block,
+                        &format!("successor argument {index}"),
+                        *argument,
+                    )
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
     for (index, value) in values.into_iter().enumerate() {
         environment.insert(successor.get_argument(index), value);
     }
     Ok(())
+}
+
+// Describe one definition and at most two direct operands in the already bounded
+// live inventory. Do not recursively print an expression or retain arena identity.
+fn unresolved_branch(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    block: usize,
+    role: &str,
+    value: Value,
+) -> PlironTraceFailureV1 {
+    let mut source = trace_value_source(context, inventory, value);
+    if let Some(definition) = value.defining_op() {
+        let definition = definition.deref(context);
+        for (index, operand) in definition.operands().take(2).enumerate() {
+            source.push_str(&format!(
+                "; operand {index}: {}",
+                trace_value_source(context, inventory, operand)
+            ));
+        }
+        if definition.get_num_operands() > 2 {
+            source.push_str("; additional operands omitted");
+        }
+    }
+    PlironTraceFailureV1::UnresolvedBranch {
+        block,
+        detail: format!("{role} is unresolved: {source}"),
+    }
+}
+
+fn trace_value_source(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    value: Value,
+) -> String {
+    value
+        .try_find_index(context)
+        .ok()
+        .and_then(|index| {
+            if let Some(definition) = value.defining_block() {
+                let block = inventory
+                    .blocks()
+                    .iter()
+                    .position(|candidate| *candidate == definition)?;
+                Some(format!("block {block} argument {index}"))
+            } else {
+                let definition = value.defining_op()?;
+                let site = inventory
+                    .operations()
+                    .iter()
+                    .find(|site| site.pointer() == definition)?;
+                Some(format!(
+                    "block {} op {} result {index} ({})",
+                    site.block(),
+                    site.operation(),
+                    trace_index_operation_kind(context, definition),
+                ))
+            }
+        })
+        .unwrap_or_else(|| "value outside the retained function inventory".to_owned())
+}
+
+fn trace_index_operation_kind(context: &Context, definition: Ptr<Operation>) -> String {
+    let operation = Operation::get_op_dyn(definition, context);
+    if let Some(binary) = operation.downcast_ref::<IndexBinaryOp>() {
+        format!("kernel.index_binary {:?}", binary.kind(context))
+    } else if let Some(constant) = operation.downcast_ref::<IndexConstantOp>() {
+        format!("kernel.index_constant {:?}", constant.value(context))
+    } else if let Some(invocation) = operation.downcast_ref::<InvocationIndexOp>() {
+        format!(
+            "kernel.invocation_index axis={:?} extent={:?}",
+            invocation.dimension(context),
+            invocation.launch_extent(context)
+        )
+    } else if let Some(cast) = operation.downcast_ref::<IndexUnsignedCastOp>() {
+        format!(
+            "kernel.index_unsigned_cast mask={:?}",
+            cast.inclusive_upper_bound(context)
+        )
+    } else if operation.downcast_ref::<IndexUnknownOp>().is_some() {
+        "kernel.index_unknown".to_owned()
+    } else if operation.downcast_ref::<DimensionOp>().is_some() {
+        "kernel.dim".to_owned()
+    } else {
+        // Generic op printers and identifiers can allocate unbounded payloads.
+        "other operation".to_owned()
+    }
 }
 
 fn decode_invocation(mut linear: u64, extents: &[u64]) -> Vec<u64> {
@@ -839,3 +1061,15 @@ fn decode_invocation(mut linear: u64, extents: &[u64]) -> Vec<u64> {
     }
     invocation
 }
+
+#[cfg(test)]
+#[path = "pliron_invocation_trace/failure_tests.rs"]
+mod failure_tests;
+
+#[cfg(test)]
+#[path = "pliron_invocation_trace/unsigned_cast_tests.rs"]
+mod unsigned_cast_tests;
+
+#[cfg(test)]
+#[path = "pliron_invocation_trace/silent_loop_tests.rs"]
+mod silent_loop_tests;

@@ -1159,6 +1159,11 @@ const GENERATED_COMPOSITION_THEOREM_V1: &str =
 
 #[cfg(test)]
 mod tests {
+    mod constant_select_replay {
+        use super::*;
+        include!("mir_pliron_per_compilation_verus_v1/constant_select_replay_tests.rs");
+    }
+
     use std::{fs, process::Command};
 
     use super::*;

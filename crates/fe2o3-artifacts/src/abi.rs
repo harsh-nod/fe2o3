@@ -152,6 +152,7 @@ impl TypeIdentity {
 pub enum ArgumentOwnership {
     ByValue,
     SharedBorrow,
+    /// Exclusive host borrow; does not establish disjoint device invocations.
     UniqueBorrow,
     RawPointer,
 }

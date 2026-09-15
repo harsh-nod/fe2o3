@@ -35,6 +35,17 @@ use fe2o3_target_spec::{
 };
 use sha2::{Digest, Sha256};
 
+mod declared_kir;
+pub use declared_kir::{
+    ProductionTargetCapabilityClosureKirV1, ProductionTargetLaunchEvidenceKirV1,
+    legalize_production_target_capabilities_kir_v1,
+};
+
+#[cfg(test)]
+mod subgroup_partition_tests;
+#[cfg(test)]
+mod borrowed_lds_tests;
+
 use crate::{
     ProductionTargetBindingErrorV1, ProductionTargetBoundKernelIrV1, bind_production_target_v1,
 };
@@ -53,6 +64,7 @@ const MAX_PRODUCTION_TARGET_CAPABILITY_DEPENDENCIES_V1: usize = 32;
 pub enum ProductionCanonicalGraphVersionV1 {
     V12,
     V13,
+    V14,
 }
 
 impl ProductionCanonicalGraphVersionV1 {
@@ -60,6 +72,7 @@ impl ProductionCanonicalGraphVersionV1 {
         match self {
             Self::V12 => 12,
             Self::V13 => 13,
+            Self::V14 => 14,
         }
     }
 }
@@ -801,6 +814,8 @@ impl Error for ProductionTargetCapabilityCanonicalErrorV1 {}
 pub enum ProductionTargetCapabilityErrorV1 {
     InvalidCanonicalKir(VerifiedCanonicalKernelIrErrorV12),
     InvalidCanonicalKirV13(VerifiedCanonicalKernelIrErrorV13),
+    InvalidCanonicalKirDeclared(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV1),
+    DeclaredVersionMismatch,
     CanonicalKirDecode(KernelIrDecodeError),
     InvalidTargetModel(ProductionAmdTargetCapabilityModelErrorV1),
     Query {
@@ -871,6 +886,8 @@ impl ProductionTargetCapabilityErrorV1 {
         match self {
             Self::InvalidCanonicalKir(_)
             | Self::InvalidCanonicalKirV13(_)
+            | Self::InvalidCanonicalKirDeclared(_)
+            | Self::DeclaredVersionMismatch
             | Self::CanonicalKirDecode(_) => {
                 ProductionTargetCapabilityDiagnosticCodeV1::InvalidCanonicalKir
             }
@@ -930,6 +947,8 @@ impl fmt::Display for ProductionTargetCapabilityErrorV1 {
         match self {
             Self::InvalidCanonicalKir(error) => write!(formatter, "{error}"),
             Self::InvalidCanonicalKirV13(error) => write!(formatter, "{error}"),
+            Self::InvalidCanonicalKirDeclared(error) => write!(formatter, "{error}"),
+            Self::DeclaredVersionMismatch => formatter.write_str("canonical graph declaration does not match the strict facade"),
             Self::CanonicalKirDecode(error) => {
                 write!(
                     formatter,
@@ -1033,6 +1052,7 @@ impl Error for ProductionTargetCapabilityErrorV1 {
         match self {
             Self::InvalidCanonicalKir(error) => Some(error),
             Self::InvalidCanonicalKirV13(error) => Some(error),
+            Self::InvalidCanonicalKirDeclared(error) => Some(error),
             Self::CanonicalKirDecode(error) => Some(error),
             Self::InvalidTargetModel(error) => Some(error),
             Self::Query { source, .. } => Some(source),
@@ -1088,26 +1108,8 @@ pub fn legalize_production_target_capabilities_v13(
     neutral
         .revalidate()
         .map_err(ProductionTargetCapabilityErrorV1::InvalidCanonicalKirV13)?;
-    let module = decode_module_v13(neutral.canonical_bytes())
-        .map_err(ProductionTargetCapabilityErrorV1::CanonicalKirDecode)?;
-    let subject = ProductionCanonicalGraphSubjectV1::from_v13(*neutral.identity(), neutral_epoch);
-    let core = legalize_production_target_capability_module_v1(
-        &module,
-        subject,
-        launch_evidence,
-        profile,
-    )?;
-    Ok(ProductionTargetCapabilityClosureV13 {
-        identity: core.identity,
-        canonical_bytes: core.canonical_bytes,
-        subject,
-        target_model: core.target_model,
-        launch_evidence: launch_evidence.clone(),
-        decisions: core.decisions,
-        owners: core.owners,
-        records: core.records,
-        artifact_only_requirements: core.artifact_only_requirements,
-    })
+    declared_kir::legalize(neutral.as_common(), neutral_epoch, launch_evidence, profile)?
+        .into_v13()
 }
 
 /// Single target-neutral `Module` query core shared by canonical adapters.
@@ -1371,7 +1373,8 @@ fn accumulate_static_resource_footprint(
 ) -> Result<(), ProductionTargetCapabilityErrorV1> {
     let allocation = match kind {
         OperationKind::ExecutionCapability(contract) => match &contract.operation {
-            ExecutionCapabilityOperationV1::LdsAllocate {
+            ExecutionCapabilityOperationV1::LdsAllocateBorrowed { layout, elements, .. }
+            | ExecutionCapabilityOperationV1::LdsAllocate {
                 layout, elements, ..
             }
             | ExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
@@ -1491,7 +1494,7 @@ fn exact_requirement_graph(
         if graph.contains_key(&requirement) {
             continue;
         }
-        let dependencies = exact_requirement_dependencies(requirement);
+        let dependencies = exact_requirement_dependencies(requirement, roots)?;
         if dependencies.len() > MAX_PRODUCTION_TARGET_CAPABILITY_DEPENDENCIES_V1 {
             return Err(
                 ProductionTargetCapabilityErrorV1::CapabilityClosureTooLarge {
@@ -1514,7 +1517,8 @@ fn exact_requirement_graph(
 
 fn exact_requirement_dependencies(
     requirement: TargetCapabilityRequirementV1,
-) -> BTreeSet<TargetCapabilityRequirementV1> {
+    roots: &BTreeSet<TargetCapabilityRequirementV1>,
+) -> Result<BTreeSet<TargetCapabilityRequirementV1>, ProductionTargetCapabilityErrorV1> {
     let mut dependencies = BTreeSet::new();
     match requirement {
         TargetCapabilityRequirementV1::Atomic(atomic) => {
@@ -1538,9 +1542,15 @@ fn exact_requirement_dependencies(
         TargetCapabilityRequirementV1::Collective(collective) => {
             match collective.execution_scope() {
                 TargetExecutionScopeV1::Subgroup => {
-                    dependencies.insert(TargetCapabilityRequirementV1::SubgroupSize(
-                        u16::try_from(collective.participants()).unwrap_or(u16::MAX),
-                    ));
+                    // A logical tile is not a hardware wave. Both the source
+                    // Wave operation and partition contract retain the latter
+                    // as an explicit root requirement, independently of tile size.
+                    dependencies.extend(roots.iter().filter(|root| matches!(
+                        root, TargetCapabilityRequirementV1::SubgroupSize(_)
+                    )).copied());
+                    if dependencies.is_empty() {
+                        return omitted(&TargetCapability::Subgroups, OmittedCapabilityAxisV1::SubgroupWidth);
+                    }
                 }
                 TargetExecutionScopeV1::Workgroup => {
                     dependencies.insert(TargetCapabilityRequirementV1::AddressSpace(
@@ -1579,7 +1589,7 @@ fn exact_requirement_dependencies(
         | TargetCapabilityRequirementV1::Abi(_)
         | TargetCapabilityRequirementV1::Object(_) => {}
     }
-    dependencies
+    Ok(dependencies)
 }
 
 fn requirements_for_type(
@@ -1607,7 +1617,8 @@ fn requirements_for_type(
             ));
             requirements_for_type(&slice.element, requirements)?;
         }
-        Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_) => {}
+        Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_)
+        | Type::ReusablePhaseToken(_) => {}
     }
     Ok(())
 }
@@ -1841,6 +1852,9 @@ fn requirements_for_operation(
                 &contract.operation,
             )?);
         }
+        // Linear custody has no physical instruction. Its verified allocation,
+        // memory and synchronization producers remain independent query roots.
+        OperationKind::ReusablePhase(_) => {}
         _ => {}
     }
     Ok(())
@@ -1859,13 +1873,76 @@ pub(crate) fn target_requirements_for_execution_operation_v1(
     };
 
     match operation {
-        Op::WorkgroupDerive { .. } | Op::WorkgroupMemoryIndex { .. } => {}
-        Op::SubgroupDerive { width, .. } | Op::MatrixAccess { width, .. } => {
+        // Issuance selects no scalar operation; numerical support remains a
+        // separate retained obligation, not an inferred target certificate.
+        Op::NumericalPolicyIssue { .. }
+        | Op::WorkgroupDerive { .. }
+        | Op::WorkgroupMemoryIndex { .. }
+        | Op::WorkgroupMemoryIndexV2 { .. }
+        | Op::WorkgroupMemoryIndexIntoDisjoint { .. } => {}
+        Op::ReusableLdsConversion(conversion) => {
+            insert_execution_address_requirement(
+                &mut requirements, ExecutionMemoryAddressSpaceV1::Workgroup,
+                TargetMemoryAccessV1::ReadWrite,
+            );
+            static_workgroup_memory(
+                &mut requirements,
+                exact_execution_footprint(operation, conversion.layout, conversion.elements)?,
+            );
+        }
+        Op::NumericalPolicyMath(math) => {
+            let unsupported = || ProductionTargetCapabilityErrorV1::MissingOperationLoweringOwner {
+                operation: "numerical-policy-math",
+            };
+            if !math.is_well_formed() {
+                return Err(unsupported());
+            }
+            if let fe2o3_kernel_ir::NumericalPolicyMathOperationV1::F32 { function, .. } = math {
+                let Some((NumericalModeV1::StrictIeee, implementation)) = math.numerical_requirements() else {
+                    return Err(unsupported());
+                };
+                if implementation != function.required_implementation() {
+                    return Err(unsupported());
+                }
+                // Target support is not numerical refinement or provider evidence.
+                requirements.insert(TargetCapabilityRequirementV1::Numerical(
+                    TargetNumericalRequirementV1::new(
+                        target_scalar(ScalarType::F32)?,
+                        target_numerical_mode(NumericalModeV1::StrictIeee),
+                    ),
+                ));
+            }
+        }
+        Op::SubgroupPartition(partition) => {
+            use fe2o3_kernel_ir::SubgroupPartitionOperationV1 as P;
+            let (width, partition_width) = partition.widths();
+            requirements.insert(TargetCapabilityRequirementV1::SubgroupSize(
+                u16::try_from(width).unwrap_or(u16::MAX),
+            ));
+            let collective = match partition {
+                P::Derive { .. } => None,
+                P::ReduceSumF32 { .. } => Some(TargetCollectiveOperationV1::ReduceAdd),
+                P::ReduceMaxF32 { .. } => Some(TargetCollectiveOperationV1::ReduceMax),
+                P::BroadcastF32 { .. } => Some(TargetCollectiveOperationV1::Broadcast),
+            };
+            if let Some(collective) = collective {
+                requirements.insert(TargetCapabilityRequirementV1::Collective(
+                    TargetCollectiveRequirementV1::new(
+                        TargetExecutionScopeV1::Subgroup, collective,
+                        TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
+                        partition_width, TargetCollectiveParticipationV1::Full,
+                        Some(TargetNumericalModeV1::IeeeStrict),
+                    ),
+                ));
+            }
+        }
+        Op::SubgroupDerive { width, .. } | Op::SubgroupDeriveBorrowed { width, .. } | Op::MatrixAccess { width, .. } => {
             requirements.insert(TargetCapabilityRequirementV1::SubgroupSize(
                 u16::try_from(*width).unwrap_or(u16::MAX),
             ));
         }
-        Op::LdsAllocate {
+        Op::LdsAllocateBorrowed { layout, elements, .. }
+        | Op::LdsAllocate {
             layout, elements, ..
         }
         | Op::LdsInitializeByInvocation {
@@ -2142,8 +2219,14 @@ fn exact_execution_footprint(
 fn execution_operation_name(operation: &ExecutionCapabilityOperationV1) -> &'static str {
     use ExecutionCapabilityOperationV1 as Op;
     match operation {
+        Op::NumericalPolicyMath(_) => "numerical-policy-math",
+        Op::ReusableLdsConversion(_) => "reusable-lds-conversion",
+        Op::SubgroupPartition(_) => "subgroup-partition",
+        Op::NumericalPolicyIssue { .. } => "numerical-policy-issue",
         Op::WorkgroupDerive { .. } => "workgroup-derive",
         Op::SubgroupDerive { .. } => "subgroup-derive",
+        Op::SubgroupDeriveBorrowed { .. } => "subgroup-derive-borrowed",
+        Op::LdsAllocateBorrowed { .. } => "lds-allocate-borrowed",
         Op::LdsAllocate { .. } => "lds-allocate",
         Op::LdsInitializeByInvocation { .. } => "lds-initialize-by-invocation",
         Op::LdsPublish { .. } => "lds-publish",
@@ -2161,6 +2244,8 @@ fn execution_operation_name(operation: &ExecutionCapabilityOperationV1) -> &'sta
         Op::RawMemoryBind { .. } => "raw-memory-bind",
         Op::PrivateMemoryAllocate { .. } => "private-memory-allocate",
         Op::WorkgroupMemoryIndex { .. } => "workgroup-memory-index",
+        Op::WorkgroupMemoryIndexV2 { .. } => "workgroup-memory-index-v2",
+        Op::WorkgroupMemoryIndexIntoDisjoint { .. } => "workgroup-memory-index-into-disjoint",
         Op::WorkgroupMemoryAllocate { .. } => "workgroup-memory-allocate",
         Op::WorkgroupMemoryPublish { .. } => "workgroup-memory-publish",
         Op::MemoryLoad { .. } => "memory-load",
@@ -2247,6 +2332,7 @@ fn type_storage_bytes(ty: &Type) -> Option<u64> {
         Type::Unit
         | Type::KernelContext(_)
         | Type::GlobalCapability(_)
+        | Type::ReusablePhaseToken(_)
         | Type::ExecutionCapability(_) => None,
     }
 }
@@ -3004,6 +3090,7 @@ fn decode_capability_closure(
     let version = match reader.u8()? {
         12 => ProductionCanonicalGraphVersionV1::V12,
         13 => ProductionCanonicalGraphVersionV1::V13,
+        14 => ProductionCanonicalGraphVersionV1::V14,
         tag => return Err(invalid_tag("canonical graph version", tag)),
     };
     let subject = ProductionCanonicalGraphSubjectV1 {
@@ -3107,7 +3194,8 @@ fn decode_capability_closure(
     }
     for record in &records {
         if record.dependencies.as_ref()
-            != exact_requirement_dependencies(record.decision.requirement())
+            != exact_requirement_dependencies(record.decision.requirement(), &roots)
+                .map_err(|_| ProductionTargetCapabilityCanonicalErrorV1::NonCanonical)?
                 .into_iter()
                 .collect::<Vec<_>>()
                 .as_slice()

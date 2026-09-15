@@ -19,7 +19,7 @@
                         ProjectedMfmaOperandV1 {
                             contract: lhs_contract,
                             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                            lane_root: 20,
+                            lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                             allocation: tensor_test_allocation(),
                         },
                     )),
@@ -30,7 +30,7 @@
                         ProjectedMfmaOperandV1 {
                             contract: rhs_contract,
                             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                            lane_root: 20,
+                            lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                             allocation: tensor_test_allocation(),
                         },
                     )),
@@ -40,7 +40,7 @@
                     ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                         ProjectedMfmaAccumulatorV1 {
                             contract: accumulator_contract,
-                            lane_root: 20,
+                            lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                             value_root: 30,
                             flow_root: 30,
                         },
@@ -176,7 +176,7 @@
             ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                 ProjectedMfmaAccumulatorV1 {
                     contract: mfma_accumulator_contract(),
-                    lane_root: 20,
+                    lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
                     value_root,
                     flow_root,
                 },
@@ -184,7 +184,10 @@
         };
         let initialized = accumulator(30, 30);
         let loop_result = accumulator(30, 40);
-        for (current, incoming) in [(initialized, loop_result), (loop_result, initialized)] {
+        for (current, incoming) in [
+            (initialized.clone(), loop_result.clone()),
+            (loop_result.clone(), initialized.clone()),
+        ] {
             assert_eq!(
                 merge_capability_values_v1(current, incoming),
                 loop_result,
@@ -248,7 +251,7 @@
             2,
             ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
                 ProjectedMfmaOperandV1 {
-                    lane_root: 21,
+                    lane_root: scoped_matrix_use_v1::Issuer::Legacy(21),
                     ..rhs
                 },
             )),
@@ -344,7 +347,7 @@
         let origin = ProjectedCapabilityOriginV1::Operand(ProjectedMfmaOperandV1 {
             contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-            lane_root: 20,
+            lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
             allocation: tensor_test_allocation(),
         });
         let mut state = HashMap::from([(0, ProjectedCapabilityValueV1::Known(origin))]);
@@ -361,7 +364,7 @@
         )
         .unwrap()
         .unwrap();
-        state.insert(1, first);
+        state.insert(1, first.clone());
         let second = SemanticAggregateRvalueV1::new(
             SemanticAggregateKindV1::EnumVariant(1),
             vec![tensor_operand(1)],
@@ -405,7 +408,7 @@
         let origin = ProjectedCapabilityOriginV1::Operand(ProjectedMfmaOperandV1 {
             contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-            lane_root: 20,
+            lane_root: scoped_matrix_use_v1::Issuer::Legacy(20),
             allocation: tensor_test_allocation(),
         });
         let state = HashMap::from([(0, ProjectedCapabilityValueV1::Known(origin))]);
@@ -451,7 +454,7 @@
 
         let mut joined = wrapped_state;
         assert!(merge_capability_states_v1(&mut joined, &HashMap::new()).unwrap());
-        assert_eq!(joined[&1], ProjectedCapabilityValueV1::Invalid);
+        assert!(joined.is_empty());
     }
 
     #[test]
@@ -514,7 +517,7 @@
             let payload =
                 SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
             let mut state = HashMap::from([(1, capability_state_origin())]);
-            transfer_capability_statements_v1(&[], &function, 0, &mut state, &payload, None).unwrap();
+            transfer_capability_statements_v1(&[], &function, 0, &mut state, &payload, None, None).unwrap();
             assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
             assert_eq!(state[&2], capability_state_origin());
             assert_eq!(state[&3], ProjectedCapabilityValueV1::Invalid);
@@ -556,7 +559,7 @@
                     .unwrap();
             let wrapped = wrap_capability_enum_value_v1(capability_state_origin(), 4).unwrap();
             let mut state = HashMap::from([(1, wrapped)]);
-            transfer_capability_statements_v1(&[], &function, 0, &mut state, &payload, None).unwrap();
+            transfer_capability_statements_v1(&[], &function, 0, &mut state, &payload, None, None).unwrap();
             assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
             assert_eq!(
                 capability_origin_from_assignment_operand_v1(
@@ -589,6 +592,7 @@
         let mut state = HashMap::from([(1, capability_state_origin())]);
         assert_eq!(
             transfer_capability_terminator_v1(
+                &projection_types(),
                 &[],
                 &function,
                 0,
@@ -615,7 +619,8 @@
             }),
         )]);
         assert!(merge_capability_states_v1(&mut current, &HashMap::new()).unwrap());
-        assert_eq!(current[&7], ProjectedCapabilityValueV1::Invalid);
+        assert!(current.is_empty());
+        assert!(capability_known_origin_v1(&current, &typed_operand(7, SCALAR_TYPE)).is_none());
     }
 
     #[test]
@@ -758,6 +763,7 @@
             &callable_effects,
             types,
             function,
+            None,
             None,
             Some(64),
             &constants,
@@ -1092,6 +1098,18 @@
         (IntrinsicProjectionV1, Vec<ProductionRankedOperationV1>),
         ProductionRankedProjectionErrorV1,
     > {
+        project_capability_index_fixture_with_launch(types, callables, function, Some(64))
+    }
+
+    fn project_capability_index_fixture_with_launch(
+        types: &[SemanticTypeDeclV1],
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+        launch: Option<u64>,
+    ) -> Result<
+        (IntrinsicProjectionV1, Vec<ProductionRankedOperationV1>),
+        ProductionRankedProjectionErrorV1,
+    > {
         let root = capability_index_provenance(None);
         let provenance = root_invocation_provenance_v1(
             types,
@@ -1099,6 +1117,7 @@
             function,
             root.root(),
             root.kernel_binding(),
+            None,
         )?;
         let mut operations = Vec::new();
         let projected = project_intrinsic_contracts(
@@ -1108,8 +1127,9 @@
             },
             types,
             function,
+            None,
             provenance,
-            Some(64),
+            launch,
             &constant_locals(function)?,
             &mut operations,
             &mut 0,

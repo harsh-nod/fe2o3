@@ -1,9 +1,32 @@
 use super::*;
 
+mod borrowed_workgroup_v1;
+mod kernel_context_borrows_v1;
+mod math_borrows_v1;
+mod matrix_borrows_v1;
+mod global_bf16_borrows_v1;
+mod storage_observation_v1;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SemanticTransparentBorrowSiteV1 {
     block: u32,
     statement: u32,
+}
+
+pub(super) fn extend_guarded_grid_borrows_v1(
+    sites: &mut BTreeSet<SemanticTransparentBorrowSiteV1>,
+    results: &guarded_grid_results::GuardedGridResultsV1,
+) {
+    sites.extend(results.borrow_sites().map(|(block, statement)| {
+        SemanticTransparentBorrowSiteV1 { block, statement }
+    }));
+}
+
+// Descriptive only: no accepted-use, source authority or lifetime evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SemanticBorrowCandidateSourceV1 {
+    Direct,
+    TypedCarrier,
 }
 
 #[derive(Clone, Copy)]
@@ -12,6 +35,8 @@ struct SemanticBorrowCandidateV1 {
     source_local: u32,
     source_type: SemanticTypeIdV1,
     source_reference: Option<u32>,
+    value_alias: bool,
+    source_kind: SemanticBorrowCandidateSourceV1,
     valid: bool,
     consumers: u32,
     intrinsic_consumer: bool,
@@ -21,24 +46,97 @@ pub(super) fn transparent_borrow_sites_v1(
     function: &SemanticFunctionDeclV1,
     callables: &[SemanticCallableDeclV1],
 ) -> BTreeSet<SemanticTransparentBorrowSiteV1> {
+    let mut sites = legacy_transparent_borrow_sites_v1(function, callables);
+    sites.extend(borrowed_workgroup_v1::direct_sites(function, callables));
+    sites
+}
+
+pub(super) fn transparent_borrow_sites_for_execution_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    expansion: &SemanticCallExpansionV1,
+    view: &SemanticExpandedRootV1,
+    max_work: usize,
+) -> Result<BTreeSet<SemanticTransparentBorrowSiteV1>, ProductionSemanticSsaErrorV1> {
+    let mut sites = legacy_transparent_borrow_sites_v1(view.body(), semantic.callables());
+    sites.extend(borrowed_workgroup_v1::execution_sites(
+        semantic, expansion, view, max_work,
+    )?);
+    Ok(sites)
+}
+
+pub(super) fn typed_transparent_borrow_sites_v1(
+    function: &SemanticFunctionDeclV1,
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+) -> BTreeSet<SemanticTransparentBorrowSiteV1> {
+    let mut sites = transparent_borrow_sites_v1(function, callables);
+    if callables.iter().any(|callable| matches!(callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { .. }, ..
+            }
+        ) || matches!(callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
+            } if matches!(contract.operation(), fe2o3_mir_model::semantic_mir_v1::SemanticExecutionCapabilityOperationV1::WorkgroupDerive { .. }
+                | fe2o3_mir_model::semantic_mir_v1::SemanticExecutionCapabilityOperationV1::LdsAllocate { .. })
+        )) {
+        sites.extend(borrowed_workgroup_v1::typed_direct_sites(function, types, callables));
+    }
+    sites
+}
+
+fn legacy_transparent_borrow_sites_v1(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+) -> BTreeSet<SemanticTransparentBorrowSiteV1> {
     let mut candidates = Vec::new();
     let mut candidate_by_reference = BTreeMap::<u32, usize>::new();
     let mut duplicate_references = BTreeSet::new();
+    let explicit_locals = direct_definition_or_lifetime_locals_v1(function);
+    let reference_types = function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.statements())
+        .filter_map(|statement| match statement.kind() {
+            SemanticStatementKindV1::Assign(assignment)
+                if matches!(
+                    assignment.value().kind(),
+                    SemanticRvalueKindV1::Borrow { .. }
+                ) =>
+            {
+                Some(assignment.value().result_type())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
-            let SemanticRvalueKindV1::Borrow { place, .. } = assignment.value().kind() else {
-                continue;
-            };
             if !assignment.destination().projections().is_empty() {
                 continue;
             }
-            let source_reference = match place.projections() {
-                [] => None,
-                [projection] if projection.kind() == SemanticProjectionKindV1::Dereference => {
-                    Some(place.local().index())
+            let (place, source_reference, value_alias) = match assignment.value().kind() {
+                SemanticRvalueKindV1::Borrow { place, .. } => {
+                    let source_reference = match place.projections() {
+                        [] => None,
+                        [projection]
+                            if projection.kind() == SemanticProjectionKindV1::Dereference =>
+                        {
+                            Some(place.local().index())
+                        }
+                        _ => continue,
+                    };
+                    (place, source_reference, false)
+                }
+                SemanticRvalueKindV1::Use(
+                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
+                ) if place.projections().is_empty()
+                    && place.ty() == assignment.destination().ty()
+                    && reference_types.contains(&place.ty()) =>
+                {
+                    (place, Some(place.local().index()), true)
                 }
                 _ => continue,
             };
@@ -51,7 +149,12 @@ pub(super) fn transparent_borrow_sites_v1(
                 source_local: place.local().index(),
                 source_type: place.ty(),
                 source_reference,
-                valid: true,
+                value_alias,
+                source_kind: SemanticBorrowCandidateSourceV1::Direct,
+                valid: function
+                    .locals()
+                    .get(reference_local as usize)
+                    .is_some_and(|local| local.role() != SemanticLocalRoleV1::Return),
                 consumers: 0,
                 intrinsic_consumer: false,
             };
@@ -93,7 +196,11 @@ pub(super) fn transparent_borrow_sites_v1(
 
     let mut accepted = BTreeSet::new();
     for terminal in 0..candidates.len() {
-        if !candidates[terminal].intrinsic_consumer {
+        // A closed, unused reference chain has no observable address. This also
+        // covers argument transports into unused parameters after checked call
+        // expansion. All escaping, projected and conflicting uses still reject.
+        let unused = candidates[terminal].consumers == 0;
+        if !unused && !candidates[terminal].intrinsic_consumer {
             continue;
         }
         let mut chain = Vec::new();
@@ -101,11 +208,31 @@ pub(super) fn transparent_borrow_sites_v1(
         let mut current = terminal;
         loop {
             let candidate = candidates[current];
-            if !candidate.valid || candidate.consumers != 1 || !visited.insert(current) {
+            let expected_consumers = if current == terminal && unused { 0 } else { 1 };
+            if !candidate.valid
+                || (!unused && candidate.value_alias)
+                || candidate.consumers != expected_consumers
+                || !visited.insert(current)
+            {
                 break;
             }
             chain.push(current);
             let Some(source_reference) = candidate.source_reference else {
+                // An unused borrow cannot authorize an implicit capability
+                // producer. Ordinary SSA still checks reaching definitions and
+                // lifetime events for explicitly represented source locals.
+                if unused
+                    && !function
+                        .locals()
+                        .get(candidate.source_local as usize)
+                        .is_some_and(|local| {
+                            matches!(local.role(), SemanticLocalRoleV1::Argument(_))
+                        })
+                    && !explicit_locals
+                        .contains(&SemanticLocalIdV1::from_index(candidate.source_local))
+                {
+                    break;
+                }
                 accepted.extend(chain);
                 break;
             };
@@ -117,6 +244,7 @@ pub(super) fn transparent_borrow_sites_v1(
     }
     accepted
         .into_iter()
+        .filter(|candidate| !candidates[*candidate].value_alias)
         .map(|candidate| candidates[candidate].site)
         .collect()
 }
@@ -314,13 +442,15 @@ fn validate_reference_uses_in_terminator_v1(
                 else {
                     continue;
                 };
-                let accepted = operation.is_some_and(|operation| {
-                    compiler_intrinsic_accepts_transparent_borrow_v1(
-                        operation,
-                        argument_index,
-                        candidates[candidate_index].source_type,
-                    )
-                });
+                let accepted = !candidates[candidate_index].value_alias
+                    && operation.is_some_and(|operation| {
+                        compiler_intrinsic_accepts_transparent_borrow_v1(
+                            operation,
+                            argument_index,
+                            candidates[candidate_index].source_type,
+                            place.ty(),
+                        )
+                    });
                 if accepted {
                     candidates[candidate_index].consumers =
                         candidates[candidate_index].consumers.saturating_add(1);
@@ -392,8 +522,18 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
     operation: &SemanticCompilerIntrinsicOperationV1,
     argument: usize,
     source_type: SemanticTypeIdV1,
+    reference_type: SemanticTypeIdV1,
 ) -> bool {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
+            use fe2o3_mir_model::semantic_mir_v1::SemanticExecutionCapabilityOperationV1;
+            match contract.operation() {
+                SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue {
+                    context, ..
+                } => argument == 0 && reference_type == context,
+                _ => false,
+            }
+        }
         SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
             invocation, ..
         } => argument == 0 && source_type == *invocation,
@@ -546,6 +686,7 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
     }
 }
 
+#[cfg(test)]
 pub(super) fn semantic_function_ssa_input_v1(
     function: &SemanticFunctionDeclV1,
     types: Option<&[SemanticTypeDeclV1]>,
@@ -574,6 +715,7 @@ pub(super) fn semantic_function_ssa_input_with_event_origins_v1(
         callables,
         transparent_borrows,
         &frame_initialization::FrameInitializationsV1::default(),
+        &defined_math_results::DefinedMathResultsV1::default(),
         record_events,
     )
     .expect("an empty frame initialization relation has no markers to reject")
@@ -585,12 +727,47 @@ pub(super) fn semantic_function_ssa_input_with_frame_initializations_v1(
     callables: &[SemanticCallableDeclV1],
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
     initializations: &frame_initialization::FrameInitializationsV1,
+    defined_results: &defined_math_results::DefinedMathResultsV1,
+    record_events: impl FnMut(u32, Option<u32>, std::ops::Range<usize>),
+) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), ProductionSemanticSsaErrorV1> {
+    semantic_function_ssa_input_with_defined_results_v1(
+        function, types, callables, transparent_borrows, initializations,
+        defined_results, &defined_matrix_results::DefinedMatrixResultsV1::default(),
+        &defined_reusable_lds_results::DefinedReusableLdsResultsV1::default(),
+        &defined_reusable_phase_results::DefinedReusablePhaseResultsV1::default(), &guarded_grid_results::GuardedGridResultsV1::default(), record_events,
+    )
+}
+
+pub(super) fn semantic_function_ssa_input_with_defined_results_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    callables: &[SemanticCallableDeclV1],
+    transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+    initializations: &frame_initialization::FrameInitializationsV1,
+    defined_results: &defined_math_results::DefinedMathResultsV1,
+    matrix_results: &defined_matrix_results::DefinedMatrixResultsV1,
+    reusable_results: &defined_reusable_lds_results::DefinedReusableLdsResultsV1,
+    phase_results: &defined_reusable_phase_results::DefinedReusablePhaseResultsV1,
+    guarded_grid_results: &guarded_grid_results::GuardedGridResultsV1,
     mut record_events: impl FnMut(u32, Option<u32>, std::ops::Range<usize>),
 ) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), ProductionSemanticSsaErrorV1> {
     initializations.verify_markers(function)?;
+    defined_results.verify_markers(function)?;
+    matrix_results.verify_markers(function)?;
+    reusable_results.verify_markers(function)?;
+    guarded_grid_results.verify_markers(function)?;
+    phase_results.verify_markers(function)?;
     let mut initialization = initializations.entries().iter().peekable();
-    let mut promotable = vec![true; function.locals().len()];
-    classify_storage_observable_locals_v1(function, transparent_borrows, &mut promotable);
+    let variables = function.locals().len().checked_add(phase_results.synthetic_variables())
+        .and_then(|n| u32::try_from(n).ok()).ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    let mut promotable = vec![true; variables as usize];
+    let mut storage_observation = storage_observation_v1::Observation::from_env(function);
+    classify_storage_observable_locals_v1(
+        function, transparent_borrows, &mut promotable, storage_observation.as_mut(),
+    );
+    if let Some(observation) = storage_observation {
+        observation.emit();
+    }
     if initializations.entries().iter().any(|entry| {
         !promotable
             .get(entry.local().index() as usize)
@@ -625,6 +802,11 @@ pub(super) fn semantic_function_ssa_input_with_frame_initializations_v1(
             let mut events = Vec::new();
             for (statement_index, statement) in block.statements().iter().enumerate() {
                 let start = events.len();
+                defined_results.append_result_events(block_index as u32, statement_index as u32, &mut events);
+                matrix_results.append_result_events(block_index as u32, statement_index as u32, &mut events);
+                reusable_results.append_result_events(block_index as u32, statement_index as u32, &mut events);
+                guarded_grid_results.append_result_events(block_index as u32, statement_index as u32, &mut events);
+                phase_results.append_events(block_index as u32, Some(statement_index as u32), &mut events);
                 let site = SemanticTransparentBorrowSiteV1 {
                     block: block_index as u32,
                     statement: statement_index as u32,
@@ -652,6 +834,7 @@ pub(super) fn semantic_function_ssa_input_with_frame_initializations_v1(
                 );
             }
             let start = events.len();
+            phase_results.append_events(block_index as u32, None, &mut events);
             append_terminator_events_v1(block.terminator().kind(), return_local, &mut events);
             record_events(block_index as u32, None, start..events.len());
             let mut edges = Vec::with_capacity(block.terminator().kind().edge_count());
@@ -699,7 +882,7 @@ pub(super) fn semantic_function_ssa_input_with_frame_initializations_v1(
     Ok((
         SsaConstructionInputV1::new(
             SsaBlockIdV1::new(function.entry().index()),
-            function.locals().len() as u32,
+            variables,
             promotable,
             entry_definitions,
             blocks,
@@ -718,6 +901,7 @@ fn authenticated_elided_grid_leader_borrow_sites_v1(
     let Some(types) = types else {
         return (BTreeSet::new(), 0);
     };
+    let explicit_locals = direct_definition_or_lifetime_locals_v1(function);
     let candidates = transparent_borrows
         .iter()
         .filter_map(|site| {
@@ -742,7 +926,7 @@ fn authenticated_elided_grid_leader_borrow_sites_v1(
                 || declaration.ty() != place.ty()
                 || ty.layout().size_bytes() != Some(0)
                 || ty.layout().is_uninhabited()
-                || local_has_direct_definition_or_lifetime_event_v1(function, place.local())
+                || explicit_locals.contains(&place.local())
             {
                 return None;
             }
@@ -797,38 +981,39 @@ fn authenticated_elided_grid_leader_borrow_sites_v1(
     (sites, option_dominance.work_units())
 }
 
-fn local_has_direct_definition_or_lifetime_event_v1(
+pub(super) fn direct_definition_or_lifetime_locals_v1(
     function: &SemanticFunctionDeclV1,
-    local: SemanticLocalIdV1,
-) -> bool {
-    let is_direct =
-        |place: &SemanticPlaceV1| place.local() == local && place.projections().is_empty();
-    function.blocks().iter().any(|block| {
-        block
-            .statements()
-            .iter()
-            .any(|statement| match statement.kind() {
-                SemanticStatementKindV1::Assign(assignment) => is_direct(assignment.destination()),
-                SemanticStatementKindV1::Store(store) => is_direct(store.destination()),
-                SemanticStatementKindV1::AtomicRmw(atomic) => is_direct(atomic.destination()),
+) -> BTreeSet<SemanticLocalIdV1> {
+    let direct = |place: &SemanticPlaceV1| place.projections().is_empty().then_some(place.local());
+    let mut locals = BTreeSet::new();
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let local = match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => direct(assignment.destination()),
+                SemanticStatementKindV1::Store(store) => direct(store.destination()),
+                SemanticStatementKindV1::AtomicRmw(atomic) => direct(atomic.destination()),
                 SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
-                    is_direct(atomic.destination())
+                    direct(atomic.destination())
                 }
                 SemanticStatementKindV1::SetDiscriminant { place, .. }
-                | SemanticStatementKindV1::Deinitialize(place) => is_direct(place),
-                SemanticStatementKindV1::StorageLive(candidate)
-                | SemanticStatementKindV1::StorageDead(candidate) => *candidate == local,
-                SemanticStatementKindV1::Assume(_) | SemanticStatementKindV1::Nop => false,
-            })
-            || matches!(
-                block.terminator().kind(),
-                SemanticTerminatorKindV1::Call(call)
-                    if call.destination().is_some_and(|destination| is_direct(destination.place()))
-            )
-    })
+                | SemanticStatementKindV1::Deinitialize(place) => direct(place),
+                SemanticStatementKindV1::StorageLive(local)
+                | SemanticStatementKindV1::StorageDead(local) => Some(*local),
+                SemanticStatementKindV1::Assume(_) | SemanticStatementKindV1::Nop => None,
+            };
+            locals.extend(local);
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() {
+            locals.extend(
+                call.destination()
+                    .and_then(|destination| direct(destination.place())),
+            );
+        }
+    }
+    locals
 }
 
-fn authenticated_implicit_entry_variables_v1(
+pub(super) fn authenticated_implicit_entry_variables_v1(
     function: &SemanticFunctionDeclV1,
     types: Option<&[SemanticTypeDeclV1]>,
     callables: &[SemanticCallableDeclV1],
@@ -865,6 +1050,10 @@ fn authenticated_implicit_entry_variables_v1(
     for block in blocks {
         for event in block.events() {
             let local = event.variable().get() as usize;
+            // Synthetic lifecycle variables have no source-local ambient authority.
+            if local >= function.locals().len() {
+                continue;
+            }
             match event {
                 SsaEventV1::Use(_) => {
                     actual_uses[local] = actual_uses[local].saturating_add(1);
@@ -874,7 +1063,9 @@ fn authenticated_implicit_entry_variables_v1(
         }
         for edge in block.edges() {
             for variable in edge.definitions() {
-                disqualified[variable.get() as usize] = true;
+                if let Some(local) = disqualified.get_mut(variable.get() as usize) {
+                    *local = true;
+                }
             }
         }
     }
@@ -948,22 +1139,23 @@ fn classify_storage_observable_locals_v1(
     function: &SemanticFunctionDeclV1,
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
     promotable: &mut [bool],
+    mut observation: Option<&mut storage_observation_v1::Observation>,
 ) {
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
+            let before = observation.as_ref().and_then(|observer| observer.value(promotable));
+            let mut transparent = None;
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment) => {
                     if !assignment.destination().projections().is_empty() {
                         mark_local_storage_observable_v1(assignment.destination(), promotable);
                     }
-                    classify_rvalue_storage_v1(
-                        assignment.value().kind(),
-                        transparent_borrows.contains(&SemanticTransparentBorrowSiteV1 {
-                            block: block_index as u32,
-                            statement: statement_index as u32,
-                        }),
-                        promotable,
-                    );
+                    let is_transparent = transparent_borrows.contains(&SemanticTransparentBorrowSiteV1 {
+                        block: block_index as u32,
+                        statement: statement_index as u32,
+                    });
+                    transparent = Some(is_transparent);
+                    classify_rvalue_storage_v1(assignment.value().kind(), is_transparent, promotable);
                 }
                 SemanticStatementKindV1::Store(store) => {
                     mark_local_storage_observable_v1(store.destination(), promotable);
@@ -989,7 +1181,16 @@ fn classify_storage_observable_locals_v1(
                 | SemanticStatementKindV1::StorageDead(_)
                 | SemanticStatementKindV1::Nop => {}
             }
+            if let Some(observer) = observation.as_deref_mut() {
+                observer.statement(
+                    SemanticTransparentBorrowSiteV1 {
+                        block: block_index as u32, statement: statement_index as u32,
+                    },
+                    statement.kind(), transparent, before, promotable,
+                );
+            }
         }
+        let before = observation.as_ref().and_then(|observer| observer.value(promotable));
         match block.terminator().kind() {
             SemanticTerminatorKindV1::Call(call) => {
                 if let Some(destination) = call.destination()
@@ -1010,6 +1211,9 @@ fn classify_storage_observable_locals_v1(
             | SemanticTerminatorKindV1::UnwindTerminate
             | SemanticTerminatorKindV1::Abort
             | SemanticTerminatorKindV1::Unreachable => {}
+        }
+        if let Some(observer) = observation.as_deref_mut() {
+            observer.terminator(block_index as u32, block.terminator().kind(), before, promotable);
         }
     }
 }

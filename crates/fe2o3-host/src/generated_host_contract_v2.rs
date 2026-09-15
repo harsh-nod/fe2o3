@@ -1049,7 +1049,10 @@ fn validate_v13_physical_type(
             element_alignment: u32::try_from(kir_type_bytes(capability.element(), pointer_width)?)
                 .map_err(|_| GeneratedHostContractErrorV2::V13PhysicalAbi)?,
         },
-        KirType::Unit | KirType::KernelContext(_) | KirType::ExecutionCapability(_) => {
+        KirType::Unit
+        | KirType::KernelContext(_)
+        | KirType::ExecutionCapability(_)
+        | KirType::ReusablePhaseToken(_) => {
             return Err(GeneratedHostContractErrorV2::V13PhysicalAbi);
         }
     };
@@ -2233,6 +2236,8 @@ impl std::error::Error for GeneratedHostPrepareErrorV2 {}
 
 #[cfg(test)]
 mod tests {
+    mod phase_compile_closure_tests;
+
     use super::*;
     use crate::{
         CompilerGeneratedKernelProfileV1, GeneratedDeviceScalarV1, GeneratedKfdReadSlice,

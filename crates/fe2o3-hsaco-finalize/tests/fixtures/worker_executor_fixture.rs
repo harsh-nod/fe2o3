@@ -14,7 +14,15 @@ const MISMATCH_OUTPUT: &[u8] = b"changed-output";
 fn main() {
     let mut request = Vec::new();
     io::stdin().read_to_end(&mut request).unwrap();
-    if !request.starts_with(b"F3LREQ02") || !contains(&request, b"workflow_kernel") {
+    if !(request.starts_with(b"F3LREQ02") || request.starts_with(b"F3LREQ03"))
+        || !contains(&request, b"workflow_kernel")
+    {
+        std::process::exit(64);
+    }
+    if request.starts_with(b"F3LREQ03") {
+        assert_eq!(field(&request, 15), [1]);
+    }
+    if request.starts_with(b"F3LREQ03") && contains(&request, b"workflow_capture_unsupported") {
         std::process::exit(64);
     }
 
@@ -68,11 +76,19 @@ fn response_with_diagnostics(
     stage_salt: &[u8],
 ) -> Vec<u8> {
     let request_id: [u8; 32] = request[14..46].try_into().unwrap();
-    let mut request_identity: [u8; 32] = field(request, 15).try_into().unwrap();
+    let capture_required = request.starts_with(b"F3LREQ03");
+    let exact_replay = output_bound(request) == OUTPUT.len() as u64;
+    let omit_capture = (!exact_replay && contains(request, b"workflow_bootstrap_missing_capture"))
+        || (exact_replay && contains(request, b"workflow_replay_missing_capture"));
+    let mut request_identity: [u8; 32] = field(request, if capture_required { 16 } else { 15 })
+        .try_into()
+        .unwrap();
     if wrong_request {
         request_identity[0] ^= 1;
     }
-    let mut bytes = if with_output {
+    let mut bytes = if with_output && capture_required && !omit_capture {
+        b"F3LRSP05".to_vec()
+    } else if with_output {
         b"F3LRSP04".to_vec()
     } else {
         b"F3LRSP02".to_vec()

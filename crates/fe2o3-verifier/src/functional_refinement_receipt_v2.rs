@@ -40,6 +40,9 @@ use crate::functional_refinement_runtime_v1::{
 };
 use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementRuntimeErrorV1};
 
+mod effect_value_relation;
+use effect_value_relation::EffectValueRelation;
+
 pub const MAX_FUNCTIONAL_REFINEMENT_VERUS_TIMEOUT_SECONDS_V2: u32 = 600;
 pub const MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2: usize = 16 * 1024;
 pub const MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2: usize = 8_192;
@@ -359,23 +362,27 @@ fn generate_ranked_functional_refinement_proof_v2(
                 subjects,
             )
             .map_err(|_| invalid_ranked_recipe())?;
-            let mut pairs = contract
-                .gpu_coordinates()
-                .iter()
-                .copied()
-                .zip(contract.reference_coordinates().iter().copied())
-                .collect::<Vec<_>>();
-            pairs.extend([
-                (contract.gpu_domain(), contract.reference_domain()),
-                (
-                    contract.gpu_precondition(),
-                    contract.reference_precondition(),
-                ),
-                (contract.gpu_value(), contract.reference_value()),
-            ]);
+            let pairs = effect_value_relation::pairs(
+                kernel,
+                Some(contract),
+                subjects,
+                EffectValueRelation::Exact,
+            )?;
             (obligation, pairs)
         }
         ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
+            let pairs = effect_value_relation::pairs(
+                kernel,
+                None,
+                subjects,
+                EffectValueRelation::NumericalRequest {
+                    block: block_index,
+                    operation: operation_index,
+                },
+            )?;
+            // No existing source/graph codec supplies a bound numerical mode.
+            // Even a future accidental success cannot reuse the exact formula.
+            drop(pairs);
             return Err(claim_specific_numerical_proof_required());
         }
         _ => return Err(invalid_ranked_recipe()),
@@ -443,21 +450,12 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     if obligation != proof.binding().normalized_obligation_effect_ir_hash() {
         return Err(invalid_ranked_recipe());
     }
-    let mut pairs = contract
-        .gpu_coordinates()
-        .iter()
-        .copied()
-        .zip(contract.reference_coordinates().iter().copied())
-        .collect::<Vec<_>>();
-    pairs.extend([
-        (contract.gpu_domain(), contract.reference_domain()),
-        (
-            contract.gpu_precondition(),
-            contract.reference_precondition(),
-        ),
-        (contract.gpu_value(), contract.reference_value()),
-    ]);
-    let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
+    let (program, pairs) = effect_value_relation::replay_program(
+        kernel,
+        contract,
+        proof.binding().subjects(),
+        EffectValueRelation::Exact,
+    )?;
     Ok(RankedEffectFormulaReplayV2 {
         lemma: program.render_lemma(&pairs, lemma_name)?,
         symbols: program.symbols.iter().copied().collect(),
@@ -1066,6 +1064,7 @@ fn render_ieee_congruence_expression_v2(
     expression: &fe2o3_pliron::ProductionSemanticExpressionV2,
 ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
     use fe2o3_pliron::ProductionSemanticExpressionV2 as Expression;
+    use fe2o3_pliron::ProductionSemanticScalarTypeV2 as Scalar;
     let scalar = scalar_tag_v2(expression.scalar());
     let rendered = match expression {
         Expression::Symbol { symbol, .. } => {
@@ -1122,13 +1121,25 @@ fn render_ieee_congruence_expression_v2(
             when_true,
             when_false,
             ..
-        } => format!(
-            "fe2o3_ieee_operator_congruence_v2({}, {}, {}, {})",
-            semantic_operation_tag_v2(6, 0, scalar, 0),
-            render_ieee_congruence_expression_v2(condition)?,
-            render_ieee_congruence_expression_v2(when_true)?,
-            render_ieee_congruence_expression_v2(when_false)?,
-        ),
+        } => match condition.as_ref() {
+            // Build validates and charges both branches; only pure rendering
+            // selects a value. The original expression and read bindings remain.
+            Expression::Constant {
+                scalar: Scalar::Bool,
+                bits: 0,
+            } => render_ieee_congruence_expression_v2(when_false)?,
+            Expression::Constant {
+                scalar: Scalar::Bool,
+                bits: 1,
+            } => render_ieee_congruence_expression_v2(when_true)?,
+            _ => format!(
+                "fe2o3_ieee_operator_congruence_v2({}, {}, {}, {})",
+                semantic_operation_tag_v2(6, 0, scalar, 0),
+                render_ieee_congruence_expression_v2(condition)?,
+                render_ieee_congruence_expression_v2(when_true)?,
+                render_ieee_congruence_expression_v2(when_false)?,
+            ),
+        },
         Expression::Cast {
             kind,
             source,
@@ -1281,11 +1292,38 @@ fn validate_proved_output(
         || !observed.stderr.is_empty()
         || !valid_count
     {
-        return Err(FunctionalRefinementVerusExecutionErrorV2::new(
-            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
-        ));
+        return Err(unexpected_proof_result(observed));
     }
     Ok(())
+}
+
+fn unexpected_proof_result(
+    observed: &FunctionalRefinementRuntimeProcessOutputV1,
+) -> FunctionalRefinementVerusExecutionErrorV2 {
+    // Diagnostic bytes are bounded and escaped; they never participate in admission.
+    const EXCERPT_BYTES: usize = 1024;
+    let excerpt = |bytes: &[u8]| -> String {
+        bytes
+            .iter()
+            .take(EXCERPT_BYTES)
+            .flat_map(|byte| std::ascii::escape_default(*byte))
+            .map(char::from)
+            .collect()
+    };
+    FunctionalRefinementVerusExecutionErrorV2 {
+        kind: FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+        detail: Some(format!(
+            "exit_code={:?}, signal={:?}; stdout_bytes={}, stdout_truncated={}, stdout=\"{}\"; stderr_bytes={}, stderr_truncated={}, stderr=\"{}\"",
+            observed.exit_code,
+            observed.signal,
+            observed.stdout.len(),
+            observed.stdout.len() > EXCERPT_BYTES,
+            excerpt(&observed.stdout),
+            observed.stderr.len(),
+            observed.stderr.len() > EXCERPT_BYTES,
+            excerpt(&observed.stderr),
+        )),
+    }
 }
 
 fn execution_identity(
@@ -1389,6 +1427,32 @@ impl Error for FunctionalRefinementVerusExecutionErrorV2 {}
 
 #[cfg(test)]
 mod tests {
+    mod constant_select {
+        use super::*;
+        include!("functional_refinement_receipt_v2/constant_select_tests.rs");
+    }
+
+    mod unexpected_proof_result {
+        use super::*;
+        include!("functional_refinement_receipt_v2/unexpected_proof_result_tests.rs");
+    }
+
+    mod binary32_rne {
+        use super::*;
+        include!("functional_refinement_receipt_v2/binary32_rne_tests.rs");
+    }
+
+    mod binary32_rne_composition {
+        use super::*;
+        include!("functional_refinement_receipt_v2/binary32_rne_composition_tests.rs");
+
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        mod protected {
+            use super::*;
+            include!("functional_refinement_receipt_v2/binary32_rne_composition_runtime_tests.rs");
+        }
+    }
+
     use std::{fs, process::Command};
 
     use super::*;

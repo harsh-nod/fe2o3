@@ -10,6 +10,31 @@ fn route(logits: &[f32]) -> RoutingOutputsV1 {
 }
 
 #[test]
+fn oracle_errors_propagate_through_the_host_runner_error_type() {
+    for (error, message) in [
+        (
+            MoeOracleErrorV1::WrongLogitLength {
+                expected: 64,
+                actual: 63,
+            },
+            "expected 64 logits, got 63",
+        ),
+        (
+            MoeOracleErrorV1::NonFiniteLogit {
+                token: 2,
+                expert: 3,
+            },
+            "non-finite logit at token 2, expert 3",
+        ),
+    ] {
+        let boxed: Box<dyn std::error::Error> = error.into();
+        assert_eq!(boxed.to_string(), message);
+        assert_eq!(boxed.downcast_ref::<MoeOracleErrorV1>(), Some(&error));
+        assert!(boxed.source().is_none());
+    }
+}
+
+#[test]
 fn deterministic_corpus_is_complete_and_reproducible() {
     let vectors = deterministic_vectors_v1();
     assert_eq!(vectors.len(), 6);

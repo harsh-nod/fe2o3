@@ -96,6 +96,24 @@ fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
     operation.get_operation().insert_at_back(block, context);
 }
 
+#[test]
+fn invalid_layout_rejects_the_public_barrier_bounds_prerequisite() {
+    let context = &mut setup();
+    let function = function(context, "conflicting_barrier_layout");
+    let entry = function.get_entry_block(context);
+    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let barrier = barrier(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &invocation);
+    append(context, entry, &barrier);
+    append(context, entry, &ret);
+    let report = run_pliron_barrier_convergence_check_v1(context, &function);
+    assert_eq!(
+        report.findings(),
+        &[PlironBarrierFindingV1::BoundsPrerequisiteRejected]
+    );
+}
+
 fn barrier(context: &mut Context) -> BarrierOp {
     BarrierOp::new(
         context,

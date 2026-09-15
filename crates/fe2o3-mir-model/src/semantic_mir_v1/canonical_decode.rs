@@ -2,6 +2,25 @@ use std::fmt;
 
 use super::*;
 
+mod defined_capability_v1;
+#[path = "defined_reusable_phase_decode_v26.rs"]
+mod defined_reusable_phase_decode_v26;
+#[path = "transpose_owned_flow_decode_v25.rs"]
+mod transpose_owned_flow_decode_v25;
+mod global_bf16_matrix_v1;
+#[path = "defined_math_v1/canonical_decode.rs"]
+mod defined_math_v1;
+#[path = "defined_matrix_v1/canonical_decode.rs"]
+mod defined_matrix_v1;
+#[path = "defined_matrix_issuer_v1/canonical_decode.rs"]
+mod defined_matrix_issuer_v1;
+#[path = "defined_reusable_lds_v1/canonical_decode.rs"]
+mod defined_reusable_lds_v1;
+mod numerical_policy_math_v1;
+mod workgroup_borrow_v1;
+mod guarded_grid_leader_v26;
+mod gfx950_transpose_v1;
+
 /// Failure to decode the bounded canonical inert semantic MIR representation.
 ///
 /// Decoding performs structural admission and exact canonical re-encoding. It
@@ -360,6 +379,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes the closed numerical-policy authority extension.
+    pub fn decode_exact_v18_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V18),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -402,6 +433,15 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V16
                         | SemanticMirWireVersionV1::V17
+                        | SemanticMirWireVersionV1::V18
+                        | SemanticMirWireVersionV1::V19
+                        | SemanticMirWireVersionV1::V20
+                        | SemanticMirWireVersionV1::V21
+                        | SemanticMirWireVersionV1::V22
+                        | SemanticMirWireVersionV1::V23
+                        | SemanticMirWireVersionV1::V24
+                        | SemanticMirWireVersionV1::V25
+                        | SemanticMirWireVersionV1::V26
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -538,7 +578,10 @@ impl<'a> CanonicalDecoderV1<'a> {
             Ok(SemanticFunctionIdV1(decoder.u32()?))
         })?;
 
-        InertSemanticMirRequestV1::new_with_callables(
+        let retained_blocks = functions.iter().try_fold(0usize, |n, f| n.checked_add(f.blocks().len()))
+            .ok_or(SemanticMirDecodeErrorV1::LengthOverflow { context: "retained block count" })?;
+        let transpose_owned_flows = self.transpose_owned_flows_v25(retained_blocks)?;
+        let mut request = InertSemanticMirRequestV1::new_with_callables(
             target,
             types,
             allocations,
@@ -547,8 +590,9 @@ impl<'a> CanonicalDecoderV1<'a> {
             functions,
             callables,
             roots,
-        )
-        .map_err(Into::into)
+        )?;
+        request.transpose_owned_flows = transpose_owned_flows.into_boxed_slice();
+        Ok(request)
     }
 
     fn finish(&self) -> Result<(), SemanticMirDecodeErrorV1> {
@@ -1285,6 +1329,12 @@ impl<'a> CanonicalDecoderV1<'a> {
             }
             None => {}
         }
+        if self.wire_version >= SemanticMirWireVersionV1::V20 {
+            // Admission performs the body hash/recipe check under its work limit.
+            function.defined_capability_contract = self.option(
+                "defined capability contract", Self::defined_capability_contract,
+            )?;
+        }
         Ok(function)
     }
 
@@ -1649,7 +1699,11 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V17 {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V22 {
+            80
+        } else if self.wire_version >= SemanticMirWireVersionV1::V19 {
+            79
+        } else if self.wire_version >= SemanticMirWireVersionV1::V17 {
             78
         } else if self.wire_version == SemanticMirWireVersionV1::V16 {
             72
@@ -2137,6 +2191,12 @@ impl<'a> CanonicalDecoderV1<'a> {
             73 => SemanticCompilerIntrinsicOperationV1::ExecutionCapability {
                 contract: self.execution_capability_contract()?,
             },
+            80 => SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad {
+                contract: self.global_bf16_matrix_load()?,
+            },
+            79 => SemanticCompilerIntrinsicOperationV1::PolicyMathF32 {
+                contract: self.numerical_policy_math_contract()?,
+            },
             74 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
                 context: SemanticTypeIdV1(self.u32()?),
                 physical: SemanticTypeIdV1(self.u32()?),
@@ -2205,7 +2265,11 @@ impl<'a> CanonicalDecoderV1<'a> {
         let epoch_after = self.option("execution capability output epoch", |decoder| {
             Ok(SemanticTypeIdentityV1(decoder.identity()?))
         })?;
-        let encoded_obligations = self.u16()?;
+        let encoded_obligations = if matches!(operation, SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. }) {
+            self.u32()?
+        } else {
+            u32::from(self.u16()?)
+        };
         let source_identity = SemanticFunctionIdentityV1(self.identity()?);
         let contract = match (workgroup_brand, epoch_before) {
             (Some(workgroup_brand), Some(epoch_before)) => {
@@ -2238,7 +2302,52 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn execution_capability_operation(
         &mut self,
     ) -> Result<SemanticExecutionCapabilityOperationV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("execution capability operation", 22)? {
+        let maximum = if self.wire_version >= SemanticMirWireVersionV1::V24 { 29 }
+            else if self.wire_version >= SemanticMirWireVersionV1::V22 { 27 }
+            else if self.wire_version >= SemanticMirWireVersionV1::V20 { 25 }
+            else if self.wire_version >= SemanticMirWireVersionV1::V18 { 24 } else { 22 };
+        Ok(match self.tagged("execution capability operation", maximum)? {
+            29 => SemanticExecutionCapabilityOperationV1::Gfx950Transpose(self.gfx950_transpose()?),
+            28 => return Err(SemanticMirDecodeErrorV1::InvalidTag { context: "unallocated execution operation", offset: self.offset - 1, value: 28 }),
+            26 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
+                workgroup_reference: SemanticTypeIdV1(self.u32()?),
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                option: SemanticTypeIdV1(self.u32()?),
+                witness: SemanticTypeIdV1(self.u32()?),
+            },
+            27 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
+                input_witness: SemanticTypeIdV1(self.u32()?),
+                output_witness: SemanticTypeIdV1(self.u32()?),
+            },
+            25 => SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+                workgroup_reference: SemanticTypeIdV1(self.u32()?),
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                subgroup: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+            },
+            24 => {
+                use SemanticSubgroupPartitionOperationV1 as Partition;
+                let maximum = if self.wire_version >= SemanticMirWireVersionV1::V22 { 3 } else { 2 };
+                let tag = self.tagged("subgroup partition operation", maximum)?;
+                let receiver = SemanticTypeIdV1(self.u32()?);
+                let receiver_type = SemanticTypeIdV1(self.u32()?);
+                let third = SemanticTypeIdV1(self.u32()?);
+                let fourth = if matches!(tag, 0 | 2) { Some(SemanticTypeIdV1(self.u32()?)) } else { None };
+                let width = self.u32()?;
+                let partition_width = self.u32()?;
+                SemanticExecutionCapabilityOperationV1::SubgroupPartition(match tag {
+                    0 => Partition::Derive { subgroup_reference: receiver, subgroup: receiver_type, epoch: third, partition: fourth.unwrap(), width, partition_width },
+                    1 => Partition::ReduceSumF32 { partition_reference: receiver, partition: receiver_type, element: third, width, partition_width },
+                    3 => Partition::ReduceMaxF32 { partition_reference: receiver, partition: receiver_type, element: third, width, partition_width },
+                    2 => Partition::BroadcastF32 { partition_reference: receiver, partition: receiver_type, element: third, source_lane: fourth.unwrap(), width, partition_width },
+                    _ => unreachable!("bounded partition tag"),
+                })
+            }
+            23 => SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue {
+                context: SemanticTypeIdV1(self.u32()?),
+                capability: SemanticTypeIdV1(self.u32()?),
+                policy: SemanticTypeIdentityV1(self.identity()?),
+            },
             0 => SemanticExecutionCapabilityOperationV1::SubgroupDerive {
                 workgroup: SemanticTypeIdV1(self.u32()?),
                 subgroup: SemanticTypeIdV1(self.u32()?),
@@ -2521,7 +2630,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             0 => SemanticCapabilityMemoryAddressSpaceV1::Global,
             _ => unreachable!(),
         };
-        let extended = self.wire_version == SemanticMirWireVersionV1::V17;
+        let extended = self.wire_version >= SemanticMirWireVersionV1::V17;
         let access = match self.tagged("capability memory access", if extended { 2 } else { 1 })? {
             0 => SemanticCapabilityMemoryAccessV1::ReadOnly,
             1 => SemanticCapabilityMemoryAccessV1::WriteOnly,
@@ -2876,13 +2985,14 @@ impl<'a> CanonicalDecoderV1<'a> {
                 right: self.operand()?,
             },
             3 => SemanticRvalueKindV1::Cast {
-                kind: match self.tagged("cast kind", 5)? {
+                kind: match self.tagged("cast kind", if self.wire_version >= SemanticMirWireVersionV1::V23 { 6 } else { 5 })? {
                     0 => SemanticCastKindV1::Integer,
                     1 => SemanticCastKindV1::Float,
                     2 => SemanticCastKindV1::Pointer,
                     3 => SemanticCastKindV1::PointerExposeProvenance,
                     4 => SemanticCastKindV1::PointerWithExposedProvenance,
                     5 => SemanticCastKindV1::Transmute,
+                    6 => SemanticCastKindV1::ArrayReferenceToSlice,
                     _ => unreachable!(),
                 },
                 operand: self.operand()?,
@@ -3166,6 +3276,16 @@ mod tests {
     use super::*;
     use std::fmt::Debug;
 
+    include!("numerical_policy_decode_tests.rs");
+    include!("numerical_policy_math_decode_tests.rs");
+    include!("global_bf16_matrix_decode_tests.rs");
+    include!("workgroup_borrow_decode_tests.rs");
+    include!("defined_math_document_tests.rs");
+    include!("subgroup_partition_decode_tests.rs");
+    include!("gfx950_transpose_decode_tests.rs");
+    include!("subgroup_partition_ordered_max_decode_tests.rs");
+    include!("workgroup_memory_index_decode_tests.rs");
+
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]
     }
@@ -3379,6 +3499,50 @@ mod tests {
             request.roots.into_vec(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn array_reference_unsize_cast_codec_is_v23_only_and_bounded() {
+        let cast = SemanticRvalueV1::new(
+            SemanticTypeIdV1(5),
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::ArrayReferenceToSlice,
+                operand: SemanticOperandV1::Copy(
+                    SemanticPlaceV1::new(SemanticLocalIdV1(1), vec![], SemanticTypeIdV1(4)).unwrap(),
+                ),
+            },
+        );
+        let mut writer = CanonicalWriterV1::new(4096);
+        encode_rvalue(&mut writer, &cast).unwrap();
+        let bytes = writer.finish();
+        assert_eq!(&bytes[..6], &[5, 0, 0, 0, 3, 6]);
+        for version in 1..23 {
+            let Some(version) = SemanticMirWireVersionV1::from_u16(version) else { continue };
+            let mut decoder = CanonicalDecoderV1::new(&bytes, SemanticMirLimitsV1::default());
+            decoder.wire_version = version;
+            assert!(matches!(decoder.rvalue(), Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "cast kind", value: 6, ..
+            })));
+        }
+        let decode = |payload: &[u8]| {
+            let mut decoder = CanonicalDecoderV1::new(payload, SemanticMirLimitsV1::default());
+            decoder.wire_version = SemanticMirWireVersionV1::V23;
+            let value = decoder.rvalue()?;
+            decoder.finish()?;
+            Ok::<_, SemanticMirDecodeErrorV1>(value)
+        };
+        assert_eq!(decode(&bytes).unwrap(), cast);
+        for end in 0..bytes.len() {
+            assert!(decode(&bytes[..end]).is_err(), "truncated at {end}");
+        }
+        let mut invalid = bytes.clone();
+        invalid.push(0);
+        assert!(matches!(decode(&invalid), Err(SemanticMirDecodeErrorV1::TrailingBytes { .. })));
+        invalid = bytes;
+        invalid[5] = 7;
+        assert!(matches!(decode(&invalid), Err(SemanticMirDecodeErrorV1::InvalidTag {
+            context: "cast kind", value: 7, ..
+        })));
     }
 
     fn component_round_trip<T: Debug + Eq>(
@@ -5031,6 +5195,33 @@ mod tests {
         )
         .unwrap();
         let (arguments, output): (Vec<_>, _) = match operation {
+            SemanticExecutionCapabilityOperationV1::Gfx950Transpose(transpose) => {
+                use SemanticGfx950TransposeOperationV1 as T;
+                match transpose.operation() {
+                    T::Issue { partition_reference, tile, .. } => (vec![partition_reference], tile),
+                    T::Stage { input_tile, view_reference, index, output_tile, .. } => (vec![input_tile, view_reference, index, index], output_tile),
+                    T::Publish { input_tile, input_workgroup, transition, .. } => (vec![input_tile, input_workgroup], transition),
+                    T::Read { tile, lane_reference, fragment, .. } => (vec![tile, lane_reference], fragment),
+                }
+            }
+            SemanticExecutionCapabilityOperationV1::SubgroupPartition(partition) => {
+                use SemanticSubgroupPartitionOperationV1 as P;
+                match partition {
+                    P::Derive { subgroup_reference, epoch, partition, .. } => {
+                        (vec![subgroup_reference, epoch], partition)
+                    }
+                    P::ReduceSumF32 { partition_reference, element, .. }
+                    | P::ReduceMaxF32 { partition_reference, element, .. } => {
+                        (vec![partition_reference, element], element)
+                    }
+                    P::BroadcastF32 { partition_reference, element, source_lane, .. } => {
+                        (vec![partition_reference, element, source_lane], element)
+                    }
+                }
+            }
+            SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue {
+                context, capability, ..
+            } => (vec![context], capability),
             SemanticExecutionCapabilityOperationV1::WorkgroupDerive { context, workgroup } => {
                 (vec![context], workgroup)
             }
@@ -5039,6 +5230,9 @@ mod tests {
                 subgroup,
                 ..
             } => (vec![workgroup], subgroup),
+            SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+                workgroup_reference, subgroup, ..
+            } => (vec![workgroup_reference], subgroup),
             SemanticExecutionCapabilityOperationV1::LdsAllocate { workgroup, lds, .. } => {
                 (vec![workgroup], lds)
             }
@@ -5147,6 +5341,12 @@ mod tests {
             } => (vec![context], view),
             SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
                 (vec![workgroup], witness)
+            }
+            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => {
+                (vec![workgroup_reference], option)
+            }
+            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+                (vec![input_witness], output_witness)
             }
             SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
                 workgroup,

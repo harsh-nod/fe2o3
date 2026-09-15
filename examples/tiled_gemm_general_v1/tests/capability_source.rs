@@ -90,14 +90,68 @@ fn multiple_workgroups_cover_dynamic_mn_tails_once() {
 }
 
 #[test]
-fn retired_compatibility_bridges_are_not_used_by_the_kernel() {
-    for fixture in [
-        include_str!("capability-ui/boundary/global_matrix_bridge.rs"),
-        include_str!("capability-ui/boundary/dynamic_workgroup_epoch_loop.rs"),
-        include_str!("capability-ui/boundary/typed_global_epilogue.rs"),
-        include_str!("capability-ui/boundary/numerical_policy_binding.rs"),
+fn supported_device_bridges_and_rejected_substitutions_have_exact_rosters() {
+    for (fixture, marker) in [
+        (
+            include_str!("capability-ui/pass/typed_global_epilogue.rs"),
+            "exclusive-read-write-indexed-rmw",
+        ),
+        (
+            include_str!("capability-ui/pass/same_policy_binding.rs"),
+            "same-kernel-policy-borrow",
+        ),
     ] {
-        assert!(fixture.contains("expected-boundary: FE2O3-CAP-GEMM"));
+        assert!(fixture.contains(&format!("expected-supported: FE2O3-CAP-GEMM {marker}")));
+        assert_eq!(fixture.matches("expected-supported:").count(), 1);
+        assert!(fixture.contains("#[kernel(typed,"));
+        assert!(fixture.contains("#[cfg(not(target_arch = \"amdgpu\"))]"));
+        assert!(!fixture.contains("expected-rejection:"));
+    }
+    for (fixture, marker) in [
+        (
+            include_str!("capability-ui/boundary/global_matrix_bridge.rs"),
+            "legacy-slice-global-substitution",
+        ),
+        (
+            include_str!("capability-ui/boundary/dynamic_workgroup_epoch_loop.rs"),
+            "legacy-epoch-reassignment",
+        ),
+        (
+            include_str!("capability-ui/boundary/numerical_policy_binding.rs"),
+            "missing-policy-owner",
+        ),
+        (
+            include_str!("capability-ui/fail/cross_policy.rs"),
+            "cross-kernel-policy",
+        ),
+        (
+            include_str!("capability-ui/fail/cross_brand.rs"),
+            "cross-kernel-matrix-lane",
+        ),
+    ] {
+        assert!(fixture.contains(&format!("expected-rejection: FE2O3-CAP-GEMM {marker}")));
+        assert_eq!(fixture.matches("expected-rejection:").count(), 1);
+        assert!(fixture.contains("#[cfg(not(target_arch = \"amdgpu\"))]"));
+        assert!(!fixture.contains("expected-supported:"));
+    }
+    let epilogue = include_str!("capability-ui/pass/typed_global_epilogue.rs");
+    for operation in [
+        "context.invocation().index_1d().get()",
+        "output.load(index)",
+        "alpha * product + beta * previous",
+        "output.store(index, value)",
+    ] {
+        assert!(epilogue.contains(operation));
+    }
+    let policy = include_str!("capability-ui/pass/same_policy_binding.rs");
+    for operation in [
+        "context.numerical_policy::<StrictIeee>()",
+        "context.with_workgroup(",
+        "workgroup.epoch()",
+        "matrix.with_numerical_policy(&policy)",
+        "paired.bf16_zero_accumulator(lane)",
+    ] {
+        assert!(policy.contains(operation));
     }
     assert!(KERNEL.contains("Global<'_"));
     for unsupported in [

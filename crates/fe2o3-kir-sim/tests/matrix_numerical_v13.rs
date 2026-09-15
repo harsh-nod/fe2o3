@@ -123,6 +123,7 @@ fn execution_capability_operation(
                 function: [16; 32],
                 operation: [source; 32],
                 block: 0,
+                occurrence: None,
             },
             operation,
         }),

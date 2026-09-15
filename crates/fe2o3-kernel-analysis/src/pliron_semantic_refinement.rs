@@ -29,6 +29,9 @@ use crate::pliron_effect_refinement::{
     run_pliron_effect_refinement_with_analyses_v1,
 };
 use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
+use crate::pliron_semantic_memory_v1::{
+    LivePlironInitialReadInputsV1, PlironSemanticMemoryErrorV1,
+};
 use crate::pliron_progress::{PlironProgressReportV1, run_pliron_progress_check_v1};
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
@@ -54,15 +57,17 @@ pub(crate) enum SemanticExpressionBuildErrorV1 {
 }
 
 /// Shared canonical expression table used by scalar and effect refinement.
-pub(crate) struct SemanticExpressionTableV1 {
+pub(crate) struct SemanticExpressionTableV1<'ctx> {
+    memory_inputs: Option<LivePlironInitialReadInputsV1<'ctx>>,
     nodes: Vec<SemanticNodeV1>,
     facts: HashMap<pliron::value::Value, usize>,
     typed_root_commitments: Vec<[u64; 4]>,
 }
 
-impl SemanticExpressionTableV1 {
+impl<'ctx> SemanticExpressionTableV1<'ctx> {
     pub(crate) fn from_inventory(
-        context: &Context,
+        context: &'ctx Context,
+        function: &FuncOp,
         inventory: &BoundedPlironFunctionInventoryV1,
     ) -> Result<Self, SemanticExpressionBuildErrorV1> {
         let definitions = inventory
@@ -81,16 +86,34 @@ impl SemanticExpressionTableV1 {
                 .then_some(pointer)
             })
             .collect::<Vec<_>>();
-        Self::build(context, &definitions)
+        Self::build(context, function, &definitions)
     }
 
     fn build(
-        context: &Context,
+        context: &'ctx Context,
+        function: &FuncOp,
         definitions: &[pliron::context::Ptr<Operation>],
     ) -> Result<Self, SemanticExpressionBuildErrorV1> {
         if definitions.len() > MAX_PLIRON_SEMANTIC_NODES_V1 {
             return Err(SemanticExpressionBuildErrorV1::ResourceLimit);
         }
+        let memory_inputs = if definitions.iter().any(|definition| {
+            Operation::get_op_dyn(*definition, context)
+                .downcast_ref::<dialect_kernel::SemanticTypedReadOp>()
+                .is_some()
+        }) {
+            Some(LivePlironInitialReadInputsV1::prove(context, function)
+                .map_err(memory_expression_error)?)
+        } else {
+            None
+        };
+        // Labels reproduce commitment bytes only. The retained live owner is
+        // necessary for equality and is revalidated before either report exits.
+        // Copy this bounded map once, not a whole-graph replay for every leaf.
+        let read_leaves = memory_inputs.as_ref()
+            .map(|inputs| inputs.with_live_commitment_leaves(|leaves| leaves.clone()))
+            .transpose().map_err(memory_expression_error)?
+            .unwrap_or_default();
         let mut nodes = Vec::new();
         let mut interned = HashMap::new();
         let mut facts = HashMap::new();
@@ -116,7 +139,24 @@ impl SemanticExpressionTableV1 {
                     operation.downcast_ref::<SemanticExpressionCommitmentOp>()
                 {
                     commitment.identity(context).map(SemanticNodeV1::Commitment)
+                } else if operation.downcast_ref::<dialect_kernel::SemanticTypedReadOp>().is_some() {
+                    let (symbol, scalar) = read_leaves.get(definition).copied().ok_or(
+                        SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+                            "typed read lacks its exact live initial-memory producer",
+                        ),
+                    )?;
+                    Some(SemanticNodeV1::TypedExpression(
+                        SemanticTypedExpressionV1::Symbol { symbol, scalar },
+                    ))
                 } else if let Some(symbol) = operation.downcast_ref::<SemanticTypedSymbolOp>() {
+                    if symbol
+                        .symbol(context)
+                        .is_some_and(|id| id >= dialect_kernel::SEMANTIC_TYPED_READ_SYMBOL_BASE_V1)
+                    {
+                        return Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+                            "reserved load symbol has no live memory producer",
+                        ));
+                    }
                     match (symbol.symbol(context), symbol.scalar(context)) {
                         (Some(symbol), Some(scalar)) => Some(SemanticNodeV1::TypedExpression(
                             SemanticTypedExpressionV1::Symbol { symbol, scalar },
@@ -318,14 +358,29 @@ impl SemanticExpressionTableV1 {
                 )?);
             }
         }
-        Ok(Self {
+        let expressions = Self {
+            memory_inputs,
             nodes,
             facts,
             typed_root_commitments,
-        })
+        };
+        expressions.revalidate_live_reads()?;
+        Ok(expressions)
+    }
+
+    /// A successful report must call this after its last expression comparison.
+    /// Private interned identities never stand alone as a memory theorem.
+    pub(crate) fn revalidate_live_reads(&self) -> Result<(), SemanticExpressionBuildErrorV1> {
+        if let Some(inputs) = &self.memory_inputs {
+            inputs.revalidate().map_err(memory_expression_error)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn identity(&self, value: pliron::value::Value) -> Option<usize> {
+        if self.memory_inputs.as_ref().is_some_and(|inputs| !inputs.epoch_is_current()) {
+            return None;
+        }
         self.facts.get(&value).copied()
     }
 
@@ -384,8 +439,23 @@ impl SemanticExpressionTableV1 {
     }
 }
 
+fn memory_expression_error(error: PlironSemanticMemoryErrorV1) -> SemanticExpressionBuildErrorV1 {
+    use PlironSemanticMemoryErrorV1 as E;
+    let reason = match error {
+        E::ResourceLimit => return SemanticExpressionBuildErrorV1::ResourceLimit,
+        E::NonInitialRead { .. } => "typed read does not observe initial memory",
+        E::Interference { .. } => "typed read has cross-invocation memory interference",
+        E::UnsupportedRead { .. } => "typed read volatility, ordering or predication lacks a proved contract",
+        _ => "typed read requires an exact live source memory proof",
+    };
+    SemanticExpressionBuildErrorV1::InvalidTypedExpression(reason)
+}
+
 fn is_typed_semantic_definition(operation: &dyn pliron::op::Op) -> bool {
-    operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
+    operation
+        .downcast_ref::<dialect_kernel::SemanticTypedReadOp>()
+        .is_some()
+        || operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
         || operation
             .downcast_ref::<SemanticTypedConstantOp>()
             .is_some()
@@ -1144,7 +1214,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         }
     }
 
-    let expressions = match SemanticExpressionTableV1::build(context, &definitions) {
+    let expressions = match SemanticExpressionTableV1::build(context, function, &definitions) {
         Ok(expressions) => expressions,
         Err(SemanticExpressionBuildErrorV1::ResourceLimit) => {
             return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
@@ -1602,6 +1672,15 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     }
     let effect_refinement =
         run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
+    match expressions.revalidate_live_reads() {
+        Ok(()) => {}
+        Err(SemanticExpressionBuildErrorV1::ResourceLimit) => {
+            return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
+        }
+        Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(reason)) => {
+            return one(PlironSemanticRefinementFindingV1::TypedExpressionRejected { reason });
+        }
+    }
     let typed_root_commitments = expressions.typed_root_commitments().to_vec();
     PlironSemanticRefinementReportV1 {
         findings,

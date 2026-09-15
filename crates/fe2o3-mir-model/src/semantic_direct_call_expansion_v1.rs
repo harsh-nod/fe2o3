@@ -11,8 +11,13 @@ use sha2::{Digest, Sha256};
 use crate::semantic_mir_v1::*;
 
 mod evidence_v1;
+mod defined_capability_v1;
 mod identity;
 mod remap;
+mod caller_location_v1;
+mod workgroup_epoch_v1;
+pub use defined_capability_v1::SemanticExpandedDefinedCapabilityV1;
+pub use workgroup_epoch_v1::SemanticExpandedWorkgroupEpochProjectionV1;
 pub use evidence_v1::{
     InertCanonicalSemanticCallExpansionEvidenceV1, MAX_SEMANTIC_CALL_EXPANSION_EVIDENCE_BYTES_V1,
     SEMANTIC_CALL_EXPANSION_EVIDENCE_POLICY_V1, SEMANTIC_CALL_EXPANSION_EVIDENCE_VERSION_V1,
@@ -555,22 +560,31 @@ fn allocate_frame(
 }
 
 fn require_defined_abi(
+    source: &AdmittedInertSemanticMirV1,
     function_id: SemanticFunctionIdV1,
     function: &SemanticFunctionDeclV1,
     call: &SemanticDirectCallV1,
+    site: (SemanticFunctionIdV1, SemanticBlockIdV1),
+    budget: &mut Budget,
 ) -> Result<()> {
     let abi = function.abi();
+    // Admission checks RustCall's source tuple, ABI field roles/types, source
+    // local roles and operands against the actual callee. Its adjusted FnAbi
+    // fields are not additional inputs to this execution view.
     if function.role() != SemanticFunctionRoleV1::InternalHelper
-        || abi.extern_abi() != SemanticExternAbiV1::Rust
+        || !matches!(
+            abi.extern_abi(),
+            SemanticExternAbiV1::Rust | SemanticExternAbiV1::RustCall
+        )
+        || abi.can_unwind()
         || abi.c_variadic()
-        || !abi.hidden_arguments().is_empty()
         || !call.variadic_argument_abis().is_empty()
         || call.unwind() != SemanticUnwindActionV1::Unreachable
     {
         return Err(unsupported(
             function_id,
             None,
-            "defined call requires ordinary nonvariadic Rust ABI and unreachable unwind",
+            "defined call requires nonvariadic Rust or normalized RustCall ABI and unreachable unwind",
         ));
     }
     let Some(destination) = call.destination() else {
@@ -587,7 +601,7 @@ fn require_defined_abi(
             "projected call return destination",
         ));
     }
-    Ok(())
+    caller_location_v1::require_unobserved(source, function_id, function, call, site, budget)
 }
 
 fn push_statement(
@@ -690,7 +704,14 @@ fn expand_root(
                         unreachable!()
                     };
                     let callee_function = &source.functions()[callee.index() as usize];
-                    require_defined_abi(callee, callee_function, call)?;
+                    require_defined_abi(
+                        source,
+                        callee,
+                        callee_function,
+                        call,
+                        (instance.function, source_block),
+                        budget,
+                    )?;
                     let destination = remap::destination(
                         call.destination().expect("checked destination"),
                         &instance,
@@ -724,6 +745,8 @@ fn expand_root(
                             budget,
                         )?;
                     }
+                    // Transfer each canonical source operand intact, including
+                    // the RustCall tuple and its Copy/Move ownership operation.
                     for (argument, argument_local) in child_frame.arguments.iter().enumerate() {
                         budget.work(1)?;
                         let local = &callee_function.locals()[argument_local.index() as usize];

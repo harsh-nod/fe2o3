@@ -11,18 +11,16 @@ use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementImportErrorV2,
 };
-use fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13;
+use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrErrorV13, VerifiedCanonicalKernelIrIdentityV13};
 use fe2o3_lower_mir_kernel::{ProductionSemanticKirErrorV1, ProductionSemanticKirOwnerV1};
 use fe2o3_pliron::{
-    ProductionFinalGraphVerificationErrorV1, ProductionRefinementStagingPolicyV2,
-    ProductionVerifiedFinalGraphV1,
+    ProductionFinalGraphTargetContractErrorV1, ProductionFinalGraphVerificationErrorV1,
+    ProductionRefinementStagingPolicyV2, ProductionVerifiedFinalGraphV1,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
-use crate::final_kir_output_equivalence_v1::{
-    FinalKirNumericalModelV1, generate_final_kir_output_equivalence_v1,
-};
+use crate::final_kir_output_equivalence_v1::FinalKirNumericalModelV1;
 use crate::functional_refinement_receipt_v2::{
     RetainedImportedFunctionalRefinementReceiptV2,
     execute_and_import_generated_mir_pliron_composition_locally_v1,
@@ -36,6 +34,18 @@ use crate::{
 
 const FINAL_GRAPH_FUNCTIONAL_OBLIGATION_DOMAIN_V1: &[u8] =
     b"FE2O3/PRODUCTION/FINAL-KIR-DIRECT-FUNCTIONAL-OBLIGATION/V1\0";
+
+mod prepared;
+mod theorem;
+
+pub use prepared::{
+    ProductionPreparedFinalGraphFunctionalExecutionV1,
+    ProductionPreparedFinalGraphFunctionalSubjectV1,
+};
+use theorem::PreparedFinalKirTheoremV1;
+
+#[cfg(test)]
+mod tests;
 
 /// Exact subjects retained at the final-graph functional boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,6 +241,11 @@ impl ProductionFinalGraphFunctionalRefinementV1 {
 
 #[derive(Debug)]
 pub enum ProductionFinalGraphFunctionalRefinementErrorV1 {
+    Canonical(VerifiedCanonicalKernelIrErrorV13),
+    TargetContract(ProductionFinalGraphTargetContractErrorV1),
+    TargetContractSubjectMismatch,
+    SourceGraphSubjectMismatch,
+    SourceProofSubjectMismatch,
     SemanticKir(ProductionSemanticKirErrorV1),
     FinalGraph(ProductionFinalGraphVerificationErrorV1),
     SemanticProof(FinalKirOutputEquivalenceErrorV1),
@@ -245,6 +260,17 @@ pub enum ProductionFinalGraphFunctionalRefinementErrorV1 {
 impl fmt::Display for ProductionFinalGraphFunctionalRefinementErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Canonical(error) => write!(formatter, "canonical KIR replay failed: {error}"),
+            Self::TargetContract(error) => write!(formatter, "final target contract failed: {error}"),
+            Self::TargetContractSubjectMismatch => formatter.write_str(
+                "prepared functional subject and checked target contract differ",
+            ),
+            Self::SourceGraphSubjectMismatch => formatter.write_str(
+                "prepared functional subject and semantic owner name different source KIR",
+            ),
+            Self::SourceProofSubjectMismatch => formatter.write_str(
+                "source functional derivation and retained execution have different subjects",
+            ),
             Self::SemanticKir(error) => write!(formatter, "semantic KIR replay failed: {error}"),
             Self::FinalGraph(error) => write!(formatter, "final live KIR replay failed: {error}"),
             Self::SemanticProof(error) => error.fmt(formatter),
@@ -269,6 +295,8 @@ impl fmt::Display for ProductionFinalGraphFunctionalRefinementErrorV1 {
 impl Error for ProductionFinalGraphFunctionalRefinementErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Canonical(error) => Some(error),
+            Self::TargetContract(error) => Some(error),
             Self::SemanticKir(error) => Some(error),
             Self::FinalGraph(error) => Some(error),
             Self::SemanticProof(error) => Some(error),
@@ -297,101 +325,24 @@ pub fn bind_ir_derived_functional_refinement_to_final_graph_v1(
     ProductionFinalGraphFunctionalRefinementV1,
     ProductionFinalGraphFunctionalRefinementErrorV1,
 > {
-    semantic_kir
-        .verify_equivalence()
-        .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::SemanticKir)?;
+    let theorem = prepare_for_verified_graph(semantic_kir, &mut final_graph)?;
+    let execution = theorem.execute(
+        runtime,
+        semantic_kir,
+        verified.derivation(),
+        verified.verified().per_compilation_verus_execution(),
+        final_graph.report().resources().closure_identity(),
+        timeout_seconds,
+    )?;
     final_graph
         .revalidate_live()
         .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraph)?;
-
-    let derivation = verified.derivation();
-    let kernel_mir = DigestV1::from_untrusted_bytes(
-        *semantic_kir
-            .semantic()
-            .semantic()
-            .semantic_sha256()
-            .as_bytes(),
-    );
-    if kernel_mir != derivation.kernel_mir() {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::KernelMirSubjectMismatch);
-    }
-    let source_graph = semantic_kir
-        .canonical_kernel_ir_v13()
-        .ok_or(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraphSubjectMismatch)?;
-    if final_graph.report().final_graph() != final_graph.canonical().identity()
-        || final_graph.report().final_epoch() != final_graph.final_epoch()
-    {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraphSubjectMismatch);
-    }
-    let target_closure = final_graph.report().resources().closure_identity();
-    if target_closure == [0; 32] {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::TargetClosureMissing);
-    }
-
-    let proof =
-        generate_final_kir_output_equivalence_v1(semantic_kir.module(), final_graph.module())
-            .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::SemanticProof)?;
-    let (source, output_writes, numerical_model) = proof.into_parts();
-    let generated_source = DigestV1::from_untrusted_bytes(source.identity().as_bytes());
-    let obligation = final_graph_obligation_identity_v1(
-        source_graph.identity(),
-        final_graph.canonical().identity(),
-        final_graph.final_epoch(),
-        derivation.output_expression_product(),
-        generated_source,
-        output_writes,
-        numerical_model,
-    );
-    let prior_binding = verified.verified().per_compilation_verus_report().binding();
-    let binding = FunctionalRefinementBindingV2::new(
-        prior_binding.safe_reference_kind(),
-        prior_binding.safe_reference_identity(),
-        prior_binding.safe_reference_source_hash(),
-        prior_binding.safe_reference_mir_hash(),
-        DigestV1::from_untrusted_bytes(*final_graph.canonical().identity().digest()),
-        kernel_mir,
-        obligation,
-    )
-    .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::Binding)?;
-    let (final_execution, staging_policy) =
-        execute_and_import_generated_mir_pliron_composition_locally_v1(
-            runtime,
-            source,
-            binding,
-            timeout_seconds,
-        )
-        .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::Execution)?;
-    let imported = final_execution.proof();
-    if imported.binding() != binding
-        || imported.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
-        || !staging_policy.accepts_signer(imported.signer_identity())
-        || staging_policy.toolchain() != imported.toolchain()
-        || !imported.signature_and_policy_verified()
-    {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::ImportedProofSubjectMismatch);
-    }
-    let report = ProductionFinalGraphFunctionalReportV1 {
-        safe_reference_mir: derivation.safe_reference_mir(),
-        kernel_mir,
-        ranked_kernel: derivation.ranked_kernel(),
-        parallel_contract: derivation.parallel_contract(),
-        output_expression_product: derivation.output_expression_product(),
-        source_graph: *source_graph.identity(),
-        final_graph: *final_graph.canonical().identity(),
-        final_epoch: final_graph.final_epoch(),
-        target_closure,
-        generated_source,
-        obligation,
-        binding,
-        output_writes,
-        numerical_model,
-    };
     Ok(ProductionFinalGraphFunctionalRefinementV1 {
         verified,
         final_graph,
-        final_execution,
-        _staging_policy: staging_policy,
-        report,
+        final_execution: execution.final_execution,
+        _staging_policy: execution.staging_policy,
+        report: execution.report,
     })
 }
 
@@ -409,104 +360,45 @@ pub fn bind_effect_ir_derived_functional_refinement_to_borrowed_final_graph_v2(
     ProductionFinalGraphFunctionalRefinementExecutionV2,
     ProductionFinalGraphFunctionalRefinementErrorV1,
 > {
-    semantic_kir
-        .verify_equivalence()
-        .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::SemanticKir)?;
-    final_graph
-        .revalidate_live()
-        .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraph)?;
-
-    let derivation = verified.derivation();
-    let kernel_mir = DigestV1::from_untrusted_bytes(
-        *semantic_kir
-            .semantic()
-            .semantic()
-            .semantic_sha256()
-            .as_bytes(),
-    );
-    if kernel_mir != derivation.kernel_mir() {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::KernelMirSubjectMismatch);
-    }
-    let source_graph = semantic_kir
-        .canonical_kernel_ir_v13()
-        .ok_or(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraphSubjectMismatch)?;
-    if final_graph.report().final_graph() != final_graph.canonical().identity()
-        || final_graph.report().final_epoch() != final_graph.final_epoch()
-    {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraphSubjectMismatch);
-    }
-    let target_closure = final_graph.report().resources().closure_identity();
-    if target_closure == [0; 32] {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::TargetClosureMissing);
-    }
-
-    let proof =
-        generate_final_kir_output_equivalence_v1(semantic_kir.module(), final_graph.module())
-            .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::SemanticProof)?;
-    let (source, output_writes, numerical_model) = proof.into_parts();
-    let generated_source = DigestV1::from_untrusted_bytes(source.identity().as_bytes());
-    let obligation = final_graph_obligation_identity_v1(
-        source_graph.identity(),
-        final_graph.canonical().identity(),
-        final_graph.final_epoch(),
-        derivation.output_expression_product(),
-        generated_source,
-        output_writes,
-        numerical_model,
-    );
-    let prior_binding = verified.per_compilation_verus_report().binding();
-    let binding = FunctionalRefinementBindingV2::new(
-        prior_binding.safe_reference_kind(),
-        prior_binding.safe_reference_identity(),
-        prior_binding.safe_reference_source_hash(),
-        prior_binding.safe_reference_mir_hash(),
-        DigestV1::from_untrusted_bytes(*final_graph.canonical().identity().digest()),
-        kernel_mir,
-        obligation,
-    )
-    .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::Binding)?;
-    let (final_execution, staging_policy) =
-        execute_and_import_generated_mir_pliron_composition_locally_v1(
-            runtime,
-            source,
-            binding,
-            timeout_seconds,
-        )
-        .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::Execution)?;
-    let imported = final_execution.proof();
-    if imported.binding() != binding
-        || imported.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
-        || !staging_policy.accepts_signer(imported.signer_identity())
-        || staging_policy.toolchain() != imported.toolchain()
-        || !imported.signature_and_policy_verified()
-    {
-        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::ImportedProofSubjectMismatch);
-    }
-    let report = ProductionFinalGraphFunctionalReportV1 {
-        safe_reference_mir: derivation.safe_reference_mir(),
-        kernel_mir,
-        ranked_kernel: derivation.ranked_kernel(),
-        parallel_contract: derivation.parallel_contract(),
-        output_expression_product: derivation.output_expression_product(),
-        source_graph: *source_graph.identity(),
-        final_graph: *final_graph.canonical().identity(),
-        final_epoch: final_graph.final_epoch(),
-        target_closure,
-        generated_source,
-        obligation,
-        binding,
-        output_writes,
-        numerical_model,
-    };
+    let theorem = prepare_for_verified_graph(semantic_kir, final_graph)?;
+    let execution = theorem.execute(
+        runtime,
+        semantic_kir,
+        verified.derivation(),
+        verified.per_compilation_verus_execution(),
+        final_graph.report().resources().closure_identity(),
+        timeout_seconds,
+    )?;
     final_graph
         .revalidate_live()
         .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraph)?;
     Ok(ProductionFinalGraphFunctionalRefinementExecutionV2 {
         verified,
-        final_execution,
-        _staging_policy: staging_policy,
-        report,
+        final_execution: execution.final_execution,
+        _staging_policy: execution.staging_policy,
+        report: execution.report,
     })
+}
+
+fn prepare_for_verified_graph(
+    semantic_kir: &ProductionSemanticKirOwnerV1,
+    final_graph: &mut ProductionVerifiedFinalGraphV1,
+) -> Result<PreparedFinalKirTheoremV1, ProductionFinalGraphFunctionalRefinementErrorV1> {
+    final_graph
+        .revalidate_live()
+        .map_err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraph)?;
+    if final_graph.report().final_graph() != final_graph.canonical().identity()
+        || final_graph.report().final_epoch() != final_graph.final_epoch()
+    {
+        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::FinalGraphSubjectMismatch);
+    }
+    if final_graph.report().resources().closure_identity() == [0; 32] {
+        return Err(ProductionFinalGraphFunctionalRefinementErrorV1::TargetClosureMissing);
+    }
+    let source = semantic_kir
+        .canonical_kernel_ir_v13()
+        .ok_or(ProductionFinalGraphFunctionalRefinementErrorV1::SourceGraphSubjectMismatch)?;
+    PreparedFinalKirTheoremV1::try_new(source, final_graph.canonical(), final_graph.final_epoch())
 }
 
 fn final_graph_obligation_identity_v1(

@@ -387,6 +387,7 @@ const REQUIRED_BEFORE_SEMANTIC_ADMISSION: &[OptimizerAnalysisV1] = &[
 pub enum TransformationPreservationModeV1 {
     ExactCanonicalIdentity,
     ExactProtectedStructureReplay,
+    CheckedControlFlowCoalescing,
 }
 
 /// Evidence that the output capability analysis was recomputed from the
@@ -658,9 +659,26 @@ pub fn check_transformation_preservation_v1(
             (None, Vec::new())
         };
     check_module_contract(transformation, before, after)?;
-    let capability_replay = input_analysis
-        .replay_candidate(input_epoch, output_epoch, u64::from(changed), after)
-        .map_err(TransformationPreservationErrorV1::CapabilityReplay)?;
+    let mut checked_coalescing = false;
+    let capability_replay =
+        match input_analysis.replay_candidate(input_epoch, output_epoch, u64::from(changed), after)
+        {
+            Ok(replay) => replay,
+            Err(_) if transformation == ProductionTransformationV1::SimplifyControlFlow => {
+                let replay = input_analysis
+                    .replay_control_flow_coalescing(
+                        before,
+                        input_epoch,
+                        output_epoch,
+                        u64::from(changed),
+                        after,
+                    )
+                    .map_err(TransformationPreservationErrorV1::CapabilityReplay)?;
+                checked_coalescing = true;
+                replay
+            }
+            Err(error) => return Err(TransformationPreservationErrorV1::CapabilityReplay(error)),
+        };
     if fresh_output_analysis.graph_epoch() != output_epoch
         || fresh_output_analysis.canonical_identity() != capability_replay.output_identity()
     {
@@ -669,7 +687,11 @@ pub fn check_transformation_preservation_v1(
 
     let (mode, invalidated_analyses, completed_replays, required_replays) = if changed {
         (
-            TransformationPreservationModeV1::ExactProtectedStructureReplay,
+            if checked_coalescing {
+                TransformationPreservationModeV1::CheckedControlFlowCoalescing
+            } else {
+                TransformationPreservationModeV1::ExactProtectedStructureReplay
+            },
             INVALIDATED_BY_MUTATION,
             REPLAYED_AT_PASS_BOUNDARY,
             REQUIRED_BEFORE_SEMANTIC_ADMISSION,

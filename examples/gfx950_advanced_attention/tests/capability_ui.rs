@@ -2,6 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn ui_target_dir(source: &Path, explicit: Option<&Path>, outer: Option<&Path>) -> PathBuf {
+    explicit
+        .map(Path::to_path_buf)
+        .or_else(|| outer.map(|root| root.join("tutorial-ui/fe2o3-gfx950-advanced-attention")))
+        .unwrap_or_else(|| source.join("target"))
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -21,8 +28,42 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
+        // Only the default target is inside source; shared caches are caller-owned.
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn ui_target_selection_prefers_explicit_cache() {
+    let explicit = Path::new("/caller/ui-cache");
+    let source = Path::new("/scratch/case");
+    for outer in [None, Some(Path::new("/caller/cargo-target"))] {
+        assert_eq!(ui_target_dir(source, Some(explicit), outer), explicit);
+    }
+}
+
+#[test]
+fn ui_target_selection_nests_under_outer_cargo_target() {
+    let outer = Path::new("/caller/cargo-target");
+    let expected = outer.join("tutorial-ui/fe2o3-gfx950-advanced-attention");
+    for source in [Path::new("/scratch/first"), Path::new("/scratch/second")] {
+        let target = ui_target_dir(source, None, Some(outer));
+        assert_eq!(target, expected);
+        assert_ne!(target, outer);
+        assert_ne!(target, source.join("target"));
+    }
+}
+
+#[test]
+fn ui_target_selection_defaults_to_owned_scratch_target() {
+    let first = Path::new("/scratch/first");
+    let second = Path::new("/scratch/second");
+    assert_eq!(ui_target_dir(first, None, None), first.join("target"));
+    assert_eq!(ui_target_dir(second, None, None), second.join("target"));
+    assert_ne!(
+        ui_target_dir(first, None, None),
+        ui_target_dir(second, None, None)
+    );
 }
 
 fn compile(case: &str, source: &str) -> Output {
@@ -43,9 +84,11 @@ fn compile(case: &str, source: &str) -> Output {
     )
     .expect("write UI fixture manifest");
     std::fs::write(scratch.0.join("src/lib.rs"), source).expect("write UI fixture source");
-    let target = std::env::var_os("FE2O3_ADVANCED_ATTENTION_UI_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| scratch.0.join("target"));
+    let explicit = std::env::var_os("FE2O3_ADVANCED_ATTENTION_UI_TARGET_DIR").map(PathBuf::from);
+    // Resolve before nested Cargo changes directory; never reuse the outer target itself.
+    let outer = std::env::var_os("CARGO_TARGET_DIR")
+        .map(|root| std::path::absolute(root).expect("resolve outer Cargo target directory"));
+    let target = ui_target_dir(&scratch.0, explicit.as_deref(), outer.as_deref());
     Command::new(env!("CARGO"))
         .current_dir(&scratch.0)
         .env("RUSTUP_TOOLCHAIN", "nightly-2026-04-03")

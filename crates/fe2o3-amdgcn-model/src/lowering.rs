@@ -48,12 +48,20 @@ use crate::{
     AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim, MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
     MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
     ProductionTargetCapabilityClosureV13, ProductionTargetCapabilityErrorV1,
-    ProductionTargetLaunchEvidenceV13, legalize_production_target_capabilities_v13,
+    ProductionTargetLaunchEvidenceV13,
     target_requirements_for_execution_operation_v1,
 };
 
 mod operational_translation_v1;
+mod declared_translation;
+mod structured_declared;
+pub use structured_declared::{StructuredDeclaredKirToLlvmV1, DeclaredWriterSegmentV1,
+    DeclaredWriterSegmentKindV1, DeclaredLlvmRecipeV1};
+pub use declared_translation::{DeclaredKirToLlvmReplayV1, DeclaredPhysicalTraceV1,
+    DeclaredPhysicalOperationV1, DeclaredPhysicalResultV1, DeclaredPhysicalCarrierV1};
 mod v13;
+#[cfg(test)]
+mod declared_version_tests;
 
 use operational_translation_v1::collect_unsupported_operational_translation_v1;
 pub use operational_translation_v1::{
@@ -113,8 +121,12 @@ impl LoweringTarget {
         matches!(self, Self::Gfx950XnackMinusV1)
     }
 
-    const fn supports_gfx950_collectives_and_lds_transpose(self) -> bool {
+    const fn supports_gfx950_lds_transpose(self) -> bool {
         matches!(self, Self::Gfx950XnackMinusV1)
+    }
+
+    const fn supports_wave64_f32_collectives(self) -> bool {
+        matches!(self, Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1)
     }
 
     const fn supports_gfx942_diagnostics(self) -> bool {
@@ -253,6 +265,7 @@ pub enum ProductionV13AmdLoweringErrorV1 {
     Decode(KernelIrDecodeError),
     Lowering(LoweringErrors),
     StructuredDerivation(StructuredKirToLlvmDerivationErrorV1),
+    DeclaredReplayMismatch,
 }
 
 impl fmt::Display for ProductionV13AmdLoweringErrorV1 {
@@ -269,6 +282,7 @@ impl fmt::Display for ProductionV13AmdLoweringErrorV1 {
                     "structured KIR-to-LLVM derivation failed: {error}"
                 )
             }
+            Self::DeclaredReplayMismatch => formatter.write_str("declared KIR physical/writer replay mismatch"),
         }
     }
 }
@@ -280,6 +294,7 @@ impl Error for ProductionV13AmdLoweringErrorV1 {
             Self::Decode(error) => Some(error),
             Self::Lowering(error) => Some(error),
             Self::StructuredDerivation(error) => Some(error),
+            Self::DeclaredReplayMismatch => None,
         }
     }
 }
@@ -296,40 +311,117 @@ pub fn lower_verified_canonical_kir_v13_to_amd_llvm_ir_v1(
     launch_evidence: &ProductionTargetLaunchEvidenceV13,
     profile: ProductionAmdTargetProfileV1,
 ) -> Result<ProductionV13AmdLoweredModuleV1, ProductionV13AmdLoweringErrorV1> {
-    let capability_closure = legalize_production_target_capabilities_v13(
-        neutral,
-        neutral_epoch,
-        launch_evidence,
-        profile,
-    )
-    .map_err(ProductionV13AmdLoweringErrorV1::Capability)?;
-    let module = decode_module_v13(neutral.canonical_bytes())
-        .map_err(ProductionV13AmdLoweringErrorV1::Decode)?;
-    let authority = V13LoweringAuthorityV1::from_closure(&module, &capability_closure)
+    neutral.revalidate().map_err(|e| ProductionV13AmdLoweringErrorV1::Capability(
+        ProductionTargetCapabilityErrorV1::InvalidCanonicalKirV13(e)))?;
+    let launch = crate::ProductionTargetLaunchEvidenceKirV1::from_v13(launch_evidence);
+    let result = lower_verified_canonical_kir_to_amd_llvm_ir_v1(neutral.as_common(), neutral_epoch, &launch, profile)?;
+    Ok(ProductionV13AmdLoweredModuleV1 {
+        llvm_ir: result.llvm_ir,
+        capability_closure: result.capability_closure.into_v13().map_err(ProductionV13AmdLoweringErrorV1::Capability)?,
+        structured_derivation: result.structured_derivation,
+        unsupported_operational_translation: result.unsupported_operational_translation,
+    })
+}
+
+/// One declared-version production path, shared by the strict V13 facade.
+pub fn lower_verified_canonical_kir_to_amd_llvm_ir_v1(
+    neutral: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV1,
+    neutral_epoch: u64,
+    launch_evidence: &crate::ProductionTargetLaunchEvidenceKirV1,
+    profile: ProductionAmdTargetProfileV1,
+) -> Result<ProductionCanonicalAmdLoweredModuleV1, ProductionV13AmdLoweringErrorV1> {
+    lower_verified_canonical_kir_to_amd_llvm_ir_with_limits_v1(neutral, neutral_epoch, launch_evidence,
+        profile, fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1::DEFAULT)
+}
+
+fn lower_verified_canonical_kir_to_amd_llvm_ir_with_limits_v1(
+    neutral: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV1,
+    neutral_epoch: u64,
+    launch_evidence: &crate::ProductionTargetLaunchEvidenceKirV1,
+    profile: ProductionAmdTargetProfileV1,
+    limits: fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1,
+) -> Result<ProductionCanonicalAmdLoweredModuleV1, ProductionV13AmdLoweringErrorV1> {
+    let capability_closure = crate::legalize_production_target_capabilities_kir_v1(
+        neutral, neutral_epoch, launch_evidence, profile,
+    ).map_err(ProductionV13AmdLoweringErrorV1::Capability)?;
+    let module = match neutral.version() {
+        fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13 => decode_module_v13(neutral.canonical_bytes()),
+        fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V14 => fe2o3_kernel_ir::decode_module_v14(neutral.canonical_bytes()),
+    }.map_err(ProductionV13AmdLoweringErrorV1::Decode)?;
+    let authority = V13LoweringAuthorityV1::from_declared_closure(&module, &capability_closure, neutral)
         .map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
-    let lowered_module = v13::lower_execution_capabilities_v1(&module, profile, &authority)
-        .map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
+    let mut recorder = if neutral.version() == fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V14 {
+        Some(declared_translation::Builder::new(&module, limits).map_err(ProductionV13AmdLoweringErrorV1::Lowering)?)
+    } else { None };
+    let phase_limits = recorder.as_ref().map_or(limits, |trace| trace.remaining(limits));
+    let lowered_module = v13::lower_declared_execution_capabilities_recorded_v1(
+        &module, profile, &authority, neutral.version(), phase_limits, recorder.as_mut(),
+    ).map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
     let target = match profile {
         ProductionAmdTargetProfileV1::Gfx942 => LoweringTarget::Gfx942XnackMinusV1,
         ProductionAmdTargetProfileV1::Gfx950 => LoweringTarget::Gfx950XnackMinusV1,
     };
+    let writer_trace = recorder.as_ref().map(|trace|
+        structured_declared::Builder::new(&lowered_module, trace.writer_limits())
+            .map(std::cell::RefCell::new)).transpose().map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
     let llvm_ir =
-        lower_compiler_module_to_llvm_ir_for_target(&lowered_module, target, None, None, true)
+        lower_compiler_module_to_llvm_ir_for_target_recorded(&lowered_module, target, None, None, true, writer_trace.as_ref())
             .map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
+    let writer_trace = writer_trace.map(|trace| {
+        let trace = trace.into_inner();
+        let remaining_work = trace.remaining_work();
+        trace.finish(&lowered_module).map(|result| (result, remaining_work))
+    }).transpose().map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
+    let (writer_trace, replay_work) = writer_trace.unwrap_or((None, 0));
+    let replay_limits = fe2o3_kernel_ir::ReusablePhaseCheckLimitsV1 {
+        work: replay_work,
+        temporary_bytes: limits.temporary_bytes,
+    };
+    let declared_replay = recorder.map(|recorder| {
+        declared_translation::DeclaredKirToLlvmReplayV1::new(neutral, &capability_closure, profile,
+            &lowered_module, &llvm_ir, recorder.finish(&module)?, writer_trace, replay_limits)
+    }).transpose().map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
     let structured_derivation =
         structured_scalar_f32_derivation_v1(neutral, &module, llvm_ir.as_bytes(), profile)
             .map_err(ProductionV13AmdLoweringErrorV1::StructuredDerivation)?;
-    let unsupported_operational_translation = if structured_derivation.is_some() {
+    let unsupported_operational_translation = if structured_derivation.is_some()
+        || declared_replay.as_ref().is_some_and(|r| r.structured().is_some()) {
         Box::new([])
     } else {
         collect_unsupported_operational_translation_v1(&module)
     };
-    Ok(ProductionV13AmdLoweredModuleV1 {
+    Ok(ProductionCanonicalAmdLoweredModuleV1 {
         llvm_ir,
         capability_closure,
+        declared_replay,
         structured_derivation,
         unsupported_operational_translation,
     })
+}
+
+/// Inert LLVM output retaining the same declared target closure that authorized it.
+#[derive(Debug)]
+pub struct ProductionCanonicalAmdLoweredModuleV1 {
+    llvm_ir: String,
+    capability_closure: crate::ProductionTargetCapabilityClosureKirV1,
+    declared_replay: Option<DeclaredKirToLlvmReplayV1>,
+    structured_derivation: Option<StructuredKirToLlvmDerivationV1>,
+    unsupported_operational_translation: Box<[ProductionV13OperationalTranslationUnsupportedV1]>,
+}
+impl ProductionCanonicalAmdLoweredModuleV1 {
+    pub const fn declared_replay(&self) -> Option<&DeclaredKirToLlvmReplayV1> { self.declared_replay.as_ref() }
+    pub fn llvm_ir(&self) -> &str { &self.llvm_ir }
+    pub const fn capability_closure(&self) -> &crate::ProductionTargetCapabilityClosureKirV1 { &self.capability_closure }
+    pub const fn capability_closure_identity(&self) -> [u8;32] { self.capability_closure.identity() }
+    pub fn decisions(&self) -> &[TargetCapabilityDecisionV1] { self.capability_closure.decisions() }
+    pub const fn structured_derivation(&self) -> Option<&StructuredKirToLlvmDerivationV1> { self.structured_derivation.as_ref() }
+    pub fn unsupported_operational_translation(&self) -> &[ProductionV13OperationalTranslationUnsupportedV1] { &self.unsupported_operational_translation }
+    pub fn has_complete_operational_translation_derivation(&self) -> bool {
+        (self.structured_derivation.is_some() || self.declared_replay.as_ref().is_some_and(|r| r.structured().is_some()))
+            && self.unsupported_operational_translation.is_empty()
+    }
+    pub const fn grants_load_authority(&self) -> bool { false }
+    pub const fn grants_launch_authority(&self) -> bool { false }
 }
 
 /// LLVM text plus the exact capability closure that authorized its construction.
@@ -391,11 +483,14 @@ impl ProductionV13AmdLoweredModuleV1 {
 }
 
 fn structured_scalar_f32_derivation_v1(
-    neutral: &VerifiedCanonicalKernelIrV13,
+    neutral: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV1,
     module: &Module,
     llvm_bytes: &[u8],
     profile: ProductionAmdTargetProfileV1,
 ) -> Result<Option<StructuredKirToLlvmDerivationV1>, StructuredKirToLlvmDerivationErrorV1> {
+    if neutral.version() != fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13 {
+        return Ok(None);
+    }
     if !matches!(profile, ProductionAmdTargetProfileV1::Gfx942) {
         return Ok(None);
     }
@@ -847,11 +942,34 @@ struct V13LoweringAuthorityV1 {
 }
 
 impl V13LoweringAuthorityV1 {
+    fn from_declared_closure(
+        module: &Module,
+        closure: &crate::ProductionTargetCapabilityClosureKirV1,
+        neutral: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV1,
+    ) -> Result<Self, LoweringErrors> {
+        let version = match neutral.version() {
+            fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13 => crate::ProductionCanonicalGraphVersionV1::V13,
+            fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V14 => crate::ProductionCanonicalGraphVersionV1::V14,
+        };
+        let subject = closure.subject();
+        if subject.version() != version || subject.digest() != *neutral.identity().digest()
+            || subject.canonical_length() != neutral.identity().canonical_length()
+        {
+            return Err(LoweringErrors::one(LoweringLocation::module(module), LoweringDiagnosticCode::CapabilityClosureMismatch,
+                "declared lowering closure does not name the exact canonical graph"));
+        }
+        Self::from_decisions(module, closure.identity(), closure.decisions(), closure.capability_owners())
+    }
+
     fn from_closure(
         module: &Module,
         closure: &ProductionTargetCapabilityClosureV13,
     ) -> Result<Self, LoweringErrors> {
-        if closure.decisions().len() != closure.capability_owners().len() {
+        Self::from_decisions(module, closure.identity(), closure.decisions(), closure.capability_owners())
+    }
+
+    fn from_decisions(module: &Module, identity: [u8;32], decisions: &[TargetCapabilityDecisionV1], observed_owners: &[ProductionAmdCapabilityOwnerV1]) -> Result<Self, LoweringErrors> {
+        if decisions.len() != observed_owners.len() {
             return Err(LoweringErrors::one(
                 LoweringLocation::module(module),
                 LoweringDiagnosticCode::CapabilityClosureMismatch,
@@ -860,7 +978,7 @@ impl V13LoweringAuthorityV1 {
         }
         let mut owners = BTreeMap::new();
         for (decision, observed_owner) in
-            closure.decisions().iter().zip(closure.capability_owners())
+            decisions.iter().zip(observed_owners)
         {
             let requirement = decision.requirement();
             let expected_owner =
@@ -884,7 +1002,7 @@ impl V13LoweringAuthorityV1 {
             }
         }
         Ok(Self {
-            closure_identity: closure.identity(),
+            closure_identity: identity,
             owners,
         })
     }
@@ -1802,6 +1920,17 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     semantic_anchor_identity: Option<ProductionSemanticAnchorKirIdentityV1>,
     require_kernel: bool,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target_recorded(module, target, launch_policies, semantic_anchor_identity, require_kernel, None)
+}
+
+fn lower_compiler_module_to_llvm_ir_for_target_recorded(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<ProductionSemanticAnchorKirIdentityV1>,
+    require_kernel: bool,
+    writer_trace: Option<&std::cell::RefCell<structured_declared::Builder>>,
+) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -2070,6 +2199,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         &helper_lowerers,
         &declarations,
         target,
+        writer_trace,
     )
 }
 
@@ -3292,6 +3422,7 @@ fn emit_compiler_module(
     helpers: &[FunctionLowerer<'_>],
     declarations: &[&Function],
     target: LoweringTarget,
+    writer_trace: Option<&std::cell::RefCell<structured_declared::Builder>>,
 ) -> Result<String, LoweringErrors> {
     let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers))?;
     let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers))?;
@@ -3388,10 +3519,10 @@ fn emit_compiler_module(
     emit_float_support_definitions(&mut output, &float_requirements, target);
 
     for (index, lowerer) in kernels.iter().enumerate() {
-        lowerer.emit_compiler_module_definition(&mut output, Some(index), Some(index))?;
+        lowerer.emit_compiler_module_definition(&mut output, Some(index), Some(index), writer_trace)?;
     }
     for lowerer in helpers {
-        lowerer.emit_compiler_module_definition(&mut output, None, None)?;
+        lowerer.emit_compiler_module_definition(&mut output, None, None, writer_trace)?;
     }
 
     for (index, lowerer) in kernels.iter().enumerate() {
@@ -5254,7 +5385,7 @@ impl<'a> FunctionLowerer<'a> {
             Type::Pointer(pointer) => pointer.pointee.as_scalar(),
             Type::Slice(slice) => slice.element.as_scalar(),
             Type::GlobalCapability(capability) => capability.element().as_scalar(),
-            Type::Unit | Type::KernelContext(_) | Type::ExecutionCapability(_) => None,
+            Type::Unit | Type::KernelContext(_) | Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_) => None,
         };
         let required = match scalar {
             Some(ScalarType::F16) => Some(TargetCapability::Float16),
@@ -5648,7 +5779,7 @@ impl<'a> FunctionLowerer<'a> {
                     format!("G1 does not lower {:?}", operation.kind),
                 ));
             }
-            OperationKind::ExecutionCapability(_) => {
+            OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_) => {
                 return Err(LoweringErrors::one(
                     location,
                     LoweringDiagnosticCode::MissingCapabilityClosure,
@@ -6211,7 +6342,7 @@ impl<'a> FunctionLowerer<'a> {
         transpose: &Gfx950LdsTransposeOperationV1,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if !self.target.supports_gfx950_collectives_and_lds_transpose() {
+        if !self.target.supports_gfx950_lds_transpose() {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedOperation,
@@ -6257,7 +6388,7 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         match wave.kind {
             WaveOperationKind::ReduceF32 { tile_width, .. }
-                if !self.target.supports_gfx950_collectives_and_lds_transpose()
+                if !self.target.supports_wave64_f32_collectives()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
                     || wave.active_lanes != 64
@@ -6268,11 +6399,11 @@ impl<'a> FunctionLowerer<'a> {
                 return Err(LoweringErrors::one(
                     location.clone(),
                     LoweringDiagnosticCode::UnsupportedWaveOperation,
-                    "gfx950 f32 reduction requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
+                    "f32 reduction requires an exact gfx942:xnack- or gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
                 ));
             }
             WaveOperationKind::BroadcastF32 { tile_width, .. }
-                if !self.target.supports_gfx950_collectives_and_lds_transpose()
+                if !self.target.supports_wave64_f32_collectives()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
                     || wave.active_lanes != 64
@@ -6283,7 +6414,7 @@ impl<'a> FunctionLowerer<'a> {
                 return Err(LoweringErrors::one(
                     location.clone(),
                     LoweringDiagnosticCode::UnsupportedWaveOperation,
-                    "gfx950 f32 broadcast requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
+                    "f32 broadcast requires an exact gfx942:xnack- or gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
                 ));
             }
             _ => {}
@@ -6298,7 +6429,7 @@ impl<'a> FunctionLowerer<'a> {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedWaveOperation,
-                "gfx950 f32 broadcast requires a statically bounded tile-local source lane",
+                "f32 broadcast requires a statically bounded tile-local source lane",
             ));
         }
         let Some(flat_workgroup_size) = self.flat_workgroup_size() else {
@@ -6587,7 +6718,7 @@ impl<'a> FunctionLowerer<'a> {
         write!(output, "{}", parameters.join(", ")).unwrap();
         writeln!(output, ") #0 !reqd_work_group_size !0 {{").unwrap();
 
-        self.emit_body(&mut output)?;
+        self.emit_body(&mut output, None)?;
         writeln!(output, "}}\n").unwrap();
         let wave_attribute = self
             .wave_width
@@ -6625,6 +6756,7 @@ impl<'a> FunctionLowerer<'a> {
         output: &mut dyn fmt::Write,
         kernel_attribute: Option<usize>,
         kernel_metadata: Option<usize>,
+        writer_trace: Option<&std::cell::RefCell<structured_declared::Builder>>,
     ) -> Result<(), LoweringErrors> {
         let parameters = self.llvm_parameters()?.join(", ");
         if self.kernel.is_some() {
@@ -6672,17 +6804,26 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
         }
-        self.emit_body(output)?;
+        self.emit_body(output, writer_trace)?;
         writeln!(output, "}}\n").unwrap();
         Ok(())
     }
 
-    fn emit_body(&self, output: &mut dyn fmt::Write) -> Result<(), LoweringErrors> {
+    fn emit_body(&self, output: &mut dyn fmt::Write,
+        writer_trace: Option<&std::cell::RefCell<structured_declared::Builder>>,
+    ) -> Result<(), LoweringErrors> {
         let body = self.body("function body is missing during LLVM body emission")?;
+        let function = writer_trace.map(|trace| trace.borrow_mut().function(self)).transpose()?;
         let mut next_probe_index = 1_u64;
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
-            self.emit_block_parameters(output, block);
+            if let (Some(trace), Some(function)) = (writer_trace, function) {
+                let mut writer = structured_declared::DigestWriter::new(output);
+                self.emit_block_parameters(&mut writer, block);
+                let (bytes, digest) = writer.finish();
+                trace.borrow_mut().record(self.module, function, block.id, None,
+                    Some(DeclaredWriterSegmentKindV1::BlockParameters), bytes, digest)?;
+            } else { self.emit_block_parameters(output, block); }
             for (operation_index, operation) in block.operations.iter().enumerate() {
                 self.emit_semantic_anchor_v1(output, next_probe_index);
                 if matches!(
@@ -6710,7 +6851,13 @@ impl<'a> FunctionLowerer<'a> {
                         )
                     })?;
                 }
-                self.emit_operation(output, block.id, operation_index, operation)?;
+                if let (Some(trace), Some(function)) = (writer_trace, function) {
+                    let mut writer = structured_declared::DigestWriter::new(output);
+                    self.emit_operation(&mut writer, block.id, operation_index, operation)?;
+                    let (bytes, digest) = writer.finish();
+                    trace.borrow_mut().record(self.module, function, block.id, Some(operation_index),
+                        structured_declared::recipe(self, operation).map(DeclaredWriterSegmentKindV1::Operation), bytes, digest)?;
+                } else { self.emit_operation(output, block.id, operation_index, operation)?; }
             }
             let terminator = block.terminator.as_ref().ok_or_else(|| {
                 LoweringErrors::one(
@@ -6719,8 +6866,21 @@ impl<'a> FunctionLowerer<'a> {
                     "basic block terminator is missing during LLVM body emission",
                 )
             })?;
-            self.emit_terminator(output, block.id, terminator);
-            self.emit_split_edges(output, block);
+            if let (Some(trace), Some(function)) = (writer_trace, function) {
+                let mut writer = structured_declared::DigestWriter::new(output);
+                self.emit_terminator(&mut writer, block.id, terminator);
+                let (bytes, digest) = writer.finish();
+                trace.borrow_mut().record(self.module, function, block.id, None,
+                    Some(DeclaredWriterSegmentKindV1::Terminator), bytes, digest)?;
+                let mut writer = structured_declared::DigestWriter::new(output);
+                self.emit_split_edges(&mut writer, block);
+                let (bytes, digest) = writer.finish();
+                trace.borrow_mut().record(self.module, function, block.id, None,
+                    Some(DeclaredWriterSegmentKindV1::SplitEdges), bytes, digest)?;
+            } else {
+                self.emit_terminator(output, block.id, terminator);
+                self.emit_split_edges(output, block);
+            }
         }
         if let SemanticAnchorEmissionV1::Active(plan) = self.semantic_anchor_emission {
             debug_assert_eq!(next_probe_index - 1, plan.operation_count);
@@ -10137,7 +10297,7 @@ fn llvm_type(ty: &Type) -> &'static str {
         | Type::Slice(_)
         | Type::KernelContext(_)
         | Type::GlobalCapability(_)
-        | Type::ExecutionCapability(_) => {
+        | Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_) => {
             unreachable!("type is not a first-class G1 LLVM value")
         }
     }

@@ -1,0 +1,98 @@
+*** Begin Patch
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/semantic_execution_capability_01.rs
+@@
+         Op::WorkgroupMemoryIndex { workgroup, witness } => {
+             ExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
+                 workgroup: id(workgroup)?,
+                 witness: id(witness)?,
+             }
+         }
++        Op::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
++            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
++                workgroup_reference: id(workgroup_reference)?, workgroup: id(workgroup)?,
++                option: id(option)?, witness: id(witness)?,
++            }
++        }
++        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
++                input_witness: id(input_witness)?, output_witness: id(output_witness)?,
++            }
++        }
+@@
+-        Op::WorkgroupMemoryIndex { witness, .. } => vec![cap(
++        Op::WorkgroupMemoryIndex { witness, .. }
++        | Op::WorkgroupMemoryIndexV2 { witness, .. } => vec![cap(
+             *witness,
+             ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
+         )],
++        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => vec![cap(
++            *output_witness, ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
++        )],
+@@
+         let mut operands = Vec::with_capacity(materialized_arguments + 2);
+         let mut operand_types = Vec::with_capacity(materialized_arguments + 2);
+-        for argument in call.arguments().iter().take(materialized_arguments) {
+-            let values = self
+-                .lower_operand(block, None, argument, operations)?
+-                .values()
+-                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
++        let scoped_index_receiver = if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. }) {
++            Some(self.lower_workgroup_index_receiver_v1(block, contract)?)
++        } else { None };
++        for (index, argument) in call.arguments().iter().take(materialized_arguments).enumerate() {
++            let values = if index == 0 && scoped_index_receiver.is_some() {
++                vec![scoped_index_receiver.as_ref().unwrap().clone()]
++            } else {
++                self.lower_operand(block, None, argument, operations)?.values()
++                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
++            };
+@@
+             Op::WorkgroupMemoryIndex { witness, .. } => {
+                 let [witness_value] = results else {
+                     return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                 };
+                 self.execution_option_binding_v1(
+                     block,
+                     operations,
+                     output,
+                     witness,
+                     None,
+                     witness_value,
+                 )
+             }
++            Op::WorkgroupMemoryIndexV2 { option, witness, .. } => {
++                if output != option { return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch); }
++                let [witness_value] = results else {
++                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
++                };
++                self.execution_option_binding_v1(block, operations, option, witness, None, witness_value)
++            }
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01.rs
+@@
+-                        let SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
++                        let (SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+                             workgroup_reference,
+                             workgroup,
+                             ..
+-                        } = contract.operation()
++                        } | SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
++                            workgroup_reference, workgroup, ..
++                        }) = contract.operation()
+@@
+-                let SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
++                let (SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed {
+                     workgroup: expected,
+                     ..
+-                } = contract.operation()
++                } | SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
++                    workgroup: expected, ..
++                }) = contract.operation()
+@@
+     include!("borrowed_workgroup_01/transport.rs");
++    include!("borrowed_workgroup_01/workgroup_index.rs");
+*** Update File: crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/borrowed_workgroup_01/transport.rs
+@@
+-            }) if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }))
++            }) if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }
++                | SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. }))
+*** End Patch

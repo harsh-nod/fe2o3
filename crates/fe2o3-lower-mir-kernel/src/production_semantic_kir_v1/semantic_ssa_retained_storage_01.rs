@@ -763,6 +763,7 @@ fn first_borrow_consumer_cause_v1(
             }
             SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
+            | SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 { .. } => {
                 "borrow for matrix load"

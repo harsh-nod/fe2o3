@@ -2,6 +2,11 @@ use std::collections::BTreeSet;
 
 use fe2o3_kernel_ir::*;
 
+#[path = "execution_capability_catalog_v13/extended.rs"]
+mod extended;
+#[path = "execution_capability_catalog_v13/atomic_entry.rs"]
+mod atomic_entry;
+
 const WORKGROUP_BRAND: [u8; 32] = [0x71; 32];
 const EPOCH_BEFORE: [u8; 32] = [0x72; 32];
 const EPOCH_AFTER: [u8; 32] = [0x73; 32];
@@ -59,7 +64,7 @@ fn dynamic_extent() -> ExecutionDynamicExtentV1 {
 }
 
 fn catalog() -> Vec<ExecutionCapabilityOperationV1> {
-    vec![
+    let mut operations = vec![
         ExecutionCapabilityOperationV1::WorkgroupDerive {
             context: id(0x10),
             workgroup: id(0x11),
@@ -214,6 +219,12 @@ fn catalog() -> Vec<ExecutionCapabilityOperationV1> {
             workgroup: id(0x11),
             witness: id(0x3c),
         },
+        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
+            workgroup_reference: id(0x70), workgroup: id(0x11), option: id(0x71), witness: id(0x72),
+        },
+        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
+            input_witness: id(0x72), output_witness: id(0x73),
+        },
         ExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
             workgroup: id(0x11),
             view: id(0x3d),
@@ -250,13 +261,21 @@ fn catalog() -> Vec<ExecutionCapabilityOperationV1> {
             space: ExecutionMemoryAddressSpaceV1::Private,
             access: ExecutionMemoryAccessV1::ExclusiveReadWrite,
         },
-    ]
+    ];
+    operations.extend(extended::catalog());
+    operations
 }
 
 fn name(operation: &ExecutionCapabilityOperationV1) -> &'static str {
     match operation {
+        ExecutionCapabilityOperationV1::ReusableLdsConversion(_) => "ReusableLdsConversion",
+        ExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. } => "SubgroupDeriveBorrowed",
+        ExecutionCapabilityOperationV1::SubgroupPartition(_) => "SubgroupPartition",
+        ExecutionCapabilityOperationV1::NumericalPolicyMath(_) => "NumericalPolicyMath",
+        ExecutionCapabilityOperationV1::NumericalPolicyIssue { .. } => "NumericalPolicyIssue",
         ExecutionCapabilityOperationV1::WorkgroupDerive { .. } => "WorkgroupDerive",
         ExecutionCapabilityOperationV1::SubgroupDerive { .. } => "SubgroupDerive",
+        ExecutionCapabilityOperationV1::LdsAllocateBorrowed { .. } => "LdsAllocateBorrowed",
         ExecutionCapabilityOperationV1::LdsAllocate { .. } => "LdsAllocate",
         ExecutionCapabilityOperationV1::LdsInitializeByInvocation { .. } => {
             "LdsInitializeByInvocation"
@@ -276,6 +295,8 @@ fn name(operation: &ExecutionCapabilityOperationV1) -> &'static str {
         ExecutionCapabilityOperationV1::RawMemoryBind { .. } => "RawMemoryBind",
         ExecutionCapabilityOperationV1::PrivateMemoryAllocate { .. } => "PrivateMemoryAllocate",
         ExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. } => "WorkgroupMemoryIndex",
+        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => "WorkgroupMemoryIndexV2",
+        ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => "WorkgroupMemoryIndexIntoDisjoint",
         ExecutionCapabilityOperationV1::WorkgroupMemoryAllocate { .. } => "WorkgroupMemoryAllocate",
         ExecutionCapabilityOperationV1::WorkgroupMemoryPublish { .. } => "WorkgroupMemoryPublish",
         ExecutionCapabilityOperationV1::MemoryLoad { .. } => "MemoryLoad",
@@ -286,12 +307,19 @@ fn name(operation: &ExecutionCapabilityOperationV1) -> &'static str {
 fn signature(operation: &ExecutionCapabilityOperationV1) -> ExecutionCapabilitySignatureV1 {
     use ExecutionCapabilityOperationV1 as Op;
     let (arguments, output) = match operation {
+        Op::ReusableLdsConversion(value) => (vec![value.input], value.output),
+        Op::SubgroupDeriveBorrowed { workgroup_reference, subgroup, .. } =>
+            (vec![*workgroup_reference], *subgroup),
+        Op::SubgroupPartition(partition) => extended::partition_signature(*partition),
+        Op::NumericalPolicyMath(math) => extended::math_signature(*math),
+        Op::NumericalPolicyIssue { context, capability, .. } => (vec![*context], *capability),
         Op::WorkgroupDerive { context, workgroup } => (vec![*context], *workgroup),
         Op::SubgroupDerive {
             workgroup,
             subgroup,
             ..
         } => (vec![*workgroup], *subgroup),
+        Op::LdsAllocateBorrowed { workgroup_reference, lds, .. } => (vec![*workgroup_reference], *lds),
         Op::LdsAllocate { workgroup, lds, .. } => (vec![*workgroup], *lds),
         Op::LdsInitializeByInvocation {
             input_lds,
@@ -403,6 +431,8 @@ fn signature(operation: &ExecutionCapabilityOperationV1) -> ExecutionCapabilityS
         ),
         Op::PrivateMemoryAllocate { context, view, .. } => (vec![*context], *view),
         Op::WorkgroupMemoryIndex { workgroup, witness } => (vec![*workgroup], *witness),
+        Op::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => (vec![*workgroup_reference], *option),
+        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => (vec![*input_witness], *output_witness),
         Op::WorkgroupMemoryAllocate {
             workgroup, view, ..
         } => (vec![*workgroup], *view),
@@ -464,6 +494,13 @@ fn capability_type(
 fn legacy_result_type(operation: &ExecutionCapabilityOperationV1) -> Type {
     use ExecutionCapabilityOperationV1 as Op;
     let (source_type, role) = match operation {
+        Op::ReusableLdsConversion(_) | Op::SubgroupDeriveBorrowed { .. } | Op::SubgroupPartition(_) | Op::NumericalPolicyMath(_) => {
+            return result_types(operation, EPOCH_BEFORE).into_iter().next().unwrap();
+        }
+        Op::NumericalPolicyIssue { capability, policy, mode, .. } => (
+            *capability,
+            Some(ExecutionCapabilityRoleV1::NumericalPolicy { policy: *policy, mode: *mode }),
+        ),
         Op::WorkgroupDerive { workgroup, .. } => {
             (*workgroup, Some(ExecutionCapabilityRoleV1::Workgroup))
         }
@@ -473,7 +510,8 @@ fn legacy_result_type(operation: &ExecutionCapabilityOperationV1) -> Type {
             *subgroup,
             Some(ExecutionCapabilityRoleV1::Subgroup { width: *width }),
         ),
-        Op::LdsAllocate {
+        Op::LdsAllocateBorrowed { lds, element, layout, elements, .. }
+        | Op::LdsAllocate {
             lds,
             element,
             layout,
@@ -593,9 +631,13 @@ fn legacy_result_type(operation: &ExecutionCapabilityOperationV1) -> Type {
                 atomic_scope: None,
             }),
         ),
-        Op::WorkgroupMemoryIndex { witness, .. } => (
+        Op::WorkgroupMemoryIndex { witness, .. }
+        | Op::WorkgroupMemoryIndexV2 { witness, .. } => (
             *witness,
             Some(ExecutionCapabilityRoleV1::WorkgroupMemoryIndex),
+        ),
+        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => (
+            *output_witness, Some(ExecutionCapabilityRoleV1::WorkgroupMemoryIndex),
         ),
         Op::WorkgroupMemoryPublish { transition, .. } => (
             *transition,
@@ -707,6 +749,7 @@ fn legacy_module_for(operation: ExecutionCapabilityOperationV1, ordinal: u8) -> 
             function: [0x67; 32],
             operation: [ordinal.wrapping_add(1); 32],
             block: 0,
+            occurrence: None,
         },
         operation: operation.clone(),
     };
@@ -771,6 +814,18 @@ fn result_types(operation: &ExecutionCapabilityOperationV1, epoch_before: [u8; 3
         )
     };
     match operation {
+        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => vec![cap(
+            *subgroup, ExecutionCapabilityRoleV1::BorrowedSubgroup {
+                workgroup_reference: *workgroup_reference, workgroup: *workgroup, width: *width,
+            },
+        )],
+        Op::SubgroupPartition(partition) => extended::partition_results(*partition, epoch_before),
+        Op::NumericalPolicyMath(math) => extended::math_results(*math, epoch_before),
+        Op::ReusableLdsConversion(value) => vec![cap(value.output, value.output_role())],
+        Op::NumericalPolicyIssue { capability, policy, mode, .. } => vec![cap(
+            *capability,
+            ExecutionCapabilityRoleV1::NumericalPolicy { policy: *policy, mode: *mode },
+        )],
         Op::WorkgroupDerive { workgroup, .. } => {
             vec![cap(*workgroup, ExecutionCapabilityRoleV1::Workgroup)]
         }
@@ -780,7 +835,8 @@ fn result_types(operation: &ExecutionCapabilityOperationV1, epoch_before: [u8; 3
             *subgroup,
             ExecutionCapabilityRoleV1::Subgroup { width: *width },
         )],
-        Op::LdsAllocate {
+        Op::LdsAllocateBorrowed { lds: source, element, layout, elements, .. }
+        | Op::LdsAllocate {
             lds: source,
             element,
             layout,
@@ -984,9 +1040,13 @@ fn result_types(operation: &ExecutionCapabilityOperationV1, epoch_before: [u8; 3
                 atomic_scope: None,
             },
         )],
-        Op::WorkgroupMemoryIndex { witness, .. } => vec![cap(
+        Op::WorkgroupMemoryIndex { witness, .. }
+        | Op::WorkgroupMemoryIndexV2 { witness, .. } => vec![cap(
             *witness,
             ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
+        )],
+        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => vec![cap(
+            *output_witness, ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
         )],
         Op::WorkgroupMemoryAllocate {
             view,
@@ -1106,6 +1166,7 @@ impl CatalogModuleBuilder {
                 function: [0x67; 32],
                 operation: [self.next_source; 32],
                 block: 0,
+                occurrence: None,
             },
             operation,
         };
@@ -1325,8 +1386,23 @@ impl CatalogModuleBuilder {
     ) -> (Vec<ValueId>, [u8; 32]) {
         use ExecutionCapabilityOperationV1 as Op;
         match operation {
+            Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, .. } => {
+                let workgroup = self.workgroup(id(0x11), EPOCH_BEFORE);
+                let witness = self.emit(Op::WorkgroupMemoryIndexV2 {
+                    workgroup_reference: id(0x70), workgroup: id(0x11), option: id(0x71), witness: *input_witness,
+                }, vec![workgroup], EPOCH_BEFORE)[0];
+                (vec![witness], EPOCH_BEFORE)
+            }
+            Op::SubgroupPartition(partition) => self.partition_operands(*partition),
+            Op::NumericalPolicyMath(math) => self.math_operands(*math),
+            Op::ReusableLdsConversion(_) => panic!(
+                "revision-six conversion uses its checked occurrence/allocation fixture, not the legacy catalog source"
+            ),
+            Op::NumericalPolicyIssue { .. } => (vec![self.context], EPOCH_BEFORE),
             Op::WorkgroupDerive { .. } => (vec![self.context], EPOCH_BEFORE),
             Op::SubgroupDerive { workgroup, .. }
+            | Op::SubgroupDeriveBorrowed { workgroup, .. }
+            | Op::LdsAllocateBorrowed { workgroup, .. }
             | Op::LdsAllocate { workgroup, .. }
             | Op::WorkgroupBarrier {
                 input_workgroup: workgroup,
@@ -1334,6 +1410,7 @@ impl CatalogModuleBuilder {
             }
             | Op::WorkgroupFence { workgroup, .. }
             | Op::WorkgroupMemoryIndex { workgroup, .. }
+            | Op::WorkgroupMemoryIndexV2 { workgroup, .. }
             | Op::WorkgroupMemoryAllocate { workgroup, .. } => {
                 (vec![self.workgroup(*workgroup, EPOCH_BEFORE)], EPOCH_BEFORE)
             }
@@ -1571,7 +1648,17 @@ impl CatalogModuleBuilder {
             Type::slice(
                 Type::Scalar(ScalarType::U32),
                 AddressSpace::Global,
-                AccessMode::ReadOnly,
+                if matches!(
+                    &operation,
+                    ExecutionCapabilityOperationV1::Atomic {
+                        kind: ExecutionAtomicKindV1::BindGlobalView,
+                        ..
+                    }
+                ) {
+                    AccessMode::ReadWrite
+                } else {
+                    AccessMode::ReadOnly
+                },
             ),
             Type::pointer(
                 Type::Scalar(ScalarType::U32),
@@ -1715,17 +1802,28 @@ fn expected_capabilities(operation: &ExecutionCapabilityOperationV1) -> BTreeSet
         ])
     };
     match operation {
+        Op::SubgroupPartition(partition) => extended::partition_capabilities(*partition),
+        Op::NumericalPolicyMath(math) => extended::math_capabilities(*math),
+        Op::ReusableLdsConversion(value) => Op::LdsAllocate {
+            workgroup: id(0x11), lds: value.input, element: value.element,
+            layout: value.layout, elements: value.elements,
+        }.required_capabilities(),
         Op::WorkgroupDerive { .. }
         | Op::WorkgroupFence { .. }
         | Op::WorkgroupMemoryIndex { .. }
-        | Op::WorkgroupMemoryPublish { .. } => BTreeSet::new(),
-        Op::SubgroupDerive { .. } | Op::SubgroupFence { .. } | Op::MatrixAccess { .. } => {
+        | Op::WorkgroupMemoryIndexV2 { .. }
+        | Op::WorkgroupMemoryIndexIntoDisjoint { .. }
+        | Op::WorkgroupMemoryPublish { .. }
+        | Op::NumericalPolicyIssue { .. } => BTreeSet::new(),
+        Op::SubgroupDerive { .. } | Op::SubgroupDeriveBorrowed { .. }
+        | Op::SubgroupFence { .. } | Op::MatrixAccess { .. } => {
             BTreeSet::from([
                 TargetCapability::Subgroups,
                 TargetCapability::SubgroupSize(64),
             ])
         }
-        Op::LdsAllocate { .. }
+        Op::LdsAllocateBorrowed { .. }
+        | Op::LdsAllocate { .. }
         | Op::LdsInitializeByInvocation { .. }
         | Op::LdsPublish { .. }
         | Op::LdsReadPublished { .. }
@@ -1800,7 +1898,7 @@ fn expected_capabilities(operation: &ExecutionCapabilityOperationV1) -> BTreeSet
 fn expected_effects(operation: &ExecutionCapabilityOperationV1) -> Vec<MemoryEffect> {
     use ExecutionCapabilityOperationV1 as Op;
     match operation {
-        Op::LdsAllocate { .. } | Op::WorkgroupMemoryAllocate { .. } => {
+        Op::LdsAllocateBorrowed { .. } | Op::LdsAllocate { .. } | Op::WorkgroupMemoryAllocate { .. } => {
             vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
         }
         Op::PrivateMemoryAllocate { .. } => {
@@ -1844,12 +1942,19 @@ fn expected_effects(operation: &ExecutionCapabilityOperationV1) -> Vec<MemoryEff
         Op::MemoryLoad { .. } => vec![MemoryEffect::Read(AddressSpace::Private)],
         Op::MemoryStore { .. } => vec![MemoryEffect::Write(AddressSpace::Private)],
         Op::WorkgroupDerive { .. }
+        | Op::SubgroupDeriveBorrowed { .. }
+        | Op::SubgroupPartition(_)
+        | Op::NumericalPolicyMath(_)
+        | Op::ReusableLdsConversion(_)
         | Op::SubgroupDerive { .. }
         | Op::SubgroupCollective { .. }
         | Op::MatrixAccess { .. }
         | Op::AsyncWait { .. }
         | Op::RawMemoryBind { .. }
-        | Op::WorkgroupMemoryIndex { .. } => Vec::new(),
+        | Op::WorkgroupMemoryIndex { .. }
+        | Op::WorkgroupMemoryIndexV2 { .. }
+        | Op::WorkgroupMemoryIndexIntoDisjoint { .. }
+        | Op::NumericalPolicyIssue { .. } => Vec::new(),
     }
 }
 
@@ -1894,9 +1999,15 @@ fn assert_invalid_execution_capability(module: &Module, case: &str) {
 fn mutate_semantic_field(operation: &mut ExecutionCapabilityOperationV1) {
     use ExecutionCapabilityOperationV1 as Op;
     match operation {
+        Op::SubgroupDeriveBorrowed { workgroup_reference, .. } => *workgroup_reference = id(0xe4),
+        Op::SubgroupPartition(partition) => extended::mutate_partition(partition),
+        Op::NumericalPolicyMath(math) => extended::mutate_math(math),
+        Op::ReusableLdsConversion(value) => value.source_binding = [0; 32],
+        Op::NumericalPolicyIssue { policy, .. } => *policy = id(0xe0),
         Op::WorkgroupDerive { workgroup, .. } => *workgroup = id(0xe0),
         Op::SubgroupDerive { width, .. } => *width = 32,
-        Op::LdsAllocate { elements, .. }
+        Op::LdsAllocateBorrowed { elements, .. }
+        | Op::LdsAllocate { elements, .. }
         | Op::LdsInitializeByInvocation { elements, .. }
         | Op::LdsPublish { elements, .. }
         | Op::LdsReadPublished { elements, .. }
@@ -1916,7 +2027,9 @@ fn mutate_semantic_field(operation: &mut ExecutionCapabilityOperationV1) {
             *success = Some(ExecutionMemoryOrderingV1::SequentiallyConsistent)
         }
         Op::RawMemoryBind { layout, .. } => layout.byte_alignment = 8,
-        Op::WorkgroupMemoryIndex { witness, .. } => *witness = id(0xe1),
+        Op::WorkgroupMemoryIndex { witness, .. }
+        | Op::WorkgroupMemoryIndexV2 { witness, .. } => *witness = id(0xe1),
+        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => *output_witness = id(0xe1),
         Op::WorkgroupMemoryPublish { output_view, .. } => *output_view = id(0xe2),
         Op::MemoryLoad { access, .. } => *access = ExecutionMemoryAccessV1::ExclusiveReadWrite,
         Op::MemoryStore { access, .. } => *access = ExecutionMemoryAccessV1::DisjointWrite,
@@ -1924,7 +2037,7 @@ fn mutate_semantic_field(operation: &mut ExecutionCapabilityOperationV1) {
 }
 
 #[test]
-fn roster_is_exactly_the_23_closed_execution_operation_families() {
+fn roster_is_exactly_the_27_closed_execution_operation_families() {
     let actual = catalog().iter().map(name).collect::<BTreeSet<_>>();
     let expected = BTreeSet::from([
         "AsyncCopy",
@@ -1937,26 +2050,34 @@ fn roster_is_exactly_the_23_closed_execution_operation_families() {
         "MatrixAccess",
         "MemoryLoad",
         "MemoryStore",
+        "NumericalPolicyIssue",
+        "NumericalPolicyMath",
         "PrivateMemoryAllocate",
         "RawMemoryBind",
         "SubgroupBarrier",
         "SubgroupCollective",
         "SubgroupDerive",
+        "SubgroupDeriveBorrowed",
         "SubgroupFence",
+        "SubgroupPartition",
         "WorkgroupBarrier",
         "WorkgroupCollective",
         "WorkgroupDerive",
         "WorkgroupFence",
         "WorkgroupMemoryAllocate",
         "WorkgroupMemoryIndex",
+        "WorkgroupMemoryIndexV2",
+        "WorkgroupMemoryIndexIntoDisjoint",
         "WorkgroupMemoryPublish",
     ]);
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 23);
+    assert_eq!(actual.len(), 29);
+    assert_eq!(catalog().len(), 46);
 }
 
 #[test]
 fn every_catalog_entry_has_exact_capabilities_effects_and_v13_round_trip() {
+    let mut legacy_headers = BTreeSet::new();
     for (ordinal, operation) in catalog().into_iter().enumerate() {
         let case_name = name(&operation);
         assert!(operation.is_well_formed(), "{case_name}");
@@ -1978,6 +2099,38 @@ fn every_catalog_entry_has_exact_capabilities_effects_and_v13_round_trip() {
         let module = module_for(operation.clone(), ordinal as u8);
         verify_module(&module).unwrap_or_else(|error| panic!("{case_name}: {error}"));
         assert_eq!(target_contract(&module).operation, operation, "{case_name}");
+        let contract = target_contract(&module);
+        let payload = encode_execution_capability_contract_v1(contract).unwrap();
+        let expected_header = extended::wire_header(&operation);
+        assert_eq!(&payload[..2], &expected_header, "{case_name} revision/tag");
+        // wire_header binds every family to its frozen tag, independently of
+        // catalog insertion order. Keep explicit coverage of all legacy tags.
+        if expected_header[0] == 1 && expected_header[1] <= 22 {
+            assert!(legacy_headers.insert(expected_header), "duplicate legacy {case_name} tag");
+        }
+        match &operation {
+            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => {
+                assert_eq!(&payload[..2], &[1, 27], "scoped workgroup Option/payload tag");
+            }
+            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => {
+                assert_eq!(&payload[..2], &[1, 28], "scoped workgroup conversion tag");
+            }
+            _ => {},
+        }
+        let mut frozen_tail = if expected_header[0] == 1 {
+            u16::try_from(contract.obligations.bits()).unwrap().to_le_bytes().to_vec()
+        } else {
+            contract.obligations.bits().to_le_bytes().to_vec()
+        };
+        frozen_tail.extend_from_slice(&contract.source.function);
+        frozen_tail.extend_from_slice(&contract.source.operation);
+        frozen_tail.extend_from_slice(&contract.source.block.to_le_bytes());
+        assert_eq!(&payload[payload.len() - frozen_tail.len()..], frozen_tail, "{case_name} exact obligations/source tail");
+        for result in &target_operation(&module).results {
+            if let Type::ExecutionCapability(capability) = &result.ty {
+                assert_eq!(encode_execution_capability_type_v1(capability).unwrap()[0], extended::type_revision(&capability.role), "{case_name} type revision");
+            }
+        }
         let encoded = encode_module_v13(&module).unwrap();
         assert_eq!(&encoded[8..10], &KERNEL_IR_VERSION_V13.to_le_bytes());
         assert_eq!(decode_module_v13(&encoded).unwrap(), module, "{case_name}");
@@ -1991,6 +2144,7 @@ fn every_catalog_entry_has_exact_capabilities_effects_and_v13_round_trip() {
             "{case_name}"
         );
     }
+    assert_eq!(legacy_headers, (0..=22).map(|tag| [1, tag]).collect::<BTreeSet<_>>());
 }
 
 #[test]

@@ -44,7 +44,7 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     IndexType, KernelContextType, PipelineType, RankedViewType, SemanticScalarType,
-    is_checked_access_capability_type,
+    SemanticTypedReadOp, is_checked_access_capability_type,
 };
 use dialect_proof::{EvidenceRefType, ObligationRefType};
 
@@ -868,7 +868,11 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
                         detail: error.to_string(),
                     },
                 )?;
-            if canonical_safety.is_none() && !is_production_ranked_operation_v1(dynamic.as_ref()) {
+            // Identity recognition is not ranked-safety or refinement admission.
+            if canonical_safety.is_none()
+                && !is_production_ranked_operation_v1(dynamic.as_ref())
+                && dynamic.downcast_ref::<SemanticTypedReadOp>().is_none()
+            {
                 return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
                     location,
                     detail: "operation is neither a ranked operation nor a typed canonical safety carrier",
@@ -1189,6 +1193,8 @@ fn is_production_attribute_id(attribute: &str) -> bool {
             | "kernel.semantic_ieee_rounding"
             | "kernel.semantic_numerical_policy"
             | "kernel.semantic_overflow"
+            | "kernel.semantic_read_ordering"
+            | "kernel.semantic_read_volatility"
             | "kernel.semantic_scalar_kind"
             | "kernel.semantic_step_bound"
             | "kernel.semantic_symbol"

@@ -34,7 +34,7 @@ fn native_lineage_fixture(target: &str, constant: u32) -> NativeLineageFixture {
     let llvm = backend
         .lower_v13_module_v1(&final_owner, epoch, &closure)
         .unwrap();
-    let llvm = backend.bind_worker_layout_v1(&llvm).unwrap();
+    let llvm = backend.bind_worker_layout_v1(llvm.llvm_ir()).unwrap();
     let replay = backend
         .prepare_lineage_replay_v1(
             neutral.canonical_bytes(),

@@ -26,12 +26,16 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffV3,
 };
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, ProtectedCompilerHandoffBindingErrorV3,
-    ProtectedFirstBuildWorkerV3Error, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    ContentIdentityV1, InertDecodedWorkerExchangeV2, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    LinkOptionV1, PinnedWorkerV1, ProtectedCompilerHandoffBindingErrorV3,
+    ProtectedFirstBuildWorkerV3Error, WORKER_REQUEST_MAGIC_V2, WORKER_REQUEST_MAGIC_V3,
+    WORKER_RESPONSE_MAGIC_V4, WORKER_RESPONSE_MAGIC_V5, WorkerExecutionErrorKind,
+    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestRevisionV1, WorkerTerminationV1,
     execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
+    preflight_protected_reproducible_first_build_worker_with_revision_v3,
 };
 use fe2o3_kernel_descriptor::DeviceTargetV1;
 use sha2::{Digest, Sha256};
@@ -167,6 +171,46 @@ fn options() -> Vec<LinkOptionV1> {
 
 fn provider() -> WorkerInputV1 {
     WorkerInputV1::new(WorkerInputKindV1::AmdGpuRelocatable, PROVIDER.to_vec()).unwrap()
+}
+
+fn assert_capture_required_exchanges(evidence: &InertProtectedFirstBuildWorkerV3EvidenceV1) {
+    for (request, response) in [
+        (
+            evidence.bootstrap_request_bytes(),
+            evidence.bootstrap().response(),
+        ),
+        (
+            evidence.exact_replay_request_bytes(),
+            evidence.exact_replay().response(),
+        ),
+    ] {
+        let exchange =
+            InertDecodedWorkerExchangeV2::decode(request, response.canonical_bytes()).unwrap();
+        assert_eq!(
+            exchange.request().revision(),
+            WorkerRequestRevisionV1::CaptureRequiredV3
+        );
+        assert!(exchange.request().revision().requires_stage_capture());
+        assert_eq!(&request[..8], WORKER_REQUEST_MAGIC_V3);
+        assert_eq!(&response.canonical_bytes()[..8], WORKER_RESPONSE_MAGIC_V5);
+        let capture = response
+            .stage_capture()
+            .expect("production requires capture");
+        let derivation = response.derivation().unwrap();
+        for (contents, identity) in [
+            (capture.linked_bitcode(), derivation.linked_module()),
+            (capture.optimized_bitcode(), derivation.optimized_module()),
+            (capture.generated_object(), derivation.generated_object()),
+        ] {
+            assert!(!contents.is_empty());
+            assert!(identity.matches(contents));
+        }
+    }
+    assert_eq!(
+        evidence.bootstrap().response().stage_capture(),
+        evidence.exact_replay().response().stage_capture()
+    );
+    assert!(!evidence.proves_llvm_to_machine_semantic_refinement());
 }
 
 fn module_handoff(seed: u8) -> CompilerModuleHandoffV2 {
@@ -444,8 +488,7 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
     );
     assert_eq!(evidence.worker_measurement().llvm_build_identity(), LLVM_ID);
     assert_eq!(evidence.execution_limits(), execution_limits);
-    assert_eq!(&evidence.bootstrap_request_bytes()[..8], b"F3LREQ02");
-    assert_eq!(&evidence.exact_replay_request_bytes()[..8], b"F3LREQ02");
+    assert_capture_required_exchanges(&evidence);
     assert_ne!(
         evidence.bootstrap().response().request_id(),
         evidence.exact_replay().response().request_id()
@@ -524,6 +567,134 @@ fn deterministic_preflight_completes_before_transaction_consumption() {
     )
     .unwrap();
     assert_eq!(evidence.output_bytes(), OUTPUT);
+    assert_capture_required_exchanges(&evidence);
+}
+
+#[test]
+fn production_rejects_missing_capture_in_bootstrap_and_exact_replay() {
+    for (marker, replay) in [
+        (b"workflow_bootstrap_missing_capture".as_slice(), false),
+        (b"workflow_replay_missing_capture".as_slice(), true),
+    ] {
+        let directory = TestDirectory::new();
+        let (_, receipt, consumed) = consumed(
+            &directory,
+            0x65,
+            CompilerModuleHandoffSlotV3::Production,
+            0x20,
+            0x16,
+        );
+        let closure = *consumed.handoff().capsule().compiler_closure();
+        let error = execute_protected_reproducible_first_build_worker_v3(
+            consumed,
+            receipt,
+            closure,
+            &pinned(),
+            vec![
+                WorkerInputV1::new(WorkerInputKindV1::AmdGpuRelocatable, marker.to_vec()).unwrap(),
+            ],
+            options(),
+            WorkerOutputConstraintsV1::new(4096).unwrap(),
+            limits(),
+        )
+        .unwrap_err();
+        let execution = match &error {
+            ProtectedFirstBuildWorkerV3Error::BootstrapExecution(error) if !replay => error,
+            ProtectedFirstBuildWorkerV3Error::ReplayExecution(error) if replay => error,
+            _ => panic!("unexpected missing-capture boundary: {error:?}"),
+        };
+        assert_eq!(
+            execution.kind(),
+            &WorkerExecutionErrorKind::DecodeResponse(
+                WorkerProtocolError::StageCaptureModeMismatch
+            )
+        );
+        assert_eq!(&execution.stdout()[..8], WORKER_RESPONSE_MAGIC_V4);
+    }
+}
+
+#[test]
+fn production_rejects_a_worker_without_capture_support_without_downgrading() {
+    let directory = TestDirectory::new();
+    let (_, receipt, consumed) = consumed(
+        &directory,
+        0x66,
+        CompilerModuleHandoffSlotV3::Production,
+        0x20,
+        0x17,
+    );
+    let closure = *consumed.handoff().capsule().compiler_closure();
+    let error = execute_protected_reproducible_first_build_worker_v3(
+        consumed,
+        receipt,
+        closure,
+        &pinned(),
+        vec![
+            WorkerInputV1::new(
+                WorkerInputKindV1::AmdGpuRelocatable,
+                b"workflow_capture_unsupported".to_vec(),
+            )
+            .unwrap(),
+        ],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap_err();
+    let ProtectedFirstBuildWorkerV3Error::BootstrapExecution(error) = error else {
+        panic!("unexpected unsupported-capture boundary: {error:?}");
+    };
+    assert_eq!(
+        error.kind(),
+        &WorkerExecutionErrorKind::ExitFailure(WorkerTerminationV1::Exit(64))
+    );
+}
+
+#[test]
+fn explicit_v2_preflight_retains_frozen_request_and_response_versions() {
+    let directory = TestDirectory::new();
+    let (_, receipt, consumed) = consumed(
+        &directory,
+        0x67,
+        CompilerModuleHandoffSlotV3::Production,
+        0x20,
+        0x18,
+    );
+    let closure = *consumed.handoff().capsule().compiler_closure();
+    let worker = pinned();
+    let preflight = preflight_protected_reproducible_first_build_worker_with_revision_v3(
+        consumed.handoff(),
+        receipt,
+        closure,
+        &worker,
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+        WorkerRequestRevisionV1::V2,
+    )
+    .unwrap();
+    let evidence = execute_preflighted_protected_reproducible_first_build_worker_v3(
+        consumed, preflight, &worker,
+    )
+    .unwrap();
+    for (request, response) in [
+        (
+            evidence.bootstrap_request_bytes(),
+            evidence.bootstrap().response(),
+        ),
+        (
+            evidence.exact_replay_request_bytes(),
+            evidence.exact_replay().response(),
+        ),
+    ] {
+        let exchange =
+            InertDecodedWorkerExchangeV2::decode(request, response.canonical_bytes()).unwrap();
+        assert_eq!(exchange.request().revision(), WorkerRequestRevisionV1::V2);
+        assert_eq!(&request[..8], WORKER_REQUEST_MAGIC_V2);
+        assert_eq!(&response.canonical_bytes()[..8], WORKER_RESPONSE_MAGIC_V4);
+        assert!(response.stage_capture().is_none());
+    }
 }
 
 #[test]
@@ -1103,6 +1274,7 @@ fn configured_upstream_llvm_worker_executes_the_native_v3_path() {
         llvm_build_identity
     );
     assert_eq!(&evidence.output_bytes()[..4], b"\x7fELF");
+    assert_capture_required_exchanges(&evidence);
     let bootstrap_output = evidence.bootstrap().response().output().unwrap();
     let replay_output = evidence.exact_replay().response().output().unwrap();
     assert_eq!(bootstrap_output.bytes(), replay_output.bytes());

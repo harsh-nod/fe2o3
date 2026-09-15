@@ -5,12 +5,38 @@ fn compiler_issued_ssa_bindings_v1(
     semantic_function: SemanticFunctionIdV1,
 ) -> Result<BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
     let mut bindings = BTreeMap::new();
+    WorkgroupIndexTransportV1::register(types, callables, &mut bindings)?;
+    register_subgroup_partition_transports_v1(types, callables, &mut bindings)?;
+    borrowed_workgroup_01::register_allocation_workgroup_issuers(types, callables, &mut bindings)?;
     for callable in callables {
         let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
             continue;
         };
         require_current_production_intrinsic_v1(operation)?;
         match operation {
+            SemanticCompilerIntrinsicOperationV1::GlobalBf16MatrixLoad { contract } => {
+                insert_compiler_issued_ssa_binding_v1(
+                    &mut bindings, contract.types().matrix,
+                    SemanticPromotedBindingV1::GlobalBf16MatrixView { contract: *contract },
+                )?;
+                insert_compiler_issued_ssa_binding_v1(
+                    &mut bindings, contract.types().fragment,
+                    SemanticPromotedBindingV1::MatrixFragment {
+                        contract: contract.operand(), storage_layout: contract.storage_layout(),
+                    },
+                )?;
+            }
+            SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }
+                if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::NumericalPolicyIssue { .. }) => {
+                insert_compiler_issued_ssa_binding_v1(
+                    &mut bindings,
+                    contract.signature().output(),
+                    SemanticPromotedBindingV1::NumericalPolicy {
+                        contract: *contract,
+                        source_type: execution_type_identity_v1(types, contract.signature().output())?,
+                    },
+                )?
+            }
             SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context } => {
                 insert_compiler_issued_ssa_binding_v1(
                     &mut bindings,

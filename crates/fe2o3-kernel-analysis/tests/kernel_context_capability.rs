@@ -10,6 +10,9 @@ use fe2o3_kernel_ir::{
     ValueId,
 };
 
+#[path = "kernel_context_capability/coalescing.rs"]
+mod coalescing;
+
 fn context(root: &str) -> KernelContextTypeV1 {
     KernelContextTypeV1::new(root, [1; 32], [2; 32], [3; 32])
 }

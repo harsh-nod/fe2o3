@@ -130,6 +130,78 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn mutable_slice_has_distinct_source_identity_and_exact_physical_contract() {
+    for element in [RustScalarElementTypeV1::I32, RustScalarElementTypeV1::F32] {
+        for width in [PointerWidth::Bits32, PointerWidth::Bits64] {
+            let disjoint = disjoint_slice(element, width);
+            let mutable = RustLayoutEvidenceV1::new(
+                RustTypeEvidenceV1::new(RustSourceTypeShapeV1::mutable_slice(element)),
+                disjoint.abi_class(),
+                width,
+                disjoint.size(),
+                disjoint.abi_alignment(),
+                disjoint.components().to_vec(),
+            )
+            .unwrap();
+            assert_eq!(mutable.rust_type().source_type().element(), element);
+            assert_eq!(mutable.components(), disjoint.components());
+            assert_ne!(mutable.type_identity(), disjoint.type_identity());
+            assert_ne!(
+                mutable.type_identity(),
+                shared_slice(element, width).type_identity()
+            );
+            assert_eq!(
+                mutable.rust_type().canonical_bytes().last(),
+                Some(&if element == RustScalarElementTypeV1::I32 {
+                    5
+                } else {
+                    10
+                })
+            );
+            let source = mutable.rust_type().canonical_bytes();
+            assert_eq!(source[source.len() - 2], 5);
+
+            for (class, size, components) in [
+                (
+                    RustcAbiClassV1::Scalar,
+                    mutable.size(),
+                    mutable.components().to_vec(),
+                ),
+                (
+                    RustcAbiClassV1::ScalarPair,
+                    width.bytes(),
+                    vec![mutable.components()[0]],
+                ),
+                (
+                    RustcAbiClassV1::ScalarPair,
+                    mutable.size(),
+                    shared_slice(element, width).components().to_vec(),
+                ),
+                (
+                    RustcAbiClassV1::ScalarPair,
+                    mutable.size(),
+                    disjoint_slice(RustScalarElementTypeV1::U32, width)
+                        .components()
+                        .to_vec(),
+                ),
+            ] {
+                assert!(
+                    RustLayoutEvidenceV1::new(
+                        mutable.rust_type(),
+                        class,
+                        width,
+                        size,
+                        mutable.abi_alignment(),
+                        components,
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn exact_vecadd_evidence_has_stable_golden_encodings_and_identities() {
     let shared = shared_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);
     let disjoint = disjoint_slice(RustScalarElementTypeV1::F32, PointerWidth::Bits64);

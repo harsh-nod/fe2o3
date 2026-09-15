@@ -177,6 +177,19 @@ fn lower_execution_operation_v1(
     let layout = |element| execution_element_layout_v1(types, element);
     use SemanticExecutionCapabilityOperationV1 as Op;
     Ok(match operation {
+        Op::Gfx950Transpose(_) => return Err(unsupported(0, None, None,
+            "source transpose requires exact LDS allocation, epoch and memory/barrier lowering")),
+        Op::SubgroupPartition(partition) => ExecutionCapabilityOperationV1::SubgroupPartition(
+            lower_subgroup_partition_operation_v1(types, partition)?,
+        ),
+        Op::NumericalPolicyIssue { context, capability, policy } => {
+            ExecutionCapabilityOperationV1::NumericalPolicyIssue {
+                context: id(context)?,
+                capability: id(capability)?,
+                policy: ExecutionTypeIdentityV1::new(*policy.as_bytes()),
+                mode: fe2o3_kernel_ir::NumericalModeV1::StrictIeee,
+            }
+        }
         Op::WorkgroupDerive { context, workgroup } => {
             ExecutionCapabilityOperationV1::WorkgroupDerive {
                 context: id(context)?,
@@ -192,17 +205,28 @@ fn lower_execution_operation_v1(
             subgroup: id(subgroup)?,
             width,
         },
+        Op::SubgroupDeriveBorrowed { .. } => {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "borrowed subgroup derivation requires the retained workgroup SSA referent",
+            ));
+        }
         Op::LdsAllocate {
             workgroup,
             lds,
             element,
             elements,
-        } => ExecutionCapabilityOperationV1::LdsAllocate {
-            workgroup: id(workgroup)?,
-            lds: id(lds)?,
-            element: id(element)?,
-            layout: layout(element)?,
-            elements,
+        } => match borrowed_workgroup_01::borrowed_allocation_pair(types, operation)? {
+            Some((reference, owned)) => ExecutionCapabilityOperationV1::LdsAllocateBorrowed {
+                workgroup_reference: id(reference)?, workgroup: id(owned)?,
+                lds: id(lds)?, element: id(element)?, layout: layout(element)?, elements,
+            },
+            None => ExecutionCapabilityOperationV1::LdsAllocate {
+                workgroup: id(workgroup)?, lds: id(lds)?, element: id(element)?,
+                layout: layout(element)?, elements,
+            },
         },
         Op::LdsInitializeByInvocation {
             input_lds,
@@ -458,6 +482,17 @@ fn lower_execution_operation_v1(
                 witness: id(witness)?,
             }
         }
+        Op::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
+            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
+                workgroup_reference: id(workgroup_reference)?, workgroup: id(workgroup)?,
+                option: id(option)?, witness: id(witness)?,
+            }
+        }
+        Op::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
+            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
+                input_witness: id(input_witness)?, output_witness: id(output_witness)?,
+            }
+        }
         Op::WorkgroupMemoryAllocate {
             workgroup,
             view,
@@ -595,6 +630,33 @@ fn execution_result_types_v1(
     };
     use ExecutionCapabilityOperationV1 as Op;
     Ok(match operation {
+        Op::ReusableLdsConversion(_) => {
+            return Err(unsupported(0, None, None,
+                "reusable LDS requires its checked defined-body SSA transfer"));
+        }
+        Op::NumericalPolicyMath(_) => {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "policy math requires its dedicated typed SSA lowering",
+            ));
+        }
+        Op::SubgroupPartition(partition) => {
+            use fe2o3_kernel_ir::SubgroupPartitionOperationV1 as P;
+            match partition {
+                P::Derive { partition, width, partition_width, .. } => vec![cap(
+                    *partition, ExecutionCapabilityRoleV1::SubgroupPartition {
+                        width: *width, partition_width: *partition_width,
+                    },
+                )],
+                P::ReduceSumF32 { .. } | P::ReduceMaxF32 { .. } | P::BroadcastF32 { .. } => vec![Type::Scalar(ScalarType::F32)],
+            }
+        }
+        Op::NumericalPolicyIssue { capability, policy, mode, .. } => vec![cap(
+            *capability,
+            ExecutionCapabilityRoleV1::NumericalPolicy { policy: *policy, mode: *mode },
+        )],
         Op::WorkgroupDerive { workgroup, .. } => {
             vec![cap(*workgroup, ExecutionCapabilityRoleV1::Workgroup)]
         }
@@ -604,7 +666,13 @@ fn execution_result_types_v1(
             *subgroup,
             ExecutionCapabilityRoleV1::Subgroup { width: *width },
         )],
-        Op::LdsAllocate {
+        Op::SubgroupDeriveBorrowed { workgroup_reference, workgroup, subgroup, width } => vec![cap(
+            *subgroup, ExecutionCapabilityRoleV1::BorrowedSubgroup {
+                workgroup_reference: *workgroup_reference, workgroup: *workgroup, width: *width,
+            },
+        )],
+        Op::LdsAllocateBorrowed { lds: lds_source, element, layout, elements, .. }
+        | Op::LdsAllocate {
             lds: lds_source,
             element,
             layout,
@@ -825,9 +893,13 @@ fn execution_result_types_v1(
                 atomic_scope: None,
             },
         )],
-        Op::WorkgroupMemoryIndex { witness, .. } => vec![cap(
+        Op::WorkgroupMemoryIndex { witness, .. }
+        | Op::WorkgroupMemoryIndexV2 { witness, .. } => vec![cap(
             *witness,
             ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
+        )],
+        Op::WorkgroupMemoryIndexIntoDisjoint { output_witness, .. } => vec![cap(
+            *output_witness, ExecutionCapabilityRoleV1::WorkgroupMemoryIndex,
         )],
         Op::WorkgroupMemoryAllocate {
             view,
@@ -952,14 +1024,19 @@ impl SemanticFunctionLoweringV1<'_> {
         contract: SemanticExecutionCapabilityContractV1,
         callable_source_identity: SemanticFunctionIdentityV1,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-        if self.execution_expansion_identity.is_some() {
-            return Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "execution capability source V1 cannot encode checked call-instance coordinates",
-            ));
-        }
+        let source = self
+            .execution_source_carrier
+            .as_ref()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+            .source_for_call(
+                self.correspondence_owner,
+                self.function,
+                self.execution_source_expansion_identity,
+                self.execution_expansion_identity,
+                block,
+                call,
+                callable_source_identity,
+            )?;
         let authenticated = self.kernel_context.ok_or_else(|| {
             unsupported(
                 self.semantic_function.index(),
@@ -991,6 +1068,9 @@ impl SemanticFunctionLoweringV1<'_> {
             ));
         }
 
+        if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }) {
+            return self.lower_borrowed_subgroup_v1(block, source, operations);
+        }
         let raw_memory = matches!(
             contract.operation(),
             SemanticExecutionCapabilityOperationV1::RawMemoryBind { .. }
@@ -1009,11 +1089,18 @@ impl SemanticFunctionLoweringV1<'_> {
         };
         let mut operands = Vec::with_capacity(materialized_arguments + 2);
         let mut operand_types = Vec::with_capacity(materialized_arguments + 2);
-        for argument in call.arguments().iter().take(materialized_arguments) {
-            let values = self
-                .lower_operand(block, None, argument, operations)?
-                .values()
-                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let borrowed_allocation = borrowed_workgroup_01::borrowed_allocation_pair(self.types, contract.operation())?;
+        let scoped_index_receiver = if borrowed_allocation.is_some()
+            || matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. }) {
+            Some(self.lower_workgroup_index_receiver_v1(block, contract)?)
+        } else { None };
+        for (index, argument) in call.arguments().iter().take(materialized_arguments).enumerate() {
+            let values = if index == 0 && scoped_index_receiver.is_some() {
+                vec![scoped_index_receiver.as_ref().unwrap().clone()]
+            } else {
+                self.lower_operand(block, None, argument, operations)?.values()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            };
             let [(value, ty)] = values.as_slice() else {
                 return Err(unsupported(
                     self.semantic_function.index(),
@@ -1110,6 +1197,7 @@ impl SemanticFunctionLoweringV1<'_> {
                 None
             };
 
+        let borrowed_partition = self.check_borrowed_partition_v1(block, call, contract, &operands, &operand_types)?;
         let operation =
             lower_execution_operation_v1(self.types, contract.operation(), dynamic_extent)?;
         let provenance = ExecutionCapabilityProvenanceV1 {
@@ -1140,8 +1228,21 @@ impl SemanticFunctionLoweringV1<'_> {
         let workgroup_brand = contract
             .workgroup_brand()
             .map(|identity| *identity.as_bytes());
-        let epoch_before = contract.epoch_before().map(|identity| *identity.as_bytes());
-        let epoch_after = contract.epoch_after().map(|identity| *identity.as_bytes());
+        let (epoch_before, epoch_after) = match self.phase_finish_epoch.take() {
+            Some(epoch) => epoch.lower(
+                source,
+                contract,
+                call.destination().ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                    .edge().target().index(),
+                &operation,
+                &provenance,
+                &operand_types,
+            )?,
+            None => (
+                contract.epoch_before().map(|identity| *identity.as_bytes()),
+                contract.epoch_after().map(|identity| *identity.as_bytes()),
+            ),
+        };
         let result_types = execution_result_types_v1(
             self.types,
             &operation,
@@ -1160,12 +1261,14 @@ impl SemanticFunctionLoweringV1<'_> {
             workgroup_brand,
             epoch_before,
             epoch_after,
-            obligations: ExecutionSafetyObligationsV1::from_bits(contract.obligations().bits()),
-            source: ExecutionCapabilitySourceV1 {
-                function: *self.function.identity().as_bytes(),
-                operation: *contract.source_identity().as_bytes(),
-                block: block.index(),
-            },
+            // These extra obligations remain mandatory in KIR. Reaching here
+            // required the original source carrier and checked shared SSA loan.
+            obligations: ExecutionSafetyObligationsV1::from_bits(contract.obligations().bits()
+                | if borrowed_allocation.is_some() {
+                    ExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+                        | ExecutionSafetyObligationsV1::ALIASING_VALIDITY
+                } else { 0 }),
+            source,
         };
         if !kir_contract.is_complete()
             || result_types.iter().any(|ty| {
@@ -1184,6 +1287,7 @@ impl SemanticFunctionLoweringV1<'_> {
             result_types,
             OperationKind::ExecutionCapability(kir_contract),
         )?;
+        self.retain_borrowed_partition_v1(contract.operation(), &results, borrowed_partition)?;
         self.execution_result_binding_v1(
             block,
             operations,
@@ -1203,6 +1307,12 @@ impl SemanticFunctionLoweringV1<'_> {
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         use SemanticExecutionCapabilityOperationV1 as Op;
         match operation {
+            Op::NumericalPolicyIssue { .. } => {
+                let [result] = results else {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                };
+                Ok(SemanticValueBindingV1::Value { id: result.id, ty: result.ty.clone() })
+            }
             Op::LdsReadPublished {
                 option, element, ..
             }
@@ -1251,6 +1361,13 @@ impl SemanticFunctionLoweringV1<'_> {
                     None,
                     witness_value,
                 )
+            }
+            Op::WorkgroupMemoryIndexV2 { option, witness, .. } => {
+                if output != option { return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch); }
+                let [witness_value] = results else {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                };
+                self.execution_option_binding_v1(block, operations, option, witness, None, witness_value)
             }
             Op::Atomic {
                 kind: SemanticExecutionAtomicKindV1::CompareExchange,

@@ -48,10 +48,12 @@ use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc
 mod closure_once_shim_collector_tests;
 pub(crate) mod closure_once_shim_v1;
 mod production_importer_v1;
+pub(crate) use production_importer_v1::reusable_phase_v26::logical_dependencies as reusable_phase_logical_dependencies_v26;
 
 pub(crate) use production_importer_v1::{
     AuthenticatedProductionKernelContextsV1, AuthenticatedRustcIdentityInventoryV3,
     AuthenticatedRustcPreflightPlanV3, ConstructedProductionSemanticMirV1,
+    GuardedBf16SourceEventsV1, RootBf16PhysicalInputV1,
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
 };
 
@@ -186,6 +188,7 @@ impl BoundKernelContextFrontendContractV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedKernelContextSourceV1 {
     root_function_identity: [u8; 32],
+    logical_helper_identity: [u8; 32],
     kernel_marker_identity: [u8; 32],
     issuance_identity: [u8; 32],
     physical_argument_count: u32,
@@ -195,6 +198,10 @@ pub(crate) struct AuthenticatedKernelContextSourceV1 {
 impl AuthenticatedKernelContextSourceV1 {
     pub(crate) const fn root_function_identity(&self) -> [u8; 32] {
         self.root_function_identity
+    }
+
+    pub(crate) const fn logical_helper_identity(&self) -> [u8; 32] {
+        self.logical_helper_identity
     }
 
     pub(crate) const fn kernel_marker_identity(&self) -> [u8; 32] {
@@ -504,9 +511,10 @@ struct KernelRoot<T> {
     kernel_binding: Option<KernelBindingIdV1>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
     kernel_context_contract: Option<BoundKernelContextFrontendContractV1>,
-    reference_effect_binding:
-        Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
+    reference_effect_binding: Option<exclusive_reference_v1::RootReferenceBindingV1<T>>,
 }
+
+pub(crate) mod exclusive_reference_v1;
 
 #[derive(Clone, Debug)]
 struct FrontendContractRegistrationRecord<T> {
@@ -1113,6 +1121,14 @@ fn bind_reference_binding_registrations<'tcx>(
                 "safe Rust reference binding does not point at the exact registered kernel instance",
             ));
         }
+        if exclusive_reference_v1::requires_context_v1(tcx, record.kernel)
+            .map_err(|error| RegistrationError::new(&record.registration_path, error))?
+        {
+            root.reference_effect_binding = Some(
+                exclusive_reference_v1::RootReferenceBindingV1::Pending(record),
+            );
+            continue;
+        }
         let binding = crate::reference_effect_v1::authenticate_reference_binding_v1(
             tcx,
             record.registration_path.clone(),
@@ -1121,7 +1137,9 @@ fn bind_reference_binding_registrations<'tcx>(
             record.reference,
         )
         .map_err(|error| RegistrationError::new(&record.registration_path, error.to_string()))?;
-        root.reference_effect_binding = Some(binding);
+        root.reference_effect_binding = Some(
+            exclusive_reference_v1::RootReferenceBindingV1::Authenticated(binding),
+        );
     }
     Ok(())
 }
@@ -2615,6 +2633,7 @@ struct DeviceCollector<'tcx> {
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
+    pending_exclusive_references: Vec<ReferenceBindingRegistrationRecord<Instance<'tcx>>>,
     ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
@@ -2802,6 +2821,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
+            pending_exclusive_references: Vec::new(),
             ffi_declarations,
             reachable_ffi_imports: BTreeSet::new(),
             expected_target: target,
@@ -2919,6 +2939,16 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
         let identity = self.instance_identity(instance);
         if self.mark_seen(identity.clone())? {
+            let reference_effect_binding = match reference_effect_binding {
+                Some(exclusive_reference_v1::RootReferenceBindingV1::Authenticated(binding)) => {
+                    Some(binding)
+                }
+                Some(exclusive_reference_v1::RootReferenceBindingV1::Pending(record)) => {
+                    self.pending_exclusive_references.push(record);
+                    None
+                }
+                None => None,
+            };
             self.call_chains.insert(
                 identity.clone(),
                 CallChainLink {
@@ -2961,7 +2991,13 @@ impl<'tcx> DeviceCollector<'tcx> {
                 ));
             }
 
-            let mir = self.tcx.instance_mir(function.instance.def);
+            // Fully validate the safe source closure before discovering calls.
+            // Failed proofs retain original MIR and the normal recursive policy.
+            let production_mir = crate::production_rustc_intrinsic_v1::production_mir_v1(
+                self.tcx,
+                function.instance,
+            );
+            let mir = production_mir.body();
             self.charge_function_blocks(&function.instance, mir.basic_blocks.len())?;
             let closure_plan = if crate::closure_profile_v1::contains_concrete_closure_v1(
                 self.tcx,
@@ -3066,6 +3102,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         self.authenticate_kernel_context_contracts()?;
         self.authenticate_production_kernel_source_safety()?;
         self.authenticate_reachable_frontend_contracts()?;
+        self.finalize_exclusive_references_v1()?;
 
         let device_ffi = crate::device_ffi::validate_local_closure(
             self.tcx,
@@ -3653,6 +3690,9 @@ impl<'tcx> DeviceCollector<'tcx> {
                 root_identity,
                 AuthenticatedKernelContextSourceV1 {
                     root_function_identity: *root_function_identity.as_bytes(),
+                    logical_helper_identity: *crate::rustc_semantic_adapter_v1::canonical_function_identities_v1(
+                        self.tcx, helper.instance,
+                    ).function().as_bytes(),
                     kernel_marker_identity: *kernel_marker_identity.as_bytes(),
                     issuance_identity,
                     physical_argument_count,
@@ -3793,6 +3833,14 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    if crate::production_rustc_intrinsic_v1::production_mir_v1(
+                        self.tcx,
+                        function.instance,
+                    )
+                    .is_source_expansion()
+                    {
+                        continue;
+                    }
                     if closure_once_shim_v1::authenticate_closure_once_shim_v1(
                         self.tcx,
                         function.instance,
@@ -3823,13 +3871,67 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ) {
                         continue;
                     }
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_checked_mul_helper_v1(
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_arithmetic_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_checked_div_v1(
                         self.tcx,
                         function.instance,
                     ) {
                         continue;
                     }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_option_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_result_try_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_result_map_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_primitive_value_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_mem_drop_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_bool_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_identity_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_option_compare_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_option_zip_helper_v1(
                         self.tcx,
                         function.instance,
                     ) {
@@ -4656,7 +4758,7 @@ fn authenticate_logical_physical_kernel_argument_v1<'tcx>(
         Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityAtomicReadWrite)
             if role_arguments.len() == 1 && role_types.len() == 1 =>
         {
-            authenticate_physical_slice_v1(*element, physical, Mutability::Not)?;
+            authenticate_physical_slice_v1(*element, physical, Mutability::Mut)?;
         }
         Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityExclusiveReadWrite)
             if role_arguments.is_empty() =>

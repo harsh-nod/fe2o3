@@ -11,6 +11,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdentityV1;
+
 use rustc_abi::ExternAbi;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{BlockCheckMode, ExprKind, Mutability, Safety, UnsafeSource};
@@ -26,6 +28,26 @@ use crate::rustc_semantic_adapter_v1::{
     canonical_function_identities_v1, rustc_mir_body_sha256_v1,
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
+
+mod compact_row_coordinate_v1;
+#[cfg(test)]
+#[path = "reference_effect_v1/output_slice_v1/compiler_tests.rs"]
+mod output_slice_compiler_tests;
+mod output_slice_metadata_v1;
+mod output_slice_v1;
+pub(crate) use compact_row_coordinate_v1::CompactRowsUsize1D;
+#[cfg(test)]
+#[path = "reference_effect_v1/compact_row_compiler_tests.rs"]
+mod compact_row_compiler_tests;
+#[cfg(test)]
+#[path = "reference_effect_v1/compact_row_source_tests.rs"]
+pub(crate) mod compact_row_source_tests;
+
+mod core_wrapping_helper_v1;
+mod guard_constants_v1;
+#[cfg(test)]
+#[path = "reference_effect_v1/vecadd_compiler_tests.rs"]
+mod vecadd_compiler_tests;
 
 pub(crate) const MAX_REFERENCE_BLOCKS_V1: usize = 4_096;
 pub(crate) const MAX_REFERENCE_STATEMENTS_V1: usize = 65_536;
@@ -92,6 +114,19 @@ pub(crate) enum ReferenceArgumentRelationV1 {
         argument: u32,
         element: ReferenceScalarTypeV1,
     },
+    /// A mutable CPU slice for one invocation-owned output element. Its
+    /// metadata remains observable; this is not whole-allocation coverage.
+    InvocationDisjointOutputSlice1D {
+        argument: u32,
+        element: ReferenceScalarTypeV1,
+    },
+    /// Exact original exclusive Global source, authenticated after context
+    /// issuance. This is a point write, not disjointness or allocation coverage.
+    ExclusivePrimitiveOutputSlice1D {
+        argument: u32,
+        element: ReferenceScalarTypeV1,
+        source: crate::collector::exclusive_reference_v1::ExclusiveOutputSourceV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +138,13 @@ pub(crate) struct ReferenceFunctionIdentityV1 {
     pub(crate) generic_type_arguments_sha256: [u8; 32],
     pub(crate) const_generic_arguments_sha256: [u8; 32],
     pub(crate) rustc_mir_body_sha256: [u8; 32],
+}
+
+impl ReferenceFunctionIdentityV1 {
+    pub(crate) fn has_function_identity_v1(&self, function: SemanticFunctionIdentityV1) -> bool {
+        // Registration/ABI binding IDs are not canonical source-function IDs.
+        function.as_bytes() != &[0; 32] && function.as_bytes() == &self.function_sha256
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +237,7 @@ pub(crate) enum ReferenceValueV1 {
     InputLength {
         reference_argument: u32,
     },
-    /// Exact, compiler-derived summary of one direct safe local scalar helper.
+    /// Exact summary of one safe local or source-authenticated core scalar helper.
     /// The summary uses `KernelScalarArgument` leaves as helper-formal symbols;
     /// the resolver substitutes the independently lowered call operands.
     SafeHelperCall {
@@ -383,6 +425,7 @@ impl ReferencePathPredicateV1 {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReferenceOutputCoordinateV1 {
     LogicalPoint(Box<[ReferenceEffectExpressionV1]>),
+    CompactRowsUsize1D(CompactRowsUsize1D),
     SingleCoordinate,
     Dynamic(ReferenceEffectExpressionV1),
     Constant {
@@ -436,7 +479,15 @@ impl ReferenceEffectIrV1 {
     fn observable_output_writes_v1(
         &self,
     ) -> Result<Vec<ReferenceOutputWriteV1>, ReferenceBindingErrorV1> {
-        let guards = reference_block_path_predicates_v1(self)?;
+        self.observable_output_writes_with_budget_v1(&mut ReferenceSymbolicWorkBudgetV2::default())
+    }
+
+    fn observable_output_writes_with_budget_v1(
+        &self,
+        work: &mut ReferenceSymbolicWorkBudgetV2,
+    ) -> Result<Vec<ReferenceOutputWriteV1>, ReferenceBindingErrorV1> {
+        output_slice_v1::validate(self, work)?;
+        let guards = reference_block_path_predicates_with_budget_v1(self, work)?;
         let resolver = ReferenceExpressionResolverV1::new(self)?;
         let point_coordinates = self
             .relations
@@ -452,9 +503,13 @@ impl ReferenceEffectIrV1 {
         let mut writes = Vec::new();
         for relation in &self.relations {
             let (argument, coordinate_output) = match relation {
-                ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. } => {
-                    (*argument, false)
+                ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
+                | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+                    argument, ..
                 }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+                    argument, ..
+                } => (*argument, false),
                 ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
                     (*argument, true)
                 }
@@ -519,6 +574,9 @@ impl ReferenceEffectIrV1 {
                             )));
                         }
                     };
+                    let coordinate = output_slice_v1::coordinate(
+                        self, argument, coordinate, &guard, &resolver, work,
+                    )?;
                     writes.push(ReferenceOutputWriteV1 {
                         argument,
                         block: block.block,
@@ -596,6 +654,22 @@ impl ReferenceEffectIrV1 {
                 } => {
                     digest.update([5, scalar_tag(*element)]);
                     digest.update(argument.to_le_bytes());
+                }
+                ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+                    argument,
+                    element,
+                } => {
+                    digest.update([6, scalar_tag(*element)]);
+                    digest.update(argument.to_le_bytes());
+                }
+                ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+                    argument,
+                    element,
+                    source,
+                } => {
+                    digest.update([7, scalar_tag(*element)]);
+                    digest.update(argument.to_le_bytes());
+                    digest.update(source.canonical_sha256_v1());
                 }
             }
         }
@@ -772,6 +846,8 @@ impl ReferenceEffectIrV1 {
                 }
                 ReferenceArgumentRelationV1::SharedSliceInput { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputSlice { .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { .. }
+                | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
                 | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { .. } => {}
             }
@@ -1087,9 +1163,13 @@ impl ReferenceEffectIrV1 {
         let point_count = self.point_coordinate_count_v1()?;
         Ok(self.relations.iter().find_map(|relation| {
             let (argument, coordinate_output) = match relation {
-                ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. } => {
-                    (*argument, false)
+                ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
+                | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+                    argument, ..
                 }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+                    argument, ..
+                } => (*argument, false),
                 ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
                     (*argument, true)
                 }
@@ -2389,6 +2469,9 @@ fn reference_checked_overflow_v2(
         return None;
     }
     let mask = reference_scalar_mask_v2(lhs_scalar)?;
+    if lhs > mask || rhs > mask {
+        return None;
+    }
     match operation {
         ReferenceBinaryOpV1::Add => Some(lhs.checked_add(rhs).is_none_or(|value| value > mask)),
         ReferenceBinaryOpV1::Subtract => Some(lhs < rhs),
@@ -2479,6 +2562,44 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
 ) -> Result<AuthenticatedReferenceEffectBindingV1, ReferenceBindingErrorV1> {
     authenticate_safe_local_reference(tcx, reference)?;
     let relations = logical_abi_relation_v1(tcx, kernel, reference)?;
+    finish_reference_binding_v1(
+        tcx,
+        registration_path,
+        logical_kernel_name,
+        kernel,
+        reference,
+        relations,
+    )
+}
+
+pub(crate) fn authenticate_exclusive_reference_binding_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    registration_path: String,
+    logical_kernel_name: String,
+    kernel: Instance<'tcx>,
+    reference: Instance<'tcx>,
+    source: &crate::collector::exclusive_reference_v1::ExclusiveReferenceSourcesV1<'tcx>,
+) -> Result<AuthenticatedReferenceEffectBindingV1, ReferenceBindingErrorV1> {
+    authenticate_safe_local_reference(tcx, reference)?;
+    let relations = logical_abi_relation_with_source_v1(tcx, kernel, reference, Some(source))?;
+    finish_reference_binding_v1(
+        tcx,
+        registration_path,
+        logical_kernel_name,
+        kernel,
+        reference,
+        relations,
+    )
+}
+
+fn finish_reference_binding_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    registration_path: String,
+    logical_kernel_name: String,
+    kernel: Instance<'tcx>,
+    reference: Instance<'tcx>,
+    relations: Vec<ReferenceArgumentRelationV1>,
+) -> Result<AuthenticatedReferenceEffectBindingV1, ReferenceBindingErrorV1> {
     let effect_ir = lower_reference_effect_ir_v1(tcx, reference, relations)?;
     let effect_ir_sha256 = effect_ir.canonical_sha256_v1();
     let observable_output_writes = effect_ir.observable_output_effects.clone();
@@ -2488,6 +2609,8 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
             ReferenceArgumentRelationV1::DisjointOutputSlice { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
                 | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { .. }
+                | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { .. }
         )
     }) && observable_output_writes.is_empty()
     {
@@ -2506,7 +2629,7 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
     })
 }
 
-fn function_identity_v1<'tcx>(
+pub(crate) fn function_identity_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> ReferenceFunctionIdentityV1 {
@@ -2599,6 +2722,15 @@ fn logical_abi_relation_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     kernel: Instance<'tcx>,
     reference: Instance<'tcx>,
+) -> Result<Vec<ReferenceArgumentRelationV1>, ReferenceBindingErrorV1> {
+    logical_abi_relation_with_source_v1(tcx, kernel, reference, None)
+}
+
+fn logical_abi_relation_with_source_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    kernel: Instance<'tcx>,
+    reference: Instance<'tcx>,
+    exclusive: Option<&crate::collector::exclusive_reference_v1::ExclusiveReferenceSourcesV1<'tcx>>,
 ) -> Result<Vec<ReferenceArgumentRelationV1>, ReferenceBindingErrorV1> {
     let kernel_signature = instantiated_signature(tcx, kernel);
     let reference_signature = instantiated_signature(tcx, reference);
@@ -2702,6 +2834,20 @@ fn logical_abi_relation_v1<'tcx>(
                 (
                     DisjointOutputKernelTypeV1::InvocationIndex1D,
                     TyKind::Ref(_, pointee, Mutability::Mut),
+                ) if matches!(*pointee.kind(), TyKind::Slice(actual) if actual == element_ty)
+                    && point_axis_count == 1 =>
+                {
+                    relations.push(
+                        ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+                            argument,
+                            element,
+                        },
+                    );
+                    continue;
+                }
+                (
+                    DisjointOutputKernelTypeV1::InvocationIndex1D,
+                    TyKind::Ref(_, pointee, Mutability::Mut),
                 ) if pointee == element_ty && point_axis_count == 1 => {
                     relations.push(
                         ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
@@ -2713,6 +2859,34 @@ fn logical_abi_relation_v1<'tcx>(
                 }
                 _ => return Err(logical_abi_mismatch(index, kernel_ty, reference_ty)),
             }
+        }
+        if let Some(source) =
+            exclusive.and_then(|proof| proof.for_argument_v1(kernel, argument, kernel_ty))
+        {
+            if kernel_ty != reference_ty || point_axis_count != 1 {
+                return Err(logical_abi_mismatch(index, kernel_ty, reference_ty));
+            }
+            let TyKind::Ref(_, pointee, Mutability::Mut) = *kernel_ty.kind() else {
+                return Err(logical_abi_mismatch(index, kernel_ty, reference_ty));
+            };
+            let TyKind::Slice(element_ty) = *pointee.kind() else {
+                return Err(logical_abi_mismatch(index, kernel_ty, reference_ty));
+            };
+            let element = scalar_type_v1(element_ty)
+                .ok_or_else(|| logical_abi_mismatch(index, kernel_ty, reference_ty))?;
+            if !source.matches_binding_v1(&function_identity_v1(tcx, kernel), argument, element) {
+                return Err(ReferenceBindingErrorV1::new(
+                    "exclusive output source belongs to a different root, argument, or primitive",
+                ));
+            }
+            relations.push(
+                ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+                    argument,
+                    element,
+                    source,
+                },
+            );
+            continue;
         }
         return Err(ReferenceBindingErrorV1::new(format!(
             "kernel argument {} type '{kernel_ty}' has no reference ABI relation",
@@ -2733,7 +2907,7 @@ fn logical_abi_mismatch(
     ))
 }
 
-fn scalar_type_v1(ty: Ty<'_>) -> Option<ReferenceScalarTypeV1> {
+pub(crate) fn scalar_type_v1(ty: Ty<'_>) -> Option<ReferenceScalarTypeV1> {
     use rustc_middle::ty::{FloatTy, IntTy, UintTy};
     Some(match *ty.kind() {
         TyKind::Bool => ReferenceScalarTypeV1::Bool,
@@ -2843,8 +3017,11 @@ fn lower_reference_effect_ir_v1<'tcx>(
             "safe Rust reference has {statement_count} MIR statements; maximum is {MAX_REFERENCE_STATEMENTS_V1}",
         )));
     }
+    let mut output_work = ReferenceSymbolicWorkBudgetV2::default();
+    let output_metadata =
+        output_slice_metadata_v1::collect(tcx, body, &relations, &mut output_work)?;
     for (local, declaration) in body.local_decls.iter_enumerated() {
-        if !supported_local_type_v1(declaration.ty) {
+        if !supported_local_type_v1(declaration.ty) && !output_metadata.is_carrier(local) {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "unsupported safe Rust reference local _{} type '{}'; V1 accepts unit, scalar values, scalar tuples, and references or slices of scalars",
                 local.as_usize(),
@@ -2859,13 +3036,26 @@ fn lower_reference_effect_ir_v1<'tcx>(
         for (statement_index, statement) in block.statements.iter().enumerate() {
             match &statement.kind {
                 StatementKind::Assign(assignment) => {
+                    let location = rustc_middle::mir::Location {
+                        block: block_id,
+                        statement_index,
+                    };
+                    if output_metadata.is_definition(location) {
+                        continue;
+                    }
                     let (destination, value) = &**assignment;
                     assignments.push(ReferenceAssignmentV1 {
                         statement: u32::try_from(statement_index).map_err(|_| {
                             ReferenceBindingErrorV1::new("reference statement index exceeds u32")
                         })?,
                         destination: lower_place_v1(tcx, body, *destination, block_index)?,
-                        value: lower_rvalue_v1(tcx, body, value, block_index)?,
+                        value: if let Some(reference_argument) =
+                            output_metadata.length_source(location)
+                        {
+                            ReferenceValueV1::InputLength { reference_argument }
+                        } else {
+                            lower_rvalue_v1(tcx, body, value, block_index)?
+                        },
                     });
                 }
                 StatementKind::StorageLive(_)
@@ -2979,15 +3169,24 @@ fn lower_reference_effect_ir_v1<'tcx>(
         loop_summaries: Box::default(),
         observable_output_effects: Box::default(),
     };
-    let backedges = reference_cfg_backedges_v2(&effect_ir)?;
-    if backedges.is_empty() {
-        effect_ir.observable_output_effects =
-            effect_ir.observable_output_writes_v1()?.into_boxed_slice();
+    if output_slice_v1::is_present(&effect_ir) {
+        // This subset uses the existing charged topological path analysis;
+        // it cannot enter the separate loop-summary protocol.
+        effect_ir.observable_output_effects = effect_ir
+            .observable_output_writes_with_budget_v1(&mut output_work)?
+            .into_boxed_slice();
     } else {
-        validate_reference_loop_shapes_v2(&effect_ir, &backedges)?;
-        let (effects, summaries) = effect_ir.observable_output_writes_with_loops_v2(&backedges)?;
-        effect_ir.observable_output_effects = effects.into_boxed_slice();
-        effect_ir.loop_summaries = summaries.into_boxed_slice();
+        let backedges = reference_cfg_backedges_v2(&effect_ir)?;
+        if backedges.is_empty() {
+            effect_ir.observable_output_effects =
+                effect_ir.observable_output_writes_v1()?.into_boxed_slice();
+        } else {
+            validate_reference_loop_shapes_v2(&effect_ir, &backedges)?;
+            let (effects, summaries) =
+                effect_ir.observable_output_writes_with_loops_v2(&backedges)?;
+            effect_ir.observable_output_effects = effects.into_boxed_slice();
+            effect_ir.loop_summaries = summaries.into_boxed_slice();
+        }
     }
     Ok(effect_ir)
 }
@@ -3048,7 +3247,10 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
             "recursive safe reference helpers are unsupported",
         ));
     }
-    authenticate_safe_local_reference(tcx, helper)?;
+    let reviewed_wrapping = core_wrapping_helper_v1::authenticate(tcx, helper);
+    if reviewed_wrapping.is_none() {
+        authenticate_safe_local_reference(tcx, helper)?;
+    }
     let signature = instantiated_signature(tcx, helper);
     if signature.inputs().len() > MAX_REFERENCE_HELPER_ARGUMENTS_V2 {
         return Err(ReferenceBindingErrorV1::at(
@@ -3119,7 +3321,10 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
             "safe helper return destination type disagrees with its instantiated signature",
         ));
     }
-    let summary = lower_safe_scalar_helper_summary_v2(tcx, helper, &parameters)?;
+    let summary = match reviewed_wrapping {
+        Some(reviewed) => reviewed.summary(tcx)?,
+        None => lower_safe_scalar_helper_summary_v2(tcx, helper, &parameters)?,
+    };
     Ok(ReferenceAssignmentV1 {
         statement,
         destination: lower_place_v1(tcx, body, destination, block)?,
@@ -3421,6 +3626,14 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     ReferenceArgumentRelationV1::ScalarInput { argument, .. }
                     | ReferenceArgumentRelationV1::SharedSliceInput { argument, .. }
                     | ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
+                    | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+                        argument,
+                        ..
+                    }
+                    | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+                        argument,
+                        ..
+                    }
                     | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. }
                     | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
                         argument,
@@ -3484,7 +3697,7 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
             ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
                 if matches!(
                     place.projection.as_ref(),
-                    [ReferencePlaceProjectionV1::Field(0)]
+                    [ReferencePlaceProjectionV1::Field(0 | 1)]
                 ) =>
             {
                 let value = self
@@ -3499,7 +3712,41 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     })?;
                 match value {
                     ReferenceValueV1::Binary { checked: true, .. } => {
-                        self.resolve_value_inner_v1(value, visiting, work, depth + 1)
+                        let expression =
+                            self.resolve_value_inner_v1(value, visiting, work, depth + 1)?;
+                        let overflow_field = matches!(
+                            place.projection.as_ref(),
+                            [ReferencePlaceProjectionV1::Field(1)]
+                        );
+                        if !overflow_field {
+                            return Ok(expression);
+                        }
+                        if let ReferenceEffectExpressionV1::Binary {
+                            operation,
+                            lhs,
+                            rhs,
+                            ..
+                        } = &expression
+                            && matches!(lhs.as_ref(), ReferenceEffectExpressionV1::Constant(_))
+                            && matches!(rhs.as_ref(), ReferenceEffectExpressionV1::Constant(_))
+                            && let Some(overflowed) =
+                                reference_checked_overflow_v2(*operation, lhs, rhs)
+                        {
+                            // Only literal operands enter the shared evaluator here;
+                            // resolving their definitions already spent this traversal's budget.
+                            for _ in 0..3 {
+                                Self::charge_node_v1(work)?;
+                            }
+                            return Ok(ReferenceEffectExpressionV1::Constant(
+                                ReferenceConstantV1::Scalar {
+                                    scalar: ReferenceScalarTypeV1::Bool,
+                                    bits: u128::from(overflowed),
+                                },
+                            ));
+                        }
+                        Err(ReferenceBindingErrorV1::new(
+                            "reference checked overflow field requires exact unsigned constant operands",
+                        ))
                     }
                     _ => Err(ReferenceBindingErrorV1::new(format!(
                         "reference field projection {:?} is not the value field of one checked scalar operation",
@@ -3885,23 +4132,35 @@ fn reference_guarded_edges_v1(
             expected,
             success,
             bounds_check,
-        } => Ok(vec![(
-            *success,
+        } => {
             if bounds_check.is_some() {
-                None
-            } else {
+                return Ok(vec![(*success, None)]);
+            }
+            let condition = guard_constants_v1::resolve(resolver, condition, budget)?;
+            budget.charge_expression_v2(&condition)?;
+            if let Some((ReferenceScalarTypeV1::Bool, bits @ (0 | 1))) =
+                reference_constant_bits_v2(&condition)
+            {
+                return Ok(if (bits == 1) == *expected {
+                    vec![(*success, None)]
+                } else {
+                    Vec::new()
+                });
+            }
+            Ok(vec![(
+                *success,
                 Some(ReferenceGuardAtomV1::Assert {
-                    condition: resolve_predicate_operand_v1(resolver, condition, budget)?,
+                    condition,
                     expected: *expected,
-                })
-            },
-        )]),
+                }),
+            )])
+        }
         ReferenceTerminatorV1::Switch {
             discriminant,
             values,
             otherwise,
         } => {
-            let expression = resolve_predicate_operand_v1(resolver, discriminant, budget)?;
+            let expression = guard_constants_v1::resolve(resolver, discriminant, budget)?;
             budget.charge_v2(values.len())?;
             let mut by_target = BTreeMap::<u32, Vec<u128>>::new();
             let mut all_values = Vec::with_capacity(values.len());
@@ -4580,6 +4839,12 @@ fn digest_output_effect_v1(digest: &mut Sha256, effect: &ReferenceOutputWriteV1)
             }
         }
         ReferenceOutputCoordinateV1::SingleCoordinate => digest.update([1]),
+        ReferenceOutputCoordinateV1::CompactRowsUsize1D(mapping) => {
+            digest.update([4]);
+            digest.update(mapping.axis().to_le_bytes());
+            digest.update(mapping.divisor().to_le_bytes());
+            digest.update(mapping.stride().to_le_bytes());
+        }
         ReferenceOutputCoordinateV1::Dynamic(expression) => {
             digest.update([2]);
             digest_effect_expression_v1(digest, expression);
@@ -4656,6 +4921,10 @@ fn digest_terminator(digest: &mut Sha256, terminator: &ReferenceTerminatorV1) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "reference_effect_v1/checked_constant_tests.rs"]
+mod checked_constant_tests;
 
 #[cfg(test)]
 mod tests {
@@ -5540,6 +5809,37 @@ mod tests {
         );
         assert_eq!(summaries[0].exact_iterations, None);
         assert_eq!(summaries[0].maximum_iterations, u64::from(u32::MAX));
+    }
+
+    #[test]
+    fn reference_function_identity_is_not_a_registration_binding() {
+        use fe2o3_mir_model::semantic_mir_v1::SemanticKernelBindingIdentityV1;
+
+        let mut identity = ReferenceFunctionIdentityV1 {
+            def_path_hash: [1; 16],
+            function_sha256: [2; 32],
+            item_definition_sha256: [3; 32],
+            monomorphization_sha256: [4; 32],
+            generic_type_arguments_sha256: [5; 32],
+            const_generic_arguments_sha256: [6; 32],
+            rustc_mir_body_sha256: [7; 32],
+        };
+        let source = SemanticFunctionIdentityV1::from_sha256([2; 32]);
+        let registration = SemanticKernelBindingIdentityV1::from_sha256([9; 32]);
+        assert_ne!(source.as_bytes(), registration.as_bytes());
+        assert!(identity.has_function_identity_v1(source));
+        assert!(
+            !identity.has_function_identity_v1(SemanticFunctionIdentityV1::from_sha256(
+                *registration.as_bytes(),
+            ))
+        );
+        assert!(
+            !identity.has_function_identity_v1(SemanticFunctionIdentityV1::from_sha256([4; 32],))
+        );
+        let zero = SemanticFunctionIdentityV1::from_sha256([0; 32]);
+        assert!(!identity.has_function_identity_v1(zero));
+        identity.function_sha256 = [0; 32];
+        assert!(!identity.has_function_identity_v1(zero));
     }
 
     #[test]

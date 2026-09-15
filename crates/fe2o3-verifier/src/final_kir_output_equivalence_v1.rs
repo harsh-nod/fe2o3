@@ -30,6 +30,9 @@ use crate::final_kir_advanced_semantics_v1::{
 use crate::functional_refinement_receipt_v2::ranked_effect_formula_replay_prelude_v2;
 use crate::{CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3};
 
+mod workgroup_memory_index_v2;
+mod reusable_lds_v1;
+
 const MAX_FINAL_KIR_SYMBOLIC_NODES_V1: usize = 8_192;
 const MAX_FINAL_KIR_SYMBOLIC_DEPTH_V1: usize = 256;
 const MAX_FINAL_KIR_EXECUTION_STATES_V1: usize = 512;
@@ -303,6 +306,7 @@ enum SymbolicValueV1 {
     Slice(SliceV1),
     Capability(CapabilityV1),
     WorkgroupView(WorkgroupViewV1),
+    ReusableLds(Box<reusable_lds_v1::Handle>),
     WorkgroupIndex(ExpressionV1),
     MemoryView(BoundedMemoryViewV1),
     Opaque,
@@ -484,14 +488,11 @@ pub(crate) fn generate_final_kir_output_equivalence_v1(
         {
             return Err(FinalKirOutputEquivalenceErrorV1::KernelContractMismatch);
         }
-        let workgroup_width = source_kernel
-            .workgroup_size
-            .filter(|size| size.y == 1 && size.z == 1)
-            .map(|size| size.x);
+        let workgroup_size = source_kernel.workgroup_size;
         let source_effects =
-            extract_kernel_effects(source_function, &numerical_policies, workgroup_width)?;
+            extract_kernel_effects(source_function, &numerical_policies, workgroup_size)?;
         let final_effects =
-            extract_kernel_effects(final_function, &numerical_policies, workgroup_width)?;
+            extract_kernel_effects(final_function, &numerical_policies, workgroup_size)?;
         if source_effects.output_roots != final_effects.output_roots {
             return Err(FinalKirOutputEquivalenceErrorV1::OutputRosterMismatch);
         }
@@ -584,7 +585,7 @@ fn require_matching_kernel_contract(
 fn extract_kernel_effects(
     function: &Function,
     numerical_policies: &BTreeMap<ScalarType, NumericalModeV1>,
-    workgroup_width: Option<u32>,
+    workgroup_size: Option<fe2o3_kernel_ir::WorkgroupSize>,
 ) -> Result<KernelEffectsV1, FinalKirOutputEquivalenceErrorV1> {
     if !function.signature.results.is_empty() {
         return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedControlFlow);
@@ -605,6 +606,7 @@ fn extract_kernel_effects(
     let execution_element_scalars = infer_execution_element_scalars(function)?;
     let mut blocks = BTreeMap::new();
     let mut definitions = body.parameters.iter().copied().collect::<BTreeSet<_>>();
+    let mut has_reusable_lds = false;
     for block in &body.blocks {
         if blocks.insert(block.id, block).is_some() || block.terminator.is_none() {
             return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedControlFlow);
@@ -613,7 +615,14 @@ fn extract_kernel_effects(
             block
                 .operations
                 .iter()
-                .flat_map(|operation| &operation.results),
+                .flat_map(|operation| {
+                    has_reusable_lds |= matches!(
+                        &operation.kind,
+                        OperationKind::ExecutionCapability(capability)
+                            if matches!(capability.operation, ExecutionCapabilityOperationV1::ReusableLdsConversion(_))
+                    );
+                    &operation.results
+                }),
         ) {
             if !definitions.insert(definition.id) {
                 return Err(FinalKirOutputEquivalenceErrorV1::MalformedValueFlow);
@@ -621,6 +630,10 @@ fn extract_kernel_effects(
         }
     }
 
+    let mut nodes = 0_usize;
+    let reusable_lds = has_reusable_lds
+        .then(|| reusable_lds_v1::Transfers::collect(function, &mut nodes))
+        .transpose()?;
     let mut values = BTreeMap::new();
     let mut memories = BTreeMap::new();
     for (ordinal, (identity, ty)) in body
@@ -666,7 +679,6 @@ fn extract_kernel_effects(
     let mut intrinsics = BTreeSet::new();
     let mut wave_widths = BTreeSet::new();
     let mut capability_roots = BTreeMap::new();
-    let mut nodes = 0_usize;
     let mut scheduled_states = 1_usize;
     while let Some(mut state) = pending.pop_front() {
         let block = blocks
@@ -679,6 +691,16 @@ fn extract_kernel_effects(
             if nodes > MAX_FINAL_KIR_SYMBOLIC_NODES_V1 {
                 return Err(FinalKirOutputEquivalenceErrorV1::ResourceLimit);
             }
+            if matches!(
+                &operation.kind,
+                OperationKind::ExecutionCapability(capability)
+                    if matches!(capability.operation, ExecutionCapabilityOperationV1::ReusableLdsConversion(_))
+            ) {
+                reusable_lds.as_ref()
+                    .ok_or(FinalKirOutputEquivalenceErrorV1::MalformedValueFlow)?
+                    .execute(operation, &mut state, &mut nodes)?;
+                continue;
+            }
             execute_operation(
                 operation,
                 &mut state,
@@ -686,7 +708,7 @@ fn extract_kernel_effects(
                 &mut wave_widths,
                 &mut capability_roots,
                 numerical_policies,
-                workgroup_width,
+                workgroup_size,
                 &execution_element_scalars,
             )?;
         }
@@ -849,9 +871,10 @@ fn execute_operation(
     wave_widths: &mut BTreeSet<u32>,
     capability_roots: &mut BTreeMap<u32, u8>,
     numerical_policies: &BTreeMap<ScalarType, NumericalModeV1>,
-    workgroup_width: Option<u32>,
+    workgroup_size: Option<fe2o3_kernel_ir::WorkgroupSize>,
     execution_element_scalars: &BTreeMap<fe2o3_kernel_ir::ExecutionTypeIdentityV1, ScalarV1>,
 ) -> Result<(), FinalKirOutputEquivalenceErrorV1> {
+    let workgroup_width = workgroup_size.filter(|size| size.y == 1 && size.z == 1).map(|size| size.x);
     let defined = match &operation.kind {
         OperationKind::Constant(constant) => {
             Some(SymbolicValueV1::Scalar(constant_expression(constant)?))
@@ -1670,7 +1693,8 @@ fn execute_operation(
                 wave_widths.insert(*width);
                 Some(SymbolicValueV1::Opaque)
             }
-            ExecutionCapabilityOperationV1::LdsAllocate {
+            ExecutionCapabilityOperationV1::LdsAllocateBorrowed { layout, elements, .. }
+            | ExecutionCapabilityOperationV1::LdsAllocate {
                 layout, elements, ..
             }
             | ExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
@@ -1716,6 +1740,12 @@ fn execute_operation(
                     ExpressionKindV1::Intrinsic(kind),
                 )))
             }
+            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => Some(
+                workgroup_memory_index_v2::issue(capability, state, intrinsics, workgroup_size)?
+            ),
+            ExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => Some(
+                workgroup_memory_index_v2::into_disjoint(capability, state)?
+            ),
             ExecutionCapabilityOperationV1::RawMemoryBind {
                 extent,
                 layout,
@@ -2053,6 +2083,10 @@ fn execute_operation(
         OperationKind::Atomic(_) => {
             return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedAtomicSemantics);
         }
+        OperationKind::ReusablePhase(_) => {
+            // No symbolic allocation/lease transition model exists for this family.
+            return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedOperation);
+        }
         OperationKind::InlineAssembly(_) => {
             return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedOperation);
         }
@@ -2226,6 +2260,11 @@ fn value_matches_type(value: &SymbolicValueV1, ty: &Type) -> bool {
                 == Some(value.physical.element)
                 && capability.role() == value.role
         }
+        (SymbolicValueV1::ReusableLds(value), Type::ExecutionCapability(capability)) => {
+            value.matches_type(capability)
+        }
+        (SymbolicValueV1::Opaque, Type::ExecutionCapability(capability))
+            if matches!(capability.role, fe2o3_kernel_ir::ExecutionCapabilityRoleV1::ReusableLds { .. }) => false,
         (SymbolicValueV1::WorkgroupView(value), Type::ExecutionCapability(capability)) => {
             let expected_lds_state = if value.published {
                 fe2o3_kernel_ir::ExecutionLdsStateV1::Published
@@ -2601,6 +2640,9 @@ fn parameter_value(
         }),
         Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_) => {
             SymbolicValueV1::Opaque
+        }
+        Type::ReusablePhaseToken(_) => {
+            return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedScalarType);
         }
         Type::Unit => return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedScalarType),
     })
@@ -3415,6 +3457,9 @@ fn render_kernel_lemma(
                 parameters.push(format!("m{ordinal}: spec_fn(int) -> int"));
                 parameters.push(format!("len{ordinal}: int"));
             }
+            Type::ReusablePhaseToken(_) => {
+                return Err(FinalKirOutputEquivalenceErrorV1::UnsupportedScalarType);
+            }
             Type::Unit
             | Type::KernelContext(_)
             | Type::GlobalCapability(_)
@@ -3958,6 +4003,9 @@ mod tests {
     };
 
     use super::*;
+
+    mod reusable_lds_v1_tests;
+    mod phase_compile_closure_tests;
 
     fn kernel_module(addend: Option<u32>) -> Module {
         let mut block = BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
@@ -4582,6 +4630,7 @@ mod tests {
                     function: [0x67; 32],
                     operation: [source_ordinal; 32],
                     block: 0,
+                    occurrence: None,
                 },
                 operation,
             }),

@@ -8,10 +8,21 @@ use fe2o3_kernel_ir::{
 /// Closed execution-capability operation family awaiting operational translation evidence.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProductionV13ExecutionCapabilityOperationKindV1 {
+    /// Issue typed strict numerical policy without certifying any FP operation.
+    NumericalPolicyIssue,
+    /// Policy-bound FP source/binding/consumer awaiting an exact physical adapter.
+    NumericalPolicyMath,
+    ReusableLdsConversion,
     /// Derive workgroup authority from kernel context.
     WorkgroupDerive,
     /// Derive subgroup authority from workgroup authority.
     SubgroupDerive,
+    /// Derive an exact epoch-bound partition of a physical subgroup.
+    SubgroupPartitionDerive,
+    /// Sum f32 values within each exact subgroup partition.
+    SubgroupPartitionReduceSumF32,
+    /// Broadcast f32 from a bounded partition-local lane.
+    SubgroupPartitionBroadcastF32,
     /// Allocate logical LDS storage.
     LdsAllocate,
     /// Initialize LDS cooperatively by invocation.
@@ -46,6 +57,10 @@ pub enum ProductionV13ExecutionCapabilityOperationKindV1 {
     PrivateMemoryAllocate,
     /// Workgroup-memory index-space witness.
     WorkgroupMemoryIndex,
+    /// Source-shaped optional workgroup index issuance.
+    WorkgroupMemoryIndexV2,
+    /// Scope-preserving conversion of an existing workgroup index.
+    WorkgroupMemoryIndexIntoDisjoint,
     /// Workgroup-memory allocation.
     WorkgroupMemoryAllocate,
     /// Workgroup-memory publication.
@@ -54,6 +69,12 @@ pub enum ProductionV13ExecutionCapabilityOperationKindV1 {
     MemoryLoad,
     /// Capability-governed memory store.
     MemoryStore,
+    /// Derive subgroup authority while retaining a shared Workgroup source borrow.
+    SubgroupDeriveBorrowed,
+    /// Ordered-comparison maximum with the exact ascending-XOR partition tree.
+    SubgroupPartitionReduceMaxF32,
+    /// Allocate through an authenticated shared Workgroup source receiver.
+    LdsAllocateBorrowed,
 }
 
 /// Closed KIR operation family awaiting complete operational translation evidence.
@@ -131,6 +152,8 @@ pub enum ProductionV13KirOperationFamilyV1 {
     IntegerSwitchTerminator,
     /// Unreachable terminator.
     UnreachableTerminator,
+    /// Linear phase custody has no structured operational derivation yet.
+    ReusablePhase,
 }
 
 /// Exact source location and kind not covered by a complete operational derivation.
@@ -218,6 +241,7 @@ fn terminator_family(terminator: &Terminator) -> ProductionV13KirOperationFamily
 fn operation_family(operation: &OperationKind) -> ProductionV13KirOperationFamilyV1 {
     use ProductionV13KirOperationFamilyV1 as Family;
     match operation {
+        OperationKind::ReusablePhase(_) => Family::ReusablePhase,
         OperationKind::Constant(_) => Family::Constant,
         OperationKind::Intrinsic(_) => Family::Intrinsic,
         OperationKind::MemoryIntrinsic(_) => Family::MemoryIntrinsic,
@@ -259,8 +283,22 @@ fn execution_operation_kind(
     use ExecutionCapabilityOperationV1 as Operation;
     use ProductionV13ExecutionCapabilityOperationKindV1 as Kind;
     match operation {
+        Operation::SubgroupPartition(partition) => {
+            use fe2o3_kernel_ir::SubgroupPartitionOperationV1 as P;
+            match partition {
+                P::Derive { .. } => Kind::SubgroupPartitionDerive,
+                P::ReduceSumF32 { .. } => Kind::SubgroupPartitionReduceSumF32,
+                P::ReduceMaxF32 { .. } => Kind::SubgroupPartitionReduceMaxF32,
+                P::BroadcastF32 { .. } => Kind::SubgroupPartitionBroadcastF32,
+            }
+        }
+        Operation::NumericalPolicyMath(_) => Kind::NumericalPolicyMath,
+        Operation::ReusableLdsConversion(_) => Kind::ReusableLdsConversion,
+        Operation::NumericalPolicyIssue { .. } => Kind::NumericalPolicyIssue,
         Operation::WorkgroupDerive { .. } => Kind::WorkgroupDerive,
         Operation::SubgroupDerive { .. } => Kind::SubgroupDerive,
+        Operation::SubgroupDeriveBorrowed { .. } => Kind::SubgroupDeriveBorrowed,
+        Operation::LdsAllocateBorrowed { .. } => Kind::LdsAllocateBorrowed,
         Operation::LdsAllocate { .. } => Kind::LdsAllocate,
         Operation::LdsInitializeByInvocation { .. } => Kind::LdsInitializeByInvocation,
         Operation::LdsPublish { .. } => Kind::LdsPublish,
@@ -278,6 +316,8 @@ fn execution_operation_kind(
         Operation::RawMemoryBind { .. } => Kind::RawMemoryBind,
         Operation::PrivateMemoryAllocate { .. } => Kind::PrivateMemoryAllocate,
         Operation::WorkgroupMemoryIndex { .. } => Kind::WorkgroupMemoryIndex,
+        Operation::WorkgroupMemoryIndexV2 { .. } => Kind::WorkgroupMemoryIndexV2,
+        Operation::WorkgroupMemoryIndexIntoDisjoint { .. } => Kind::WorkgroupMemoryIndexIntoDisjoint,
         Operation::WorkgroupMemoryAllocate { .. } => Kind::WorkgroupMemoryAllocate,
         Operation::WorkgroupMemoryPublish { .. } => Kind::WorkgroupMemoryPublish,
         Operation::MemoryLoad { .. } => Kind::MemoryLoad,

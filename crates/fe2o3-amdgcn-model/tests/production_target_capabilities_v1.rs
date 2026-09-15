@@ -112,6 +112,7 @@ fn execution_operation(operation: ExecutionCapabilityOperationV1) -> Operation {
                 function: [9; 32],
                 operation: [10; 32],
                 block: 0,
+                occurrence: None,
             },
             operation,
         }),

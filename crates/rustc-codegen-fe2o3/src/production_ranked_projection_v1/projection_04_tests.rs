@@ -86,7 +86,7 @@
     }
 
     #[test]
-    fn guarded_disjoint_access_is_ordinary_clean_pliron_cfg() {
+    fn guarded_disjoint_access_has_clean_guards_but_requires_effect_refinement() {
         let invocation = ProductionRankedValueIdV1::new(0);
         let view = ProductionRankedValueIdV1::new(1);
         let entry = vec![
@@ -123,6 +123,15 @@
         assert_eq!(blocks.len(), 5);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].block, 2);
+        assert_eq!(
+            blocks[1].terminator(),
+            &ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: ProductionRankedValueV1::Local(invocation),
+                rhs: ProductionRankedValueV1::Argument(0),
+                true_block: 2,
+                false_block: 3,
+            }
+        );
         assert!(matches!(
             blocks[3].terminator(),
             ProductionRankedTerminatorV1::Trap
@@ -130,15 +139,50 @@
         let kernel = ProductionRankedKernelV1::new("generic_checked_access", 1, blocks).unwrap();
         let construction =
             ProductionConstructionV1::ranked_kernel("checked_access_module", kernel).unwrap();
-        let lowering = compile_ranked_kernel_for_lowering_v1(
+        assert_guarded_write_requires_effect_refinement(construction, sources[0]);
+        assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
+        assert!(ranked_ir.contains("kernel.br ^bb4"));
+    }
+
+    fn assert_guarded_write_requires_effect_refinement(
+        construction: ProductionConstructionV1,
+        source: ProjectedAccessSourceV1,
+    ) {
+        use fe2o3_kernel_analysis::{KernelCheckStatusV1, PlironEffectRefinementFindingV1};
+
+        assert_eq!(source.access, AccessKindAttr::Write);
+        assert_eq!(source.memory_space, MemorySpaceAttr::Global);
+        let error = compile_ranked_kernel_for_lowering_v1(
             construction,
             ProductionSessionLimitsV1::default(),
         )
-        .unwrap();
-        assert!(lowering.bounds_report().is_clean());
-        assert!(lowering.race_report().is_clean());
-        assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
-        assert!(ranked_ir.contains("kernel.br ^bb4"));
+        .expect_err("bounds and race checks cannot supply the missing reference-effect contract");
+        // The fixed production pipeline reaches semantics only after clean
+        // bounds and race checks; an earlier prerequisite failure is not enough.
+        let ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(
+            error,
+        )) = error
+        else {
+            panic!("guarded access must reach effect refinement, got {error:?}");
+        };
+        let report = error.report();
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(report.findings().is_empty(), "{report:?}");
+        assert!(report.progress().is_clean(), "{report:?}");
+        let effects = report.effect_refinement();
+        assert_eq!(effects.status(), KernelCheckStatusV1::Rejected);
+        assert_eq!(effects.contract_count(), 0);
+        assert_eq!(effects.proved_contract_count(), 0);
+        let [PlironEffectRefinementFindingV1::UnmodeledWriteSite { location, .. }] =
+            effects.findings()
+        else {
+            panic!("expected the exact missing write-effect contract, got {effects:?}");
+        };
+        assert_eq!(location.block(), source.block);
+        assert_eq!(location.operation(), source.operation);
+        assert!(!effects.all_declared_effects_are_proved());
+        assert!(!effects.grants_compiler_refinement_authority());
+        assert!(!effects.grants_artifact_or_launch_authority());
     }
 
     #[test]
@@ -634,7 +678,26 @@
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
         assert_eq!(blocks.len(), 6);
+        assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].block, 3);
+        assert_eq!(
+            blocks[1].terminator(),
+            &ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: ProductionRankedValueV1::Local(invocation),
+                rhs: ProductionRankedValueV1::Local(upper),
+                true_block: 2,
+                false_block: 4,
+            }
+        );
+        assert_eq!(
+            blocks[2].terminator(),
+            &ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: ProductionRankedValueV1::Local(shifted),
+                rhs: ProductionRankedValueV1::Argument(0),
+                true_block: 3,
+                false_block: 4,
+            }
+        );
         assert!(matches!(
             blocks[4].terminator(),
             ProductionRankedTerminatorV1::Trap
@@ -645,13 +708,7 @@
         let kernel = ProductionRankedKernelV1::new("shifted_checked_access", 1, blocks).unwrap();
         let construction =
             ProductionConstructionV1::ranked_kernel("shifted_access_module", kernel).unwrap();
-        let lowering = compile_ranked_kernel_for_lowering_v1(
-            construction,
-            ProductionSessionLimitsV1::default(),
-        )
-        .unwrap();
-        assert!(lowering.bounds_report().is_clean());
-        assert!(lowering.race_report().is_clean());
+        assert_guarded_write_requires_effect_refinement(construction, sources[0]);
     }
 
     #[test]

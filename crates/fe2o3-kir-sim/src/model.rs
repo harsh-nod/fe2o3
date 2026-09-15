@@ -804,11 +804,18 @@ impl From<VerifiedCanonicalKernelIrIdentityV13> for SimulationKernelIrIdentityV1
     }
 }
 
+impl From<fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV1> for SimulationKernelIrIdentityV1 {
+    fn from(identity: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV1) -> Self {
+        Self { wire_version: identity.version().wire_version(), digest: *identity.digest(), canonical_length: identity.canonical_length() }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum AdmissionProjectionV1 {
     Identity,
     EraseLogicalCapabilitiesV12,
     EraseLogicalCapabilitiesV13,
+    EraseLogicalCapabilitiesDeclared(fe2o3_kernel_ir::CanonicalKernelIrVersionV1),
 }
 
 /// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
@@ -817,7 +824,7 @@ pub struct AdmittedSimulationModuleV1 {
     pub(crate) identity: SimulationKernelIrIdentityV1,
     pub(crate) module: Module,
     pub(crate) capability_projection_v13:
-        Option<crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV13>,
+        Option<crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV1>,
     pub(crate) admitted_resident_bytes: usize,
 }
 
@@ -918,15 +925,20 @@ impl AdmittedSimulationModuleV1 {
         canonical: VerifiedCanonicalKernelIrV13,
         limits: SimulationLimitsV1,
     ) -> Result<Self, SimulationAdmissionErrorV1> {
+        Self::admit_declared(canonical.into_common(), limits)
+    }
+
+    /// Consumes one exact declared owner; V13 facades never admit V14 bytes.
+    pub fn admit_declared(canonical: fe2o3_kernel_ir::VerifiedCanonicalKernelIrV1, limits: SimulationLimitsV1)
+        -> Result<Self, SimulationAdmissionErrorV1> {
         let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
-        Self::admit_canonical(
-            identity,
-            canonical.into_canonical_bytes(),
-            limits,
-            decode_module_v13,
-            encode_module_v13,
-            AdmissionProjectionV1::EraseLogicalCapabilitiesV13,
-        )
+        let version = canonical.version();
+        let (decode, encode): (fn(&[u8])->Result<Module,KernelIrDecodeError>, fn(&Module)->Result<Vec<u8>,KernelIrEncodeError>) = match version {
+            fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13 => (decode_module_v13, encode_module_v13),
+            fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V14 => (fe2o3_kernel_ir::decode_module_v14, fe2o3_kernel_ir::encode_module_v14),
+        };
+        Self::admit_canonical(identity, canonical.into_canonical_bytes(), limits, decode, encode,
+            AdmissionProjectionV1::EraseLogicalCapabilitiesDeclared(version))
     }
 
     fn admit_canonical(
@@ -962,12 +974,13 @@ impl AdmittedSimulationModuleV1 {
         let (module, projection_scratch_bytes, capability_projection_v13) = match projection {
             AdmissionProjectionV1::Identity => (module, 0, None),
             AdmissionProjectionV1::EraseLogicalCapabilitiesV12
-            | AdmissionProjectionV1::EraseLogicalCapabilitiesV13 => {
+            | AdmissionProjectionV1::EraseLogicalCapabilitiesV13
+            | AdmissionProjectionV1::EraseLogicalCapabilitiesDeclared(_) => {
                 verify_module(&module)
                     .map_err(SimulationAdmissionErrorV1::LogicalCapabilityErasureVerification)?;
                 let retain_v13_receipt = matches!(
                     projection,
-                    AdmissionProjectionV1::EraseLogicalCapabilitiesV13
+                    AdmissionProjectionV1::EraseLogicalCapabilitiesV13 | AdmissionProjectionV1::EraseLogicalCapabilitiesDeclared(_)
                 );
                 if retain_v13_receipt
                     && let Some(operation) =
@@ -985,8 +998,12 @@ impl AdmittedSimulationModuleV1 {
                         requirement,
                     ));
                 }
+                let version = match projection {
+                    AdmissionProjectionV1::EraseLogicalCapabilitiesDeclared(version) => version,
+                    _ => fe2o3_kernel_ir::CanonicalKernelIrVersionV1::V13,
+                };
                 let (module, scratch, receipt) =
-                    crate::context::erase_logical_capabilities(module, retain_v13_receipt).map_err(
+                    crate::context::erase_logical_capabilities_declared(module, retain_v13_receipt, version).map_err(
                         |error| match error {
                         crate::context::LogicalCapabilityErasureError::AllocationFailure => {
                             SimulationAdmissionErrorV1::LogicalCapabilityErasureAllocationFailure
@@ -1018,6 +1035,8 @@ impl AdmittedSimulationModuleV1 {
             .and_then(|bytes| bytes.checked_add(capability_receipt_bytes))
             .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?;
         let decode_peak = decoded_resident_bytes
+            .checked_add(capability_receipt_bytes)
+            .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?
             .max(admitted_resident_bytes)
             .checked_add(projection_scratch_bytes)
             .and_then(|bytes| bytes.checked_add(canonical_capacity))
@@ -1063,6 +1082,11 @@ impl AdmittedSimulationModuleV1 {
     pub fn capability_projection_receipt_v13(
         &self,
     ) -> Option<&crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV13> {
+        self.capability_projection_v13.as_ref().and_then(|r| r.as_v13())
+    }
+
+    /// Complete version-labelled pre-erasure coordinate receipt; grants no authority.
+    pub fn capability_projection_receipt(&self) -> Option<&crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV1> {
         self.capability_projection_v13.as_ref()
     }
 
@@ -1185,6 +1209,10 @@ impl Error for SimulationAdmissionErrorV1 {
 /// admission cannot silently erase or reinterpret an unsupported operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IncompleteExecutionCapabilityOperationV13 {
+    SubgroupPartition,
+    /// The issued token is used and no exact consumer projection is implemented.
+    NumericalPolicyIssue,
+    NumericalPolicyMath,
     WorkgroupDerive,
     SubgroupDerive,
     LdsAllocate,
@@ -1204,6 +1232,8 @@ pub enum IncompleteExecutionCapabilityOperationV13 {
     RawMemoryBind,
     PrivateMemoryAllocate,
     WorkgroupMemoryIndex,
+    WorkgroupMemoryIndexV2,
+    WorkgroupMemoryIndexIntoDisjoint,
     WorkgroupMemoryAllocate,
     WorkgroupMemoryPublish,
     MemoryLoad,
@@ -1213,6 +1243,9 @@ pub enum IncompleteExecutionCapabilityOperationV13 {
 impl fmt::Display for IncompleteExecutionCapabilityOperationV13 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::SubgroupPartition => "subgroup_partition",
+            Self::NumericalPolicyIssue => "numerical_policy_issue",
+            Self::NumericalPolicyMath => "numerical_policy_math",
             Self::WorkgroupDerive => "workgroup_derive",
             Self::SubgroupDerive => "subgroup_derive",
             Self::LdsAllocate => "lds_allocate",
@@ -1232,6 +1265,8 @@ impl fmt::Display for IncompleteExecutionCapabilityOperationV13 {
             Self::RawMemoryBind => "raw_memory_bind",
             Self::PrivateMemoryAllocate => "private_memory_allocate",
             Self::WorkgroupMemoryIndex => "workgroup_memory_index",
+            Self::WorkgroupMemoryIndexV2 => "workgroup_memory_index_v2",
+            Self::WorkgroupMemoryIndexIntoDisjoint => "workgroup_memory_index_into_disjoint",
             Self::WorkgroupMemoryAllocate => "workgroup_memory_allocate",
             Self::WorkgroupMemoryPublish => "workgroup_memory_publish",
             Self::MemoryLoad => "memory_load",

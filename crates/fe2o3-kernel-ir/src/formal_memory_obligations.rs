@@ -753,6 +753,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                     }
                 }
                 OperationKind::Alloca { .. }
+                | OperationKind::ReusablePhase(_)
                 | OperationKind::Barrier(_)
                 | OperationKind::Fence(_)
                 | OperationKind::Matrix(_)

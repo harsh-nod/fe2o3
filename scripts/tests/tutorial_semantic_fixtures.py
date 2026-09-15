@@ -146,6 +146,80 @@ class TutorialSemanticFixtureTests(unittest.TestCase):
             expected = json.dumps(record, ensure_ascii=True, indent=2, allow_nan=False).encode("ascii") + b"\n"
             self.assertEqual(expected, (RUNNER.FIXTURE_ROOT / f"{identity}.json").read_bytes())
 
+    def test_producer_build_uses_source_declared_features(self) -> None:
+        producer = GENERATOR._load_producer_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            runtime = root / "runtime"
+            runtime.mkdir()
+            (target / "debug").mkdir(parents=True)
+            for name in (producer.TRANSACTION_EXPORT_BINARY, "cargo-fe2o3"):
+                (target / "debug" / name).write_bytes(b"test build result")
+            commands = []
+
+            def run(command, **_kwargs):
+                commands.append(command)
+                stdout = f"{runtime}\n".encode() if command[0] == "rustc" else b""
+                return GENERATOR.subprocess.CompletedProcess(command, 0, stdout, b"")
+
+            with mock.patch.object(GENERATOR.shutil, "which", return_value="/pinned/cargo"), \
+                 mock.patch.object(GENERATOR, "_run", side_effect=run):
+                result = GENERATOR._build_producer(producer, target, root)
+            self.assertEqual(result, (
+                target / "debug" / producer.TRANSACTION_EXPORT_BINARY,
+                target / "debug" / "cargo-fe2o3",
+            ))
+            self.assertEqual(commands[0], ["rustc", "--print", "target-libdir"])
+            self.assertEqual(commands[1], [
+                "/pinned/cargo", "build", "--offline", "--locked", "--package",
+                "rustc-codegen-fe2o3", "--bin", producer.TRANSACTION_EXPORT_BINARY,
+                "--message-format=short",
+            ])
+            self.assertEqual(commands[2], [
+                "/pinned/cargo", "build", "--offline", "--locked", "--package",
+                "cargo-fe2o3", "--bin", "cargo-fe2o3", "--message-format=short",
+            ])
+
+    def test_producer_probe_uses_prepare_without_hardware_authority(self) -> None:
+        producer = GENERATOR._load_producer_contract()
+        fixtures = {item["fixtureId"]: item for item in self.manifest["compilerFixtures"]}
+        kernels = {
+            item["fixtureId"]: item
+            for item in self.manifest["capabilityKernels"]
+        }
+        candidate = {"compilerCommit": "a" * 40, "compilerTree": "b" * 40}
+        diagnostic = b"fe2o3 tutorial production transaction: FE2O3-TUTORIAL-TXN-007: observed test blocker\n"
+        commands = []
+
+        def run(command, **_kwargs):
+            if command[0] == "rustc":
+                return GENERATOR.subprocess.CompletedProcess(command, 0, b"/pinned/sysroot\n", b"")
+            commands.append(command)
+            return GENERATOR.subprocess.CompletedProcess(command, 1, b"", diagnostic)
+
+        with mock.patch.object(GENERATOR, "_git_snapshot", return_value=({}, candidate, ROOT)), \
+             mock.patch.object(GENERATOR, "_build_producer", return_value=(Path("/pinned/producer"), Path("/pinned/cargo-fe2o3"))), \
+             mock.patch.object(GENERATOR, "_run", side_effect=run):
+            exports = GENERATOR.probe_production_exports(self.manifest, fixtures, kernels)
+        self.assertEqual(47, len(commands))
+        self.assertEqual(self.fixture_ids, set(exports))
+        self.assertTrue(all(item["diagnosticCode"] == "FE2O3-TUTORIAL-TXN-007" for item in exports.values()))
+        for command in commands:
+            self.assertEqual(command[:5], [
+                "/pinned/producer", "--phase", "prepare", "--cargo-fe2o3", "/pinned/cargo-fe2o3",
+            ])
+            self.assertEqual(command[5::2], ["--request", "--output-directory"])
+            self.assertFalse(Path(command[-1]).parent.exists(), "probe scratch must be removed")
+
+    def test_available_coordinates_require_validated_pre_hardware_transport(self) -> None:
+        producer = mock.Mock()
+        producer.validate_pre_hardware_export.side_effect = ValueError("stale or substituted")
+        request = {"fixture": {"fixtureId": "test", "target": "gfx950"}}
+        with self.assertRaisesRegex(ValueError, "stale or substituted"):
+            GENERATOR._available_export(producer, Path("/test/export"), request)
+        producer.validate_pre_hardware_export.assert_called_once_with(Path("/test/export"), request)
+
     def test_generator_maps_only_exact_macro_capability_roles(self) -> None:
         expected = {
             "Global<'_, f32, ReadOnly>": ("f32", "read_only"),

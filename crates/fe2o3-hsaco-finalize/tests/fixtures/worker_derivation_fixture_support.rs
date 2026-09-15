@@ -17,22 +17,56 @@ pub fn append_derivation_response_fields_with_salt(
     output: &[u8],
     stage_salt: &[u8],
 ) {
+    let captured_stages = response.starts_with(b"F3LRSP05").then(|| {
+        let module = input_payload(field(request, 9));
+        [
+            [b"fixture-linked-module".as_slice(), stage_salt, module].concat(),
+            [b"fixture-optimized-module".as_slice(), stage_salt, module].concat(),
+            [b"fixture-generated-object".as_slice(), stage_salt, output].concat(),
+        ]
+    });
     push_field(response, 8, &[]);
     push_field(
         response,
         9,
-        &derivation_evidence(request, output, stage_salt),
+        &derivation_evidence(request, output, stage_salt, captured_stages.as_ref()),
     );
-    let response_identity = domain_hash(b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V4\0", response);
-    push_field(response, 10, &response_identity);
+    if let Some(stages) = captured_stages {
+        let mut capture = vec![1];
+        for (index, stage) in stages.iter().enumerate() {
+            capture.push((index + 1) as u8);
+            capture.extend_from_slice(&(stage.len() as u32).to_le_bytes());
+            capture.extend_from_slice(stage);
+        }
+        push_field(response, 10, &capture);
+        let response_identity = domain_hash(b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V5\0", response);
+        push_field(response, 11, &response_identity);
+    } else {
+        let response_identity = domain_hash(b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V4\0", response);
+        push_field(response, 10, &response_identity);
+    }
 }
 
-fn derivation_evidence(request: &[u8], output: &[u8], stage_salt: &[u8]) -> Vec<u8> {
+fn derivation_evidence(
+    request: &[u8],
+    output: &[u8],
+    stage_salt: &[u8],
+    captured_stages: Option<&[Vec<u8>; 3]>,
+) -> Vec<u8> {
     let module = input_identity(field(request, 9));
     let module_bytes = input_payload(field(request, 9));
-    let linked = synthetic_stage_identity(b"fixture-linked-module", stage_salt, module_bytes);
-    let optimized = synthetic_stage_identity(b"fixture-optimized-module", stage_salt, module_bytes);
-    let generated = synthetic_stage_identity(b"fixture-generated-object", stage_salt, output);
+    let [linked, optimized, generated] = match captured_stages {
+        Some(stages) => stages.each_ref().map(|bytes| InputIdentity {
+            digest: Sha256::digest(bytes).into(),
+            byte_len: bytes.len() as u64,
+            kind: 0,
+        }),
+        None => [
+            synthetic_stage_identity(b"fixture-linked-module", stage_salt, module_bytes),
+            synthetic_stage_identity(b"fixture-optimized-module", stage_salt, module_bytes),
+            synthetic_stage_identity(b"fixture-generated-object", stage_salt, output),
+        ],
+    };
     let hsaco = InputIdentity {
         digest: Sha256::digest(output).into(),
         byte_len: output.len() as u64,

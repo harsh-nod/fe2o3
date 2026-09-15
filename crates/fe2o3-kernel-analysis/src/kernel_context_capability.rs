@@ -7,7 +7,7 @@
 //! legal on a target that cannot execute it.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     error::Error,
     fmt,
 };
@@ -15,9 +15,46 @@ use std::{
 use fe2o3_kernel_ir::{
     BlockId, ExecutionCapabilityOpV1, ExecutionCapabilityRequirementV1, ExecutionCapabilityTypeV1,
     FunctionId, KernelContextSourceIdentityV1, KernelContextTypeV1, KernelId, Module,
-    OperationKind, TargetCapability, Type, ValueId, VerifiedCanonicalKernelIrErrorV13,
-    VerifiedCanonicalKernelIrIdentityV13, VerifiedCanonicalKernelIrV13,
+    OperationKind, TargetCapability, Type, ValueId, VerificationErrors,
+    VerifiedCanonicalKernelIrErrorV13, VerifiedCanonicalKernelIrIdentityV13,
+    VerifiedCanonicalKernelIrV13,
 };
+
+mod control_flow_coalescing;
+
+// Shared by seeding, reverse edges, propagation, and scoped output (including
+// cloned scope-name bytes). Canonical and CFG verification keep their own bounds.
+const MAX_REQUIREMENT_CLOSURE_WORK_V1: usize = 1_000_000;
+
+struct RequirementClosureBudget {
+    limit: usize,
+    remaining: usize,
+}
+
+impl RequirementClosureBudget {
+    fn new(limit: usize) -> Self {
+        let limit = limit.min(MAX_REQUIREMENT_CLOSURE_WORK_V1);
+        Self {
+            limit,
+            remaining: limit,
+        }
+    }
+
+    fn charge(
+        &mut self,
+        module: &Module,
+        work: usize,
+    ) -> Result<(), VerifiedCanonicalKernelIrErrorV13> {
+        self.remaining = self.remaining.checked_sub(work).ok_or_else(|| {
+            VerifiedCanonicalKernelIrErrorV13::Verification(VerificationErrors::resource_limit(
+                module,
+                "kernel capability requirement closure work",
+                self.limit,
+            ))
+        })?;
+        Ok(())
+    }
+}
 
 /// Stable location of one direct logical context type in canonical KIR.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -338,38 +375,15 @@ impl KernelCapabilityPreservationAnalysisV1 {
         committed_mutations: u64,
         candidate: &Module,
     ) -> Result<KernelCapabilityPreservationReplayV1, KernelCapabilityPreservationErrorV1> {
-        if observed_input_epoch != self.graph_epoch {
-            return Err(KernelCapabilityPreservationErrorV1::StaleAnalysisEpoch {
-                captured: self.graph_epoch,
-                observed: observed_input_epoch,
-            });
-        }
-
+        self.check_input_epoch(observed_input_epoch)?;
         let (canonical, facts) = capture(candidate)
             .map_err(|source| KernelCapabilityPreservationErrorV1::CandidateRejected { source })?;
-        let changed = canonical.identity() != &self.canonical_identity;
-        if changed != (committed_mutations != 0) {
-            return Err(
-                KernelCapabilityPreservationErrorV1::MutationPresenceMismatch {
-                    canonical_changed: changed,
-                    committed_mutations,
-                },
-            );
-        }
-        let expected_output_epoch = observed_input_epoch
-            .checked_add(committed_mutations)
-            .ok_or(KernelCapabilityPreservationErrorV1::MutationEpochOverflow {
-                input: observed_input_epoch,
-                committed_mutations,
-            })?;
-        if candidate_output_epoch != expected_output_epoch {
-            return Err(KernelCapabilityPreservationErrorV1::InvalidOutputEpoch {
-                input: observed_input_epoch,
-                expected: expected_output_epoch,
-                observed: candidate_output_epoch,
-                changed,
-            });
-        }
+        let replay = self.replay_identity(
+            observed_input_epoch,
+            candidate_output_epoch,
+            committed_mutations,
+            canonical.identity(),
+        )?;
         if facts.context_types != self.facts.context_types {
             return Err(KernelCapabilityPreservationErrorV1::ContextTypesChanged);
         }
@@ -395,9 +409,55 @@ impl KernelCapabilityPreservationAnalysisV1 {
             return Err(KernelCapabilityPreservationErrorV1::RequirementClosureChanged);
         }
 
+        Ok(replay)
+    }
+
+    fn check_input_epoch(&self, observed: u64) -> Result<(), KernelCapabilityPreservationErrorV1> {
+        if observed != self.graph_epoch {
+            return Err(KernelCapabilityPreservationErrorV1::StaleAnalysisEpoch {
+                captured: self.graph_epoch,
+                observed,
+            });
+        }
+        Ok(())
+    }
+
+    // Callers must separately establish the protected-fact correspondence.
+    fn replay_identity(
+        &self,
+        observed_input_epoch: u64,
+        candidate_output_epoch: u64,
+        committed_mutations: u64,
+        candidate_identity: &VerifiedCanonicalKernelIrIdentityV13,
+    ) -> Result<KernelCapabilityPreservationReplayV1, KernelCapabilityPreservationErrorV1> {
+        self.check_input_epoch(observed_input_epoch)?;
+        let changed = candidate_identity != &self.canonical_identity;
+        if changed != (committed_mutations != 0) {
+            return Err(
+                KernelCapabilityPreservationErrorV1::MutationPresenceMismatch {
+                    canonical_changed: changed,
+                    committed_mutations,
+                },
+            );
+        }
+        let expected_output_epoch = observed_input_epoch
+            .checked_add(committed_mutations)
+            .ok_or(KernelCapabilityPreservationErrorV1::MutationEpochOverflow {
+                input: observed_input_epoch,
+                committed_mutations,
+            })?;
+        if candidate_output_epoch != expected_output_epoch {
+            return Err(KernelCapabilityPreservationErrorV1::InvalidOutputEpoch {
+                input: observed_input_epoch,
+                expected: expected_output_epoch,
+                observed: candidate_output_epoch,
+                changed,
+            });
+        }
+
         Ok(KernelCapabilityPreservationReplayV1 {
             input_identity: self.canonical_identity,
-            output_identity: *canonical.identity(),
+            output_identity: *candidate_identity,
             input_epoch: observed_input_epoch,
             output_epoch: candidate_output_epoch,
             changed,
@@ -430,6 +490,21 @@ pub struct KernelCapabilityPreservationReplayV1 {
 }
 
 impl KernelCapabilityPreservationReplayV1 {
+    /// Composes checked adjacent relations, including explicitly checked
+    /// coordinate changes. Neither a missing epoch nor a different graph joins.
+    pub fn then(self, next: Self) -> Result<Self, KernelCapabilityPreservationErrorV1> {
+        if self.output_identity != next.input_identity || self.output_epoch != next.input_epoch {
+            return Err(KernelCapabilityPreservationErrorV1::ReplayChainMismatch);
+        }
+        Ok(Self {
+            input_identity: self.input_identity,
+            output_identity: next.output_identity,
+            input_epoch: self.input_epoch,
+            output_epoch: next.output_epoch,
+            changed: self.input_identity != next.output_identity,
+        })
+    }
+
     pub const fn input_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV13 {
         &self.input_identity
     }
@@ -465,6 +540,9 @@ impl KernelCapabilityPreservationReplayV1 {
 
 #[derive(Debug)]
 pub enum KernelCapabilityPreservationErrorV1 {
+    ControlFlowCoalescingMismatch,
+    SourceAnalysisMismatch,
+    ReplayChainMismatch,
     StaleAnalysisEpoch {
         captured: u64,
         observed: u64,
@@ -499,6 +577,11 @@ pub enum KernelCapabilityPreservationErrorV1 {
 impl fmt::Display for KernelCapabilityPreservationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ControlFlowCoalescingMismatch => formatter.write_str(
+                "candidate is not an exact bounded coalescing of single-predecessor, argument-free blocks",
+            ),
+            Self::SourceAnalysisMismatch => formatter.write_str("control-flow replay source differs from the captured canonical graph"),
+            Self::ReplayChainMismatch => formatter.write_str("capability replay graphs or epochs do not join"),
             Self::StaleAnalysisEpoch { captured, observed } => write!(
                 formatter,
                 "kernel-capability analysis captured epoch {captured}, observed stale epoch {observed}"
@@ -562,6 +645,9 @@ impl Error for KernelCapabilityPreservationErrorV1 {
         match self {
             Self::CandidateRejected { source } => Some(source),
             Self::StaleAnalysisEpoch { .. }
+            | Self::ControlFlowCoalescingMismatch
+            | Self::SourceAnalysisMismatch
+            | Self::ReplayChainMismatch
             | Self::MutationEpochOverflow { .. }
             | Self::MutationPresenceMismatch { .. }
             | Self::InvalidOutputEpoch { .. }
@@ -583,11 +669,27 @@ fn capture(
     (VerifiedCanonicalKernelIrV13, ProtectedCapabilityFactsV1),
     VerifiedCanonicalKernelIrErrorV13,
 > {
-    let canonical = VerifiedCanonicalKernelIrV13::from_module(module.clone())?;
-    Ok((canonical, protected_facts(module)))
+    capture_with_budget(
+        module,
+        &mut RequirementClosureBudget::new(MAX_REQUIREMENT_CLOSURE_WORK_V1),
+    )
 }
 
-fn protected_facts(module: &Module) -> ProtectedCapabilityFactsV1 {
+fn capture_with_budget(
+    module: &Module,
+    budget: &mut RequirementClosureBudget,
+) -> Result<
+    (VerifiedCanonicalKernelIrV13, ProtectedCapabilityFactsV1),
+    VerifiedCanonicalKernelIrErrorV13,
+> {
+    let canonical = VerifiedCanonicalKernelIrV13::from_module(module.clone())?;
+    Ok((canonical, protected_facts(module, budget)?))
+}
+
+fn protected_facts(
+    module: &Module,
+    budget: &mut RequirementClosureBudget,
+) -> Result<ProtectedCapabilityFactsV1, VerifiedCanonicalKernelIrErrorV13> {
     let mut context_types = Vec::new();
     let mut context_uses = Vec::new();
     let mut issuances = Vec::new();
@@ -655,7 +757,8 @@ fn protected_facts(module: &Module) -> ProtectedCapabilityFactsV1 {
                 | Type::Pointer(_)
                 | Type::Slice(_)
                 | Type::GlobalCapability(_)
-                | Type::ExecutionCapability(_) => None,
+                | Type::ExecutionCapability(_)
+                | Type::ReusablePhaseToken(_) => None,
             })
             .collect::<BTreeMap<_, _>>();
 
@@ -774,25 +877,31 @@ fn protected_facts(module: &Module) -> ProtectedCapabilityFactsV1 {
         &mut scoped_requirements,
         ExecutionRequirementScopeV1::Module,
         &module.required_capabilities,
-    );
+        module,
+        budget,
+    )?;
     for function in &module.functions {
         extend_requirements(
             &mut scoped_requirements,
             ExecutionRequirementScopeV1::Function(function.id.clone()),
             &function.required_capabilities,
-        );
+            module,
+            budget,
+        )?;
     }
     for kernel in &module.kernels {
         extend_requirements(
             &mut scoped_requirements,
             ExecutionRequirementScopeV1::Kernel(kernel.id.clone()),
             &kernel.required_capabilities,
-        );
+            module,
+            budget,
+        )?;
     }
     let (effective_scoped_requirements, effective_requirements) =
-        effective_execution_requirements(module);
+        effective_execution_requirements(module, budget)?;
 
-    ProtectedCapabilityFactsV1 {
+    Ok(ProtectedCapabilityFactsV1 {
         context_types,
         context_uses,
         issuances,
@@ -801,58 +910,72 @@ fn protected_facts(module: &Module) -> ProtectedCapabilityFactsV1 {
         scoped_requirements,
         effective_scoped_requirements,
         effective_requirements,
-    }
+    })
 }
 
 fn effective_execution_requirements(
     module: &Module,
-) -> (
-    Vec<ScopedExecutionRequirementV1>,
-    Vec<ExecutionCapabilityRequirementV1>,
-) {
-    let mut closures = module
+    budget: &mut RequirementClosureBudget,
+) -> Result<
+    (
+        Vec<ScopedExecutionRequirementV1>,
+        Vec<ExecutionCapabilityRequirementV1>,
+    ),
+    VerifiedCanonicalKernelIrErrorV13,
+> {
+    budget.charge(module, module.functions.len())?;
+    let positions = module
         .functions
         .iter()
-        .map(|function| {
-            (
-                function.id.clone(),
-                execution_requirements(function.effective_capabilities()),
-            )
-        })
+        .enumerate()
+        .map(|(position, function)| (&function.id, position))
         .collect::<BTreeMap<_, _>>();
+    let mut callers = vec![BTreeSet::new(); module.functions.len()];
+    let mut closures = vec![BTreeSet::new(); module.functions.len()];
+    let mut pending = VecDeque::new();
 
-    // Calls are part of the exact verified graph. Fixed-point propagation
-    // records the requirement closure of recursive and mutually recursive
-    // helper graphs without relying on traversal order.
-    loop {
-        let previous = closures.clone();
-        let mut changed = false;
-        for function in &module.functions {
-            let Some(body) = &function.body else {
-                continue;
-            };
-            let closure = closures
-                .get_mut(&function.id)
-                .expect("every verified function has an initialized closure");
+    for (caller, function) in module.functions.iter().enumerate() {
+        if let Some(body) = &function.body {
+            budget.charge(module, body.blocks.len())?;
             for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+                budget.charge(module, 1)?;
                 let OperationKind::Call { callee, .. } = &operation.kind else {
                     continue;
                 };
-                if let Some(callee_requirements) = previous.get(callee) {
-                    let before = closure.len();
-                    closure.extend(callee_requirements.iter().cloned());
-                    changed |= closure.len() != before;
+                if let Some(&callee) = positions.get(callee) {
+                    budget.charge(module, 1)?;
+                    callers[callee].insert(caller);
                 }
             }
         }
-        if !changed {
-            break;
+        let capabilities = function.effective_capabilities();
+        budget.charge(module, capabilities.len())?;
+        for requirement in execution_requirements(capabilities) {
+            budget.charge(module, 1)?;
+            closures[caller].insert(requirement.clone());
+            pending.push_back((caller, requirement));
         }
     }
 
+    // Each newly learned (function, requirement) pair is queued once. Reverse
+    // edges are distinct, so recursion and duplicate calls cannot cause retries.
+    while let Some((callee, requirement)) = pending.pop_front() {
+        budget.charge(module, 1)?;
+        for &caller in &callers[callee] {
+            budget.charge(module, 1)?;
+            if !closures[caller].contains(&requirement) {
+                budget.charge(module, 1)?;
+                closures[caller].insert(requirement.clone());
+                pending.push_back((caller, requirement.clone()));
+            }
+        }
+    }
+
+    budget.charge(module, module.required_capabilities.len())?;
     let declared_module = execution_requirements(module.required_capabilities.iter().cloned());
-    let mut module_closure = declared_module.clone();
-    for requirements in closures.values() {
+    let mut module_closure = declared_module;
+    for requirements in &closures {
+        budget.charge(module, requirements.len())?;
         module_closure.extend(requirements.iter().cloned());
     }
 
@@ -861,29 +984,38 @@ fn effective_execution_requirements(
         &mut scoped,
         ExecutionRequirementScopeV1::Module,
         &module_closure,
-    );
-    for function in &module.functions {
+        module,
+        budget,
+    )?;
+    for (function, requirements) in module.functions.iter().zip(&closures) {
         extend_requirement_set(
             &mut scoped,
             ExecutionRequirementScopeV1::Function(function.id.clone()),
-            closures
-                .get(&function.id)
-                .expect("every verified function retains its closure"),
-        );
+            requirements,
+            module,
+            budget,
+        )?;
     }
+    budget.charge(module, module.kernels.len())?;
     for kernel in &module.kernels {
+        budget.charge(module, kernel.required_capabilities.len())?;
         let mut requirements = execution_requirements(kernel.required_capabilities.iter().cloned());
-        if let Some(entry_requirements) = closures.get(&kernel.entry) {
+        if let Some(&entry) = positions.get(&kernel.entry) {
+            let entry_requirements = &closures[entry];
+            budget.charge(module, entry_requirements.len())?;
             requirements.extend(entry_requirements.iter().cloned());
         }
         extend_requirement_set(
             &mut scoped,
             ExecutionRequirementScopeV1::Kernel(kernel.id.clone()),
             &requirements,
-        );
+            module,
+            budget,
+        )?;
     }
 
-    (scoped, module_closure.into_iter().collect())
+    budget.charge(module, module_closure.len())?;
+    Ok((scoped, module_closure.into_iter().collect()))
 }
 
 fn execution_requirements(
@@ -913,7 +1045,10 @@ fn extend_requirement_set(
     output: &mut Vec<ScopedExecutionRequirementV1>,
     scope: ExecutionRequirementScopeV1,
     requirements: &BTreeSet<ExecutionCapabilityRequirementV1>,
-) {
+    module: &Module,
+    budget: &mut RequirementClosureBudget,
+) -> Result<(), VerifiedCanonicalKernelIrErrorV13> {
+    budget.charge(module, scoped_requirement_work(&scope, requirements.len()))?;
     output.extend(
         requirements
             .iter()
@@ -923,13 +1058,22 @@ fn extend_requirement_set(
                 requirement,
             }),
     );
+    Ok(())
 }
 
 fn extend_requirements(
     output: &mut Vec<ScopedExecutionRequirementV1>,
     scope: ExecutionRequirementScopeV1,
     capabilities: &BTreeSet<TargetCapability>,
-) {
+    module: &Module,
+    budget: &mut RequirementClosureBudget,
+) -> Result<(), VerifiedCanonicalKernelIrErrorV13> {
+    budget.charge(module, capabilities.len())?;
+    let requirement_count = capabilities
+        .iter()
+        .filter(|capability| matches!(capability, TargetCapability::Execution(_)))
+        .count();
+    budget.charge(module, scoped_requirement_work(&scope, requirement_count))?;
     output.extend(
         capabilities
             .iter()
@@ -952,4 +1096,22 @@ fn extend_requirements(
                 | TargetCapability::WaveWidth(_) => None,
             }),
     );
+    Ok(())
 }
+
+fn scoped_requirement_work(scope: &ExecutionRequirementScopeV1, count: usize) -> usize {
+    let identity_bytes = match scope {
+        ExecutionRequirementScopeV1::Module => 0,
+        ExecutionRequirementScopeV1::Function(id) => id.as_str().len(),
+        ExecutionRequirementScopeV1::Kernel(id) => id.as_str().len(),
+    };
+    count.saturating_mul(identity_bytes.saturating_add(1))
+}
+
+#[cfg(test)]
+#[path = "kernel_context_capability/closure_tests.rs"]
+mod closure_tests;
+
+#[cfg(test)]
+#[path = "kernel_context_capability/phase_compile_closure_tests.rs"]
+mod phase_compile_closure_tests;

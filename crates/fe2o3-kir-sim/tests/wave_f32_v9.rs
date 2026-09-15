@@ -21,6 +21,12 @@ use fe2o3_kir_sim::{
 
 const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
 
+#[path = "wave_f32_v9/float_uniformity.rs"]
+mod float_uniformity;
+
+#[path = "wave_f32_v9/raw_shuffle_uniformity.rs"]
+mod raw_shuffle_uniformity;
+
 #[derive(Clone, Copy, Debug)]
 enum KirVersion {
     V9,

@@ -63,10 +63,10 @@ impl ExecutionCapabilityContractAttr {
 
 impl Verify for ExecutionCapabilityContractAttr {
     fn verify(&self, _context: &Context) -> Result<()> {
-        if self
-            .contract(MAX_EXECUTION_CAPABILITY_OPERANDS_V1)
-            .is_none()
-        {
+        // This attribute contains no live SSA edges. Check bounded inert
+        // representability; the enclosing operation decodes its exact count.
+        if !(0..=MAX_EXECUTION_CAPABILITY_OPERANDS_V1)
+            .any(|operand_count| self.contract(operand_count).is_some()) {
             return verify_err_noloc!(
                 "kernel.execution_capability_contract is not canonical V1 data"
             );

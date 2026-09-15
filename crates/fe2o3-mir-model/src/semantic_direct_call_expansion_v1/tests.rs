@@ -1,7 +1,16 @@
 use super::*;
 
+#[path = "common_v25_tests.rs"]
+mod common_v25_tests;
+
 #[path = "evidence_v1/tests.rs"]
 mod evidence_v1_tests;
+
+#[path = "rust_call_tests.rs"]
+mod rust_call_tests;
+
+#[path = "caller_location_v1/tests.rs"]
+mod caller_location_tests;
 
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);

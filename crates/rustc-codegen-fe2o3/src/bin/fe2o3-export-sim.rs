@@ -333,7 +333,7 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 12] {
+const fn conflicting_extraction_environment() -> [&'static str; 13] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,

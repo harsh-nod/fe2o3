@@ -27,6 +27,27 @@ fn atomic_rejects_without_mutation(
 }
 
 #[test]
+fn oracle_errors_preserve_details_when_propagated_to_host_applications() {
+    let reduction = reduction_rejects_without_mutation(&[], 0, &[]);
+    let boxed: Box<dyn std::error::Error> = reduction.clone().into();
+    assert_eq!(boxed.downcast_ref(), Some(&reduction));
+    assert_eq!(
+        boxed.to_string(),
+        "invalid LDS reduction profile: InvalidLaneCount { provided: 0 }"
+    );
+    assert!(boxed.source().is_none());
+
+    let atomic = atomic_rejects_without_mutation(canonical_atomic_profile_v1(), &[]);
+    let boxed: Box<dyn std::error::Error> = atomic.clone().into();
+    assert_eq!(boxed.downcast_ref(), Some(&atomic));
+    assert_eq!(
+        boxed.to_string(),
+        "invalid scoped atomic profile: InvalidLaneVectorLength { provided: 0 }"
+    );
+    assert!(boxed.source().is_none());
+}
+
+#[test]
 fn deterministic_reduction_vectors_compute_exact_sums() {
     for vector in reduction_vectors_v1() {
         let trace = canonical_reduction_trace_v1(vector.epoch);

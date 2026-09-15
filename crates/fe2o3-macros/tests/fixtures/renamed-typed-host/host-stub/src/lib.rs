@@ -57,6 +57,10 @@ pub mod __generated {
             TypeIdentity
         }
 
+        fn mutable_slice_type_identity_v1(_width: PointerWidth) -> TypeIdentity {
+            TypeIdentity
+        }
+
         fn disjoint_slice_type_identity_v1(_width: PointerWidth) -> TypeIdentity {
             TypeIdentity
         }
@@ -338,6 +342,14 @@ pub mod __generated {
     impl<'allocation, T> GeneratedKfdReadWriteSlice<'allocation, T> {
         pub fn new(values: &'allocation mut [T]) -> Self {
             Self { _values: values }
+        }
+
+        pub fn bind_mutable_argument(
+            self,
+            _plan: &GeneratedArgumentPackingPlanV1,
+            _argument_index: usize,
+        ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+            Ok(GeneratedKfdSliceBinding(PhantomData))
         }
 
         pub fn len(&self) -> usize {

@@ -910,6 +910,9 @@ fn raw_launch_extents(
     for site in operations {
         let operation = Operation::get_op_dyn(site.pointer(), context);
         if let Some(layout) = operation.downcast_ref::<ExecutionLayoutOp>() {
+            if site.block() != 0 {
+                return Err("bounds witness V1 found gpu.execution_layout outside entry".to_owned());
+            }
             if execution_layout.is_some() {
                 return Err("bounds witness V1 found more than one gpu.execution_layout".to_owned());
             }
@@ -935,11 +938,6 @@ fn raw_launch_extents(
         let Some(extent) = invocation.launch_extent(context) else {
             return Err("bounds witness V1 found a missing launch extent".to_owned());
         };
-        if extent == DYNAMIC_EXTENT {
-            return Err(format!(
-                "bounds witness V1 cannot enumerate dynamic launch dimension {dimension}"
-            ));
-        }
         if by_dimension.insert(dimension, extent).is_some() {
             return Err(format!(
                 "bounds witness V1 found duplicate invocation dimension {dimension}"
@@ -955,15 +953,12 @@ fn raw_launch_extents(
                 ));
             }
             match by_dimension.get(&dimension) {
-                Some(invocation_extent) if *invocation_extent == layout_extent => {}
+                Some(invocation_extent)
+                    if *invocation_extent == DYNAMIC_EXTENT
+                        || *invocation_extent == layout_extent => {}
                 Some(invocation_extent) => {
                     return Err(format!(
                         "bounds witness V1 invocation dimension {dimension} extent {invocation_extent} is inconsistent with gpu.execution_layout extent {layout_extent}"
-                    ));
-                }
-                None if layout_extent > 1 => {
-                    return Err(format!(
-                        "bounds witness V1 gpu.execution_layout has active axis {dimension} extent {layout_extent} without an invocation dimension"
                     ));
                 }
                 None => {}
@@ -982,6 +977,11 @@ fn raw_launch_extents(
         .map_or(0, |(dimension, _)| dimension + 1);
     let mut extents = vec![1; dimension_count];
     for (dimension, extent) in by_dimension {
+        if extent == DYNAMIC_EXTENT {
+            return Err(format!(
+                "bounds witness V1 cannot enumerate dynamic launch dimension {dimension}"
+            ));
+        }
         extents[dimension] = extent;
     }
     Ok(extents)
@@ -1650,15 +1650,43 @@ builtin.func @bounds_witness_vacuous: builtin.function <() -> ()>
     }
 
     #[test]
-    fn execution_layout_active_axes_require_invocation_dimensions() {
+    fn execution_layout_active_axes_are_enumerated_without_unused_invocation_values() {
         let context = &mut setup();
         let source =
             affine_source_with_execution_layout("bounds_witness_missing_active_axis", [8, 4, 1]);
 
-        expect_incomplete_bounds_replay(
-            replay_with_clean_bounds_report(context, &source),
-            "active axis 1 extent 4 without an invocation dimension",
-        );
+        let SupportedWitnessBuildV1::Complete(witness) =
+            replay_with_clean_bounds_report(context, &source).unwrap()
+        else {
+            panic!("all actual layout axes must participate in bounds replay");
+        };
+        assert_eq!(witness.obligations.len(), 1);
+        assert_eq!(witness.obligations[0].checked_invocations, 32);
+    }
+
+    #[test]
+    fn concrete_layout_resolves_dynamic_declarations_without_vacuous_bounds_replay() {
+        for declared in [0, 8] {
+            let context = &mut setup();
+            let source = affine_source_with_execution_layout("bounds_layout_dynamic", [8, 1, 1])
+                .replace(
+                    "kernel.launch_extent 8",
+                    &format!("kernel.launch_extent {declared}"),
+                );
+            let SupportedWitnessBuildV1::Complete(witness) =
+                replay_with_clean_bounds_report(context, &source).unwrap()
+            else {
+                panic!("concrete layout must resolve the launch domain");
+            };
+            assert_eq!(witness.obligations[0].checked_invocations, 8);
+            let bad = source.replace("[16]", "[15]");
+            assert!(matches!(
+                replay_with_clean_bounds_report(context, &bad),
+                Err(ProductionAnalysisWitnessValidationErrorV1::BoundsCounterexample {
+                    invocation, index: 15, extent: 15, ..
+                }) if invocation == vec![7, 0, 0]
+            ));
+        }
     }
 
     #[test]

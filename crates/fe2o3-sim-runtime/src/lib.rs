@@ -2094,7 +2094,10 @@ fn validate_compiler_packing_plan_v2(
             }
             Type::Pointer(_) => (8, 8, None),
             Type::Slice(_) => (8, 8, Some(8)),
-            Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_) => {
+            Type::KernelContext(_)
+            | Type::GlobalCapability(_)
+            | Type::ExecutionCapability(_)
+            | Type::ReusablePhaseToken(_) => {
                 return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
                     "logical KIR capabilities have no caller-provided physical slot".to_owned(),
                 ));
@@ -4259,6 +4262,8 @@ fn require_capacity(
 
 #[cfg(test)]
 mod tests {
+    mod phase_compile_closure_tests;
+
     use super::*;
     use fe2o3_kernel_ir::SemanticArgumentStorageV2;
     use fe2o3_kernel_ir::{
@@ -4294,6 +4299,7 @@ mod tests {
     };
 
     include!("sim_bundle_v6_tests.rs");
+    include!("sim_bundle_reference_fixture.rs");
     include!("sim_bundle_v7_tests.rs");
     include!("sim_bundle_v8_tests.rs");
 

@@ -24,7 +24,7 @@ pub fn typed_global(
 }
 
 fn main() {
-    type PhysicalEntry = fn(&[u32], &mut [u32], WriteOnlyDisjointSlice<u32, OutputMapping>, &[u32]);
+    type PhysicalEntry = fn(&[u32], &mut [u32], WriteOnlyDisjointSlice<u32, OutputMapping>, &mut [u32]);
     let _: PhysicalEntry = <typed_global_gpu::Marker as gpu_device::KernelMarkerV1>::FUNCTION;
     assert_eq!(
         <typed_global_gpu::Marker as gpu_device::KernelMarkerV1>::REGISTRATION.2,

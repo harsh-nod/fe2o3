@@ -30,6 +30,10 @@ use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 use crate::{PresburgerCoverageDecisionV1, PresburgerFiniteImageV1};
 
+#[path = "pliron_conditional_prefix_ownership_v1.rs"]
+mod conditional_prefix_v1;
+pub use conditional_prefix_v1::*;
+
 /// Maximum logical output elements materialized by one exact coverage proof.
 pub const MAX_HIERARCHICAL_OWNERSHIP_ELEMENTS_V1: usize = 1_048_576;
 /// Maximum independently contracted output views in one function.
@@ -589,6 +593,8 @@ pub struct HierarchicalOwnershipReportV1 {
     findings: Vec<HierarchicalOwnershipFindingV1>,
     regions: Vec<HierarchicalOwnershipRegionV1>,
     coverage_summary: HierarchicalCoverageProofSummaryV1,
+    conditional_prefix:
+        Option<Result<ConditionalPrefixCoverageV1, ConditionalPrefixDerivationErrorV1>>,
 }
 
 impl HierarchicalOwnershipReportV1 {
@@ -614,6 +620,17 @@ impl HierarchicalOwnershipReportV1 {
 
     pub const fn coverage_summary(&self) -> HierarchicalCoverageProofSummaryV1 {
         self.coverage_summary
+    }
+
+    /// Outstanding launch conditions, never an unconditional TotalView proof.
+    /// Presence does not change status, findings, or mandatory admission.
+    pub fn conditional_prefix_coverage(&self) -> Option<&ConditionalPrefixCoverageV1> {
+        self.conditional_prefix.as_ref()?.as_ref().ok()
+    }
+
+    /// Retains why conditional analysis rejected; never changes admission status.
+    pub fn conditional_prefix_failure(&self) -> Option<&ConditionalPrefixDerivationErrorV1> {
+        self.conditional_prefix.as_ref()?.as_ref().err()
     }
 
     /// True only for a clean report containing at least one proved total-view
@@ -690,6 +707,18 @@ pub fn run_pliron_hierarchical_ownership_check_v1(
 }
 
 pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> HierarchicalOwnershipReportV1 {
+    let conditional = derive_pliron_conditional_prefix_coverage_v1(context, function);
+    let mut report =
+        run_unconditional_ownership_check_with_analyses_v1(context, function, analyses);
+    report.conditional_prefix = Some(conditional);
+    report
+}
+
+fn run_unconditional_ownership_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
@@ -900,6 +929,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         findings,
         regions,
         coverage_summary,
+        conditional_prefix: None,
     }
 }
 
@@ -1495,6 +1525,7 @@ fn clean() -> HierarchicalOwnershipReportV1 {
         findings: Vec::new(),
         regions: Vec::new(),
         coverage_summary: HierarchicalCoverageProofSummaryV1::default(),
+        conditional_prefix: None,
     }
 }
 
@@ -1510,6 +1541,7 @@ fn one_with_summary(
         findings: vec![finding],
         regions: Vec::new(),
         coverage_summary,
+        conditional_prefix: None,
     }
 }
 

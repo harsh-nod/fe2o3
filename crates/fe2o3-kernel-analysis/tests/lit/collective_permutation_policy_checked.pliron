@@ -1,6 +1,10 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: PASS
-// CHECK: PASS
+// EXPECT: REJECT
+// CHECK: error[FE2O3-EFFECT-008]
+// CHECK: has no exact effect-refinement contract; every observable global write must participate in the reference-effect bijection
+// Collective-only positive: reference and collective staging are checked in
+// pliron_collective_semantics.rs. The global write deliberately has no effect
+// contract, so policy-checked collective staging must not permit production lowering.
 builtin.func @collective_permutation_policy_checked: builtin.function <() -> ()>
 {
   ^entry_block1v1():

@@ -1,5 +1,18 @@
 //! Compiler-private join from authenticated Rust reference MIR to bounded ranked GPU writes.
 
+#[cfg(test)]
+#[path = "production_reference_effect_join_v2/optional_precision_consumer_tests.rs"]
+pub(crate) mod optional_precision_consumer_tests;
+
+#[cfg(test)]
+#[path = "production_reference_effect_join_v2/output_slice_tests.rs"]
+mod output_slice_tests;
+mod read_root_placement_v1;
+mod compact_row_v1;
+mod reference_read_lookup_v1;
+use reference_read_lookup_v1::ReferenceReadLookupV1;
+use crate::production_ranked_projection_v1::{ProjectedReferenceInputV2, ReferenceReadRosterV1};
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
@@ -99,6 +112,7 @@ pub(crate) fn reserved_reference_output_ranks_v2(
         .iter()
         .map(|write| match &write.coordinate {
             ReferenceOutputCoordinateV1::LogicalPoint(axes) => Ok(axes.len()),
+            ReferenceOutputCoordinateV1::CompactRowsUsize1D(_) => Ok(1),
             _ => Err(
                 crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
                     "reference-effect projection requires independently indexed logical point outputs",
@@ -114,7 +128,14 @@ pub(crate) struct CompilerOwnedReferenceEffectRequestV2 {
     kernel: ProductionRankedKernelV1,
     requests: Vec<CompilerOwnedReferenceEffectSiteV2>,
     proof_timeout_seconds: u32,
+    source_site_remap: Option<read_root_placement_v1::CheckedReadRootPlacementV1>,
+    owned_sources: Option<ReferenceSourceRostersV2>,
 }
+
+type ReferenceSourceRostersV2 = (
+    Vec<fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1>,
+    Vec<fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1>,
+);
 
 struct CompilerOwnedReferenceEffectSiteV2 {
     block: usize,
@@ -133,14 +154,58 @@ struct PreparedReferenceOutputV2 {
 }
 
 impl CompilerOwnedReferenceEffectRequestV2 {
+    pub(crate) fn prove_and_compile_with_sources_v2(
+        mut self,
+    ) -> Result<(ProductionRankedKernelLoweringInputV1,
+        Vec<fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1>,
+        Vec<fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1>), ProductionReferenceEffectJoinErrorV2> {
+        let (accesses, generated) = self.take_and_remap_sources_v2()?;
+        let lowering = self.prove_and_compile()?;
+        Ok((lowering, accesses, generated))
+    }
+
+    fn take_and_remap_sources_v2(&mut self) -> Result<ReferenceSourceRostersV2, ProductionReferenceEffectJoinErrorV2> {
+        let (mut accesses, mut generated) = self.owned_sources.take().ok_or(
+            ProductionReferenceEffectJoinErrorV2::UnsupportedReference("reference request has no owned source roster"),
+        )?;
+        self.remap_source_sites_v2(&mut accesses, &mut generated)?;
+        Ok((accesses, generated))
+    }
+
+    pub(crate) fn remap_source_sites_v2(
+        &mut self,
+        accesses: &mut [fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1],
+        generated: &mut [fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1],
+    ) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+        if self.owned_sources.is_some() {
+            return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                "reference request must remap its owned source roster",
+            ));
+        }
+        if let Some(remap) = &self.source_site_remap {
+            remap.remap_sources(&self.kernel, accesses, generated)?;
+            self.source_site_remap = None;
+        }
+        Ok(())
+    }
+
     pub(crate) fn prove_and_compile(
         self,
     ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionReferenceEffectJoinErrorV2> {
+        if self.source_site_remap.is_some() || self.owned_sources.is_some() {
+            return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                "read-root placement requires its exact source-site roster remap before compilation",
+            ));
+        }
         let Self {
             kernel,
             requests,
             proof_timeout_seconds,
+            source_site_remap: _,
+            owned_sources: _,
         } = self;
+        #[cfg(test)]
+        guard_observation_tests_v1::prepared_kernel(&kernel);
         let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
             RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
         )
@@ -165,11 +230,11 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                     proof_timeout_seconds,
                 )
                 .map_err(|error| {
-                    ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
+                    ProductionReferenceEffectJoinErrorV2::ProofExecution(error)
                 })?;
             if toolchain.is_some_and(|expected| expected != imported.toolchain()) {
-                return Err(ProductionReferenceEffectJoinErrorV2::ProofExecution(
-                    "per-output receipts were imported under different Verus toolchains".to_owned(),
+                return Err(ProductionReferenceEffectJoinErrorV2::ProofRequest(
+                    "per-output receipts were imported under different Verus toolchains",
                 ));
             }
             toolchain = Some(imported.toolchain());
@@ -182,8 +247,8 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             imported_proofs.push(imported);
         }
         let toolchain = toolchain.ok_or_else(|| {
-            ProductionReferenceEffectJoinErrorV2::ProofExecution(
-                "compiler-owned reference request contains no output roles".to_owned(),
+            ProductionReferenceEffectJoinErrorV2::ProofRequest(
+                "compiler-owned reference request contains no output roles",
             )
         })?;
         let policy = ProductionRefinementStagingPolicyV2::new(signers, toolchain)
@@ -230,11 +295,82 @@ fn per_output_proof_timeout_v2(
         .min(LOCAL_PROOF_TIMEOUT_SECONDS_V2))
 }
 
-pub(crate) fn prepare_reference_effect_request_v2(
+#[cfg(test)]
+pub(crate) fn prepare_projected_reference_effect_request_v2(
+    input: ProjectedReferenceInputV2,
+    bindings: &AuthenticatedReferenceEffectBindingsV1,
+    reserved_values: Vec<ProductionRankedValueIdV1>,
+) -> Result<CompilerOwnedReferenceEffectRequestV2, ProductionReferenceEffectJoinErrorV2> {
+    prepare_projected_reference_effect_request_with_source_v2(
+        input,
+        bindings,
+        reserved_values,
+        None,
+    )
+}
+
+pub(crate) fn prepare_projected_reference_effect_request_with_source_v2(
+    input: ProjectedReferenceInputV2,
+    bindings: &AuthenticatedReferenceEffectBindingsV1,
+    reserved_values: Vec<ProductionRankedValueIdV1>,
+    source: Option<
+        &mut crate::production_ranked_projection_v1::source_scalar_ssa_v1::DeferredSourceValuesV1<
+            '_,
+        >,
+    >,
+) -> Result<CompilerOwnedReferenceEffectRequestV2, ProductionReferenceEffectJoinErrorV2> {
+    let (kernel, writes, reads, accesses, generated) = input.into_parts(bindings)?;
+    let mut request = prepare_reference_effect_request_with_source_inner_v2(
+        kernel,
+        bindings,
+        writes,
+        reserved_values,
+        &reads,
+        source,
+    )?;
+    request.owned_sources = Some((accesses, generated));
+    Ok(request)
+}
+
+#[cfg(test)]
+fn prepare_reference_effect_request_v2(
     kernel: ProductionRankedKernelV1,
     bindings: &AuthenticatedReferenceEffectBindingsV1,
     writes: &[RankedGpuWriteV2],
     reserved_values: Vec<ProductionRankedValueIdV1>,
+) -> Result<CompilerOwnedReferenceEffectRequestV2, ProductionReferenceEffectJoinErrorV2> {
+    prepare_reference_effect_request_inner_v2(kernel, bindings, writes, reserved_values, &ReferenceReadRosterV1::default())
+}
+
+#[cfg(test)]
+fn prepare_reference_effect_request_inner_v2(
+    kernel: ProductionRankedKernelV1,
+    bindings: &AuthenticatedReferenceEffectBindingsV1,
+    writes: &[RankedGpuWriteV2],
+    reserved_values: Vec<ProductionRankedValueIdV1>,
+    reference_reads: &ReferenceReadRosterV1,
+) -> Result<CompilerOwnedReferenceEffectRequestV2, ProductionReferenceEffectJoinErrorV2> {
+    prepare_reference_effect_request_with_source_inner_v2(
+        kernel,
+        bindings,
+        writes.to_vec(),
+        reserved_values,
+        reference_reads,
+        None,
+    )
+}
+
+fn prepare_reference_effect_request_with_source_inner_v2(
+    kernel: ProductionRankedKernelV1,
+    bindings: &AuthenticatedReferenceEffectBindingsV1,
+    mut writes: Vec<RankedGpuWriteV2>,
+    reserved_values: Vec<ProductionRankedValueIdV1>,
+    reference_reads: &ReferenceReadRosterV1,
+    mut source: Option<
+        &mut crate::production_ranked_projection_v1::source_scalar_ssa_v1::DeferredSourceValuesV1<
+            '_,
+        >,
+    >,
 ) -> Result<CompilerOwnedReferenceEffectRequestV2, ProductionReferenceEffectJoinErrorV2> {
     let [binding] = bindings.as_slice() else {
         return Err(ProductionReferenceEffectJoinErrorV2::BindingCount(
@@ -252,16 +388,40 @@ pub(crate) fn prepare_reference_effect_request_v2(
         !matches!(
             write.coordinate,
             ReferenceOutputCoordinateV1::LogicalPoint(_)
+                | ReferenceOutputCoordinateV1::CompactRowsUsize1D(_)
         )
     }) {
         return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
             "V2 source join accepts independently indexed logical point outputs",
         ));
     }
+    let mut bounds_work = ReferenceSymbolicWorkBudgetV2::default();
     let gpu_effects = writes
-        .iter()
-        .map(|write| compiler_extracted_gpu_effect_v1(&kernel, binding, write))
+        .iter_mut()
+        .map(|write| {
+            let mut normalized=None;
+            let effect=compiler_extracted_gpu_effect_with_scalar_v1(&kernel,binding,write,|guard| {
+                if let Some(source)=source.as_deref_mut() && write.value.is_err() {
+                    normalized=Some(source.resolve(write,guard));
+                }
+            })?;
+            // Replace only this owned pending value after the borrowed guard
+            // scope closes. No parallel expression map or cache is allocated.
+            if let Some(value)=normalized {write.value=value;}
+            Ok(effect)
+        })
         .collect::<Result<Vec<_>, _>>()?;
+    for write in binding.observable_output_writes.iter() {
+        if matches!(write.coordinate, ReferenceOutputCoordinateV1::CompactRowsUsize1D(_)) {
+            bounds_work.charge_v2(binding.effect_ir.relations.len()).map_err(|_|
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "compact row source relation exceeds the shared bounds work budget",
+                ))?;
+            compact_row_v1::require_exclusive(&binding.effect_ir, write.argument)?;
+        }
+    }
+    #[cfg(test)]
+    guard_observation_tests_v1::extracted(&gpu_effects);
     let pairs = establish_reference_effect_bijection_v1(
         binding.observable_output_writes.as_ref(),
         &gpu_effects,
@@ -272,9 +432,11 @@ pub(crate) fn prepare_reference_effect_request_v2(
             pairs.len(),
         ));
     }
+    #[cfg(test)]
+    guard_observation_tests_v1::paired();
 
     let mut writes_by_location = BTreeMap::new();
-    for write in writes {
+    for write in &writes {
         if writes_by_location
             .insert((write.block, write.operation), write)
             .is_some()
@@ -288,6 +450,13 @@ pub(crate) fn prepare_reference_effect_request_v2(
         | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
             argument,
             element,
+        }
+        | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+            argument,
+            element,
+        }
+        | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+            argument, element, ..
         } = relation
             && output_relations.insert(*argument, *element).is_some()
         {
@@ -325,6 +494,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
             element,
             &kernel,
             &gpu_expression,
+            reference_reads,
         )?;
         if gpu_expression.scalar() != reference_expression.scalar() {
             return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
@@ -370,7 +540,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
             },
         );
     }
-    crate::production_reference_bounds_v2::discharge_reference_bounds_over_ranked_domains_v2(
+    crate::production_reference_bounds_v2::discharge_reference_bounds_with_budget_v2(
         &kernel,
         &binding.effect_ir,
         &prepared
@@ -382,6 +552,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
                 },
             )
             .collect::<Vec<_>>(),
+        &mut bounds_work,
     )
     .map_err(
         |error| ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
@@ -415,6 +586,13 @@ pub(crate) fn prepare_reference_effect_request_v2(
             return Err(ProductionReferenceEffectJoinErrorV2::AmbiguousOwnership);
         }
     }
+    let source_site_remap = if read_root_placement_v1::required(&prepared)? {
+        let (placed, remap) = read_root_placement_v1::place(
+            &kernel, &mut prepared, &binding.effect_ir, &mut bounds_work,
+        )?;
+        blocks = placed;
+        Some(remap)
+    } else {
     let entry = blocks
         .first_mut()
         .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
@@ -459,7 +637,10 @@ pub(crate) fn prepare_reference_effect_request_v2(
             let expected_symbol = u32::try_from(axis).map_err(|_| {
                 ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(identity.get())
             })?;
-            replace_reserved_semantic_symbol_v2(&mut entry_operations, identity, expected_symbol)?;
+            compact_row_v1::place_coordinate(
+                &mut entry_operations, identity, expected_symbol,
+                &output.reference_write.coordinate, &binding.effect_ir, &mut bounds_work,
+            )?;
         }
         entry_operations.push(ProductionRankedOperationV1::OwnershipContract {
             view: output.write.view,
@@ -472,6 +653,10 @@ pub(crate) fn prepare_reference_effect_request_v2(
         entry_operations,
         entry.terminator().clone(),
     );
+    None
+    };
+    #[cfg(test)]
+    guard_observation_tests_v1::prepared_values(&prepared);
     let mut requests = Vec::with_capacity(prepared.len());
     for output in prepared {
         let [
@@ -565,6 +750,8 @@ pub(crate) fn prepare_reference_effect_request_v2(
         kernel,
         requests,
         proof_timeout_seconds,
+        source_site_remap,
+        owned_sources: None,
     })
 }
 
@@ -631,12 +818,14 @@ fn reference_expression_with_gpu_loads_v2(
     expected: ReferenceScalarTypeV1,
     kernel: &ProductionRankedKernelV1,
     gpu_expression: &ProductionSemanticExpressionV2,
+    reference_reads: &ReferenceReadRosterV1,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
+    let reads = ReferenceReadLookupV1::new(kernel, gpu_expression, reference_reads)?;
     reference_expression_inner_checked_v2(
         effect_ir,
         expression,
         expected,
-        Some((kernel, gpu_expression)),
+        Some(&reads),
     )
 }
 
@@ -644,7 +833,7 @@ fn reference_expression_inner_checked_v2(
     effect_ir: &ReferenceEffectIrV1,
     expression: &ReferenceEffectExpressionV1,
     expected: ReferenceScalarTypeV1,
-    gpu_loads: Option<(&ProductionRankedKernelV1, &ProductionSemanticExpressionV2)>,
+    gpu_loads: Option<&ReferenceReadLookupV1<'_>>,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
     let expression = reference_expression_inner_v2(effect_ir, expression, gpu_loads, 0)?;
     let expected = reference_scalar_v2(expected).ok_or(
@@ -666,7 +855,7 @@ fn reference_expression_inner_checked_v2(
 fn reference_expression_inner_v2(
     effect_ir: &ReferenceEffectIrV1,
     expression: &ReferenceEffectExpressionV1,
-    gpu_loads: Option<(&ProductionRankedKernelV1, &ProductionSemanticExpressionV2)>,
+    gpu_loads: Option<&ReferenceReadLookupV1<'_>>,
     depth: usize,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
     if depth >= fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
@@ -732,10 +921,11 @@ fn reference_expression_inner_v2(
             reference_argument,
             index,
         } => {
-            let (kernel, gpu_expression) =
+            let reads =
                 gpu_loads.ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-                    "safe reference load requires an independently projected GPU expression",
+                    "safe reference load requires independently projected source reads",
                 ))?;
+            let kernel = reads.kernel;
             let (argument, element) = effect_ir
                 .relations
                 .iter()
@@ -762,9 +952,8 @@ fn reference_expression_inner_v2(
                     "safe reference load argument origin overflowed",
                 ),
             )?;
-            let mut loads = Vec::new();
-            collect_semantic_loads_v2(gpu_expression, &mut loads);
-            let mut matches = loads.into_iter().filter(|load| {
+            reads.roster.charge(reads.loads.len()).map_err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference)?;
+            let mut matches = reads.loads.iter().copied().filter(|load| {
                 load.scalar == scalar
                     && load.allocation_origin == allocation_origin
                     && load.indices.len() == 1
@@ -922,10 +1111,20 @@ fn collect_semantic_loads_v2<'a>(
     }
 }
 
+#[cfg(test)]
 fn compiler_extracted_gpu_effect_v1(
     kernel: &ProductionRankedKernelV1,
     binding: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
     write: &RankedGpuWriteV2,
+) -> Result<CompilerExtractedGpuOutputEffectV1, ProductionReferenceEffectJoinErrorV2> {
+    compiler_extracted_gpu_effect_with_scalar_v1(kernel, binding, write, |_| {})
+}
+
+fn compiler_extracted_gpu_effect_with_scalar_v1(
+    kernel: &ProductionRankedKernelV1,
+    binding: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
+    write: &RankedGpuWriteV2,
+    mut use_guard: impl FnMut(&mut scalar_guard_v1::ScalarWriteGuardV1<'_>),
 ) -> Result<CompilerExtractedGpuOutputEffectV1, ProductionReferenceEffectJoinErrorV2> {
     let output_argument = write
         .allocation_origin
@@ -943,6 +1142,13 @@ fn compiler_extracted_gpu_effect_v1(
             | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
                 argument,
                 element,
+            }
+            | ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D {
+                argument,
+                element,
+            }
+            | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D {
+                argument, element, ..
             } if *argument == output_argument => Some(*element),
             _ => None,
         })
@@ -956,16 +1162,11 @@ fn compiler_extracted_gpu_effect_v1(
             detail: "GPU output scalar is outside the bounded reference-join subset",
         });
     }
-    let guard = gpu_write_path_predicate_v2(kernel, &binding.effect_ir, write)?;
-    let coordinate = ReferenceOutputCoordinateV1::LogicalPoint(
-        write
-            .indices
-            .iter()
-            .copied()
-            .map(|value| gpu_index_expression_v2(kernel, value, 0))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_boxed_slice(),
-    );
+    let mut scope = gpu_write_path_scope_v2(kernel, &binding.effect_ir, write)?;
+    let coordinate = compact_row_v1::gpu_coordinate(
+        kernel, &binding.effect_ir, output_argument, write, &mut scope,
+    )?;
+    use_guard(&mut scope);
     Ok(CompilerExtractedGpuOutputEffectV1 {
         output_argument,
         block: u32::try_from(write.block).map_err(|_| {
@@ -983,7 +1184,7 @@ fn compiler_extracted_gpu_effect_v1(
             }
         })?,
         coordinate,
-        guard,
+        guard:scope.predicate,
     })
 }
 
@@ -1079,6 +1280,9 @@ fn operation_result_v2(
 fn reference_logical_point_rank_v2(
     coordinate: &ReferenceOutputCoordinateV1,
 ) -> Result<usize, ProductionReferenceEffectJoinErrorV2> {
+    if matches!(coordinate, ReferenceOutputCoordinateV1::CompactRowsUsize1D(_)) {
+        return Ok(1);
+    }
     let ReferenceOutputCoordinateV1::LogicalPoint(axes) = coordinate else {
         return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
             "reference output coordinate is not a logical point",
@@ -1306,19 +1510,26 @@ impl<'a> GpuGuardExpressionsV2<'a> {
                 .ok_or_else(|| {
                     gpu_guard_error_v2(self.write, "GPU input extent allocation cannot be mapped")
                 })?;
-            let mut relations = self.effect_ir.relations.iter().filter(|relation|
-                matches!(relation, ReferenceArgumentRelationV1::SharedSliceInput { argument: actual, .. } if *actual == argument));
+            let mut relations = self.effect_ir.relations.iter().filter_map(|relation| match relation {
+                ReferenceArgumentRelationV1::SharedSliceInput { argument: actual, .. }
+                    if *actual == argument => Some(false),
+                ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { argument: actual, .. }
+                | ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { argument: actual, .. }
+                    if *actual == argument => Some(true),
+                _ => None,
+            });
+            let writable = relations.next();
             if axis != 0
-                || relations.next().is_none()
+                || writable.is_none()
                 || relations.next().is_some()
                 || self
                     .views
                     .values()
-                    .any(|view| view.origin == origin && (view.shape.len() != 1 || view.writable))
+                    .any(|view| view.origin == origin && (view.shape.len() != 1 || Some(view.writable) != writable))
             {
                 return Err(gpu_guard_error_v2(
                     self.write,
-                    "GPU guard length is not one exact shared slice input",
+                    "GPU guard length is not one exact shared input or invocation output slice",
                 ));
             }
             return Ok(ReferenceEffectExpressionV1::InputLength {
@@ -1338,6 +1549,16 @@ impl<'a> GpuGuardExpressionsV2<'a> {
             _ => None,
         }
         .ok_or_else(|| {
+            #[cfg(test)]
+            eprintln!(
+                "fe2o3 GPU guard missing definition: write=bb{}:op{} operand={value:?} depth={depth} first_write_index={:?} definitions={} extent_count={} first_extents={:?}",
+                self.write.block,
+                self.write.operation,
+                self.write.indices.first(),
+                self.definitions.len(),
+                self.extents.len(),
+                self.extents.iter().take(4).collect::<Vec<_>>(),
+            );
             gpu_guard_error_v2(
                 self.write,
                 "GPU guard operand has no representable ranked definition",
@@ -1419,11 +1640,26 @@ impl<'a> GpuGuardExpressionsV2<'a> {
     }
 }
 
+mod transparent_guard_split_v1;
+pub(crate) mod scalar_guard_v1;
+
+#[cfg(test)]
+pub(crate) mod guard_observation_tests_v1;
+
+#[cfg(test)]
 fn gpu_write_path_predicate_v2(
     kernel: &ProductionRankedKernelV1,
     effect_ir: &ReferenceEffectIrV1,
     write: &RankedGpuWriteV2,
 ) -> Result<ReferencePathPredicateV1, ProductionReferenceEffectJoinErrorV2> {
+    gpu_write_path_scope_v2(kernel, effect_ir, write).map(|scope| scope.predicate)
+}
+
+fn gpu_write_path_scope_v2<'a>(
+    kernel: &'a ProductionRankedKernelV1,
+    effect_ir: &'a ReferenceEffectIrV1,
+    write: &'a RankedGpuWriteV2,
+) -> Result<scalar_guard_v1::ScalarWriteGuardV1<'a>, ProductionReferenceEffectJoinErrorV2> {
     let blocks = kernel.blocks();
     if write.block >= blocks.len() || blocks.len() > MAX_REFERENCE_BLOCKS_V1 {
         return Err(ProductionReferenceEffectJoinErrorV2::WriteLocation);
@@ -1436,6 +1672,17 @@ fn gpu_write_path_predicate_v2(
     };
     let mut work = ReferenceSymbolicWorkBudgetV2::default();
     let expressions = GpuGuardExpressionsV2::new(kernel, effect_ir, write, &mut work)?;
+    work.charge_v2(effect_ir.relations.len())
+        .map_err(|_| fail())?;
+    let output_argument = write.allocation_origin.checked_sub(1)
+        .and_then(|argument| u32::try_from(argument).ok());
+    let (output_slice, exclusive_output) = effect_ir.relations.iter().fold((false, false),
+        |(slice, exclusive), relation| match relation {
+            ReferenceArgumentRelationV1::InvocationDisjointOutputSlice1D { .. } => (true, exclusive),
+            ReferenceArgumentRelationV1::ExclusivePrimitiveOutputSlice1D { argument, .. } =>
+                (true, exclusive || Some(*argument) == output_argument),
+            _ => (slice, exclusive),
+        });
     let mut successors = Vec::with_capacity(blocks.len());
     let mut indegree = vec![0_usize; blocks.len()];
     for block in blocks {
@@ -1487,7 +1734,9 @@ fn gpu_write_path_predicate_v2(
     predicates[0] = ReferencePathPredicateV1::unconditional_v1();
     for block in order {
         if block == write.block {
-            return Ok(predicates.swap_remove(block));
+            return Ok(scalar_guard_v1::ScalarWriteGuardV1 {
+                predicate:predicates.swap_remove(block),expressions,exclusive_output,work,
+            });
         }
         if !reaches_write[block] || predicates[block].is_unreachable_v1() {
             continue;
@@ -1534,6 +1783,8 @@ fn gpu_write_path_predicate_v2(
                 *true_block,
                 *false_block,
             )),
+            ProductionRankedTerminatorV1::AnalysisSplit { first_block, second_block, .. }
+                if transparent_guard_split_v1::reconverges(kernel, *first_block as usize, *second_block as usize, &mut work).map_err(|_| fail())? => None,
             ProductionRankedTerminatorV1::AnalysisSplit { .. }
             | ProductionRankedTerminatorV1::AnalysisSplitArgs { .. } => {
                 return Err(gpu_guard_error_v2(
@@ -1544,7 +1795,8 @@ fn gpu_write_path_predicate_v2(
             _ => None,
         };
         let edges = if let Some((operation, lhs, rhs, yes, no)) = comparison {
-            if operation == ReferenceBinaryOpV1::LessThan
+            if !output_slice
+                && operation == ReferenceBinaryOpV1::LessThan
                 && expressions.output_bound(lhs, rhs, &mut work)?
             {
                 vec![(yes as usize, None)]
@@ -1556,7 +1808,20 @@ fn gpu_write_path_predicate_v2(
                     checked: false,
                 };
                 work.charge_expression_v2(&condition).map_err(|_| fail())?;
-                vec![
+                let (condition, yes, no) = if output_slice {
+                    transparent_guard_split_v1::canonical_point_threshold(
+                        condition, yes, no, &mut work,
+                    ).map_err(|_| fail())?
+                } else {
+                    (condition, yes, no)
+                };
+                let (condition, yes, no) = if exclusive_output {
+                    compact_row_v1::canonical_row_threshold(condition, yes, no, &mut work)
+                        .map_err(|_| fail())?
+                } else { (condition, yes, no) };
+                if output_slice && transparent_guard_split_v1::preceding_bound(&source, &condition, block, &mut work).map_err(|_| fail())? {
+                    vec![(yes as usize, None)]
+                } else { vec![
                     (
                         yes as usize,
                         Some(reference_boolean_guard_atom_v1(condition.clone(), true)),
@@ -1565,7 +1830,7 @@ fn gpu_write_path_predicate_v2(
                         no as usize,
                         Some(reference_boolean_guard_atom_v1(condition, false)),
                     ),
-                ]
+                ] }
             }
         } else {
             successors[block]
@@ -1778,7 +2043,9 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
         root: &'static str,
         detail: String,
     },
-    ProofExecution(String),
+    // UnexpectedProofResult remains indeterminate, never a numerical mismatch.
+    ProofExecution(fe2o3_verifier::FunctionalRefinementVerusExecutionErrorV2),
+    ProofRequest(&'static str),
     Compile(ProductionRankedCompileErrorV2),
 }
 
@@ -1861,6 +2128,8 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
                 formatter,
                 "functional-refinement proof runtime unavailable at {root}: {detail}; compilation stopped before proof admission or artifact emission"
             ),
+            Self::ProofRequest(detail) => write!(formatter,
+                "functional-refinement proof request is inconsistent: {detail}; compilation stopped before artifact emission"),
             Self::ProofExecution(detail) => write!(
                 formatter,
                 "functional-refinement proof execution failed: {detail}; compilation stopped before artifact emission"
@@ -1877,6 +2146,10 @@ impl std::error::Error for ProductionReferenceEffectJoinErrorV2 {}
 
 #[cfg(test)]
 mod tests {
+    include!("production_reference_effect_join_v2/compact_row_v1/tests.rs");
+    include!("production_reference_effect_join_v2/derived_read_guard_tests.rs");
+    include!("production_reference_effect_join_v2/read_root_placement_v1_tests.rs");
+    include!("production_reference_effect_join_v2/reference_read_roster_tests.rs");
     use super::*;
     use crate::reference_effect_v1::{
         AuthenticatedReferenceEffectBindingV1, ReferenceAssignmentV1, ReferenceBlockV1,
@@ -2339,6 +2612,7 @@ mod tests {
                 block: 3,
                 operation,
                 scalar,
+                read_mode: fe2o3_pliron::ProductionSemanticReadModeV2::UnorderedNonVolatile,
                 allocation_origin,
                 view: local(view),
                 indices: vec![local(0)].into_boxed_slice(),

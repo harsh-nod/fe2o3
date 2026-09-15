@@ -2,16 +2,17 @@
 //!
 //! This is deliberately a value analysis, not a race detector. It derives
 //! bounded unsigned formulas from SSA definitions and records the launch
-//! domain named by `kernel.invocation_index`. Memory and synchronization
-//! passes consume these facts without duplicating expression recognition.
+//! domain declared by `kernel.invocation_index` and a verified execution layout.
+//! Original declarations remain separate from the effective bounds. Memory and
+//! synchronization passes consume these facts without duplicating expression recognition.
 
 use std::collections::{HashMap, VecDeque};
 
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DimensionOp,
     IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
-    IndexLessThanBranchArgsOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp,
-    ranked_view_type,
+    IndexLessThanBranchArgsOp, IndexUnsignedCastOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
+    RankedViewOp, ranked_view_type,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -26,6 +27,9 @@ use pliron::{
 use crate::pliron_function_inventory::{
     BoundedPlironFunctionInventoryFailureV1, BoundedPlironFunctionInventoryV1,
 };
+use crate::pliron_invocation_trace::{
+    PlironExecutionLayoutV1, pliron_execution_layout_with_inventory_v1,
+};
 
 pub const MAX_SPARSE_INDEX_VALUES_V1: usize = 65_536;
 pub const MAX_SPARSE_INDEX_USES_V1: usize = 262_144;
@@ -33,6 +37,7 @@ pub const MAX_SPARSE_INDEX_WORK_UNITS_V1: usize = 1_048_576;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SparseIndexFailureV1 {
+    InvalidExecutionLayout,
     ResourceLimit {
         resource: &'static str,
         limit: usize,
@@ -138,6 +143,10 @@ pub enum SparseIndexFactV1 {
         dividend: SparseAffineIndexV1,
         modulus: u64,
     },
+    Quotient {
+        dividend: SparseAffineIndexV1,
+        divisor: u64,
+    },
     CheckedTiled2D(SparseCheckedTiledIndex2DV1),
     CheckedRowStriped2D(SparseCheckedRowStripedIndex2DV1),
 }
@@ -228,6 +237,7 @@ impl SparseIndexFactV1 {
             Self::Unknown
             | Self::MachineOverflow(_)
             | Self::Remainder { .. }
+            | Self::Quotient { .. }
             | Self::CheckedTiled2D(_)
             | Self::CheckedRowStriped2D(_) => None,
         }
@@ -239,6 +249,7 @@ impl SparseIndexFactV1 {
             Self::Unknown
             | Self::MachineOverflow(_)
             | Self::Remainder { .. }
+            | Self::Quotient { .. }
             | Self::CheckedTiled2D(_)
             | Self::CheckedRowStriped2D(_) => None,
         }
@@ -253,6 +264,9 @@ impl SparseIndexFactV1 {
                 dividend.evaluate(invocation).map(|value| value % modulus)
             }
             Self::Remainder { .. } => None,
+            Self::Quotient { dividend, divisor } => {
+                dividend.evaluate(invocation)?.checked_div(*divisor)
+            }
             Self::CheckedTiled2D(_) => None,
             Self::CheckedRowStriped2D(_) => None,
         }
@@ -264,6 +278,9 @@ impl SparseIndexFactV1 {
             Self::MachineOverflow(_) => None,
             Self::Affine(affine) => affine.maximum(launch_extents),
             Self::Remainder { modulus, .. } => modulus.checked_sub(1),
+            Self::Quotient { dividend, divisor } => {
+                dividend.maximum(launch_extents)?.checked_div(*divisor)
+            }
             Self::CheckedTiled2D(_) => None,
             Self::CheckedRowStriped2D(_) => None,
         }
@@ -363,13 +380,16 @@ pub fn analyze_pliron_sparse_indices_v1(
 ) -> Result<SparseIndexAnalysisV1, SparseIndexFailureV1> {
     let inventory = BoundedPlironFunctionInventoryV1::collect(context, function)
         .map_err(sparse_inventory_failure)?;
-    analyze_pliron_sparse_indices_with_inventory_v1(context, function, &inventory)
+    let layout = pliron_execution_layout_with_inventory_v1(context, &inventory)
+        .map_err(|_| SparseIndexFailureV1::InvalidExecutionLayout)?;
+    analyze_pliron_sparse_indices_with_inventory_v1(context, function, &inventory, layout)
 }
 
 pub(crate) fn analyze_pliron_sparse_indices_with_inventory_v1(
     context: &Context,
     function: &FuncOp,
     inventory: &BoundedPlironFunctionInventoryV1,
+    layout: Option<PlironExecutionLayoutV1>,
 ) -> Result<SparseIndexAnalysisV1, SparseIndexFailureV1> {
     let entry = function.get_entry_block(context);
     let blocks = inventory.blocks().to_vec();
@@ -534,7 +554,20 @@ pub(crate) fn analyze_pliron_sparse_indices_with_inventory_v1(
         }
     }
 
-    let resolved_launch_extents = if launch_extents.is_empty() {
+    let resolved_launch_extents = if let Some(layout) = layout {
+        for (dimension, declared) in launch_extents.iter().enumerate() {
+            if let Some(declared) = declared {
+                let actual = layout
+                    .global_extents
+                    .get(dimension)
+                    .ok_or(SparseIndexFailureV1::InvalidExecutionLayout)?;
+                if *declared != 0 && declared != actual {
+                    return Err(SparseIndexFailureV1::InvalidExecutionLayout);
+                }
+            }
+        }
+        layout.global_extents.to_vec()
+    } else if launch_extents.is_empty() {
         vec![1]
     } else {
         launch_extents
@@ -581,11 +614,10 @@ pub(crate) fn analyze_pliron_sparse_indices_with_inventory_v1(
             (definition.result, fact)
         })
         .collect();
-    let declared_launch_extents = launch_extents.clone();
     Ok(SparseIndexAnalysisV1 {
         facts,
         launch_extents: resolved_launch_extents,
-        declared_launch_extents,
+        declared_launch_extents: launch_extents,
     })
 }
 
@@ -874,6 +906,18 @@ fn derive_operation(
         }
         return known(SparseIndexFactV1::Unknown);
     }
+    if let Some(cast) = operation.downcast_ref::<IndexUnsignedCastOp>() {
+        let SparseIndexLatticeV1::Known(source) =
+            lookup(cast.source(context), lattice, definition_indices)
+        else {
+            return SparseIndexLatticeV1::Pending;
+        };
+        return known(derive_unsigned_cast(
+            source,
+            cast.inclusive_upper_bound(context),
+            launch_extents,
+        ));
+    }
     if let Some(binary) = operation.downcast_ref::<IndexBinaryOp>() {
         let lhs = lookup(binary.lhs(context), lattice, definition_indices);
         let rhs = lookup(binary.rhs(context), lattice, definition_indices);
@@ -971,6 +1015,36 @@ const fn malformed(detail: &'static str) -> SparseIndexFailureV1 {
     SparseIndexFailureV1::MalformedControlFlow { detail }
 }
 
+fn derive_unsigned_cast(
+    source: SparseIndexFactV1,
+    mask: Option<u64>,
+    launch_extents: &[u64],
+) -> SparseIndexFactV1 {
+    let Some(mask) = mask else {
+        return SparseIndexFactV1::Unknown;
+    };
+    if mask == u64::MAX || matches!(source, SparseIndexFactV1::MachineOverflow(_)) {
+        return source;
+    }
+    let SparseIndexFactV1::Affine(source) = source else {
+        return SparseIndexFactV1::Unknown;
+    };
+    if let Some(value) = source.is_constant() {
+        return SparseIndexFactV1::Affine(SparseAffineIndexV1::constant(value & mask));
+    }
+    if maximum_known_invocation(&[&source], launch_extents)
+        .and_then(|invocation| source.evaluate(&invocation))
+        .is_some_and(|maximum| maximum <= mask)
+    {
+        SparseIndexFactV1::Affine(source)
+    } else {
+        SparseIndexFactV1::Remainder {
+            dividend: source,
+            modulus: mask + 1,
+        }
+    }
+}
+
 fn derive_binary(
     kind: Option<IndexBinaryKindAttr>,
     lhs: SparseIndexFactV1,
@@ -1038,7 +1112,35 @@ fn derive_binary(
                 modulus,
             })
             .unwrap_or(SparseIndexFactV1::Unknown),
-        Some(IndexBinaryKindAttr::Divide) => SparseIndexFactV1::Unknown,
+        Some(IndexBinaryKindAttr::Divide) => {
+            let Some(divisor) = rhs.is_constant().filter(|divisor| *divisor != 0) else {
+                return SparseIndexFactV1::Unknown;
+            };
+            if let Some(value) = lhs.is_constant() {
+                return SparseIndexFactV1::Affine(SparseAffineIndexV1::constant(value / divisor));
+            }
+            // Keep one fixed-size formula, not a recursively expanded expression.
+            // Every referenced axis must have a checked launch range.
+            let bounded_axes = lhs
+                .coefficients
+                .iter()
+                .enumerate()
+                .all(|(axis, coefficient)| {
+                    *coefficient == 0 || launch_extents.get(axis).is_some_and(|extent| *extent != 0)
+                });
+            if bounded_axes
+                && maximum_known_invocation(&[&lhs], launch_extents)
+                    .and_then(|invocation| lhs.evaluate(&invocation))
+                    .is_some()
+            {
+                SparseIndexFactV1::Quotient {
+                    dividend: lhs,
+                    divisor,
+                }
+            } else {
+                SparseIndexFactV1::Unknown
+            }
+        }
         None => SparseIndexFactV1::Unknown,
     }
 }
@@ -1105,3 +1207,11 @@ const fn limit(resource: &'static str, limit: usize, actual: usize) -> SparseInd
         actual,
     }
 }
+
+#[cfg(test)]
+#[path = "pliron_sparse_index/quotient_tests.rs"]
+mod quotient_tests;
+
+#[cfg(test)]
+#[path = "pliron_sparse_index/unsigned_cast_tests.rs"]
+mod unsigned_cast_tests;

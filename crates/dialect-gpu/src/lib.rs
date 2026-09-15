@@ -908,6 +908,7 @@ pub fn register_dialect(
     <optimization_v1::BFloat16Type as Type>::register(context);
     <optimization_v1::PointerType as Type>::register(context);
     <optimization_v1::SliceType as Type>::register(context);
+    <PhaseValueTypeV14 as Type>::register(context);
     <HierarchyIdOp as Op>::register(context);
     <ExecutionLayoutOp as Op>::register(context);
     <MemorySpaceOp as Op>::register(context);
@@ -948,6 +949,7 @@ pub fn register_dialect(
     <IntegerSwitchOp as Op>::register(context);
     <UnreachableOp as Op>::register(context);
     <ExecutionCapabilityOp as Op>::register(context);
+    <ReusablePhaseOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context

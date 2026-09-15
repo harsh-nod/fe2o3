@@ -373,6 +373,7 @@ pub enum Type {
     GlobalCapability(GlobalCapabilityTypeV1),
     /// Branded target-neutral execution authority introduced by canonical V13.
     ExecutionCapability(crate::ExecutionCapabilityTypeV1),
+    ReusablePhaseToken(crate::ReusablePhaseTokenTypeV1),
 }
 
 impl Type {
@@ -412,6 +413,7 @@ impl Type {
                 | Self::KernelContext(_)
                 | Self::GlobalCapability(_)
                 | Self::ExecutionCapability(_)
+                | Self::ReusablePhaseToken(_)
         )
     }
 
@@ -422,6 +424,7 @@ impl Type {
             Self::Slice(slice) => slice.element.contains_kernel_context(),
             Self::GlobalCapability(_)
             | Self::ExecutionCapability(_)
+            | Self::ReusablePhaseToken(_)
             | Self::Unit
             | Self::Scalar(_) => false,
         }
@@ -430,7 +433,7 @@ impl Type {
     /// Returns whether this type contains any compiler-issued logical authority.
     pub fn contains_logical_capability(&self) -> bool {
         match self {
-            Self::KernelContext(_) | Self::GlobalCapability(_) | Self::ExecutionCapability(_) => {
+            Self::KernelContext(_) | Self::GlobalCapability(_) | Self::ExecutionCapability(_) | Self::ReusablePhaseToken(_) => {
                 true
             }
             Self::Pointer(pointer) => pointer.pointee.contains_logical_capability(),

@@ -16,8 +16,12 @@ const SCALAR_LLVM_BUILD_IDENTITY: &str =
 fn main() {
     let mut request = Vec::new();
     io::stdin().read_to_end(&mut request).unwrap();
-    let is_v2 = request.get(..8) == Some(b"F3LREQ02");
-    let compiler_input = is_v2.then(|| input_payload(field(&request, 9)));
+    let is_module_request =
+        request.get(..8) == Some(b"F3LREQ02") || request.get(..8) == Some(b"F3LREQ03");
+    if request.starts_with(b"F3LREQ03") {
+        assert_eq!(field(&request, 15), [1]);
+    }
+    let compiler_input = is_module_request.then(|| input_payload(field(&request, 9)));
     let scalar = compiler_input.is_some_and(is_scalar_add_module);
     let selector = compiler_input.map_or(0, embedded_source_selector);
     let scalar_fixture = compiler_input
@@ -40,7 +44,13 @@ fn main() {
         diagnostics.sort();
     }
     io::stdout()
-        .write_all(&response(&request, is_v2, &output, &diagnostics, selector))
+        .write_all(&response(
+            &request,
+            is_module_request,
+            &output,
+            &diagnostics,
+            selector,
+        ))
         .unwrap();
 }
 
@@ -93,24 +103,34 @@ fn embedded_source_selector(module: &[u8]) -> u8 {
 
 fn response(
     request: &[u8],
-    is_v2: bool,
+    is_module_request: bool,
     output_bytes: &[u8],
     diagnostics: &[String],
     selector: u8,
 ) -> Vec<u8> {
     let request_id = field(request, 1);
-    let mut request_identity = field(request, if is_v2 { 15 } else { 10 }).to_vec();
+    let capture_required = request.starts_with(b"F3LREQ03");
+    let identity_field = if capture_required {
+        16
+    } else if is_module_request {
+        15
+    } else {
+        10
+    };
+    let mut request_identity = field(request, identity_field).to_vec();
     if selector == 0x23 {
         request_identity[0] ^= 1;
     }
-    let mut bytes = if is_v2 {
+    let mut bytes = if capture_required {
+        b"F3LRSP05".to_vec()
+    } else if is_module_request {
         b"F3LRSP04".to_vec()
     } else {
         b"F3LRSP01".to_vec()
     };
     push_field(&mut bytes, 1, request_id);
     push_field(&mut bytes, 2, &request_identity);
-    let offset = if is_v2 {
+    let offset = if is_module_request {
         let mut envelope = field(request, 8).to_vec();
         if selector == 0x24 {
             envelope[0] ^= 1;
@@ -144,7 +164,7 @@ fn response(
     output.extend_from_slice(&(output_bytes.len() as u64).to_le_bytes());
     output.extend_from_slice(output_bytes);
     push_field(&mut bytes, 6 + offset, &output);
-    if is_v2 {
+    if is_module_request {
         append_derivation_response_fields(&mut bytes, request, output_bytes);
     }
     bytes

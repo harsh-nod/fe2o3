@@ -366,6 +366,39 @@ fn rejects_wrong_target_invalid_collective_protocol_and_unbounded_broadcast() {
 }
 
 #[test]
+fn portable_f32_collectives_require_an_exact_profile_without_admitting_gfx950_lds() {
+    let mut module = collective_and_lds_transpose_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
+    let function = &mut module.functions[0];
+    function.body.as_mut().unwrap().blocks[0]
+        .operations
+        .retain(|operation| !matches!(operation.kind, OperationKind::Gfx950LdsTranspose(_)));
+    function.required_capabilities = function.derived_capabilities();
+    function
+        .required_capabilities
+        .insert(gfx942_xnack_minus_target_capability());
+    module.required_capabilities = function.required_capabilities.clone();
+    module.kernels[0].required_capabilities = function.required_capabilities.clone();
+    verify_module(&module).unwrap();
+
+    let kernel = KernelId::new("collective");
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &kernel).unwrap();
+    assert_eq!(llvm.matches(" = fadd float ").count(), 4);
+    assert_eq!(llvm.matches(" = fcmp olt float ").count(), 4);
+    assert_eq!(llvm.matches("call i32 @llvm.amdgcn.ds.bpermute").count(), 9);
+    assert!(!llvm.contains("llvm.amdgcn.ds.load.tr"));
+    assert!(fe2o3_amdgcn_model::lower_kernel_to_llvm_ir(&module, &kernel).is_err());
+    assert!(fe2o3_amdgcn_model::lower_kernel_to_gfx942_llvm_ir(&module, &kernel).is_err());
+
+    let OperationKind::Wave(wave) =
+        &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind
+    else {
+        panic!("reduction")
+    };
+    wave.active_lanes = 32;
+    assert!(lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &kernel).is_err());
+}
+
+#[test]
 fn lowers_mask63_wave64_broadcast_and_rejects_hostile_masks() {
     for mask_on_left in [false, true] {
         let module = masked_wave64_broadcast_module(Some(63), mask_on_left);

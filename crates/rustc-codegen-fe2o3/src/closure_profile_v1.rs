@@ -27,14 +27,16 @@ use std::fmt;
 mod custody_v1;
 pub(crate) use custody_v1::CollectedClosureCustodyV1;
 
-const MAX_CLOSURES: usize = 8;
-// Preserve the original aggregate work/storage envelope while allowing one
-// device environment to use more than an eighth of the function's allowance.
-const MAX_TOTAL_CAPTURES: usize = MAX_CLOSURES * 16;
-const MAX_TOTAL_ENVIRONMENT_BYTES: u64 = MAX_CLOSURES as u64 * 256;
+const MAX_STATIC_CALLS: usize = 64;
+// Each ordinary environment needs a validated use within the shared call budget.
+const MAX_CLOSURES: usize = MAX_STATIC_CALLS;
+// Aggregate storage is independent of the number of admitted environments.
+const MAX_TOTAL_CAPTURES: usize = 128;
+const MAX_TOTAL_ENVIRONMENT_BYTES: u64 = 2048;
+// Bound forwarding walks explicitly, including cycles, by the same work budget.
+const MAX_ALIAS_DEPTH: usize = MAX_STATIC_CALLS;
 const MAX_ENVIRONMENT_ALIGNMENT: u64 = 16;
 const MAX_CALL_ARGUMENTS: usize = 8;
-const MAX_STATIC_CALLS: usize = 64;
 const MAX_MACRO_EXPANSION_DEPTH: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -292,11 +294,6 @@ fn analyze_with_custody_v1<'tcx>(
                 "returning a closure escapes its environment",
             ));
         }
-        if environments.len() == MAX_CLOSURES {
-            return Err(ClosureProfileErrorV1::new(format!(
-                "closure count exceeds {MAX_CLOSURES}"
-            )));
-        }
         let transport = incoming.and_then(|arguments| arguments.get(&local.as_usize()));
         if let Some(transport) = transport {
             transport.require_type(tcx, ty)?;
@@ -322,6 +319,11 @@ fn analyze_with_custody_v1<'tcx>(
                 local.as_usize()
             )));
         };
+        if environments.len() == MAX_CLOSURES {
+            return Err(ClosureProfileErrorV1::new(format!(
+                "closure count exceeds {MAX_CLOSURES}"
+            )));
+        }
         require_origin(policy, origin)?;
         let call_kind = closure_kind(args.as_closure().kind_ty().to_opt_closure_kind())?;
         let upvars = args.as_closure().upvar_tys();
@@ -742,7 +744,7 @@ fn resolve_alias_root(
     roots: &BTreeSet<Local>,
     aliases: &BTreeMap<Local, Local>,
 ) -> Option<Local> {
-    for _ in 0..=MAX_CLOSURES {
+    for _ in 0..=MAX_ALIAS_DEPTH {
         if roots.contains(&local) {
             return Some(local);
         }

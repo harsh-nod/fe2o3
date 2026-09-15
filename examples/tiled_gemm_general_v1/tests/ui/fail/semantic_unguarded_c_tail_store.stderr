@@ -5,7 +5,7 @@ error[E0599]: no method named `store_c_at` found for struct `Gfx942TiledGemmWave
   |          ^^^^^^^^^^
   |
 help: there is a method `store_c_fragment` with a similar name, but with different arguments
- --> device-api/src/lib.rs
+ --> $FE2O3_GEMM_DEVICE_V1/src/lib.rs
   |
   | /     pub fn store_c_fragment(
   | |         self,

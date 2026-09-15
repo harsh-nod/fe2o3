@@ -1,0 +1,105 @@
+*** Begin Patch
+*** Update File: crates/rustc-codegen-fe2o3/src/collector/production_importer_v1.rs
+@@
+ mod numerical_policy_v1;
++mod index_witness_mapping_v1;
+@@
+         let capability_root = capability_memory_root_for_terminal_v1(
++            tcx,
+@@
+             let root = capability_memory_root_for_terminal_v1(
++                tcx,
+@@
+         let Expansion::Execution(execution) = terminal.expansion else {
++            if terminal.expansion == Expansion::ThreadIndexIntoDisjoint {
++                index_witness_mapping_v1::validate_conversion_carriage_v1(tcx, plan, kernel_contexts, semantic_mir, terminal_index)?;
++            }
+             continue;
+         };
+@@
+         let root = capability_memory_root_for_terminal_v1(
++            tcx,
+@@
+-fn capability_memory_root_for_terminal_v1<'a>(
+-    plan: &ProductionSemanticPreflightPlanV1<'_>,
++fn capability_memory_root_for_terminal_v1<'a, 'tcx>(
++    tcx: TyCtxt<'tcx>,
++    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+@@
+-    if !is_capability_terminal {
++    let is_workgroup_conversion = if expansion == Expansion::ThreadIndexIntoDisjoint {
++        let producer = plan.terminal_producers().get(terminal as usize)
++            .ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint conversion owner"))?;
++        index_witness_mapping_v1::conversion_requires_root_v1(tcx, producer.instance)?
++    } else {
++        false
++    };
++    if !is_capability_terminal && !is_workgroup_conversion {
+@@
+-                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
+-                    workgroup: abi.source_input_types()[0],
+-                    witness: abi.source_output_type(),
++                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
++                    workgroup_reference: abi.source_input_types()[0],
++                    workgroup: pointer_pointee_v1(types, abi.source_input_types()[0])?,
++                    option: abi.source_output_type(),
++                    witness: option_payload_v1(types, abi.source_output_type())?,
+@@
+         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
+             if inputs.len() == 1 && rust_inputs.len() == 1 =>
+         {
+-            let (Some((input_space, input_brand)), Some((output_space, output_brand))) = (
+-                rust_index_witness_contract_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex),
+-                rust_index_witness_contract_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex),
+-            ) else {
+-                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+-            };
+-            if input_space != output_space || input_brand != output_brand {
+-                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
++            let contract = index_witness_mapping_v1::thread_into_disjoint_contract_v1(
++                tcx, rust_inputs[0], rust_output,
++            ).ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint mapping"))?;
++            let input_space = match contract.mapping {
++                index_witness_mapping_v1::RustIndexMappingV1::Invocation(space) => space,
++                index_witness_mapping_v1::RustIndexMappingV1::WorkgroupMemory(brand) => {
++                    let root = capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
++                        "workgroup index conversion lacks authenticated root custody",
++                    ))?;
++                    require_capability_memory_terminal_abi_v1(
++                        tcx, abi, types, rust_inputs, rust_output,
++                        &[SemanticSourceArgumentOwnershipV1::ByValue],
++                    )?;
++                    return execution_capability_operation_v1(
++                        tcx, abi,
++                        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
++                            input_witness: inputs[0], output_witness: output,
++                        },
++                        root, kernel_contexts, brand.kernel_brand, brand.epoch, None, source_identity,
++                    );
++                }
+-            }
++            };
+@@
+         ProductionTerminalExpansionV1::DisjointSliceGetMut
+             if inputs.len() == 2 && rust_inputs.len() == 2 =>
+         {
+-            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+-                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+-            let rust_index =
+-                rust_index_witness_space_v1(tcx, rust_inputs[1], TrustedDeviceItem::ThreadIndex);
+-            if rust_slice.map(|(_, space)| space) != rust_index {
+-                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+-            }
++            index_witness_mapping_v1::disjoint_slice_get_mut_contract_v1(
++                tcx, rust_inputs[0], rust_inputs[1],
++            ).ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint mapping"))?;
+*** Update File: crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/typed_global_carriage_v1_tests/mod.rs
+@@
+             let root = capability_memory_root_for_terminal_v1(
++                tcx,
+*** Update File: crates/rustc-codegen-fe2o3/src/collector/production_importer_v1/global_bf16_matrix_v1.rs
+@@
+         let root = capability_memory_root_for_terminal_v1(
++            tcx,
+             plan,
+*** End Patch

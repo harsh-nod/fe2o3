@@ -60,6 +60,24 @@ pub enum MoeOracleErrorV1 {
     },
 }
 
+impl core::fmt::Display for MoeOracleErrorV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::WrongLogitLength { expected, actual } => {
+                write!(formatter, "expected {expected} logits, got {actual}")
+            }
+            Self::NonFiniteLogit { token, expert } => {
+                write!(
+                    formatter,
+                    "non-finite logit at token {token}, expert {expert}"
+                )
+            }
+        }
+    }
+}
+
+impl core::error::Error for MoeOracleErrorV1 {}
+
 fn descending_score_then_expert(
     logits: &[f32],
     token: usize,

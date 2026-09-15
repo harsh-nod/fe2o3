@@ -254,6 +254,7 @@ pub(crate) enum DescriptorKind {
     SharedSlice,
     DisjointSlice,
     GlobalMutPointer,
+    MutableSlice,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -284,6 +285,13 @@ impl SourceTypeDescriptorV1 {
         }
     }
 
+    pub const fn mutable_slice(element: ScalarTypeV1) -> Self {
+        Self {
+            kind: DescriptorKind::MutableSlice,
+            element,
+        }
+    }
+
     pub const fn global_mut_pointer(pointee: ScalarTypeV1) -> Self {
         Self {
             kind: DescriptorKind::GlobalMutPointer,
@@ -305,6 +313,10 @@ impl SourceTypeDescriptorV1 {
 
     pub const fn is_disjoint_slice(&self) -> bool {
         matches!(self.kind, DescriptorKind::DisjointSlice)
+    }
+
+    pub const fn is_mutable_slice(&self) -> bool {
+        matches!(self.kind, DescriptorKind::MutableSlice)
     }
 
     pub const fn is_global_mut_pointer(&self) -> bool {
@@ -340,6 +352,10 @@ impl DeviceLayoutDescriptorV1 {
 
     pub const fn disjoint_slice(element: ScalarTypeV1) -> Self {
         Self::slice(DescriptorKind::DisjointSlice, element)
+    }
+
+    pub const fn mutable_slice(element: ScalarTypeV1) -> Self {
+        Self::slice(DescriptorKind::MutableSlice, element)
     }
 
     pub const fn global_mut_pointer(pointee: ScalarTypeV1) -> Self {
@@ -623,6 +639,29 @@ impl LogicalArgumentV1 {
             device_layout.identity,
             OwnershipSemantics::UniqueBorrow,
             access,
+            AliasSemantics::Exclusive,
+            pointer_offset,
+        )
+    }
+
+    /// An initialized mutable slice borrowed for the entire host launch.
+    /// Exclusivity between host arguments does not establish freedom from races
+    /// between device invocations accessing this slice.
+    pub fn mutable_slice(
+        source_index: u16,
+        name: ValidName,
+        source_type: &SourceTypeRecordV1,
+        device_layout: &DeviceLayoutRecordV1,
+        pointer_offset: u32,
+    ) -> Result<Self, ValidationError> {
+        require_matching_descriptors(source_type, device_layout, DescriptorKind::MutableSlice)?;
+        Self::slice(
+            source_index,
+            name,
+            source_type.identity,
+            device_layout.identity,
+            OwnershipSemantics::UniqueBorrow,
+            AccessMode::ReadWrite,
             AliasSemantics::Exclusive,
             pointer_offset,
         )
@@ -1342,6 +1381,9 @@ fn validate_argument_against_records(
         DescriptorKind::DisjointSlice => {
             DeviceLayoutDescriptorV1::disjoint_slice(source_type.descriptor.element)
         }
+        DescriptorKind::MutableSlice => {
+            DeviceLayoutDescriptorV1::mutable_slice(source_type.descriptor.element)
+        }
         DescriptorKind::GlobalMutPointer => {
             DeviceLayoutDescriptorV1::global_mut_pointer(source_type.descriptor.element)
         }
@@ -1358,6 +1400,7 @@ fn validate_argument_against_records(
         }
         DescriptorKind::SharedSlice => validate_shared_slice_argument(argument),
         DescriptorKind::DisjointSlice => validate_disjoint_slice_argument(argument),
+        DescriptorKind::MutableSlice => validate_mutable_slice_argument(argument),
         DescriptorKind::GlobalMutPointer => validate_global_mut_pointer_argument(argument),
     }
 }
@@ -1406,6 +1449,18 @@ fn validate_disjoint_slice_argument(argument: &LogicalArgumentV1) -> Result<(), 
     {
         return Err(ValidationError::InvalidArgument(
             "DisjointSlice must be an exclusive memory borrow",
+        ));
+    }
+    validate_slice_components(argument)
+}
+
+fn validate_mutable_slice_argument(argument: &LogicalArgumentV1) -> Result<(), ValidationError> {
+    if argument.ownership != OwnershipSemantics::UniqueBorrow
+        || argument.access != AccessMode::ReadWrite
+        || argument.alias != AliasSemantics::Exclusive
+    {
+        return Err(ValidationError::InvalidArgument(
+            "mutable slice must be an exclusive read-write borrow",
         ));
     }
     validate_slice_components(argument)

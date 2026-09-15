@@ -19,7 +19,7 @@
       "status": "not-applicable"
     }
   },
-  "compilerInputContractSha256": "42668d9ca248c88c8a6f5f5fd5a970ea895d712945efbdd023d7d5b3fc86b4d8",
+  "compilerInputContractSha256": "a6a15a5c86ba17fd618d7c629e3851e05f46eaf50e35b37ce92e4347558bdb08",
   "expectedArguments": [
     {
       "bytes": "0x00002a4200002a4200002a4200002a4200e4404600e44046",
@@ -54,9 +54,9 @@
   },
   "productionExport": {
     "coordinates": null,
-    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
-    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
-    "diagnosticIdentitySha256": "d1fbcae61431dcb8ad0a10a95cec9878c5644967107da4775756313a33513dbd",
+    "diagnostic": "FE2O3-TUTORIAL-TXN-007: protected cargo-fe2o3 fixture build failed with exit status: 1: cargo fe2o3 authority release: cannot admit the fixed compiler-execution client profile: trusted client-profile directory \"profile root\" has invalid descriptor, type, owner, mode, or link state",
+    "diagnosticCode": "FE2O3-TUTORIAL-TXN-007",
+    "diagnosticIdentitySha256": "83d7574aaa30e8c8e9cd1dc6d50ccac1980ab73e68531ee4fc0035c2fd7d0f7a",
     "identityContract": {
       "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
       "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
@@ -67,7 +67,7 @@
       ],
       "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
     },
-    "stage": "exporter-build",
+    "stage": "protected-completion",
     "status": "blocked"
   },
   "request": {
@@ -94,6 +94,6 @@
     ]
   },
   "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
-  "sourceClosureSha256": "6f7126a8aa0f8313c5350c1d52253de63aa81a01fcd9662e1b1c80b2f23135f8",
+  "sourceClosureSha256": "d1cea2ecfc805407ef2046052774a52f12715155e0fc3e2bea44cf1bc3dcbfbe",
   "target": "gfx942"
 }

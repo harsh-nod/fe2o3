@@ -48,6 +48,17 @@ pub trait GeneratedDeviceScalarV1:
     }
 
     #[doc(hidden)]
+    fn mutable_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
+        canonical_slice_layout_with_source_v1(
+            Self::RUST_SCALAR_TYPE,
+            pointer_width,
+            RustSourceTypeShapeV1::mutable_slice(Self::RUST_SCALAR_TYPE),
+            true,
+        )
+        .type_identity()
+    }
+
+    #[doc(hidden)]
     fn disjoint_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
         Self::disjoint_slice_type_identity_for_index_space_v1(
             pointer_width,
@@ -231,7 +242,7 @@ fn canonical_slice_layout_with_source_v1(
     element: RustScalarElementTypeV1,
     pointer_width: PointerWidth,
     source_type: RustSourceTypeShapeV1,
-    disjoint: bool,
+    mutable: bool,
 ) -> RustLayoutEvidenceV1 {
     let width = pointer_width.bytes();
     let alignment = u32::try_from(width).expect("pointer width fits u32");
@@ -240,7 +251,7 @@ fn canonical_slice_layout_with_source_v1(
         width,
         alignment,
         RustPhysicalComponentKindV1::Pointer {
-            mutability: if disjoint {
+            mutability: if mutable {
                 RustPointerMutabilityV1::Mut
             } else {
                 RustPointerMutabilityV1::Const
@@ -821,6 +832,23 @@ impl GeneratedArgumentPackingPlanV1 {
         )
     }
 
+    pub(crate) fn bind_generated_address_free_mutable_slice_v1<
+        'allocation,
+        T: GeneratedDeviceScalarV1,
+    >(
+        &self,
+        argument_index: usize,
+        length: usize,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_address_free_slice_v1::<T>(
+            argument_index,
+            length,
+            GeneratedSliceEffectV1::MutableReadWrite,
+            borrow,
+        )
+    }
+
     pub(crate) fn bind_generated_address_free_write_slice_v1<
         'allocation,
         T: GeneratedDeviceScalarV1,
@@ -889,6 +917,13 @@ impl GeneratedArgumentPackingPlanV1 {
                 Access::ReadOnly,
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedReadOnly,
+            ),
+            GeneratedSliceEffectV1::MutableReadWrite => (
+                T::mutable_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
             ),
             GeneratedSliceEffectV1::ExclusiveReadWrite => (
                 T::disjoint_slice_type_identity_v1(self.pointer_width),
@@ -982,6 +1017,13 @@ impl GeneratedArgumentPackingPlanV1 {
                 Access::ReadOnly,
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedReadOnly,
+            ),
+            GeneratedSliceEffectV1::MutableReadWrite => (
+                T::mutable_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
             ),
             GeneratedSliceEffectV1::ExclusiveReadWrite => (
                 T::disjoint_slice_type_identity_v1(self.pointer_width),
@@ -1116,6 +1158,7 @@ impl GeneratedArgumentPackingPlanV1 {
 #[derive(Clone, Copy)]
 enum GeneratedSliceEffectV1 {
     SharedRead,
+    MutableReadWrite,
     ExclusiveWrite,
     ExclusiveReadWrite,
     MappedExclusiveWrite(RustDisjointIndexSpaceV1),
@@ -2278,21 +2321,44 @@ fn worker_v3_field_mismatch(
         .iter()
         .find(|record| record.identity() == argument.device_layout())
         .map(|record| record.descriptor());
-    let expected_type_identity = source.map(|source| {
+    let expected_type_identity = source.and_then(|source| {
         let scalar = descriptor_scalar_to_rust_layout(source.scalar_type());
         if source.is_scalar() {
-            canonical_scalar_layout_v1(scalar, PointerWidth::Bits64).type_identity()
+            Some(canonical_scalar_layout_v1(scalar, PointerWidth::Bits64).type_identity())
         } else if source.is_shared_slice() {
-            canonical_slice_layout_v1(scalar, PointerWidth::Bits64, false).type_identity()
-        } else {
+            Some(canonical_slice_layout_v1(scalar, PointerWidth::Bits64, false).type_identity())
+        } else if source.is_mutable_slice() {
+            if disjoint_index_space.is_some()
+                || field.kind()
+                    != (AbiKind::Slice {
+                        element_size: scalar.size_bytes(),
+                        element_alignment: scalar.size_bytes() as u32,
+                    })
+            {
+                return None;
+            }
+            Some(
+                canonical_slice_layout_with_source_v1(
+                    scalar,
+                    PointerWidth::Bits64,
+                    RustSourceTypeShapeV1::mutable_slice(scalar),
+                    true,
+                )
+                .type_identity(),
+            )
+        } else if source.is_disjoint_slice() {
             // Descriptor V1 preserves the disjoint ownership class. The authenticated generated
             // host contract supplies the exact source mapping, with Index1D as the legacy default.
-            canonical_disjoint_slice_layout_v1(
-                scalar,
-                PointerWidth::Bits64,
-                disjoint_index_space.unwrap_or(RustDisjointIndexSpaceV1::Index1D),
+            Some(
+                canonical_disjoint_slice_layout_v1(
+                    scalar,
+                    PointerWidth::Bits64,
+                    disjoint_index_space.unwrap_or(RustDisjointIndexSpaceV1::Index1D),
+                )
+                .type_identity(),
             )
-            .type_identity()
+        } else {
+            None
         }
     });
     let layout_matches = match (source, device_layout) {
@@ -2856,17 +2922,23 @@ mod tests {
     }
 
     fn worker_v3_table(disjoint: bool) -> DeviceDescriptorTableV1 {
-        let source = SourceTypeRecordV1::new(if disjoint {
+        worker_v3_slice_table(if disjoint {
             SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32)
         } else {
             SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32)
-        });
-        let layout = DeviceLayoutRecordV1::new(if disjoint {
+        })
+    }
+
+    fn worker_v3_slice_table(descriptor: SourceTypeDescriptorV1) -> DeviceDescriptorTableV1 {
+        let source = SourceTypeRecordV1::new(descriptor);
+        let layout = DeviceLayoutRecordV1::new(if source.descriptor().is_disjoint_slice() {
             DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32)
+        } else if source.descriptor().is_mutable_slice() {
+            DeviceLayoutDescriptorV1::mutable_slice(ScalarTypeV1::F32)
         } else {
             DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32)
         });
-        let argument = if disjoint {
+        let argument = if source.descriptor().is_disjoint_slice() {
             LogicalArgumentV1::disjoint_slice(
                 0,
                 descriptor_name("values"),
@@ -2876,6 +2948,9 @@ mod tests {
                 0,
             )
             .unwrap()
+        } else if source.descriptor().is_mutable_slice() {
+            LogicalArgumentV1::mutable_slice(0, descriptor_name("values"), &source, &layout, 0)
+                .unwrap()
         } else {
             LogicalArgumentV1::shared_slice(0, descriptor_name("values"), &source, &layout, 0)
                 .unwrap()
@@ -2932,6 +3007,122 @@ mod tests {
         generated: &CompilerGeneratedArgumentLayoutV1,
     ) -> Result<super::GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
         validate_worker_v3_argument_packing(table, &table.kernels()[0], generated)
+    }
+
+    #[test]
+    fn mutable_slice_host_contract_rejects_disjoint_and_element_substitutions() {
+        let table = worker_v3_slice_table(SourceTypeDescriptorV1::mutable_slice(ScalarTypeV1::F32));
+        let field = AbiField::new(
+            Name::new("values").unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            Mutability::Mutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            f32::mutable_slice_type_identity_v1(PointerWidth::Bits64),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        )
+        .unwrap();
+        let exact = generated(vec![field.clone()], 16, 8);
+        let plan = validate_worker_v3(&table, &exact).unwrap();
+        for (kind, mutability, access, ownership, alias) in [
+            (
+                AbiKind::Slice {
+                    element_size: 8,
+                    element_alignment: 8,
+                },
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+            (
+                field.kind(),
+                Mutability::Immutable,
+                Access::ReadOnly,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            (
+                field.kind(),
+                Mutability::Mutable,
+                Access::WriteOnly,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+        ] {
+            let substituted = AbiField::new(
+                field.name().clone(),
+                field.offset(),
+                field.size(),
+                field.alignment(),
+                kind,
+                mutability,
+                access,
+                field.address_space(),
+                field.type_identity(),
+                ownership,
+                alias,
+            )
+            .unwrap();
+            assert!(validate_worker_v3(&table, &generated(vec![substituted], 16, 8)).is_err());
+        }
+        assert!(
+            plan.bind_generated_address_free_mutable_slice_v1::<f32>(
+                0,
+                7,
+                super::GeneratedArgumentBorrowV1::new(),
+            )
+            .is_ok()
+        );
+        assert!(
+            plan.bind_generated_address_free_mutable_slice_v1::<i32>(
+                0,
+                7,
+                super::GeneratedArgumentBorrowV1::new(),
+            )
+            .is_err()
+        );
+        assert!(
+            plan.bind_generated_address_free_read_write_slice_v1::<f32>(
+                0,
+                7,
+                super::GeneratedArgumentBorrowV1::new(),
+            )
+            .is_err()
+        );
+        let disjoint = generated(
+            vec![canonical_slice::<f32>("values", true, Access::ReadWrite)],
+            16,
+            8,
+        );
+        assert!(validate_worker_v3(&table, &disjoint).is_err());
+        assert!(validate_worker_v3(&worker_v3_table(true), &exact).is_err());
+        let disjoint_plan = validate_worker_v3(&worker_v3_table(true), &disjoint).unwrap();
+        assert!(
+            disjoint_plan
+                .bind_generated_address_free_mutable_slice_v1::<f32>(
+                    0,
+                    7,
+                    super::GeneratedArgumentBorrowV1::new(),
+                )
+                .is_err()
+        );
+        let mapped = CompilerGeneratedArgumentLayoutV1::new_with_disjoint_index_spaces_v1(
+            16,
+            8,
+            PointerWidth::Bits64,
+            vec![field],
+            vec![Some(RustDisjointIndexSpaceV1::GridExclusive)],
+        )
+        .unwrap();
+        assert!(validate_worker_v3(&table, &mapped).is_err());
     }
 
     #[test]

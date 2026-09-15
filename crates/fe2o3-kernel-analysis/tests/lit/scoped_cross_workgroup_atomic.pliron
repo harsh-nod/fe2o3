@@ -1,6 +1,10 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: PASS
-// CHECK: PASS
+// EXPECT: REJECT
+// CHECK: error[FE2O3-EFFECT-008]
+// CHECK: has no exact effect-refinement contract
+// Atomic/race positive only: W4 fixture tests retain exact independent atomic
+// and race evidence, but require production rejection because the global RMW
+// has no reference-effect contract.
 // ATOMIC-CAPABILITY: 32 Global Agent
 builtin.func @scoped_cross_workgroup_atomic: builtin.function <() -> ()>
 {

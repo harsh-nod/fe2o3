@@ -2,6 +2,63 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn native_ui_target_dir(source: &Path, explicit: Option<&Path>, outer: Option<&Path>) -> PathBuf {
+    explicit
+        .map(Path::to_path_buf)
+        .or_else(|| outer.map(|root| root.join("tutorial-ui/fe2o3-tiled-gemm-general-v1/native")))
+        .unwrap_or_else(|| source.join("target"))
+}
+
+#[test]
+fn native_ui_target_selection_prefers_explicit_cache() {
+    let source = Path::new("/scratch/case");
+    for explicit in [
+        Path::new("/caller/ui-cache"),
+        Path::new("relative-ui-cache"),
+    ] {
+        for outer in [None, Some(Path::new("/caller/cargo-target"))] {
+            assert_eq!(
+                native_ui_target_dir(source, Some(explicit), outer),
+                explicit
+            );
+        }
+    }
+}
+
+#[test]
+fn native_ui_target_selection_nests_under_outer_cargo_target() {
+    let outer = Path::new("/caller/cargo-target");
+    let expected = outer.join("tutorial-ui/fe2o3-tiled-gemm-general-v1/native");
+    for source in [Path::new("/scratch/first"), Path::new("/scratch/second")] {
+        let target = native_ui_target_dir(source, None, Some(outer));
+        assert_eq!(target, expected);
+        assert_ne!(target, outer);
+        assert!(!target.starts_with(source));
+        assert_ne!(
+            target,
+            outer.join("tutorial-ui/fe2o3-tiled-gemm-general-v1/amdgpu")
+        );
+    }
+}
+
+#[test]
+fn native_ui_target_selection_defaults_to_owned_scratch_target() {
+    let first = Path::new("/scratch/first");
+    let second = Path::new("/scratch/second");
+    assert_eq!(
+        native_ui_target_dir(first, None, None),
+        first.join("target")
+    );
+    assert_eq!(
+        native_ui_target_dir(second, None, None),
+        second.join("target")
+    );
+    assert_ne!(
+        native_ui_target_dir(first, None, None),
+        native_ui_target_dir(second, None, None)
+    );
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -47,9 +104,11 @@ fn compile(case: &str, source: &str) -> Output {
     )
     .expect("write UI fixture manifest");
     std::fs::write(scratch.0.join("src/lib.rs"), source).expect("write UI fixture source");
-    let target = std::env::var_os("FE2O3_GENERAL_GEMM_UI_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| scratch.0.join("target"));
+    let explicit = std::env::var_os("FE2O3_GENERAL_GEMM_UI_TARGET_DIR").map(PathBuf::from);
+    // Resolve before nested Cargo changes directory; never reuse the outer target itself.
+    let outer = std::env::var_os("CARGO_TARGET_DIR")
+        .map(|root| std::path::absolute(root).expect("resolve outer Cargo target directory"));
+    let target = native_ui_target_dir(&scratch.0, explicit.as_deref(), outer.as_deref());
     let action = if case == "pipeline-resource-limit" {
         "build"
     } else {
@@ -152,43 +211,77 @@ fn hostile_capability_substitutions_fail_closed() {
     }
 }
 
+#[path = "capability-ui/amdgpu.rs"]
+mod amdgpu;
+
 #[test]
-fn missing_fully_typed_gemm_bridges_remain_explicit() {
-    const BOUNDARIES: [(&str, &str, &[&str]); 4] = [
+fn supported_typed_gemm_bridges_typecheck_on_amdgpu() {
+    for (case, source) in [
         (
-            "global-matrix-bridge",
+            "typed-global-epilogue",
+            include_str!("capability-ui/pass/typed_global_epilogue.rs"),
+        ),
+        (
+            "same-policy-binding",
+            include_str!("capability-ui/pass/same_policy_binding.rs"),
+        ),
+    ] {
+        amdgpu::compile(case, source).assert_success(case);
+    }
+}
+
+#[test]
+fn legacy_substitutions_and_policy_custody_fail_closed_on_amdgpu() {
+    // A failed dependency or target setup must not masquerade as a negative.
+    amdgpu::compile(
+        "negative-device-control",
+        include_str!("capability-ui/pass/same_policy_binding.rs"),
+    )
+    .assert_success("negative-device-control");
+
+    const CASES: [(&str, &str, &str, &str, &[&str]); 5] = [
+        (
+            "legacy-global-matrix",
             include_str!("capability-ui/boundary/global_matrix_bridge.rs"),
+            "E0308",
+            "matrix.bf16_a_row_major(input, 0, 16, 16, 16)",
             &["mismatched types", "&[u16]"],
         ),
         (
-            "dynamic-workgroup-epoch-loop",
+            "legacy-epoch-reassignment",
             include_str!("capability-ui/boundary/dynamic_workgroup_epoch_loop.rs"),
-            &["mismatched types", "NextEpoch"],
+            "E0308",
+            "workgroup = next;",
+            &["mismatched types", "InitialEpoch", "NextEpoch"],
         ),
         (
-            "typed-global-epilogue",
-            include_str!("capability-ui/boundary/typed_global_epilogue.rs"),
+            "missing-policy-owner",
+            include_str!("capability-ui/boundary/numerical_policy_binding.rs"),
+            "E0061",
+            "matrix.with_numerical_policy::<Brand<'kernel>, StrictIeee>()",
+            &["1 argument", "0 arguments", "NumericalPolicyCapability"],
+        ),
+        (
+            "cross-kernel-policy",
+            include_str!("capability-ui/fail/cross_policy.rs"),
+            "E0308",
+            "matrix.with_numerical_policy(policy)",
             &[
-                "Global's role must be ReadOnly, DisjointWrite<IndexSpace>, or AtomicReadWrite<Scope>",
+                "mismatched types",
+                "NumericalPolicyCapability",
+                "KernelA",
+                "KernelB",
             ],
         ),
         (
-            "numerical-policy-binding",
-            include_str!("capability-ui/boundary/numerical_policy_binding.rs"),
-            &["no method named `with_numerical_policy`"],
+            "cross-kernel-matrix-lane",
+            include_str!("capability-ui/fail/cross_brand.rs"),
+            "E0308",
+            "matrix.bf16_zero_accumulator(lane)",
+            &["mismatched types", "SubgroupLane", "KernelA", "KernelB"],
         ),
     ];
-
-    for (case, source, expected) in BOUNDARIES {
-        assert!(source.contains("expected-boundary: FE2O3-CAP-GEMM"));
-        let output = compile(case, source);
-        let stderr = String::from_utf8(output.stderr).expect("rustc diagnostics are UTF-8");
-        assert!(!output.status.success(), "boundary fixture {case} compiled");
-        for expected in expected {
-            assert!(
-                stderr.contains(expected),
-                "{case} no longer fails at {expected:?}:\n{stderr}"
-            );
-        }
+    for (case, source, code, source_line, expected) in CASES {
+        amdgpu::compile(case, source).assert_rejected(case, code, source_line, expected);
     }
 }

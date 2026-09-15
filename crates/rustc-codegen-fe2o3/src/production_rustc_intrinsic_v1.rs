@@ -2,6 +2,10 @@
 
 use std::fmt;
 
+// Source expansions retain ordinary callable identity and semantic-MIR
+// admission. They are not unsafe intrinsics or panic-name exemptions.
+pub(crate) use crate::trusted_device_items::{ProductionMirV1, production_mir_v1};
+
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicScopeV1,

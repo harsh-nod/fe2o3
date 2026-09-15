@@ -1854,7 +1854,7 @@ fn scan_operation(
         OperationKind::KernelContextIssue(_)
         | OperationKind::GlobalCapabilityBind(_)
         | OperationKind::GlobalCapabilityIndex(_)
-        | OperationKind::ExecutionCapability(_) => {
+        | OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_) => {
             unreachable!("logical capability is erased during V12/V13 admission")
         }
     }

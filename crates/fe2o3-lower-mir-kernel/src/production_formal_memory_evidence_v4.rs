@@ -393,6 +393,9 @@ fn encode(
             ProductionCanonicalKernelIrVersionV1::V11 => 11,
             ProductionCanonicalKernelIrVersionV1::V12 => 12,
             ProductionCanonicalKernelIrVersionV1::V13 => 13,
+            ProductionCanonicalKernelIrVersionV1::V14 => {
+                return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidHeader);
+            }
         },
     );
     push_u16(&mut bytes, 0);

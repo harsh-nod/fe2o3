@@ -4,6 +4,13 @@ This standalone crate contains ordinary attributed Rust `#[kernel]` source for
 one fixed `T8/E4/K2/C4` deterministic router, plus host-side oracle and
 proof-facing executable contracts.
 
+Current status: the capability migration changed `src/kernel.rs`, but the
+retained Phase A proof fixtures still name the older source identity. The
+all-target host suite rejects that mismatch. The nine CPU-oracle tests pass;
+they do not validate the GPU kernel. The compiler/finalizer material below
+describes retained Phase A work, not current production readiness. Updating
+proof pins requires revalidation against the changed source and pinned runtime.
+
 The bounded compiler profile authenticates the exact attributed source, kernel
 root and `FnAbi`, reviewed provider-terminal manifest, and complete reachable
 portable-MIR closure. It checks a private same-session structural

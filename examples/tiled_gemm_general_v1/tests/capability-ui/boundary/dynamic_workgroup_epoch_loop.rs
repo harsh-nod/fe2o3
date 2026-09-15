@@ -1,4 +1,9 @@
-// expected-boundary: FE2O3-CAP-GEMM runtime K loops need reusable typed workgroup epochs
+// expected-rejection: FE2O3-CAP-GEMM legacy-epoch-reassignment
+#![no_std]
+
+#[cfg(not(target_arch = "amdgpu"))]
+compile_error!("GEMM device UI must compile the actual AMD target");
+
 use fe2o3_device::{InitialEpoch, WorkgroupCapability};
 
 fn dynamic_epochs<'workgroup, Brand>(

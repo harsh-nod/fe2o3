@@ -12,7 +12,7 @@ use fe2o3_device::{
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn execution_capability_v17(mut context: KernelContext<'_>, input: Global<'_, u32, ReadOnly>) {
-    let atomic_physical: &[u32] = &[];
+    let atomic_physical: &mut [u32] = &mut [];
     let atomic_view = CapabilityMemoryView::<
         u32,
         GlobalAddressSpace,

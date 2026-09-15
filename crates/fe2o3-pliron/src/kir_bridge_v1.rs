@@ -16,6 +16,7 @@ use std::{
 #[cfg(feature = "internal-test-context-access")]
 use dialect_gpu::CanonicalKirSafetyOpInterface;
 use dialect_gpu::{
+    PhaseValueTypeV14, ReusablePhaseOp as PlironReusablePhaseOp,
     AddressSpaceAttr, AllocaOp as PlironAllocaOp, AtomicOp as PlironAtomicOp,
     CanonicalBarrierOp as PlironCanonicalBarrierOp, CanonicalFenceOp as PlironCanonicalFenceOp,
     CanonicalKirOperationAttr, CanonicalKirOperationCarrier, CanonicalKirSwitchCarrier,
@@ -42,6 +43,7 @@ use dialect_kernel::{
     KernelContextType as PlironKernelContextType, ReturnOp as RankedReturnOp, SourceCoordinateAttr,
 };
 use fe2o3_kernel_ir::{
+    CanonicalKernelIrVersionV1, VerifiedCanonicalKernelIrV1,
     AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, Constant, FunctionId, Module,
     Operation as KirOperation, OperationKind, ScalarType, TargetCapability, Terminator, Type,
     UnaryOp, ValueId, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
@@ -81,6 +83,10 @@ use pliron::{
 use pliron::printable::Printable;
 
 use crate::{HARD_MAX_OPERATION_TREE_ITEMS, OperationHandle, OperationHandleError, PlironSession};
+
+mod declared_v14;
+#[cfg(test)]
+mod declared_v14_tests;
 
 // `ModuleOp::new` creates one operation containing one region and one block.
 const BUILTIN_MODULE_ROOT_TREE_WORK_V1: usize = 3;
@@ -980,6 +986,7 @@ enum KirBridgeCanonicalVersionV1 {
     V11,
     V12,
     V13,
+    V14,
 }
 
 #[derive(Clone, Default)]
@@ -988,6 +995,7 @@ struct KirBridgeOriginsV1 {
     blocks: HashMap<Ptr<BasicBlock>, (usize, BlockId)>,
     values: HashMap<Value, ValueId>,
     logical_types: HashMap<Value, Type>,
+    phase_operations: HashMap<Ptr<Operation>, KirBridgeCoordinateV1>,
 }
 
 impl KirPlironGraphV1 {
@@ -1161,17 +1169,7 @@ impl PlironSession {
         &mut self,
         input: &VerifiedCanonicalKernelIrV13,
     ) -> Result<KirPlironGraphV1, KirBridgeErrorV1> {
-        input
-            .revalidate()
-            .map_err(|_| KirBridgeErrorV1::CanonicalInputRejected)?;
-        let module = fe2o3_kernel_ir::decode_module_v13(input.canonical_bytes())
-            .map_err(|_| KirBridgeErrorV1::CanonicalInputRejected)?;
-        import_module(
-            self,
-            input.canonical_bytes(),
-            KirBridgeCanonicalVersionV1::V13,
-            module,
-        )
+        self.import_canonical_kir_declared_o0(input.as_common())
     }
 
     /// Extracts canonical Kernel IR from a typed live graph and requires an
@@ -1570,6 +1568,7 @@ fn digest(
         KirBridgeCanonicalVersionV1::V11 => KIR_PLIRON_BRIDGE_V11_IDENTITY_DOMAIN_V1,
         KirBridgeCanonicalVersionV1::V12 => KIR_PLIRON_BRIDGE_V12_IDENTITY_DOMAIN_V1,
         KirBridgeCanonicalVersionV1::V13 => KIR_PLIRON_BRIDGE_V13_IDENTITY_DOMAIN_V1,
+        KirBridgeCanonicalVersionV1::V14 => b"FE2O3/KIR-PLIRON-BRIDGE/CANONICAL-KIR-V14/V1\0",
     };
     hasher.update(
         u32::try_from(domain.len())
@@ -1591,10 +1590,12 @@ fn import_module(
     canonical_version: KirBridgeCanonicalVersionV1,
     module: Module,
 ) -> Result<KirPlironGraphV1, KirBridgeErrorV1> {
-    let (mut tree_work, correspondence) = preflight(&module)?;
+    let (mut tree_work, correspondence, phase_count) = preflight(&module)?;
+    let phase_operations = declared_v14::reserve_phase_origins(phase_count)?;
+    add_tree_work(&mut tree_work, phase_operations.capacity())?;
     if matches!(
         canonical_version,
-        KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13
+        KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13 | KirBridgeCanonicalVersionV1::V14
     ) {
         let declarations = portable_requirements(&module)
             .len()
@@ -1625,6 +1626,7 @@ fn import_module(
             &module,
             canonical_version,
             input.digest,
+            phase_operations,
         )
     }));
     let origins = match built {
@@ -1663,6 +1665,7 @@ fn extract_module(
         .copied()
         .ok_or(KirBridgeErrorV1::GraphIdentityMismatch)?;
     match catch_unwind(AssertUnwindSafe(|| {
+        declared_v14::validate_phase_custody(&session.context, root, graph)?;
         extract_module_graph(
             &session.context,
             root,
@@ -1693,6 +1696,7 @@ fn extract_optimized_module(
         .copied()
         .ok_or(KirBridgeErrorV1::GraphIdentityMismatch)?;
     match catch_unwind(AssertUnwindSafe(|| {
+        declared_v14::validate_phase_custody(&session.context, root, graph)?;
         extract_optimized_module_graph(
             &session.context,
             root,
@@ -1710,10 +1714,11 @@ fn extract_optimized_module(
     }
 }
 
-fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
+fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>, usize), KirBridgeErrorV1> {
     let mut tree_work = BUILTIN_MODULE_ROOT_TREE_WORK_V1;
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
+    let mut phase_count = 0;
     for (function_index, function) in module.functions.iter().enumerate() {
         function
             .signature
@@ -1760,6 +1765,8 @@ fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>),
                     .try_for_each(|value| preflight_type(&value.ty))?;
                 preflight_operation(operation, coordinate)?;
                 add_tree_work(&mut tree_work, 2)?;
+                // Reuse this bounded walk instead of rescanning every module.
+                phase_count += usize::from(matches!(operation.kind, OperationKind::ReusablePhase(_)));
                 push_correspondence(&mut correspondence, &mut ordinal, coordinate)?;
             }
             let coordinate = KirBridgeCoordinateV1::Terminator {
@@ -1771,7 +1778,7 @@ fn preflight(module: &Module) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>),
             push_correspondence(&mut correspondence, &mut ordinal, coordinate)?;
         }
     }
-    Ok((tree_work, correspondence))
+    Ok((tree_work, correspondence, phase_count))
 }
 
 fn add_tree_work(tree_work: &mut usize, additional: usize) -> Result<(), KirBridgeErrorV1> {
@@ -1805,6 +1812,8 @@ fn to_u32(value: usize) -> Result<u32, KirBridgeErrorV1> {
 
 fn preflight_type(ty: &Type) -> Result<(), KirBridgeErrorV1> {
     match ty {
+        Type::ReusablePhaseToken(_) => PhaseValueTypeV14::supports(ty)
+            .then_some(()).ok_or(KirBridgeErrorV1::UnsupportedType),
         Type::Unit | Type::Scalar(_) => Ok(()),
         Type::Pointer(pointer) => {
             preflight_address_space(pointer.address_space)?;
@@ -1847,6 +1856,8 @@ fn preflight_operation(
     coordinate: KirBridgeCoordinateV1,
 ) -> Result<(), KirBridgeErrorV1> {
     match &operation.kind {
+        OperationKind::ReusablePhase(_) => CanonicalKirOperationAttr::new_declared(operation, CanonicalKernelIrVersionV1::V14)
+            .map(|_| ()).ok_or(KirBridgeErrorV1::UnsupportedOperation { coordinate }),
         OperationKind::Constant(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }
@@ -1909,15 +1920,16 @@ fn build_module_graph(
     module: &Module,
     canonical_version: KirBridgeCanonicalVersionV1,
     graph_epoch: [u8; 32],
+    phase_operations: HashMap<Ptr<Operation>, KirBridgeCoordinateV1>,
 ) -> Result<KirBridgeOriginsV1, KirBridgeErrorV1> {
     if !Operation::is_op::<ModuleOp>(root, context) {
         return Err(KirBridgeErrorV1::MalformedGraph);
     }
     let root = ModuleOp::from_operation(root);
-    let mut origins = KirBridgeOriginsV1::default();
+    let mut origins = KirBridgeOriginsV1 { phase_operations, ..KirBridgeOriginsV1::default() };
     if matches!(
         canonical_version,
-        KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13
+        KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13 | KirBridgeCanonicalVersionV1::V14
     ) {
         append_v12_module_contract(context, &root, module, graph_epoch)?;
     }
@@ -2023,6 +2035,11 @@ fn build_module_graph(
                 graph_epoch,
             )?;
             live.insert_at_back(live_block, context);
+            if matches!(operation.kind, OperationKind::ReusablePhase(_)) {
+                if origins.phase_operations.insert(live, coordinate).is_some() {
+                    return Err(KirBridgeErrorV1::MalformedGraph);
+                }
+            }
             let raw = live.deref(context);
             if raw.get_num_results() != operation.results.len() {
                 return Err(KirBridgeErrorV1::MalformedGraph);
@@ -2575,6 +2592,7 @@ fn build_operation(
         }
         OperationKind::Wave(_) => canonical_operation!(PlironWaveOp),
         OperationKind::InlineAssembly(_) => canonical_operation!(PlironInlineAssemblyOp),
+        OperationKind::ReusablePhase(_) => canonical_operation!(PlironReusablePhaseOp),
     };
     Ok(live)
 }
@@ -2626,7 +2644,7 @@ fn build_terminator(
         Some(Terminator::Return { values: returned })
             if matches!(
                 canonical_version,
-                KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13
+                KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13 | KirBridgeCanonicalVersionV1::V14
             ) && returned.is_empty() =>
         {
             Ok(RankedReturnOp::new(context).get_operation())
@@ -2721,7 +2739,12 @@ fn build_terminator(
 }
 
 fn type_to_pliron(context: &Context, ty: &Type) -> Result<TypeHandle, KirBridgeErrorV1> {
+    if PhaseValueTypeV14::supports(ty) {
+        return PhaseValueTypeV14::get(context, ty).map(Into::into)
+            .ok_or(KirBridgeErrorV1::UnsupportedType);
+    }
     Ok(match ty {
+        Type::ReusablePhaseToken(_) => return Err(KirBridgeErrorV1::UnsupportedType),
         Type::Unit => UnitType::get(context).into(),
         Type::Scalar(ScalarType::Bool) => IntegerType::get(context, 1, Signedness::Signless).into(),
         Type::Scalar(ScalarType::I8) => IntegerType::get(context, 8, Signedness::Signed).into(),
@@ -2958,7 +2981,7 @@ fn validated_live_functions(
         KirBridgeCanonicalVersionV1::V9
         | KirBridgeCanonicalVersionV1::V10
         | KirBridgeCanonicalVersionV1::V11 => 0,
-        KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13 => {
+        KirBridgeCanonicalVersionV1::V12 | KirBridgeCanonicalVersionV1::V13 | KirBridgeCanonicalVersionV1::V14 => {
             let requirements = portable_requirements(metadata);
             let declaration_count = requirements
                 .len()
@@ -3518,6 +3541,7 @@ fn extract_any_operation(
     extract_carrier!(PlironGfx950LdsTransposeOp);
     extract_carrier!(PlironWaveOp);
     extract_carrier!(PlironInlineAssemblyOp);
+    extract_carrier!(PlironReusablePhaseOp);
     if Operation::is_op::<KernelContextIssueOp>(live, context) {
         return extract_kernel_context_issue(context, live, coordinate, graph_epoch);
     }
@@ -4230,6 +4254,8 @@ fn extract_operation(
                 graph_epoch,
             )
         }
+        OperationKind::ReusablePhase(_) => extract_expected_canonical_operation::<PlironReusablePhaseOp>(
+            context, live, expected, reverse, coordinate, graph_epoch),
     }
 }
 
@@ -4467,6 +4493,9 @@ fn block_id_for(
 
 fn type_from_pliron(context: &Context, ty: TypeHandle) -> Result<Type, KirBridgeErrorV1> {
     let raw = ty.deref(context);
+    if let Some(phase) = raw.downcast_ref::<PhaseValueTypeV14>() {
+        return phase.kir_type().ok_or(KirBridgeErrorV1::UnsupportedType);
+    }
     if raw.is::<UnitType>() {
         return Ok(Type::Unit);
     }

@@ -2,9 +2,10 @@ use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
     DIALECT_NAME, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchOp, IndexType, IndexUnknownOp, InvocationIndexOp, MemorySpaceAttr,
-    OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp,
-    RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, TrapOp, register_dialect,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, IndexUnknownOp, InvocationIndexOp,
+    MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
+    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, TrapOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOverlapClassV1, HierarchicalOwnershipFindingV1, HierarchicalOwnershipLevelV1,
@@ -837,6 +838,136 @@ fn total_view_proves_multidimensional_surjectivity_and_guarded_tail_finality() {
             .element_count(),
         7,
     );
+}
+
+#[test]
+fn quotient_guards_and_duplicate_successor_arguments_preserve_exact_coverage() {
+    for (bound, declared_extent, through_argument, split, fallback, first_hole) in [
+        (16, 1024, true, 1024, 16, None),
+        (15, 1024, true, 1024, 15, Some(960)),
+        (16, 0, true, 1024, 16, None),
+        (15, 0, true, 1024, 15, Some(960)),
+        (16, 0, false, 1024, 16, None),
+        (15, 0, false, 1024, 15, Some(960)),
+        (16, 0, true, 512, 15, None),
+        (16, 0, true, 512, 16, Some(512)),
+    ] {
+        let context = &mut setup();
+        let (function, _) = function(context, "quotient_coverage", 0);
+        let entry = function.get_entry_block(context);
+        let index: TypeHandle = IndexType::get(context).into();
+        let join = BasicBlock::new(
+            context,
+            None,
+            if through_argument {
+                vec![index]
+            } else {
+                vec![]
+            },
+        );
+        join.insert_at_back(function.get_region(context), context);
+        let body = block(context, &function, "write");
+        let exit = block(context, &function, "exit");
+        let execution = layout(context, [1024, 1, 1], [64, 1, 1], 64);
+        let invocation = InvocationIndexOp::new(context, 0, declared_extent);
+        let divisor = IndexConstantOp::new(context, 64);
+        let limit = IndexConstantOp::new(context, bound);
+        let extent = IndexConstantOp::new(context, split);
+        let fallback = IndexConstantOp::new(context, fallback);
+        let quotient = IndexBinaryOp::new(
+            context,
+            IndexBinaryKindAttr::Divide,
+            invocation.result(context),
+            divisor.result(context),
+        );
+        let output = view(context, vec![1024], vec![], MemorySpaceAttr::Global);
+        let ownership = coverage_contract(
+            context,
+            output.result(context),
+            OwnershipCoverageAttr::TotalView,
+        );
+        let enter = IndexLessThanBranchArgsOp::new(
+            context,
+            invocation.result(context),
+            extent.result(context),
+            if through_argument {
+                vec![quotient.result(context)]
+            } else {
+                vec![]
+            },
+            if through_argument {
+                vec![fallback.result(context)]
+            } else {
+                vec![]
+            },
+            join,
+            join,
+        );
+        for operation in [
+            execution.get_operation(),
+            invocation.get_operation(),
+            divisor.get_operation(),
+            limit.get_operation(),
+            extent.get_operation(),
+            fallback.get_operation(),
+            quotient.get_operation(),
+            output.get_operation(),
+            ownership.get_operation(),
+            enter.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        let argument = if through_argument {
+            join.deref(context).get_argument(0)
+        } else {
+            quotient.result(context)
+        };
+        let guard =
+            IndexLessThanBranchOp::new(context, argument, limit.result(context), body, exit);
+        append(context, join, &guard);
+        let store = write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        );
+        append(context, body, &store);
+        let leave = BranchOp::new(context, exit);
+        append(context, body, &leave);
+        let ret = ReturnOp::new(context);
+        append(context, exit, &ret);
+        pliron::operation::verify_operation(function.get_operation(), context).unwrap();
+        let sparse =
+            fe2o3_kernel_analysis::analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+        assert_eq!(sparse.declared_launch_extent(0), Some(declared_extent));
+        assert_eq!(sparse.launch_extents(), &[1024, 1, 1]);
+        assert!(matches!(
+            sparse.fact(quotient.result(context)),
+            fe2o3_kernel_analysis::SparseIndexFactV1::Quotient { .. }
+        ));
+        assert_eq!(
+            sparse.fact(quotient.result(context)).evaluate(&[1023]),
+            Some(15)
+        );
+        if through_argument {
+            assert_eq!(
+                sparse.fact(argument),
+                fe2o3_kernel_analysis::SparseIndexFactV1::Unknown,
+                "conflicting successor slots must be resolved by the actual edge, not merged into a constant"
+            );
+        }
+        let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
+        if let Some(first_hole) = first_hole {
+            assert!(
+                matches!(report.findings(), [HierarchicalOwnershipFindingV1::CoverageHole { coordinate, .. }] if coordinate == &[first_hole]),
+                "{:?}",
+                report.findings()
+            );
+            assert!(!report.all_total_view_contracts_are_proved());
+        } else {
+            assert!(report.is_clean(), "{:?}", report.findings());
+            assert!(report.all_total_view_contracts_are_proved());
+        }
+    }
 }
 
 #[test]

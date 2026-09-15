@@ -1,4 +1,6 @@
 use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr, MemoryScopeAttr};
+#[path = "pliron_race/blocked_global_v1.rs"]
+mod blocked_global_v1;
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME,
@@ -2255,6 +2257,88 @@ fn multidimensional_identity_is_clean_and_dropped_dimension_collides() {
 }
 
 #[test]
+fn effective_layout_keeps_unused_axes_and_quotient_collisions() {
+    for quotient_address in [false, true] {
+        let context = &mut setup();
+        let function = function(context, "effective_layout_collision");
+        let entry = function.get_entry_block(context);
+        let global = if quotient_address {
+            [128, 1, 1]
+        } else {
+            [128, 2, 1]
+        };
+        let layout = ExecutionLayoutOp::new(context, 71, global, [64, 1, 1], 64);
+        let output = view_with_contract(
+            context,
+            vec![if quotient_address { 2 } else { 128 }],
+            MemorySpaceAttr::Global,
+            71,
+            71,
+        );
+        let invocation = InvocationIndexOp::new(context, 0, 0);
+        let divisor = IndexConstantOp::new(context, 64);
+        let quotient = IndexBinaryOp::new(
+            context,
+            IndexBinaryKindAttr::Divide,
+            invocation.result(context),
+            divisor.result(context),
+        );
+        let index = if quotient_address {
+            quotient.result(context)
+        } else {
+            invocation.result(context)
+        };
+        let write = access(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            index,
+        );
+        let ret = ReturnOp::new(context);
+        for operation in [
+            layout.get_operation(),
+            output.get_operation(),
+            invocation.get_operation(),
+            divisor.get_operation(),
+            quotient.get_operation(),
+            write.get_operation(),
+            ret.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        assert!(
+            fe2o3_kernel_analysis::run_pliron_ranked_bounds_check_v1(context, &function).is_clean()
+        );
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        assert_eq!(
+            report.status(),
+            KernelCheckStatusV1::Rejected,
+            "{:?}",
+            report.findings()
+        );
+        let (first, second) = report
+            .findings()
+            .iter()
+            .find_map(|finding| match finding {
+                RankedRaceFindingV1::ConflictingEffects { first, second, .. } => {
+                    Some((first, second))
+                }
+                _ => None,
+            })
+            .expect("actual duplicate writers must be retained");
+        assert_eq!(first.invocation(), &[0, 0, 0]);
+        assert_eq!(
+            second.invocation(),
+            if quotient_address {
+                &[1, 0, 0]
+            } else {
+                &[0, 1, 0]
+            }
+        );
+    }
+}
+
+#[test]
 fn private_memory_and_single_invocation_do_not_create_inter_invocation_races() {
     for (space, extent) in [(MemorySpaceAttr::Private, 64), (MemorySpaceAttr::Global, 1)] {
         let context = &mut setup();
@@ -3043,12 +3127,14 @@ fn invocation_axis_outside_retained_layout_fails_closed() {
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
-    assert!(matches!(
+    assert_eq!(
         report.findings(),
-        [RankedRaceFindingV1::ExecutionLayoutUnavailable { detail }]
-            if detail.contains("axis 3")
-                && detail.contains("outside the three-dimensional gpu.execution_layout")
-    ));
+        &[RankedRaceFindingV1::BoundsPrerequisiteRejected]
+    );
+    assert_eq!(
+        fe2o3_kernel_analysis::analyze_pliron_sparse_indices_v1(context, &function).unwrap_err(),
+        fe2o3_kernel_analysis::SparseIndexFailureV1::InvalidExecutionLayout
+    );
 }
 
 #[test]

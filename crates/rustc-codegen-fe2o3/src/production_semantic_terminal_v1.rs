@@ -135,6 +135,17 @@ pub(crate) enum ProductionExecutionTerminalV1 {
     GlobalExclusiveLoad,
     GlobalExclusiveStore,
     GlobalStoreBlock,
+    NumericalPolicyIssue,
+    SubgroupPartitionDerive,
+    SubgroupPartitionReduceSumF32,
+    SubgroupPartitionBroadcastF32,
+    SubgroupPartitionReduceMaxF32,
+    Gfx950TransposeIssue,
+    Gfx950TransposeStageB4,
+    Gfx950TransposeStageB8,
+    Gfx950TransposePublish,
+    Gfx950TransposeReadB4,
+    Gfx950TransposeReadB8,
 }
 
 impl ProductionExecutionTerminalV1 {
@@ -149,7 +160,7 @@ impl ProductionExecutionTerminalV1 {
     }
 
     #[cfg(test)]
-    const ALL: [Self; 42] = [
+    const ALL: [Self; 53] = [
         Self::BindAtomicView,
         Self::WorkgroupDerive,
         Self::SubgroupDerive,
@@ -192,6 +203,17 @@ impl ProductionExecutionTerminalV1 {
         Self::GlobalExclusiveLoad,
         Self::GlobalExclusiveStore,
         Self::GlobalStoreBlock,
+        Self::NumericalPolicyIssue,
+        Self::SubgroupPartitionDerive,
+        Self::SubgroupPartitionReduceSumF32,
+        Self::SubgroupPartitionBroadcastF32,
+        Self::SubgroupPartitionReduceMaxF32,
+        Self::Gfx950TransposeIssue,
+        Self::Gfx950TransposeStageB4,
+        Self::Gfx950TransposeStageB8,
+        Self::Gfx950TransposePublish,
+        Self::Gfx950TransposeReadB4,
+        Self::Gfx950TransposeReadB8,
     ];
 
     pub(crate) const fn identity_tag(self) -> u8 {
@@ -238,19 +260,37 @@ impl ProductionExecutionTerminalV1 {
             Self::GlobalExclusiveLoad => 39,
             Self::GlobalExclusiveStore => 40,
             Self::GlobalStoreBlock => 41,
+            Self::NumericalPolicyIssue => 42,
+            Self::SubgroupPartitionDerive => 43,
+            Self::SubgroupPartitionReduceSumF32 => 44,
+            Self::SubgroupPartitionBroadcastF32 => 45,
+            Self::SubgroupPartitionReduceMaxF32 => 46,
+            Self::Gfx950TransposeIssue => 47,
+            Self::Gfx950TransposeStageB4 => 48,
+            Self::Gfx950TransposeStageB8 => 49,
+            Self::Gfx950TransposePublish => 50,
+            Self::Gfx950TransposeReadB4 => 51,
+            Self::Gfx950TransposeReadB8 => 52,
         }
     }
 
     pub(crate) const fn source_argument_count(self) -> usize {
         match self {
+            Self::Gfx950TransposeIssue => 1,
+            Self::Gfx950TransposeStageB4 | Self::Gfx950TransposeStageB8 => 4,
+            Self::Gfx950TransposePublish | Self::Gfx950TransposeReadB4 | Self::Gfx950TransposeReadB8 => 2,
             Self::WorkgroupDerive
             | Self::SubgroupDerive
             | Self::LdsAllocate
             | Self::WorkgroupBarrier
             | Self::PrivateMemoryAllocate
+            | Self::NumericalPolicyIssue
             | Self::WorkgroupMemoryIndex1D
             | Self::WorkgroupMemoryAllocate => 1,
             Self::BindAtomicView
+            | Self::SubgroupPartitionDerive
+            | Self::SubgroupPartitionReduceSumF32
+            | Self::SubgroupPartitionReduceMaxF32
             | Self::SubgroupBarrier
             | Self::WorkgroupFence
             | Self::LdsPublish
@@ -264,6 +304,7 @@ impl ProductionExecutionTerminalV1 {
             | Self::GlobalBindExclusiveReadWrite
             | Self::GlobalExclusiveLoad => 2,
             Self::WorkgroupReduceSum
+            | Self::SubgroupPartitionBroadcastF32
             | Self::WorkgroupInclusiveScanSum
             | Self::WorkgroupExclusiveScanSum
             | Self::BindGlobalAtomicLocation
@@ -290,6 +331,22 @@ impl ProductionExecutionTerminalV1 {
 
     pub(crate) const fn trusted_device_item(self) -> TrustedDeviceItem {
         match self {
+            Self::Gfx950TransposeIssue => TrustedDeviceItem::Gfx950LdsTransposeTileIssue,
+            Self::Gfx950TransposeStageB4 => TrustedDeviceItem::Gfx950LdsTransposeStageB4,
+            Self::Gfx950TransposeStageB8 => TrustedDeviceItem::Gfx950LdsTransposeStageB8,
+            Self::Gfx950TransposePublish => TrustedDeviceItem::Gfx950LdsTransposePublish,
+            Self::Gfx950TransposeReadB4 => TrustedDeviceItem::Gfx950LdsTransposeReadB4,
+            Self::Gfx950TransposeReadB8 => TrustedDeviceItem::Gfx950LdsTransposeReadB8,
+            Self::SubgroupPartitionDerive => TrustedDeviceItem::Gfx950SubgroupWave16,
+            Self::SubgroupPartitionReduceSumF32 => {
+                TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16
+            }
+            Self::SubgroupPartitionReduceMaxF32 => {
+                TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16
+            }
+            Self::SubgroupPartitionBroadcastF32 => {
+                TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16
+            }
             Self::BindAtomicView => TrustedDeviceItem::CapabilityGlobalBindAtomic,
             Self::WorkgroupDerive => TrustedDeviceItem::ExecutionWorkgroupCurrent,
             Self::SubgroupDerive => TrustedDeviceItem::ExecutionSubgroupCurrent,
@@ -340,6 +397,7 @@ impl ProductionExecutionTerminalV1 {
             Self::GlobalExclusiveLoad => TrustedDeviceItem::CapabilityGlobalExclusiveLoad,
             Self::GlobalExclusiveStore => TrustedDeviceItem::CapabilityGlobalExclusiveStore,
             Self::GlobalStoreBlock => TrustedDeviceItem::CapabilityGlobalStoreBlock,
+            Self::NumericalPolicyIssue => TrustedDeviceItem::NumericalPolicyIssue,
         }
     }
 }
@@ -349,9 +407,25 @@ pub(crate) const fn execution_terminal_contract_v1(
 ) -> Option<ProductionExecutionTerminalV1> {
     use ProductionExecutionTerminalV1 as Terminal;
     Some(match item {
+        TrustedDeviceItem::Gfx950LdsTransposeTileIssue => Terminal::Gfx950TransposeIssue,
+        TrustedDeviceItem::Gfx950LdsTransposeStageB4 => Terminal::Gfx950TransposeStageB4,
+        TrustedDeviceItem::Gfx950LdsTransposeStageB8 => Terminal::Gfx950TransposeStageB8,
+        TrustedDeviceItem::Gfx950LdsTransposePublish => Terminal::Gfx950TransposePublish,
+        TrustedDeviceItem::Gfx950LdsTransposeReadB4 => Terminal::Gfx950TransposeReadB4,
+        TrustedDeviceItem::Gfx950LdsTransposeReadB8 => Terminal::Gfx950TransposeReadB8,
         TrustedDeviceItem::CapabilityGlobalBindAtomic => Terminal::BindAtomicView,
         TrustedDeviceItem::ExecutionWorkgroupCurrent => Terminal::WorkgroupDerive,
         TrustedDeviceItem::ExecutionSubgroupCurrent => Terminal::SubgroupDerive,
+        TrustedDeviceItem::Gfx950SubgroupWave16 => Terminal::SubgroupPartitionDerive,
+        TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16 => {
+            Terminal::SubgroupPartitionReduceSumF32
+        }
+        TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16 => {
+            Terminal::SubgroupPartitionReduceMaxF32
+        }
+        TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16 => {
+            Terminal::SubgroupPartitionBroadcastF32
+        }
         TrustedDeviceItem::ExecutionLdsAllocate => Terminal::LdsAllocate,
         TrustedDeviceItem::ExecutionWorkgroupBarrier => Terminal::WorkgroupBarrier,
         TrustedDeviceItem::ExecutionSubgroupBarrier => Terminal::SubgroupBarrier,
@@ -399,6 +473,7 @@ pub(crate) const fn execution_terminal_contract_v1(
         TrustedDeviceItem::CapabilityGlobalExclusiveLoad => Terminal::GlobalExclusiveLoad,
         TrustedDeviceItem::CapabilityGlobalExclusiveStore => Terminal::GlobalExclusiveStore,
         TrustedDeviceItem::CapabilityGlobalStoreBlock => Terminal::GlobalStoreBlock,
+        TrustedDeviceItem::NumericalPolicyIssue => Terminal::NumericalPolicyIssue,
         _ => return None,
     })
 }
@@ -458,6 +533,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     WorkgroupBarrier,
     MathContextCurrent,
     MathF32(F32MathFunction),
+    PolicyMathF32(F32MathFunction),
     /// The exact rustc `core::intrinsics::fabs::<f32>` compiler intrinsic.
     RustcFabsF32,
     /// The exact checked `fe2o3_device::memory::volatile_load` provider.
@@ -477,6 +553,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Bf16MatrixBRowMajor,
     Bf16MatrixALoadZeroFilledV2,
     Bf16MatrixBLoadZeroFilledV2,
+    GlobalBf16MatrixALoadZeroFilled,
+    GlobalBf16MatrixBLoadZeroFilled,
     F32MatrixAccumulatorZero,
     F32MatrixAccumulatorIntoValues,
     MatrixMultiplyAccumulate,
@@ -522,6 +600,17 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
     matches!(
         item,
         TrustedDeviceItem::Invocation3DCurrent
+            | TrustedDeviceItem::PolicyMathBind
+            | TrustedDeviceItem::PolicyMatrixBind
+            | TrustedDeviceItem::PolicyGfx950MatrixIssue
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4LoadM16K128
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4LoadK128N16
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8LoadM16K128
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8LoadK128N16
             | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
@@ -713,7 +802,11 @@ impl ProductionSemanticTerminalRuleV1 {
                 Self::Expand(ProductionTerminalExpansionV1::MathContextCurrent)
             }
             TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(function)) => {
-                Self::Expand(ProductionTerminalExpansionV1::MathF32(function))
+                Self::Expand(if matches!(function, F32MathFunction::Abs) {
+                    ProductionTerminalExpansionV1::MathF32(function)
+                } else {
+                    ProductionTerminalExpansionV1::PolicyMathF32(function)
+                })
             }
             TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromBits(
                 NarrowFloatFormat::Bf16,
@@ -776,6 +869,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2 => {
                 Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2)
+            }
+            TrustedDeviceItem::Bf16MfmaGlobalMatrixALoadZeroFilled => {
+                Self::Expand(ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled)
+            }
+            TrustedDeviceItem::Bf16MfmaGlobalMatrixBLoadZeroFilled => {
+                Self::Expand(ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled)
             }
             TrustedDeviceItem::F32AccumulatorFragmentZero => {
                 Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorZero)
@@ -1057,7 +1156,8 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::MathContextCurrent) => {
                 TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler)
             }
-            Self::Expand(ProductionTerminalExpansionV1::MathF32(function)) => {
+            Self::Expand(ProductionTerminalExpansionV1::MathF32(function))
+            | Self::Expand(ProductionTerminalExpansionV1::PolicyMathF32(function)) => {
                 TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(function))
             }
             Self::Expand(ProductionTerminalExpansionV1::Bf16Conversion(conversion)) => {
@@ -1117,6 +1217,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2) => {
                 TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
+            }
+            Self::Expand(ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled) => {
+                TrustedDeviceItem::Bf16MfmaGlobalMatrixALoadZeroFilled
+            }
+            Self::Expand(ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled) => {
+                TrustedDeviceItem::Bf16MfmaGlobalMatrixBLoadZeroFilled
             }
             Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorZero) => {
                 TrustedDeviceItem::F32AccumulatorFragmentZero
@@ -1260,8 +1366,55 @@ mod tests {
         }
         assert_eq!(
             tags.into_iter().collect::<Vec<_>>(),
-            (0_u8..42).collect::<Vec<_>>()
+            (0_u8..53).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn subgroup_partition_terminals_extend_the_frozen_roster() {
+        use ProductionExecutionTerminalV1 as Terminal;
+        for (terminal, tag, arguments) in [
+            (Terminal::SubgroupPartitionDerive, 43, 2),
+            (Terminal::SubgroupPartitionReduceSumF32, 44, 2),
+            (Terminal::SubgroupPartitionBroadcastF32, 45, 3),
+            (Terminal::SubgroupPartitionReduceMaxF32, 46, 2),
+        ] {
+            assert_eq!(terminal.identity_tag(), tag);
+            assert_eq!(terminal.source_argument_count(), arguments);
+            assert_eq!(
+                execution_terminal_contract_v1(terminal.trusted_device_item()),
+                Some(terminal)
+            );
+        }
+    }
+
+    #[test]
+    fn numerical_policy_issuance_is_a_one_argument_execution_terminal() {
+        let terminal = ProductionExecutionTerminalV1::NumericalPolicyIssue;
+        let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(
+            TrustedDeviceItem::NumericalPolicyIssue,
+        );
+        assert_eq!(
+            rule,
+            ProductionSemanticTerminalRuleV1::Expand(ProductionTerminalExpansionV1::Execution(
+                terminal,
+            )),
+        );
+        assert_eq!(terminal.source_argument_count(), 1);
+        assert_eq!(terminal.identity_tag(), 42);
+        assert_eq!(
+            rule.trusted_device_item(),
+            TrustedDeviceItem::NumericalPolicyIssue,
+        );
+        for marker in [
+            TrustedDeviceItem::StrictIeeeNumericalPolicy,
+            TrustedDeviceItem::NumericalPolicyCapability,
+        ] {
+            assert_eq!(
+                ProductionSemanticTerminalRuleV1::from_trusted_device_item(marker),
+                ProductionSemanticTerminalRuleV1::Reject(marker),
+            );
+        }
     }
 
     #[test]
@@ -1474,7 +1627,7 @@ mod tests {
             ),
             (
                 TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(F32MathFunction::Exp)),
-                ProductionTerminalExpansionV1::MathF32(F32MathFunction::Exp),
+                ProductionTerminalExpansionV1::PolicyMathF32(F32MathFunction::Exp),
             ),
             (
                 TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromBits(
@@ -1693,12 +1846,56 @@ mod tests {
         );
         for item in [
             TrustedDeviceItem::Invocation3DCurrent,
+            TrustedDeviceItem::PolicyMathBind,
+            TrustedDeviceItem::PolicyMatrixBind,
+            TrustedDeviceItem::PolicyGfx950MatrixIssue,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8RowMajor,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
         ] {
             assert!(is_traversed_reviewed_helper_v1(item));
+        }
+    }
+
+    #[test]
+    fn global_fp4_fp8_helpers_retain_bodies_and_legacy_gates() {
+        for item in [
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8RowMajor,
+        ] {
+            assert!(is_traversed_reviewed_helper_v1(item));
+            assert_eq!(
+                ProductionSemanticTerminalRuleV1::from_trusted_device_item(item),
+                ProductionSemanticTerminalRuleV1::Reject(item)
+            );
+        }
+        for item in [
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4LoadK128N16,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8LoadK128N16,
+        ] {
+            assert!(is_traversed_reviewed_helper_v1(item));
+            assert_eq!(
+                ProductionSemanticTerminalRuleV1::from_trusted_device_item(item),
+                ProductionSemanticTerminalRuleV1::Reject(item)
+            );
+        }
+        for item in [
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16,
+            TrustedDeviceItem::Gfx950LdsTransposeTileIssue,
+        ] {
+            assert!(!is_traversed_reviewed_helper_v1(item));
         }
     }
 }

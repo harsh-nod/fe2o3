@@ -133,6 +133,99 @@ fn decode_error(bytes: &[u8]) -> DecodeError {
     decode_device_descriptor_table_v1(bytes).expect_err("mutation must be rejected")
 }
 
+fn mutable_slice_fixture() -> DeviceDescriptorTableV1 {
+    let mut base = fixture();
+    base.type_records
+        .retain(|record| !record.descriptor().is_disjoint_slice());
+    base.layout_records
+        .retain(|record| record.descriptor().kind != DescriptorKind::DisjointSlice);
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::mutable_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::mutable_slice(ScalarTypeV1::F32));
+    base.kernels[0].arguments[2] =
+        LogicalArgumentV1::mutable_slice(2, name("output"), &source, &layout, 24).unwrap();
+    base.type_records.push(source);
+    base.layout_records.push(layout);
+    DeviceDescriptorTableV1::new(
+        base.canonical_code_object_digest,
+        base.code_object_version,
+        base.compiler,
+        base.producer,
+        base.device_target,
+        base.type_records,
+        base.layout_records,
+        base.kernels,
+    )
+    .unwrap()
+}
+
+#[test]
+fn mutable_slice_wire_preserves_exclusive_borrow_without_disjoint_source_identity() {
+    assert_eq!(
+        crate::encode::descriptor_kind_tag(DescriptorKind::MutableSlice),
+        5
+    );
+    let table = mutable_slice_fixture();
+    let encoded = encode_device_descriptor_table_v1(&table).unwrap();
+    let decoded = decode_device_descriptor_table_v1(&encoded).unwrap();
+    assert_eq!(table, decoded);
+    assert_eq!(
+        encoded,
+        encode_device_descriptor_table_v1(&decoded).unwrap()
+    );
+    let argument = &decoded.kernels()[0].arguments()[2];
+    assert_eq!(argument.ownership(), OwnershipSemantics::UniqueBorrow);
+    assert_eq!(argument.access(), AccessMode::ReadWrite);
+    assert_eq!(argument.alias(), AliasSemantics::Exclusive);
+    assert_eq!(argument.physical_components().len(), 2);
+    assert_ne!(
+        argument.source_type(),
+        fixture().kernels()[0].arguments()[2].source_type()
+    );
+    assert_ne!(
+        argument.device_layout(),
+        fixture().kernels()[0].arguments()[2].device_layout()
+    );
+
+    for mutation in 0..7 {
+        let mut changed = table.clone();
+        let argument = &mut changed.kernels[0].arguments[2];
+        match mutation {
+            0 => argument.ownership = OwnershipSemantics::SharedBorrow,
+            1 => argument.alias = AliasSemantics::SharedReadOnly,
+            2 => argument.access = AccessMode::WriteOnly,
+            3 => argument.components.pop().map(|_| ()).unwrap(),
+            4 => argument.components[1].offset += 8,
+            5 => argument.source_type = fixture().kernels()[0].arguments()[2].source_type(),
+            6 => argument.device_layout = fixture().kernels()[0].arguments()[2].device_layout(),
+            _ => unreachable!(),
+        }
+        let bytes = encode_device_descriptor_table_v1(&changed).unwrap();
+        assert!(
+            decode_device_descriptor_table_v1(&bytes).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::mutable_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::mutable_slice(ScalarTypeV1::F32));
+    assert!(
+        LogicalArgumentV1::disjoint_slice(
+            0,
+            name("values"),
+            &source,
+            &layout,
+            AccessMode::ReadWrite,
+            0
+        )
+        .is_err()
+    );
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    assert!(LogicalArgumentV1::mutable_slice(0, name("values"), &source, &layout, 0).is_err());
+}
+
 fn find(bytes: &[u8], needle: &[u8]) -> usize {
     bytes
         .windows(needle.len())

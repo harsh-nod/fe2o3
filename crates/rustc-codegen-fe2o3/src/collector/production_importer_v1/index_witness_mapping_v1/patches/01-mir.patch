@@ -1,0 +1,139 @@
+*** Begin Patch
+*** Update File: crates/fe2o3-mir-model/src/semantic_mir_v1.rs
+@@
+ mod workgroup_borrow_v1;
++mod workgroup_memory_index_v1;
+@@
+     WorkgroupMemoryIndex {
+         workgroup: SemanticTypeIdV1,
+         witness: SemanticTypeIdV1,
+     },
++    WorkgroupMemoryIndexV2 {
++        workgroup_reference: SemanticTypeIdV1,
++        workgroup: SemanticTypeIdV1,
++        option: SemanticTypeIdV1,
++        witness: SemanticTypeIdV1,
++    },
++    WorkgroupMemoryIndexIntoDisjoint {
++        input_witness: SemanticTypeIdV1,
++        output_witness: SemanticTypeIdV1,
++    },
+@@
+         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
+             signature.matches(&[workgroup], witness)
+         }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => {
++            signature.matches(&[workgroup_reference], option)
++        }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++            signature.matches(&[input_witness], output_witness)
++        }
+@@
+         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. }
+         | SemanticExecutionCapabilityOperationV1::WorkgroupMemoryPublish { .. } => true,
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
++            let ids = [workgroup_reference, workgroup, option, witness];
++            ids.iter().enumerate().all(|(i, id)| !ids[..i].contains(id))
++        }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++            input_witness != output_witness
++        }
+@@
+         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { .. } => {
+             base | SemanticExecutionSafetyObligationsV1::BOUNDS
+                 | SemanticExecutionSafetyObligationsV1::EXACT_PARTICIPATION
+         }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { .. } => {
++            base | SemanticExecutionSafetyObligationsV1::BOUNDS
++                | SemanticExecutionSafetyObligationsV1::EXACT_PARTICIPATION
++                | SemanticExecutionSafetyObligationsV1::LIFETIME_VALIDITY
++        }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { .. } => {
++            base | SemanticExecutionSafetyObligationsV1::LIFETIME_VALIDITY
++        }
+@@
+         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
+             references[0] = Some(*workgroup);
+             references[1] = Some(*witness);
+             return references;
+         }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
++            references[0] = Some(*workgroup_reference);
++            references[1] = Some(*workgroup);
++            references[2] = Some(*option);
++            references[3] = Some(*witness);
++            return references;
++        }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++            references[0] = Some(*input_witness);
++            references[1] = Some(*output_witness);
++            return references;
++        }
+@@
+                 && workgroup_borrow_v1::abi_matches(request, abi, contract.operation())
++                && workgroup_memory_index_v1::abi_matches(request, abi, contract.operation())
+@@
+ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+@@
+     let mut required = SemanticMirWireVersionV1::V2;
++    if request.callables.iter().any(|callable| matches!(callable,
++        SemanticCallableDeclV1::CompilerIntrinsic {
++            operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract }, ..
++        } if workgroup_memory_index_v1::is_scoped_index(contract.operation()))) {
++        required = SemanticMirWireVersionV1::V22;
++    }
+@@
+         SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
+-            let required = if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }) {
++            let required = if workgroup_memory_index_v1::is_scoped_index(contract.operation()) {
++                SemanticMirWireVersionV1::V22
++            } else if matches!(contract.operation(), SemanticExecutionCapabilityOperationV1::SubgroupDeriveBorrowed { .. }) {
+@@
+         SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
+             writer.u8(18)?;
+             writer.u32(workgroup.0)?;
+             writer.u32(witness.0)
+         }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, workgroup, option, witness } => {
++            writer.u8(26)?;
++            writer.u32(workgroup_reference.0)?;
++            writer.u32(workgroup.0)?;
++            writer.u32(option.0)?;
++            writer.u32(witness.0)
++        }
++        SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++            writer.u8(27)?;
++            writer.u32(input_witness.0)?;
++            writer.u32(output_witness.0)
++        }
+*** Update File: crates/fe2o3-mir-model/src/semantic_mir_v1/canonical_decode.rs
+@@
+-        let maximum = if self.wire_version >= SemanticMirWireVersionV1::V20 { 25 }
++        let maximum = if self.wire_version >= SemanticMirWireVersionV1::V22 { 27 }
++            else if self.wire_version >= SemanticMirWireVersionV1::V20 { 25 }
+@@
+         Ok(match self.tagged("execution capability operation", maximum)? {
++            26 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 {
++                workgroup_reference: SemanticTypeIdV1(self.u32()?),
++                workgroup: SemanticTypeIdV1(self.u32()?),
++                option: SemanticTypeIdV1(self.u32()?),
++                witness: SemanticTypeIdV1(self.u32()?),
++            },
++            27 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint {
++                input_witness: SemanticTypeIdV1(self.u32()?),
++                output_witness: SemanticTypeIdV1(self.u32()?),
++            },
+@@
+     include!("subgroup_partition_decode_tests.rs");
++    include!("workgroup_memory_index_decode_tests.rs");
+@@
+             SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
+                 (vec![workgroup], witness)
+             }
++            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexV2 { workgroup_reference, option, .. } => {
++                (vec![workgroup_reference], option)
++            }
++            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndexIntoDisjoint { input_witness, output_witness } => {
++                (vec![input_witness], output_witness)
++            }
+*** End Patch

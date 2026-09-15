@@ -5,9 +5,10 @@ use dialect_amdgcn::{
 use dialect_kernel::IndexBinaryKindAttr;
 use fe2o3_kernel_ir::{
     AccessMode, AmdGpuDiagnosticOperation, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
-    FunctionRole, LaunchDomain, OperationKind, ScalarType, TargetCapability, Terminator, Type,
-    WaveWidth, WorkgroupSize, analyze_interprocedural_effects_v1, decode_module_v13,
-    gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
+    FunctionId, FunctionRole, LaunchDomain, OperationKind, ScalarType, TargetCapability,
+    Terminator, Type, WaveWidth, WorkgroupSize, analyze_interprocedural_effects_v1,
+    decode_module_v13, gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability,
+    verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV5,
@@ -451,6 +452,7 @@ fn compiler_intrinsic_callable(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KernelContextFixtureV1 {
     Valid,
+    ErasedEntry,
     DuplicateRootIssuance,
     HelperIssuance,
 }
@@ -575,7 +577,7 @@ fn kernel_context_owner_v15(fixture: KernelContextFixtureV1) -> ProductionSemant
         )
     };
     let (root_locals, root_blocks) = match fixture {
-        KernelContextFixtureV1::Valid => (
+        KernelContextFixtureV1::Valid | KernelContextFixtureV1::ErasedEntry => (
             vec![
                 local(164, unit, SemanticLocalRoleV1::Return),
                 local(165, context, SemanticLocalRoleV1::Temporary),
@@ -593,7 +595,14 @@ fn kernel_context_owner_v15(fixture: KernelContextFixtureV1) -> ProductionSemant
                     11,
                     kernel_context_call_v15(
                         1,
-                        vec![SemanticOperandV1::Move(local_place(1, context))],
+                        vec![if fixture == KernelContextFixtureV1::ErasedEntry {
+                            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                context,
+                                SemanticConstantValueV1::ZeroSized,
+                            ))
+                        } else {
+                            SemanticOperandV1::Move(local_place(1, context))
+                        }],
                         2,
                         unit,
                         2,
@@ -762,6 +771,15 @@ fn kernel_context_input_v1() -> ProductionKernelContextLoweringInputV1 {
     )
 }
 
+#[path = "production_semantic_kir_v1/kernel_context_entry_tests.rs"]
+mod kernel_context_entry_tests;
+
+#[path = "production_semantic_kir_v1/source_evidence_boundary_tests125.rs"]
+mod source_evidence_boundary_tests125;
+
+#[path = "production_semantic_kir_v1/expansion_contracts125.rs"]
+mod expansion_contracts125;
+
 #[test]
 fn kernel_context_v15_lowers_to_one_optimizer_visible_v13_issue() {
     let lowered = ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
@@ -811,13 +829,7 @@ fn kernel_context_v15_lowers_to_one_optimizer_visible_v13_issue() {
     assert_eq!(issue.source().contract(), bytes(177));
     assert_eq!(issue.source().issuance(), bytes(192));
 
-    let helper = lowered
-        .module()
-        .functions
-        .iter()
-        .find(|function| function.role == FunctionRole::InternalHelper)
-        .unwrap();
-    assert_eq!(helper.signature.parameters, [result.ty.clone()]);
+    expansion_contracts125::assert_expansion(&lowered);
     let entry_body = entry.body.as_ref().unwrap();
     let issue_block = entry_body
         .blocks
@@ -837,15 +849,38 @@ fn kernel_context_v15_lowers_to_one_optimizer_visible_v13_issue() {
         continuation.parameters.is_empty(),
         "a dominating context definition does not require a redundant block parameter"
     );
-    let helper_call = continuation
-        .operations
+    let view = lowered
+        .semantic_ssa()
+        .execution_view_for_root(SemanticFunctionIdV1::from_index(0))
+        .unwrap();
+    let helper_local = view.instances()[1].local_start() + 1;
+    let transfers = view.body().blocks()[1]
+        .statements()
         .iter()
-        .find_map(|operation| match &operation.kind {
-            OperationKind::Call { callee, arguments } if callee == &helper.id => Some(arguments),
+        .filter_map(|statement| match statement.kind() {
+            SemanticStatementKindV1::Assign(assignment)
+                if assignment.destination().local().index() == helper_local =>
+            {
+                Some(assignment)
+            }
             _ => None,
         })
-        .unwrap();
-    assert_eq!(helper_call, &[result.id]);
+        .collect::<Vec<_>>();
+    let [transfer] = transfers.as_slice() else {
+        panic!("one exact expanded context transfer: {transfers:?}");
+    };
+    assert!(
+        matches!(transfer.value().kind(), SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place))
+        if place.local().index() == 1 && place.projections().is_empty())
+    );
+    assert_eq!(
+        continuation.terminator,
+        Some(Terminator::Branch {
+            target: expansion_contracts125::execution_block(&lowered, 1, 0),
+            arguments: vec![],
+        })
+    );
+    expansion_contracts125::assert_barrier(&lowered, 0, 2);
     let has_portable_barrier = |requirements: &std::collections::BTreeSet<TargetCapability>| {
         requirements.iter().any(|capability| {
             matches!(
@@ -875,12 +910,7 @@ fn kernel_context_v15_lowers_to_one_optimizer_visible_v13_issue() {
                 && span.semantic_block().index() == 0
                 && span.operation_count() == 1)
     );
-    let induction = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
-        lowered.semantic().semantic(),
-        SemanticFunctionIdV1::from_index(0),
-    )
-    .unwrap();
-    InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(&lowered, &induction).unwrap();
+    expansion_contracts125::v6_round_trip(&lowered);
 
     let optimizer_input = decode_module_v13(lowered.canonical_kernel_ir_bytes()).unwrap();
     assert!(
@@ -1839,7 +1869,9 @@ fn retained_scalar_argument_owner() -> ProductionSemanticMirOwnerV1 {
                 )],
                 helper_call,
             ),
-            block(238, vec![], SemanticTerminatorKindV1::Return),
+            expansion_contracts125::observed_return_tail(5, u32_ty, 9, 2, 238).remove(0),
+            block(239, vec![], SemanticTerminatorKindV1::Abort),
+            block(240, vec![], SemanticTerminatorKindV1::Return),
         ],
     )
     .unwrap()
@@ -1998,6 +2030,29 @@ fn retained_pointer_atomic_rmw_owner() -> ProductionSemanticMirOwnerV1 {
                 ),
                 SemanticStatementV1::new(
                     source,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        SemanticPlaceV1::new(
+                            SemanticLocalIdV1::from_index(3),
+                            vec![
+                                SemanticProjectionV1::new(
+                                    SemanticProjectionKindV1::Dereference,
+                                    pointer_ty,
+                                )
+                                .unwrap(),
+                            ],
+                            pointer_ty,
+                        )
+                        .unwrap(),
+                        SemanticRvalueV1::new(
+                            pointer_ty,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(
+                                1, pointer_ty,
+                            ))),
+                        ),
+                    )),
+                ),
+                SemanticStatementV1::new(
+                    source,
                     SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
                         local_place(2, u32_ty),
                         atomic_address,
@@ -2046,7 +2101,7 @@ fn retained_pointer_atomic_rmw_owner() -> ProductionSemanticMirOwnerV1 {
         .unwrap()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum RetainedScalarInvalidationV1 {
     Uninitialized,
     Move,
@@ -2285,9 +2340,13 @@ fn retained_scalar_argument_is_stored_once_in_the_entry_slot() {
     assert!(lowered.canonical_kernel_ir_v11().is_none());
     let function = &lowered.module().functions[0];
     let body = function.body.as_ref().unwrap();
-    let [span] = lowered.correspondence().synthetic_operation_spans() else {
-        panic!("retained argument must have one private-slot prologue span");
+    let [span, observer_trap] = lowered.correspondence().synthetic_operation_spans() else {
+        panic!("one retained argument prologue and one observer trap");
     };
+    assert_eq!(
+        observer_trap.rule(),
+        SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+    );
     assert_eq!(
         span.rule(),
         SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
@@ -2357,13 +2416,11 @@ fn retained_scalar_argument_is_stored_once_in_the_entry_slot() {
                 .then(|| operation.results[0].id)
         })
         .expect("the dominating restricted pointer must remain readable after the CFG edge");
-    assert!(call_block.operations.iter().any(|operation| {
-        matches!(&operation.kind, OperationKind::Call { arguments, .. } if arguments == &[edge_load])
-    }));
-    let helper = &lowered.module().functions[1];
+    expansion_contracts125::assert_expansion(&lowered);
+    let observed = expansion_contracts125::observed_selector(&lowered, 2);
     assert_eq!(
-        helper.signature.parameters,
-        vec![Type::Scalar(ScalarType::U32)]
+        observed, edge_load,
+        "the helper result must retain the post-alias load"
     );
     let mut amdgpu_module = lowered.module().clone();
     let target = gfx942_xnack_minus_target_capability();
@@ -2410,40 +2467,104 @@ fn retained_pointer_atomic_rmw_loads_the_pointer_value_from_its_private_slot() {
             _ => None,
         })
         .expect("retained thin pointer must have one private slot");
-    let loaded_pointer = operations
+    let loads = operations
         .iter()
-        .find_map(|operation| match operation.kind {
-            OperationKind::Load { pointer, .. } if pointer == slot => Some(operation.results[0].id),
+        .enumerate()
+        .filter_map(|(ordinal, operation)| match operation.kind {
+            OperationKind::Load { pointer, .. } if pointer == slot => {
+                Some((ordinal, operation.results[0].id))
+            }
             _ => None,
         })
-        .expect("atomic address must load the pointer value from the slot");
-    assert!(operations.iter().any(|operation| matches!(
-        operation.kind,
-        OperationKind::Atomic(ref atomic)
-            if atomic.pointer == loaded_pointer && atomic.pointer != slot
-    )));
+        .collect::<Vec<_>>();
+    let [(first_load, alias_value), (reload, loaded_pointer)] = loads.as_slice() else {
+        panic!("alias value load and post-write atomic reload: {loads:?}");
+    };
+    let stores = operations
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, operation)| match operation.kind {
+            OperationKind::Store { pointer, value, .. } if pointer == slot => {
+                Some((ordinal, value))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [(initialize, initial_value), (alias_write, stored_value)] = stores.as_slice() else {
+        panic!("initialization and alias write: {stores:?}");
+    };
+    assert_eq!(*initial_value, body.parameters[0]);
+    assert_eq!(*stored_value, *alias_value);
+    assert!(initialize < first_load && first_load < alias_write && alias_write < reload);
+    let atomics = operations
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, operation)| match &operation.kind {
+            OperationKind::Atomic(atomic) => Some((ordinal, atomic)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [(atomic_ordinal, atomic)] = atomics.as_slice() else {
+        panic!("one atomic RMW");
+    };
+    assert!(reload < atomic_ordinal);
+    assert_eq!(atomic.pointer, *loaded_pointer);
+    assert_ne!(atomic.pointer, slot);
+}
+
+fn assert_retained_scalar_rejection(
+    invalidation: RetainedScalarInvalidationV1,
+    failing_statement: u32,
+) {
+    let actual = ProductionSemanticKirOwnerV1::try_lower(
+        retained_scalar_invalidation_owner(invalidation),
+        ProductionSemanticKirLimitsV1::default(),
+    );
+    match invalidation {
+        RetainedScalarInvalidationV1::Uninitialized => assert!(
+            matches!(
+                &actual,
+                Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                    function: 0, block: 0, statement: Some(statement), local: 1,
+                }) if *statement == failing_statement
+            ),
+            "{invalidation:?}: {actual:?}"
+        ),
+        RetainedScalarInvalidationV1::Move | RetainedScalarInvalidationV1::StorageDead => {
+            let expected_event = match invalidation {
+                RetainedScalarInvalidationV1::Move => 6,
+                RetainedScalarInvalidationV1::StorageDead => 4,
+                _ => unreachable!(),
+            };
+            assert!(
+                matches!(
+                    &actual,
+                    Err(ProductionSemanticKirErrorV1::SemanticSsa(
+                        fe2o3_pliron::ProductionSemanticSsaErrorV1::Planner { function, error:
+                            fe2o3_mir_model::SsaPlannerErrorV1::UndefinedAtUse { block, event, variable }
+                        }
+                    )) if function.index() == 0 && block.get() == 0
+                        && *event == expected_event && variable.get() == 1
+                ),
+                "{invalidation:?}: {actual:?}"
+            );
+        }
+    }
 }
 
 #[test]
-fn retained_scalar_slot_rejects_uninitialized_move_and_storage_dead_uses() {
-    for (invalidation, failing_statement) in [
-        (RetainedScalarInvalidationV1::Uninitialized, 0),
-        (RetainedScalarInvalidationV1::Move, 3),
-        (RetainedScalarInvalidationV1::StorageDead, 3),
-    ] {
-        assert!(matches!(
-            ProductionSemanticKirOwnerV1::try_lower(
-                retained_scalar_invalidation_owner(invalidation),
-                ProductionSemanticKirLimitsV1::default(),
-            ),
-            Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                block: 0,
-                statement: Some(statement),
-                local: 1,
-                ..
-            }) if statement == failing_statement
-        ));
-    }
+fn retained_scalar_slot_rejects_uninitialized_use() {
+    assert_retained_scalar_rejection(RetainedScalarInvalidationV1::Uninitialized, 0);
+}
+
+#[test]
+fn retained_scalar_slot_rejects_moved_use() {
+    assert_retained_scalar_rejection(RetainedScalarInvalidationV1::Move, 3);
+}
+
+#[test]
+fn retained_scalar_slot_rejects_storage_dead_use() {
+    assert_retained_scalar_rejection(RetainedScalarInvalidationV1::StorageDead, 3);
 }
 
 fn return_local() -> SemanticLocalDeclV1 {
@@ -3215,11 +3336,10 @@ fn borrowed_projection_validation_rejects_root_ir_identity_and_access_hostility(
         &[],
     )
     .unwrap_err();
-    assert!(
-        missing_root
-            .to_string()
-            .contains("ranked projection receipt has no exact kernel root")
-    );
+    assert!(matches!(
+        missing_root,
+        ProductionSemanticKirErrorV1::CorrespondenceMismatch
+    ));
 
     let empty_ir = validate_borrowed_ranked_semantic_projection_candidate_v1(
         &owner,
@@ -4182,6 +4302,17 @@ fn transparent_helper_carrier_types_v1(
 fn transparent_helper_carrier_owner_v1(
     mode: TransparentHelperCarrierFixtureV1,
 ) -> ProductionSemanticMirOwnerV1 {
+    let admitted = transparent_helper_carrier_request_v1(mode, false)
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+fn transparent_helper_carrier_request_v1(
+    mode: TransparentHelperCarrierFixtureV1,
+    observe_parameter: bool,
+) -> InertSemanticMirRequestV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let source = SemanticSourceProvenanceV1::unavailable();
     let edge = |target| {
@@ -4226,10 +4357,31 @@ fn transparent_helper_carrier_owner_v1(
         SemanticExternAbiV1::GpuKernel,
         false,
         false,
-        0,
-        vec![],
+        u32::from(observe_parameter),
+        if observe_parameter {
+            vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                TRANSPARENT_HELPER_CARRIER_TYPE,
+                SemanticAbiPassModeV1::Direct(
+                    SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                        SemanticAbiExtensionV1::ZeroExtend,
+                        0,
+                        None,
+                    )
+                    .unwrap(),
+                ),
+            ))]
+        } else {
+            vec![]
+        },
         SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
     )
+    .unwrap()
+    .with_source_argument_ownership(if observe_parameter {
+        vec![SemanticSourceArgumentOwnershipV1::ByValue]
+    } else {
+        vec![]
+    })
     .unwrap();
     let root = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256(bytes(234)),
@@ -4250,7 +4402,11 @@ fn transparent_helper_carrier_owner_v1(
             SemanticLocalDeclV1::new(
                 SemanticLocalIdentityV1::from_sha256(bytes(240)),
                 TRANSPARENT_HELPER_CARRIER_TYPE,
-                SemanticLocalRoleV1::Temporary,
+                if observe_parameter {
+                    SemanticLocalRoleV1::Argument(0)
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
                 source,
             ),
             SemanticLocalDeclV1::new(
@@ -4261,10 +4417,25 @@ fn transparent_helper_carrier_owner_v1(
             ),
         ],
         SemanticBlockIdV1::from_index(0),
-        vec![
-            block(242, vec![aggregate], SemanticTerminatorKindV1::Call(call)),
-            block(243, vec![], SemanticTerminatorKindV1::Return),
-        ],
+        {
+            let mut blocks = vec![block(
+                242,
+                if observe_parameter {
+                    vec![]
+                } else {
+                    vec![aggregate]
+                },
+                SemanticTerminatorKindV1::Call(call),
+            )];
+            blocks.extend(expansion_contracts125::observed_return_tail(
+                2,
+                TRANSPARENT_HELPER_BOOL_TYPE,
+                1,
+                1,
+                243,
+            ));
+            blocks
+        },
     )
     .unwrap()
     .with_kernel_entry(SemanticKernelEntryV1::new(
@@ -4347,7 +4518,7 @@ fn transparent_helper_carrier_owner_v1(
         vec![block(253, vec![result], SemanticTerminatorKindV1::Return)],
     )
     .unwrap();
-    let admitted = InertSemanticMirRequestV1::new_with_callables(
+    InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
         transparent_helper_carrier_types_v1(mode),
         vec![],
@@ -4361,13 +4532,16 @@ fn transparent_helper_carrier_owner_v1(
         vec![SemanticFunctionIdV1::from_index(0)],
     )
     .unwrap()
-    .admit_current_production(SemanticMirLimitsV1::default())
-    .unwrap();
-    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
-        .unwrap()
 }
 
 fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRequestV1 {
+    defined_helper_request_with_observer_v1(mode, false)
+}
+
+fn defined_helper_request_with_observer_v1(
+    mode: DefinedHelperFixtureV1,
+    observe: bool,
+) -> InertSemanticMirRequestV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u64_ty = SemanticTypeIdV1::from_index(1);
     let u32_ty = SemanticTypeIdV1::from_index(2);
@@ -4419,6 +4593,18 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
         None,
     )
     .unwrap();
+    let mut root_blocks = vec![block(
+        209,
+        vec![],
+        SemanticTerminatorKindV1::Call(root_call),
+    )];
+    if observe {
+        root_blocks.extend(expansion_contracts125::observed_return_tail(
+            2, u64_ty, 7, 1, 210,
+        ));
+    } else {
+        root_blocks.push(block(210, vec![], SemanticTerminatorKindV1::Return));
+    }
     let root = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256(bytes(201)),
         SemanticFunctionRoleV1::KernelRoot,
@@ -4449,10 +4635,7 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
             ),
         ],
         SemanticBlockIdV1::from_index(0),
-        vec![
-            block(209, vec![], SemanticTerminatorKindV1::Call(root_call)),
-            block(210, vec![], SemanticTerminatorKindV1::Return),
-        ],
+        root_blocks,
     )
     .unwrap()
     .with_kernel_entry(SemanticKernelEntryV1::new(
@@ -4680,42 +4863,71 @@ fn defined_helper_owner_v1(mode: DefinedHelperFixtureV1) -> ProductionSemanticMi
 }
 
 #[test]
-fn reachable_defined_scalar_helper_survives_kir_effects_and_exact_llvm() {
+fn source_argument_lookup_requires_an_actual_kernel_parameter() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        retained_scalar_argument_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let entry = &lowered.module().functions[0];
+    let body = entry.body.as_ref().unwrap();
+    assert_eq!(
+        lowered.source_argument_for_kernel_parameter(&entry.id, body.parameters[0]),
+        Some(0),
+    );
+    for result in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .flat_map(|op| &op.results)
+    {
+        assert_eq!(
+            lowered.source_argument_for_kernel_parameter(&entry.id, result.id),
+            None
+        );
+    }
+    assert_eq!(
+        lowered
+            .source_argument_for_kernel_parameter(&FunctionId::new("missing"), body.parameters[0]),
+        None,
+    );
+    assert!(
+        lowered
+            .ranked_lowering_for_root(SemanticFunctionIdV1::from_index(0))
+            .is_none()
+    );
+}
+
+#[test]
+fn source_argument_lookup_survives_checked_call_expansion() {
     let lowered = ProductionSemanticKirOwnerV1::try_lower(
         defined_helper_owner_v1(DefinedHelperFixtureV1::Valid),
         ProductionSemanticKirLimitsV1::default(),
     )
     .unwrap();
-    lowered.verify_equivalence().unwrap();
-    assert_eq!(lowered.correspondence().lowered_functions().len(), 2);
-    let helper_mapping = &lowered.correspondence().lowered_functions()[1];
-    let helper_id = helper_mapping.kernel_ir_function().clone();
     let entry = &lowered.module().functions[0];
-    let helper = &lowered.module().functions[1];
-    assert_eq!(entry.role, FunctionRole::KernelEntry);
-    assert_eq!(helper.role, FunctionRole::InternalHelper);
-    assert_eq!(helper.signature.parameters, [Type::Scalar(ScalarType::U64)]);
-    assert_eq!(helper.signature.results, [Type::Scalar(ScalarType::U64)]);
+    assert!(lowered.has_expanded_calls());
+    let parameter = entry.body.as_ref().unwrap().parameters[0];
+    assert_eq!(
+        lowered.source_argument_for_kernel_parameter(&entry.id, parameter),
+        Some(0)
+    );
+}
+
+#[test]
+fn reachable_defined_scalar_helper_survives_kir_effects_and_exact_llvm() {
+    let lowered = expansion_contracts125::observed_helper(DefinedHelperFixtureV1::Valid);
+    expansion_contracts125::assert_expansion(&lowered);
+    expansion_contracts125::v6_round_trip(&lowered);
+    let entry = &lowered.module().functions[0];
+    assert_eq!(entry.signature.parameters, [Type::Scalar(ScalarType::U64)]);
+    assert!(entry.signature.results.is_empty());
     let entry_body = entry.body.as_ref().unwrap();
-    let call = entry_body.blocks[0]
-        .operations
-        .iter()
-        .find(|operation| matches!(operation.kind, OperationKind::Call { .. }))
-        .unwrap();
-    assert!(matches!(
-        &call.kind,
-        OperationKind::Call { callee, arguments }
-            if callee == &helper_id && arguments == entry_body.parameters.as_slice()
-    ));
-    assert_eq!(call.results.len(), 1);
-    assert!(!call.has_complete_effect_summary());
-    assert!(matches!(
-        helper.body.as_ref().unwrap().blocks[0].terminator,
-        Some(Terminator::Return { ref values })
-            if values == helper.body.as_ref().unwrap().parameters.as_slice()
-    ));
+    assert_eq!(
+        expansion_contracts125::observed_selector(&lowered, 1),
+        entry_body.parameters[0]
+    );
     let effects = analyze_interprocedural_effects_v1(lowered.module()).unwrap();
-    assert!(effects.function(&helper_id).unwrap().is_complete_and_pure());
     assert!(effects.function(&entry.id).unwrap().is_complete_and_pure());
 
     let mut module = lowered.module().clone();
@@ -4732,46 +4944,29 @@ fn reachable_defined_scalar_helper_survives_kir_effects_and_exact_llvm() {
     module.kernels[0].required_capabilities.insert(target);
     verify_module(&module).unwrap();
     let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
-    assert!(llvm.contains(&format!("define internal i64 @{helper_id}(i64 %arg0)")));
-    assert!(llvm.contains(&format!("call i64 @{helper_id}(i64 %arg0)")));
+    assert!(llvm.contains("switch i64 %arg0"), "{llvm}");
+    assert!(llvm.contains("i64 7, label"), "{llvm}");
+    assert!(llvm.contains("unreachable"), "{llvm}");
 }
 
 #[test]
 fn exact_transparent_scalar_carrier_helper_uses_one_physical_u16_parameter() {
+    let admitted =
+        transparent_helper_carrier_request_v1(TransparentHelperCarrierFixtureV1::Exact, true)
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .unwrap();
     let lowered = ProductionSemanticKirOwnerV1::try_lower(
-        transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::Exact),
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
         ProductionSemanticKirLimitsV1::default(),
     )
     .unwrap();
-    lowered.verify_equivalence().unwrap();
-
-    let helper_function = SemanticFunctionIdV1::from_index(1);
-    let helper_mapping = lowered
-        .correspondence()
-        .lowered_functions()
-        .iter()
-        .find(|mapping| mapping.semantic_function() == helper_function)
-        .unwrap();
-    let helper_id = helper_mapping.kernel_ir_function();
-    let helper = lowered.module().function(helper_id).unwrap();
-    assert_eq!(helper.role, FunctionRole::InternalHelper);
-    assert_eq!(helper.signature.parameters, [Type::Scalar(ScalarType::U16)]);
-    assert_eq!(helper.signature.results, [Type::Scalar(ScalarType::Bool)]);
-
+    expansion_contracts125::assert_expansion(&lowered);
     let entry = &lowered.module().functions[0];
-    let call = entry.body.as_ref().unwrap().blocks[0]
-        .operations
-        .iter()
-        .find(|operation| matches!(operation.kind, OperationKind::Call { .. }))
-        .unwrap();
-    assert!(matches!(
-        &call.kind,
-        OperationKind::Call { callee, arguments }
-            if callee == helper_id && arguments.len() == 1
-    ));
-    assert_eq!(call.results.len(), 1);
-    assert_eq!(call.results[0].ty, Type::Scalar(ScalarType::Bool));
-
+    assert_eq!(entry.signature.parameters, [Type::Scalar(ScalarType::U16)]);
+    let body = entry.body.as_ref().unwrap();
+    let helper_function = SemanticFunctionIdV1::from_index(0);
+    expansion_contracts125::assert_carrier_comparison(&lowered, body.parameters[0]);
     let component = lowered
         .correspondence()
         .parameter_component_bindings()
@@ -4787,10 +4982,7 @@ fn exact_transparent_scalar_carrier_helper_uses_one_physical_u16_parameter() {
         component.projection(),
         [SemanticKirParameterProjectionV1::Field(0)]
     );
-    assert_eq!(
-        component.kernel_ir_value(),
-        helper.body.as_ref().unwrap().parameters[0]
-    );
+    assert_eq!(component.kernel_ir_value(), body.parameters[0]);
     assert!(
         lowered
             .correspondence()
@@ -4801,52 +4993,63 @@ fn exact_transparent_scalar_carrier_helper_uses_one_physical_u16_parameter() {
 }
 
 #[test]
-fn transparent_helper_carrier_rejects_loose_layout_and_wrong_ownership() {
+fn transparent_scalar_carrier_predicate_rejects_loose_layout() {
     let loose_types =
         transparent_helper_carrier_types_v1(TransparentHelperCarrierFixtureV1::LooseStorageOnly);
     assert_eq!(
         exact_transparent_scalar_carrier_field_v1(&loose_types, TRANSPARENT_HELPER_CARRIER_TYPE,),
         None
     );
-    assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            transparent_helper_carrier_owner_v1(
-                TransparentHelperCarrierFixtureV1::LooseStorageOnly,
-            ),
-            ProductionSemanticKirLimitsV1::default(),
-        ),
-        Err(ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
-            semantic_type: 3,
-            ..
-        })
-    ));
+}
 
+#[test]
+fn loose_storage_carrier_constant_in_validity_survives_helper_expansion() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::LooseStorageOnly),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    expansion_contracts125::assert_expansion(&lowered);
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    assert!(body.parameters.is_empty());
+    let constant = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .find(|operation| {
+            matches!(
+                operation.kind,
+                OperationKind::Constant(fe2o3_kernel_ir::Constant::U16(0x7f80))
+            )
+        })
+        .unwrap()
+        .results[0]
+        .id;
+    expansion_contracts125::assert_carrier_comparison(&lowered, constant);
+}
+
+#[test]
+fn transparent_helper_carrier_rejects_wrong_ownership() {
     let exact_types =
         transparent_helper_carrier_types_v1(TransparentHelperCarrierFixtureV1::WrongOwnership);
     assert_eq!(
         exact_transparent_scalar_carrier_field_v1(&exact_types, TRANSPARENT_HELPER_CARRIER_TYPE,),
         Some(TRANSPARENT_HELPER_U16_TYPE)
     );
-    assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::WrongOwnership,),
-            ProductionSemanticKirLimitsV1::default(),
-        ),
-        Err(ProductionSemanticKirErrorV1::Unsupported {
-            function: 1,
-            detail: "helper scalar carrier lacks an exact by-value source ABI",
-            ..
-        })
-    ));
+    let actual = transparent_helper_carrier_request_v1(
+        TransparentHelperCarrierFixtureV1::WrongOwnership,
+        false,
+    )
+    .admit_current_production(SemanticMirLimitsV1::default());
+    assert!(
+        matches!(&actual, Err(SemanticMirErrorV1::InvalidFunctionAbi)),
+        "wrong ownership: {actual:?}"
+    );
 }
 
 #[test]
 fn exact_function_owner_correspondence_v5_round_trips_and_rejects_hostile_rosters() {
-    let lowered = ProductionSemanticKirOwnerV1::try_lower(
-        defined_helper_owner_v1(DefinedHelperFixtureV1::Valid),
-        ProductionSemanticKirLimitsV1::default(),
-    )
-    .unwrap();
+    let lowered = expansion_contracts125::call_free_roster();
     let induction = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
         lowered.semantic().semantic(),
         SemanticFunctionIdV1::from_index(0),
@@ -4888,9 +5091,9 @@ fn exact_function_owner_correspondence_v5_round_trips_and_rejects_hostile_roster
     ));
 
     let mut reordered = canonical.to_vec();
-    let first_semantic = canonical[first + 4..first + 8].to_vec();
-    reordered[first + 4..first + 8].copy_from_slice(&canonical[second + 4..second + 8]);
-    reordered[second + 4..second + 8].copy_from_slice(&first_semantic);
+    let second_end = second + 20 + read_u32(second + 16);
+    reordered[first..second_end]
+        .copy_from_slice(&[&canonical[second..second_end], &canonical[first..second]].concat());
     assert!(matches!(
         InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&reordered),
         Err(ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster)
@@ -4929,9 +5132,9 @@ fn exact_function_owner_correspondence_v5_round_trips_and_rejects_hostile_roster
 }
 
 #[test]
-fn live_owner_issues_exact_source_refinement_and_hostile_bytes_fail_closed() {
+fn legacy_call_free_owner_issues_exact_source_refinement_and_hostile_bytes_fail_closed() {
     let lowered = ProductionSemanticKirOwnerV1::try_lower(
-        defined_helper_owner_v1(DefinedHelperFixtureV1::Valid),
+        scalar_loop_owner(),
         ProductionSemanticKirLimitsV1::default(),
     )
     .unwrap();
@@ -4998,53 +5201,106 @@ fn recursive_defined_helper_closure_fails_closed() {
     .unwrap_err();
     assert!(matches!(
         error,
-        ProductionSemanticKirErrorV1::Unsupported {
-            detail: "recursive deterministic helper call graph is unsupported",
-            ..
-        }
+        ProductionSemanticKirErrorV1::SemanticSsa(
+            fe2o3_pliron::ProductionSemanticSsaErrorV1::CallExpansion(
+                fe2o3_mir_model::SemanticCallExpansionErrorV1::Unsupported {
+                    function, block: None, reason: "recursive defined call",
+                }
+            )
+        ) if function.index() == 1
     ));
 }
 
 #[test]
 fn branched_helper_return_is_a_live_block_parameter() {
-    let lowered = ProductionSemanticKirOwnerV1::try_lower(
-        defined_helper_owner_v1(DefinedHelperFixtureV1::BranchReturn),
-        ProductionSemanticKirLimitsV1::default(),
-    )
-    .unwrap();
-    lowered.verify_equivalence().unwrap();
-    let return_block = lowered.module().functions[1]
+    let lowered = expansion_contracts125::observed_helper(DefinedHelperFixtureV1::BranchReturn);
+    expansion_contracts125::assert_expansion(&lowered);
+    expansion_contracts125::v6_round_trip(&lowered);
+    let return_id = expansion_contracts125::execution_block(&lowered, 1, 3);
+    let return_block = lowered.module().functions[0]
         .body
         .as_ref()
         .unwrap()
         .blocks
         .iter()
-        .find(|block| block.id == BlockId(3))
+        .find(|block| block.id == return_id)
         .unwrap();
     let [parameter] = return_block.parameters.as_slice() else {
         panic!("branched scalar return must have one block parameter");
     };
-    assert!(matches!(
+    assert_eq!(parameter.ty, Type::Scalar(ScalarType::U64));
+    assert_eq!(
+        expansion_contracts125::observed_selector(&lowered, 1),
+        parameter.id
+    );
+    assert_eq!(
         return_block.terminator,
-        Some(Terminator::Return { ref values }) if values == &[parameter.id]
-    ));
+        Some(Terminator::Branch {
+            target: expansion_contracts125::execution_block(&lowered, 0, 1),
+            arguments: vec![],
+        })
+    );
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    for (source_block, is_input) in [(1, true), (2, false)] {
+        let block = body
+            .blocks
+            .iter()
+            .find(|block| {
+                block.id == expansion_contracts125::execution_block(&lowered, 1, source_block)
+            })
+            .unwrap();
+        let Some(Terminator::Branch { target, arguments }) = &block.terminator else {
+            panic!("merge edge");
+        };
+        assert_eq!(*target, return_id);
+        let [value] = arguments.as_slice() else {
+            panic!("one return edge value");
+        };
+        if is_input {
+            assert_eq!(*value, body.parameters[0]);
+        } else {
+            assert!(block.operations.iter().any(|operation| operation.kind
+                == OperationKind::Constant(fe2o3_kernel_ir::Constant::U64(7))
+                && operation.results[0].id == *value));
+        }
+    }
 }
 
 #[test]
-fn impure_and_tail_called_helpers_fail_closed() {
-    let impure = ProductionSemanticKirOwnerV1::try_lower(
-        defined_helper_owner_v1(DefinedHelperFixtureV1::Impure),
-        ProductionSemanticKirLimitsV1::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        impure,
-        ProductionSemanticKirErrorV1::Unsupported {
-            detail: "reachable deterministic scalar helper is not interprocedurally complete and pure",
-            ..
-        }
-    ));
+fn expanded_helper_preserves_barrier_effects_before_observable_return() {
+    let lowered = expansion_contracts125::observed_helper(DefinedHelperFixtureV1::Impure);
+    expansion_contracts125::assert_expansion(&lowered);
+    expansion_contracts125::assert_barrier(&lowered, 1, 0);
+    expansion_contracts125::v6_round_trip(&lowered);
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    assert_eq!(
+        expansion_contracts125::observed_selector(&lowered, 1),
+        body.parameters[0]
+    );
+    for ((function, block), (next_function, next_block)) in
+        [((0, 0), (1, 0)), ((1, 0), (1, 1)), ((1, 1), (0, 1))]
+    {
+        let at = expansion_contracts125::execution_block(&lowered, function, block);
+        assert_eq!(
+            body.blocks
+                .iter()
+                .find(|block| block.id == at)
+                .unwrap()
+                .terminator,
+            Some(Terminator::Branch {
+                target: expansion_contracts125::execution_block(
+                    &lowered,
+                    next_function,
+                    next_block
+                ),
+                arguments: vec![]
+            })
+        );
+    }
+}
 
+#[test]
+fn tail_called_helper_expansion_fails_closed() {
     let tail = ProductionSemanticKirOwnerV1::try_lower(
         defined_helper_owner_v1(DefinedHelperFixtureV1::TailCall),
         ProductionSemanticKirLimitsV1::default(),
@@ -5052,10 +5308,13 @@ fn impure_and_tail_called_helpers_fail_closed() {
     .unwrap_err();
     assert!(matches!(
         tail,
-        ProductionSemanticKirErrorV1::Unsupported {
-            detail: "semantic tail calls remain closed in deterministic helper lowering",
-            ..
-        }
+        ProductionSemanticKirErrorV1::SemanticSsa(
+            fe2o3_pliron::ProductionSemanticSsaErrorV1::CallExpansion(
+                fe2o3_mir_model::SemanticCallExpansionErrorV1::Unsupported {
+                    function, block: Some(block), reason: "tail call expansion is unsupported",
+                }
+            )
+        ) if function.index() == 1 && block.index() == 0
     ));
 }
 
@@ -5088,13 +5347,11 @@ fn indexed_identity_v1(index: u32, domain: u8) -> [u8; 32] {
     identity
 }
 
-#[test]
-fn explicit_function_limit_above_the_default_revalidates_exactly() {
-    const FUNCTION_COUNT: usize = 1_025;
+fn function_limit_owner_v1(function_count: usize, chain: bool) -> ProductionSemanticMirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let source = SemanticSourceProvenanceV1::unavailable();
-    let mut functions = Vec::with_capacity(FUNCTION_COUNT);
-    for index in 0..FUNCTION_COUNT {
+    let mut functions = Vec::with_capacity(function_count);
+    for index in 0..function_count {
         let index_u32 = u32::try_from(index).unwrap();
         let role = if index == 0 {
             SemanticFunctionRoleV1::KernelRoot
@@ -5121,7 +5378,49 @@ fn explicit_function_limit_above_the_default_revalidates_exactly() {
             SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
         )
         .unwrap();
-        let blocks = if index + 1 == FUNCTION_COUNT {
+        let blocks = if !chain && index == 0 {
+            let mut blocks = Vec::with_capacity(function_count);
+            for callee in 1..function_count {
+                let call = SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(callee as u32),
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        local_place(0, unit),
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::CallReturn,
+                            SemanticBlockIdV1::from_index(callee as u32),
+                        ),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap();
+                blocks.push(
+                    SemanticBasicBlockV1::new(
+                        SemanticBlockIdentityV1::from_sha256(indexed_identity_v1(
+                            callee as u32,
+                            232,
+                        )),
+                        source,
+                        vec![],
+                        SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Call(call)),
+                    )
+                    .unwrap(),
+                );
+            }
+            blocks.push(
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256(indexed_identity_v1(
+                        function_count as u32,
+                        233,
+                    )),
+                    source,
+                    vec![],
+                    SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+                )
+                .unwrap(),
+            );
+            blocks
+        } else if !chain || index + 1 == function_count {
             vec![
                 SemanticBasicBlockV1::new(
                     SemanticBlockIdentityV1::from_sha256(indexed_identity_v1(index_u32, 231)),
@@ -5195,7 +5494,7 @@ fn explicit_function_limit_above_the_default_revalidates_exactly() {
             function
         });
     }
-    let callables = (0..FUNCTION_COUNT)
+    let callables = (0..function_count)
         .map(|index| {
             SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(
                 u32::try_from(index).unwrap(),
@@ -5215,17 +5514,83 @@ fn explicit_function_limit_above_the_default_revalidates_exactly() {
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    let owner =
-        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
-            .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+#[test]
+fn explicit_function_limit_above_the_default_revalidates_exactly() {
+    const FUNCTION_COUNT: usize = 1_025;
+    // Each depth-one frame adds StorageLive, a unit return transfer, and StorageDead.
+    const EXPANDED_STATEMENTS: usize = 3 * (FUNCTION_COUNT - 1);
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            function_limit_owner_v1(FUNCTION_COUNT, false),
+            ProductionSemanticKirLimitsV1::default(),
+        ),
+        Err(ProductionSemanticKirErrorV1::ResourceLimit {
+            resource: ProductionSemanticKirResourceV1::Functions,
+            actual: FUNCTION_COUNT,
+            limit: 1_024,
+        })
+    ));
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            function_limit_owner_v1(FUNCTION_COUNT, false),
+            ProductionSemanticKirLimitsV1::new(FUNCTION_COUNT, 2 * FUNCTION_COUNT, 0),
+        ),
+        Err(ProductionSemanticKirErrorV1::ResourceLimit {
+            resource: ProductionSemanticKirResourceV1::Statements,
+            actual: EXPANDED_STATEMENTS,
+            limit: 0,
+        })
+    ));
     let lowered = ProductionSemanticKirOwnerV1::try_lower(
-        owner,
-        ProductionSemanticKirLimitsV1::new(FUNCTION_COUNT, 2 * FUNCTION_COUNT, 0),
+        function_limit_owner_v1(FUNCTION_COUNT, false),
+        ProductionSemanticKirLimitsV1::new(FUNCTION_COUNT, 2 * FUNCTION_COUNT, EXPANDED_STATEMENTS),
     )
     .unwrap();
+    assert_eq!(lowered.correspondence().function_count(), FUNCTION_COUNT);
+    assert_eq!(lowered.correspondence().lowered_functions().len(), 1);
+    let view = lowered
+        .semantic_ssa()
+        .execution_view_for_root(SemanticFunctionIdV1::from_index(0))
+        .unwrap();
+    assert_eq!(view.instances().len(), FUNCTION_COUNT);
+    for (index, instance) in view.instances().iter().enumerate().skip(1) {
+        assert_eq!(instance.function().index() as usize, index);
+        assert_eq!(instance.parent().unwrap().index(), 0);
+        assert_eq!(instance.depth(), 1);
+    }
     assert_eq!(
-        lowered.correspondence().lowered_functions().len(),
-        FUNCTION_COUNT
+        view.body()
+            .blocks()
+            .iter()
+            .map(|block| block.statements().len())
+            .sum::<usize>(),
+        EXPANDED_STATEMENTS
     );
     lowered.verify_equivalence().unwrap();
+    lowered.semantic_ssa().verify_replay().unwrap();
+}
+
+#[test]
+fn helper_expansion_depth_limit_is_independent_of_function_count() {
+    let actual = ProductionSemanticKirOwnerV1::try_lower(
+        function_limit_owner_v1(66, true),
+        ProductionSemanticKirLimitsV1::default(),
+    );
+    assert!(
+        matches!(
+            &actual,
+            Err(ProductionSemanticKirErrorV1::SemanticSsa(
+                fe2o3_pliron::ProductionSemanticSsaErrorV1::CallExpansion(
+                    fe2o3_mir_model::SemanticCallExpansionErrorV1::Limit(
+                        fe2o3_mir_model::SemanticCallExpansionResourceV1::Depth
+                    )
+                )
+            ))
+        ),
+        "{actual:?}"
+    );
 }

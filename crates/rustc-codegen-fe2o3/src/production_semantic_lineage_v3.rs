@@ -293,7 +293,8 @@ impl LineageNeutralKirIdentityV1 {
             ProductionCanonicalKernelIrVersionV1::V9 => MultiRootCanonicalKirVersionV2::V9,
             ProductionCanonicalKernelIrVersionV1::V11 => MultiRootCanonicalKirVersionV2::V11,
             ProductionCanonicalKernelIrVersionV1::V12
-            | ProductionCanonicalKernelIrVersionV1::V13 => return Ok(None),
+            | ProductionCanonicalKernelIrVersionV1::V13
+            | ProductionCanonicalKernelIrVersionV1::V14 => return Ok(None),
         };
         MultiRootNeutralKirIdentityV2::new(version, self.canonical_length, self.digest).map(Some)
     }
@@ -1236,6 +1237,11 @@ impl PreparedProductionSemanticLineageV3 {
                     bound_kir.canonical_bytes().len() as u64,
                     Some(*bound_kir.identity()),
                 )
+            }
+            ProductionCanonicalKernelIrVersionV1::V14 => {
+                return Err(ProductionSemanticLineageErrorV3::LiveOwner(
+                    "V14 phase emission requires distinct final source/physical lineage carriage".into(),
+                ));
             }
         };
         let final_v13 = match (final_v13_identity, final_v13_epoch) {

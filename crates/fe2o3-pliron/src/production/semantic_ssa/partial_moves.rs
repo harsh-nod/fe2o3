@@ -1,14 +1,12 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum SemanticMovePathElementV1 {
-    Field(u32),
-    ConstantIndex { offset: u64, from_end: bool },
-    Downcast(u32),
-}
-
-type SemanticMovePathV1 = Vec<SemanticMovePathElementV1>;
-type SemanticPartialMoveStateV1 = BTreeMap<u32, BTreeSet<SemanticMovePathV1>>;
+mod discriminant_read_v1;
+mod incoming_retention_v1;
+mod state;
+use state::{
+    Path as SemanticMovePathV1, PathElement as SemanticMovePathElementV1,
+    State as SemanticPartialMoveStateV1,
+};
 
 #[derive(Clone, Copy)]
 struct SemanticPartialMoveLocationV1 {
@@ -19,52 +17,97 @@ struct SemanticPartialMoveLocationV1 {
 
 struct SemanticPartialMoveBudgetV1 {
     function: SemanticFunctionIdV1,
-    base_storage_words: usize,
-    base_work_units: usize,
-    state_entries: usize,
-    work_units: usize,
-    limits: SsaPlannerLimitsV1,
+    state: state::Budget,
+    auxiliary_storage_words: usize,
+    plan_storage_words: usize,
 }
 
 impl SemanticPartialMoveBudgetV1 {
-    fn charge_state_entry(&mut self) -> Result<(), ProductionSemanticSsaErrorV1> {
-        self.state_entries = self
-            .state_entries
-            .checked_add(1)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        let required = self
-            .base_storage_words
-            .checked_add(self.state_entries)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        if required > self.limits.max_storage_words() {
-            return Err(ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {
-                function: self.function,
-                resource: SsaPlannerResourceV1::StorageWords,
-                required,
-                limit: self.limits.max_storage_words(),
-            });
-        }
-        Ok(())
+    fn error(&self, error: state::Error) -> ProductionSemanticSsaErrorV1 {
+        self.error_at(resource_diagnostic_v1::Stage::DynamicState, error)
+    }
+
+    fn error_at(
+        &self,
+        stage: resource_diagnostic_v1::Stage,
+        error: state::Error,
+    ) -> ProductionSemanticSsaErrorV1 {
+        partial_move_budget_error_with_stage_v1(
+            self.function,
+            error,
+            stage,
+            self.auxiliary_storage_words,
+            self.plan_storage_words,
+        )
     }
 
     fn charge_work(&mut self) -> Result<(), ProductionSemanticSsaErrorV1> {
-        self.work_units = self
-            .work_units
-            .checked_add(1)
+        self.state.work(1).map_err(|error| self.error(error))
+    }
+
+    fn projection_scratch(
+        &self,
+        place: &SemanticPlaceV1,
+    ) -> Result<state::Storage, ProductionSemanticSsaErrorV1> {
+        let depth = place.projections().len();
+        self.state
+            .work(
+                depth
+                    .checked_add(1)
+                    .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
+            )
+            .map_err(|error| self.error(error))?;
+        let words = depth
+            .checked_mul(size_of::<SemanticMovePathElementV1>().div_ceil(size_of::<usize>()))
             .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        let required = self
-            .base_work_units
-            .checked_add(self.work_units)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        if required > self.limits.max_work_units() {
-            return Err(ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {
-                function: self.function,
-                resource: SsaPlannerResourceV1::WorkUnits,
-                required,
-                limit: self.limits.max_work_units(),
-            });
-        }
-        Ok(())
+        self.state.reserve(words).map_err(|error| self.error(error))
+    }
+}
+
+fn partial_move_budget_error_v1(
+    function: SemanticFunctionIdV1,
+    error: state::Error,
+) -> ProductionSemanticSsaErrorV1 {
+    match error {
+        state::Error::Overflow => ProductionSemanticSsaErrorV1::ResourceOverflow,
+        state::Error::Limit {
+            resource,
+            required,
+            limit,
+            ..
+        } => ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {
+            function,
+            resource: match resource {
+                state::Resource::Storage => SsaPlannerResourceV1::StorageWords,
+                state::Resource::Work => SsaPlannerResourceV1::WorkUnits,
+            },
+            required,
+            limit,
+        },
+    }
+}
+
+fn partial_move_budget_error_with_stage_v1(
+    function: SemanticFunctionIdV1,
+    error: state::Error,
+    stage: resource_diagnostic_v1::Stage,
+    auxiliary_storage_words: usize,
+    plan_storage_words: usize,
+) -> ProductionSemanticSsaErrorV1 {
+    let storage = match error {
+        state::Error::Limit { storage, .. } => storage,
+        state::Error::Overflow => None,
+    };
+    let error = partial_move_budget_error_v1(function, error);
+    match storage {
+        Some(storage) => resource_diagnostic_v1::wrap(
+            error,
+            stage,
+            auxiliary_storage_words,
+            Some(plan_storage_words),
+            (storage.live, storage.peak, storage.requested),
+        ),
+        None => error,
     }
 }
 
@@ -95,25 +138,51 @@ pub(super) fn validate_partial_moves_v1(
         return Ok(ProductionSemanticPartialMoveCertificateV1::default());
     }
 
+    let base_storage_words = plan
+        .resources()
+        .storage_words()
+        .checked_add(auxiliary_resources.storage_words)
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    let base_work_units = plan
+        .resources()
+        .work_units()
+        .checked_add(auxiliary_resources.work_units)
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
     let mut budget = SemanticPartialMoveBudgetV1 {
         function: function_id,
-        base_storage_words: plan
-            .resources()
-            .storage_words()
-            .checked_add(auxiliary_resources.storage_words)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-        base_work_units: plan
-            .resources()
-            .work_units()
-            .checked_add(auxiliary_resources.work_units)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-        state_entries: 0,
-        work_units: 0,
-        limits: limits.planner(),
+        state: state::Budget::new(
+            base_storage_words,
+            base_work_units,
+            limits.planner().max_storage_words(),
+            limits.planner().max_work_units(),
+        )
+        .map_err(|error| {
+            partial_move_budget_error_with_stage_v1(
+                function_id,
+                error,
+                resource_diagnostic_v1::Stage::StateBase,
+                auxiliary_resources.storage_words,
+                plan.resources().storage_words(),
+            )
+        })?,
+        auxiliary_storage_words: auxiliary_resources.storage_words,
+        plan_storage_words: plan.resources().storage_words(),
     };
+    // Incoming handles, queue/queued entries and bounded traversal scratch are
+    // live for this pass. Shared nodes and owned paths are charged on allocation.
+    let workspace_words = function
+        .blocks()
+        .len()
+        .checked_mul(4)
+        .and_then(|words| words.checked_add(80))
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    let _workspace = budget
+        .state
+        .reserve(workspace_words)
+        .map_err(|error| budget.error_at(resource_diagnostic_v1::Stage::Workspace, error))?;
     let mut incoming = vec![None::<SemanticPartialMoveStateV1>; function.blocks().len()];
     let entry = function.entry().index() as usize;
-    incoming[entry] = Some(BTreeMap::new());
+    incoming[entry] = Some(SemanticPartialMoveStateV1::default());
     let mut pending = VecDeque::from([entry]);
     let mut queued = vec![false; function.blocks().len()];
     queued[entry] = true;
@@ -122,6 +191,21 @@ pub(super) fn validate_partial_moves_v1(
         .iter()
         .position(|local| matches!(local.role(), SemanticLocalRoleV1::Return))
         .map(|local| local as u32);
+    let retention = incoming_retention_v1::InputRetention::new(
+        function.blocks().len(),
+        entry,
+        &budget.state,
+        |record| {
+            for (source, block) in function.blocks().iter().enumerate() {
+                block
+                    .terminator()
+                    .kind()
+                    .try_for_each_edge(|edge| record(source, edge.target().index() as usize))?;
+            }
+            Ok(())
+        },
+    )
+    .map_err(|error| budget.error_at(resource_diagnostic_v1::Stage::Retention, error))?;
 
     while let Some(block_index) = pending.pop_front() {
         queued[block_index] = false;
@@ -129,12 +213,12 @@ pub(super) fn validate_partial_moves_v1(
             continue;
         }
         budget.charge_work()?;
-        let mut state = incoming[block_index]
-            .as_ref()
-            .cloned()
+        let mut state = retention
+            .begin(block_index, &mut incoming)
             .ok_or(ProductionSemanticSsaErrorV1::ReplayMismatch)?;
         let block = &function.blocks()[block_index];
         for (statement_index, statement) in block.statements().iter().enumerate() {
+            budget.charge_work()?;
             let location = SemanticPartialMoveLocationV1 {
                 function: function_id,
                 block: block_index as u32,
@@ -154,6 +238,7 @@ pub(super) fn validate_partial_moves_v1(
             block: block_index as u32,
             statement: None,
         };
+        budget.charge_work()?;
         validate_partial_move_terminator_v1(
             function,
             types,
@@ -165,6 +250,7 @@ pub(super) fn validate_partial_moves_v1(
         )?;
 
         block.terminator().kind().try_for_each_edge(|edge| {
+            budget.charge_work()?;
             let target = edge.target().index() as usize;
             if !plan.is_reachable(SsaBlockIdV1::new(target as u32)) {
                 return Ok(());
@@ -185,7 +271,7 @@ pub(super) fn validate_partial_moves_v1(
             }
             let first_incoming_edge = incoming[target].is_none();
             let changed = merge_partial_move_state_v1(
-                incoming[target].get_or_insert_with(BTreeMap::new),
+                incoming[target].get_or_insert_with(SemanticPartialMoveStateV1::default),
                 &edge_state,
                 &mut budget,
             )?;
@@ -199,8 +285,10 @@ pub(super) fn validate_partial_moves_v1(
 
     Ok(ProductionSemanticPartialMoveCertificateV1 {
         projected_moves,
-        state_entries: budget.state_entries,
-        work_units: budget.work_units,
+        // Existing certificate field carries peak logical state storage, not
+        // cumulative insertions into states that may already have been freed.
+        state_entries: budget.state.peak(),
+        work_units: budget.state.work_units(),
     })
 }
 
@@ -418,10 +506,9 @@ fn validate_partial_move_statement_v1(
             validate_partial_move_place_read_v1(function, types, place, location, state, budget)?;
             mark_partial_move_v1(place.local().index(), Vec::new(), state, budget)
         }
-        SemanticStatementKindV1::StorageLive(local) => {
-            state.remove(&local.index());
-            Ok(())
-        }
+        SemanticStatementKindV1::StorageLive(local) => state
+            .clear(local.index(), &budget.state)
+            .map_err(|error| budget.error(error)),
         SemanticStatementKindV1::StorageDead(local) => {
             mark_partial_move_v1(local.index(), Vec::new(), state, budget)
         }
@@ -446,9 +533,11 @@ fn validate_partial_move_rvalue_v1(
     match value {
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. }
-        | SemanticRvalueKindV1::Length(place)
-        | SemanticRvalueKindV1::Discriminant(place) => {
+        | SemanticRvalueKindV1::Length(place) => {
             validate_partial_move_place_read_v1(function, types, place, location, state, budget)
+        }
+        SemanticRvalueKindV1::Discriminant(place) => {
+            discriminant_read_v1::validate(function, types, place, location, state, budget)
         }
         SemanticRvalueKindV1::Load(load) => validate_partial_move_place_read_v1(
             function,
@@ -576,15 +665,17 @@ fn validate_partial_move_operand_v1(
     state: &mut SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
+    budget.charge_work()?;
     let place = match operand {
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
         SemanticOperandV1::Constant(_) => return Ok(()),
     };
     validate_partial_move_place_read_v1(function, types, place, location, state, budget)?;
-    if matches!(operand, SemanticOperandV1::Move(_))
-        && let Some(path) = canonical_partial_move_path_v1(function, types, place, location)?
-    {
-        mark_partial_move_v1(place.local().index(), path, state, budget)?;
+    if matches!(operand, SemanticOperandV1::Move(_)) {
+        let _scratch = budget.projection_scratch(place)?;
+        if let Some(path) = canonical_partial_move_path_v1(function, types, place, location)? {
+            mark_partial_move_v1(place.local().index(), path, state, budget)?;
+        }
     }
     Ok(())
 }
@@ -598,30 +689,38 @@ fn validate_partial_move_destination_v1(
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
     if destination.projections().is_empty() {
-        state.remove(&destination.local().index());
-        return Ok(());
+        return state
+            .clear(destination.local().index(), &budget.state)
+            .map_err(|error| budget.error(error));
     }
 
     let local = destination.local().index();
+    let _scratch = budget.projection_scratch(destination)?;
+    if let [projection] = destination.projections()
+        && matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
+        && let Some(declaration) = function.locals().get(local as usize)
+        && let Some(types) = types
+        && matches!(types.get(declaration.ty().index() as usize).map(|ty| ty.shape()),
+            Some(SemanticTypeShapeV1::Array { element, .. }) if *element == destination.ty())
+    {
+        // Replacing one element cannot introduce a move hole in a readable
+        // owned array. Do not clear any existing hole or infer initialization;
+        // retained-storage initialization and bounds checks remain independent.
+        validate_partial_move_path_read_v1(local, &[], location, state, budget)?;
+        return validate_partial_move_projection_indices_v1(destination, location, state, budget);
+    }
     let Some(path) = canonical_partial_move_path_v1(function, types, destination, location)? else {
         return validate_partial_move_projection_indices_v1(destination, location, state, budget);
     };
-    if let Some(moved) = state.get_mut(&local) {
-        for prefix_length in 0..path.len() {
-            budget.charge_work()?;
-            if moved.contains(&path[..prefix_length]) {
-                return Err(partial_move_error_v1(
-                    location,
-                    local,
-                    SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
-                ));
-            }
-        }
-        budget.charge_work()?;
-        moved.retain(|candidate| !candidate.starts_with(&path));
-        if moved.is_empty() {
-            state.remove(&local);
-        }
+    if !state
+        .initialize(local, &path, &budget.state)
+        .map_err(|error| budget.error(error))?
+    {
+        return Err(partial_move_error_v1(
+            location,
+            local,
+            SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+        ));
     }
     validate_partial_move_projection_indices_v1(destination, location, state, budget)
 }
@@ -633,6 +732,7 @@ fn validate_partial_move_projection_indices_v1(
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
     for projection in place.projections() {
+        budget.charge_work()?;
         if let SemanticProjectionKindV1::Index(index) = projection.kind() {
             validate_partial_move_path_read_v1(index.index(), &[], location, state, budget)?;
         }
@@ -649,6 +749,7 @@ fn validate_partial_move_place_read_v1(
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
     let local = place.local().index();
+    let _scratch = budget.projection_scratch(place)?;
     let path = canonical_partial_move_path_v1(function, types, place, location)
         .ok()
         .flatten()
@@ -664,24 +765,9 @@ fn validate_partial_move_path_read_v1(
     state: &SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
-    let Some(moved) = state.get(&local) else {
-        return Ok(());
-    };
-    for prefix_length in 0..=path.len() {
-        budget.charge_work()?;
-        if moved.contains(&path[..prefix_length]) {
-            return Err(partial_move_error_v1(
-                location,
-                local,
-                SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
-            ));
-        }
-    }
-    budget.charge_work()?;
-    if moved
-        .range(path.to_vec()..)
-        .next()
-        .is_some_and(|candidate| candidate.starts_with(path))
+    if !state
+        .readable(local, path, &budget.state)
+        .map_err(|error| budget.error(error))?
     {
         return Err(partial_move_error_v1(
             location,
@@ -783,16 +869,9 @@ fn mark_partial_move_v1(
     state: &mut SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
-    let paths = state.entry(local).or_default();
-    if path.is_empty() {
-        paths.clear();
-    } else if paths.contains(&Vec::new()) {
-        return Ok(());
-    }
-    if paths.insert(path) {
-        budget.charge_state_entry()?;
-    }
-    Ok(())
+    state
+        .mark(local, path, &budget.state)
+        .map_err(|error| budget.error(error))
 }
 
 fn merge_partial_move_state_v1(
@@ -800,28 +879,54 @@ fn merge_partial_move_state_v1(
     source: &SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<bool, ProductionSemanticSsaErrorV1> {
-    let mut changed = false;
-    for (local, incoming_paths) in source {
-        let paths = destination.entry(*local).or_default();
-        if paths.contains(&Vec::new()) {
-            continue;
-        }
-        if incoming_paths.contains(&Vec::new()) {
-            if paths.len() != 1 || !paths.contains(&Vec::new()) {
-                paths.clear();
-                paths.insert(Vec::new());
-                budget.charge_state_entry()?;
-                changed = true;
-            }
-            continue;
-        }
-        for path in incoming_paths {
-            budget.charge_work()?;
-            if paths.insert(path.clone()) {
-                budget.charge_state_entry()?;
-                changed = true;
-            }
-        }
-    }
-    Ok(changed)
+    destination
+        .merge(source, &budget.state)
+        .map_err(|error| budget.error(error))
+}
+
+/// Parent hook: replace the old dense partial-move preflight with this adapter
+/// envelope. The solver separately enforces actual peak state storage and work.
+pub(super) fn auxiliary_resources_v1(
+    function: &SemanticFunctionDeclV1,
+    input: &SsaConstructionInputV1,
+) -> Result<SemanticSsaAuxiliaryResourcesV1, ProductionSemanticSsaErrorV1> {
+    let blocks = input.blocks().len();
+    let variables = input.promotable().len();
+    let statements = function.blocks().iter().try_fold(0usize, |total, block| {
+        total
+            .checked_add(block.statements().len())
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)
+    })?;
+    let (events, edges, definitions) = input.blocks().iter().try_fold(
+        (0usize, 0usize, 0usize),
+        |(events, edges, definitions), block| {
+            let events = events
+                .checked_add(block.events().len())
+                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+            let edges = edges
+                .checked_add(block.edges().len())
+                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+            let definitions = block.edges().iter().try_fold(definitions, |total, edge| {
+                total
+                    .checked_add(edge.definitions().len())
+                    .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)
+            })?;
+            Ok((events, edges, definitions))
+        },
+    )?;
+    let adapter_items = variables
+        .checked_mul(8)
+        .and_then(|value| value.checked_add(blocks.checked_mul(12)?))
+        .and_then(|value| value.checked_add(statements.checked_mul(8)?))
+        .and_then(|value| value.checked_add(events.checked_mul(4)?))
+        .and_then(|value| value.checked_add(edges.checked_mul(6)?))
+        .and_then(|value| value.checked_add(definitions.checked_mul(2)?))
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+    Ok(SemanticSsaAuxiliaryResourcesV1 {
+        storage_words: adapter_items,
+        work_units: adapter_items
+            .checked_add(events)
+            .and_then(|value| value.checked_add(definitions))
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
+    })
 }

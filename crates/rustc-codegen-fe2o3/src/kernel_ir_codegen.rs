@@ -76,7 +76,6 @@ impl InertCompilerModuleTextV1 {
         &self.external_declarations
     }
 
-    #[cfg(test)]
     pub(crate) const fn descriptor_source_identity(
         &self,
     ) -> Option<CompilerDescriptorSourceIdentityV1> {
@@ -483,7 +482,7 @@ fn enforce_compiler_module_bounds(module: &Module) -> Result<(), CompilerModuleC
             .parameters
             .iter()
             .chain(&function.signature.results)
-            .any(|ty| matches!(ty, Type::ExecutionCapability(_)))
+            .any(|ty| matches!(ty, Type::ExecutionCapability(_) | Type::ReusablePhaseToken(_)))
         {
             return Err(CompilerModuleConstructionError::LogicalExecutionCapabilityInPhysicalAbi);
         }
@@ -656,7 +655,8 @@ fn check_type_depth(ty: &Type, depth: usize) -> Result<(), CompilerModuleConstru
         Type::Pointer(pointer) => check_type_depth(&pointer.pointee, depth + 1),
         Type::Slice(slice) => check_type_depth(&slice.element, depth + 1),
         Type::GlobalCapability(capability) => check_type_depth(capability.element(), depth + 1),
-        Type::Unit | Type::Scalar(_) | Type::KernelContext(_) | Type::ExecutionCapability(_) => {
+        Type::Unit | Type::Scalar(_) | Type::KernelContext(_) | Type::ExecutionCapability(_)
+        | Type::ReusablePhaseToken(_) => {
             Ok(())
         }
     }

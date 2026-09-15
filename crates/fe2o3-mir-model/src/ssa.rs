@@ -12,6 +12,11 @@ use sha2::{Digest as _, Sha256};
 mod planner;
 mod support;
 
+#[cfg(test)]
+mod liveness_storage_v1_tests;
+#[cfg(test)]
+mod storage_representation_v1_tests;
+
 use planner::Planner;
 use support::WorkBudget;
 
@@ -615,7 +620,6 @@ pub struct SsaConstructionPlanV1 {
     promoted_variables: Vec<SsaVariableIdV1>,
     live_in: Vec<Vec<SsaVariableIdV1>>,
     merge_variables: Vec<Vec<SsaVariableIdV1>>,
-    transport_variables: Vec<Vec<SsaVariableIdV1>>,
     entry_definitions: Vec<SsaArgumentV1>,
     entry_arguments: Vec<SsaArgumentV1>,
     resolved_events: Vec<Vec<(u32, SsaResolvedEventV1)>>,
@@ -656,7 +660,7 @@ impl SsaConstructionPlanV1 {
     }
 
     pub fn transport_variables(&self, block: SsaBlockIdV1) -> Option<&[SsaVariableIdV1]> {
-        self.reachable_slice(block, &self.transport_variables)
+        self.reachable_slice(block, &self.merge_variables)
     }
 
     pub fn entry_arguments(&self) -> &[SsaArgumentV1] {

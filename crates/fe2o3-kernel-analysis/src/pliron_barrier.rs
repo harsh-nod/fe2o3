@@ -807,8 +807,8 @@ pub(crate) fn trace_failure_detail(failure: PlironTraceFailureV1) -> String {
         PlironTraceFailureV1::LaunchTooLarge { invocations } => {
             format!("launch domain has {invocations} invocations")
         }
-        PlironTraceFailureV1::UnresolvedBranch { block } => {
-            format!("branch in block {block} has an unresolved condition")
+        PlironTraceFailureV1::UnresolvedBranch { block, detail } => {
+            format!("branch in block {block} cannot be traced: {detail}")
         }
         PlironTraceFailureV1::ForeignView { block, operation } => {
             format!("memory view at block {block} op {operation} is unresolved")
@@ -825,7 +825,7 @@ pub(crate) fn trace_failure_detail(failure: PlironTraceFailureV1) -> String {
             "scoped synchronization lacks a retained gpu.execution_layout".to_owned()
         }
         PlironTraceFailureV1::InvalidExecutionLayout => {
-            "gpu.execution_layout is malformed, duplicated, or outside the entry block".to_owned()
+            "gpu.execution_layout is malformed, duplicated, outside the entry block, or inconsistent with invocation declarations".to_owned()
         }
         PlironTraceFailureV1::UnsupportedGridSynchronization { block, operation } => {
             format!(
@@ -847,6 +847,60 @@ pub(crate) fn trace_failure_detail(failure: PlironTraceFailureV1) -> String {
 #[cfg(test)]
 mod status_tests {
     use super::*;
+
+    #[test]
+    fn invalid_layout_cannot_fall_back_to_an_unconditional_barrier_path() {
+        use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, MemoryOrderAttr, MemoryScopeAttr};
+        use dialect_kernel::{InvocationIndexOp, ReturnOp};
+        use pliron::{builtin::types::FunctionType, op::Op};
+
+        let context = &mut Context::new();
+        dialect_kernel::register_dialect(
+            context,
+            &pliron::dialect::DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        dialect_gpu::register_dialect(context).unwrap();
+        let function = FuncOp::new(
+            context,
+            "conflicting_barrier_layout".try_into().unwrap(),
+            FunctionType::get(context, vec![], vec![]),
+        );
+        let layout = ExecutionLayoutOp::new(context, 7, [4, 1, 1], [4, 1, 1], 4);
+        let invocation = InvocationIndexOp::new(context, 0, 8);
+        let barrier = BarrierOp::new(
+            context,
+            HierarchyAttr::Workgroup,
+            MemoryScopeAttr::Workgroup,
+            AddressSpaceAttr::Workgroup,
+            MemoryOrderAttr::AcquireRelease,
+        );
+        let ret = ReturnOp::new(context);
+        for operation in [
+            layout.get_operation(),
+            invocation.get_operation(),
+            barrier.get_operation(),
+            ret.get_operation(),
+        ] {
+            operation.insert_at_back(function.get_entry_block(context), context);
+        }
+        let mut analyses = PlironAnalysisManagerV1::new(&function);
+        let report = run_pliron_barrier_convergence_check_with_analyses_v1(
+            context,
+            &function,
+            &mut analyses,
+        );
+        assert!(
+            matches!(report.findings(),
+            [PlironBarrierFindingV1::AnalysisIncomplete { detail }]
+                if detail.contains("inconsistent with invocation declarations")),
+            "{report:?}"
+        );
+        assert!(matches!(
+            analyses.exact_trace(),
+            Err(PlironTraceFailureV1::InvalidExecutionLayout)
+        ));
+    }
 
     #[test]
     fn every_barrier_finding_has_the_shared_status() {

@@ -9,6 +9,7 @@ mod global_metadata_tests {
     const VIEW: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
     const VIEW_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
     const INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
+    const SHARED_SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
 
     struct MetadataFixture {
         types: Vec<SemanticTypeDeclV1>,
@@ -18,6 +19,10 @@ mod global_metadata_tests {
     }
 
     fn fixture() -> MetadataFixture {
+        fixture_for_role(false)
+    }
+
+    fn fixture_for_role(exclusive: bool) -> MetadataFixture {
         let provenance = SemanticKernelCapabilityProvenanceV1::new(
             SemanticFunctionIdV1::from_index(0),
             SemanticKernelBindingIdentityV1::from_sha256([6; 32]),
@@ -29,17 +34,18 @@ mod global_metadata_tests {
         )
         .unwrap();
         let context = RootKernelContextLoweringV1 {
+            entry_transfer: None,
             selected_root: SemanticFunctionIdV1::from_index(0),
             semantic_type: UNIT,
             context_type: KernelContextTypeV1::new("metadata_root", [1; 32], [2; 32], [3; 32]),
             source: KernelContextSourceIdentityV1::new([4; 32], [5; 32], [6; 32], [7; 32]),
         };
-        let pointer = |pointee, metadata| {
+        let pointer = |pointee, metadata, mutability| {
             SemanticTypeShapeV1::Pointer(
                 SemanticPointerTypeV1::new_with_kind(
                     pointee,
                     SemanticPointerKindV1::Reference,
-                    SemanticMutabilityV1::Immutable,
+                    mutability,
                     0,
                     64,
                     metadata,
@@ -73,7 +79,15 @@ mod global_metadata_tests {
             ty(
                 22,
                 SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
-                pointer(SLICE, SemanticPointerMetadataV1::SliceLength),
+                pointer(
+                    SLICE,
+                    SemanticPointerMetadataV1::SliceLength,
+                    if exclusive {
+                        SemanticMutabilityV1::Mutable
+                    } else {
+                        SemanticMutabilityV1::Immutable
+                    },
+                ),
             ),
             ty(
                 23,
@@ -90,7 +104,11 @@ mod global_metadata_tests {
             ty(
                 24,
                 SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
-                pointer(VIEW, SemanticPointerMetadataV1::None),
+                pointer(
+                    VIEW,
+                    SemanticPointerMetadataV1::None,
+                    SemanticMutabilityV1::Immutable,
+                ),
             ),
             plain_bit_scalar_type(
                 25,
@@ -100,9 +118,44 @@ mod global_metadata_tests {
                     bits: 64,
                 },
             ),
+            ty(
+                26,
+                SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
+                pointer(
+                    SLICE,
+                    SemanticPointerMetadataV1::SliceLength,
+                    SemanticMutabilityV1::Immutable,
+                ),
+            ),
         ];
         let original = noop_semantic_owner(&["metadata_root"]);
         let callable_identity = SemanticFunctionIdentityV1::from_sha256([77; 32]);
+        let contract = if exclusive {
+            SemanticCapabilityMemoryContractV1::global_exclusive_read_write()
+        } else {
+            SemanticCapabilityMemoryContractV1::global_read_only()
+        };
+        let operation = if exclusive {
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                context: UNIT,
+                physical: PHYSICAL,
+                view: VIEW,
+                element: ELEMENT,
+                contract,
+                provenance,
+                source_identity: callable_identity,
+            }
+        } else {
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                context: UNIT,
+                physical: PHYSICAL,
+                view: VIEW,
+                element: ELEMENT,
+                contract,
+                provenance,
+                source_identity: callable_identity,
+            }
+        };
         let callables = vec![SemanticCallableDeclV1::CompilerIntrinsic {
             binding: SemanticNonBodyCallableBindingV1::new(
                 callable_identity,
@@ -113,26 +166,23 @@ mod global_metadata_tests {
                 SemanticSourceProvenanceV1::unavailable(),
                 original.semantic().functions()[0].abi().clone(),
             ),
-            operation: SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
-                context: UNIT,
-                physical: PHYSICAL,
-                view: VIEW,
-                element: ELEMENT,
-                contract: SemanticCapabilityMemoryContractV1::global_read_only(),
-                provenance,
-                source_identity: callable_identity,
-            },
+            operation,
             operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([82; 32]),
         }];
         let binding = SemanticValueBindingV1::GlobalCapability {
             value: ValueId(40),
             semantic_view: VIEW,
             element: ELEMENT,
-            contract: SemanticCapabilityMemoryContractV1::global_read_only(),
+            contract,
             provenance,
-            capability: GlobalCapabilityTypeV1::read_only(
+            capability: GlobalCapabilityTypeV1::new(
                 Type::Scalar(ScalarType::U32),
                 context.context_type.clone(),
+                if exclusive {
+                    GlobalCapabilityRoleV1::ExclusiveReadWrite
+                } else {
+                    GlobalCapabilityRoleV1::ReadOnly
+                },
             ),
         };
         MetadataFixture {
@@ -276,7 +326,12 @@ mod global_metadata_tests {
 
     #[test]
     fn len_helper_projections_emit_only_capability_length_including_a_physical_temporary() {
-        let fixture = fixture();
+        check_len_helper_reborrow(false);
+        check_len_helper_reborrow(true);
+    }
+
+    fn check_len_helper_reborrow(exclusive: bool) {
+        let fixture = fixture_for_role(exclusive);
         let original = noop_semantic_owner(&["metadata_root"]);
         let original = &original.semantic().functions()[0];
         let source = SemanticSourceProvenanceV1::unavailable();
@@ -300,6 +355,12 @@ mod global_metadata_tests {
                 SemanticLocalDeclV1::new(
                     SemanticLocalIdentityV1::from_sha256([241; 32]),
                     PHYSICAL,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([242; 32]),
+                    SHARED_SLICE,
                     SemanticLocalRoleV1::Temporary,
                     source,
                 ),
@@ -368,9 +429,33 @@ mod global_metadata_tests {
             .unwrap();
         assert!(operations.is_empty());
         lower.locals[2] = Some(carrier);
+        // rustc retains this shared reborrow in exclusive-view len(&self).
+        let reborrow = SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Shared,
+            place: SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(2),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SLICE)
+                        .unwrap(),
+                ],
+                SLICE,
+            )
+            .unwrap(),
+        };
+        let reborrowed = lower
+            .lower_rvalue(block, None, SHARED_SLICE, &reborrow, &mut operations)
+            .unwrap();
+        assert_eq!(
+            reborrowed.value().unwrap(),
+            lower.locals[2].as_ref().unwrap().value().unwrap()
+        );
+        assert!(operations.is_empty());
+        lower.locals[3] = Some(reborrowed);
         let temporary =
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], PHYSICAL).unwrap();
-        for place in [physical, temporary] {
+        let shared =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], SHARED_SLICE).unwrap();
+        for place in [physical, temporary, shared.clone()] {
             lower
                 .lower_rvalue(
                     block,
@@ -398,7 +483,7 @@ mod global_metadata_tests {
                 &mut operations,
             )
             .unwrap();
-        assert_eq!(operations.len(), 3);
+        assert_eq!(operations.len(), 4);
         assert!(operations.iter().all(|operation| matches!(
             operation.kind,
             OperationKind::SliceLength { slice: ValueId(40) }
@@ -425,7 +510,43 @@ mod global_metadata_tests {
                     .is_err()
             );
         }
-        assert_eq!(operations.len(), 3);
+        assert_eq!(operations.len(), 4);
+        let source_carrier = lower.locals[2].clone().unwrap();
+        for lifetime_end in [
+            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(2)),
+            SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(2)),
+        ] {
+            lower.locals[2] = Some(source_carrier.clone());
+            lower
+                .lower_statement(block, None, &lifetime_end, &mut operations)
+                .unwrap();
+            assert!(matches!(
+                lower.lower_rvalue(block, None, SHARED_SLICE, &reborrow, &mut operations),
+                Err(ProductionSemanticKirErrorV1::MissingLocalDefinition { local: 2, .. })
+            ));
+        }
+        lower
+            .lower_statement(
+                block,
+                None,
+                &SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(3)),
+                &mut operations,
+            )
+            .unwrap();
+        assert!(matches!(
+            lower.lower_rvalue(
+                block,
+                None,
+                INDEX,
+                &SemanticRvalueKindV1::Unary {
+                    operation: SemanticUnaryOpV1::PointerMetadata,
+                    operand: SemanticOperandV1::Copy(shared),
+                },
+                &mut operations,
+            ),
+            Err(ProductionSemanticKirErrorV1::MissingLocalDefinition { local: 3, .. })
+        ));
+        assert_eq!(operations.len(), 4);
         let SemanticValueBindingV1::GlobalCapability { capability, .. } = &fixture.binding else {
             unreachable!()
         };

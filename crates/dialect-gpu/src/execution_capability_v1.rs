@@ -23,6 +23,8 @@ use pliron::{
 
 use crate::TargetNeutralGpuOpInterface;
 
+mod lds_publish_types;
+
 /// One exact KIR V13 execution operation in the live Pliron graph.
 ///
 /// SSA values remain real operands/results. The immutable semantic contract,
@@ -150,6 +152,13 @@ impl Verify for ExecutionCapabilityOp {
                 self.loc(context),
                 "gpu.execution_capability has incomplete or substituted graph identity"
             );
+        }
+        if matches!(contract.operation, fe2o3_kernel_ir::ExecutionCapabilityOperationV1::LdsPublish { .. }
+            | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::WorkgroupMemoryPublish { .. }) {
+            if !lds_publish_types::valid(context, &raw, &contract) {
+                return verify_err!(self.loc(context), "gpu.execution_capability substituted LDS publish SSA types");
+            }
+            return Ok(());
         }
         for result in raw.results() {
             let result_type = result.get_type(context);

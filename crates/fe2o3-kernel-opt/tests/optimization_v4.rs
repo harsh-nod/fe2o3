@@ -72,6 +72,35 @@ fn context_module() -> Module {
     module
 }
 
+#[test]
+fn production_cfg_coalescing_preserves_the_complete_context_use_chain() {
+    let expected = context_module();
+    let mut input = expected.clone();
+    let body = input.functions[0].body.as_mut().unwrap();
+    let mut successor = BasicBlock::new(BlockId(9));
+    successor.operations = body.blocks[0].operations.split_off(1);
+    successor.terminator = body.blocks[0].terminator.take();
+    body.blocks[0].terminator = Some(Terminator::Branch {
+        target: successor.id,
+        arguments: vec![],
+    });
+    body.blocks.push(successor);
+    let optimized = optimize_production_kernel_ir_module_v4(&input).unwrap();
+    assert_eq!(optimized.module(), &expected);
+    assert!(
+        optimized
+            .report()
+            .capability_pass_replays()
+            .iter()
+            .any(|pass| {
+                pass.preservation().mode()
+            == fe2o3_kernel_opt::TransformationPreservationModeV1::CheckedControlFlowCoalescing
+            })
+    );
+    assert!(optimized.report().is_production_replay_compatible());
+    assert!(!optimized.report().grants_semantic_preservation_authority());
+}
+
 fn scalar_module() -> Module {
     let ty = Type::Scalar(ScalarType::U32);
     let mut block = BasicBlock::new(BlockId(0));

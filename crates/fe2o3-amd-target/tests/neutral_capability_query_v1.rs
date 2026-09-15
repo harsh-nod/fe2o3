@@ -500,6 +500,76 @@ fn nonfinal_and_physical_contracts_remain_explicit() {
 }
 
 #[test]
+fn ordered_f32_max_support_is_exact_and_revision_bound_on_both_profiles() {
+    use TargetCollectiveOperationV1::{ReduceMax, ReduceMin};
+    assert_eq!(
+        PRODUCTION_AMD_NEUTRAL_CAPABILITY_MODEL_REVISION_V1,
+        "production-neutral-v1-backend-contract-v4"
+    );
+    for profile in PROFILES {
+        let model = model(profile);
+        for width in [1, 2, 4, 8, 16, 32, 64] {
+            assert_eq!(
+                outcome(&model, collective(ReduceMax, f32_type(), width)),
+                Supported
+            );
+        }
+        assert!(matches!(
+            query_target_capability_v1(&model, collective(ReduceMax, f32_type(), 0)),
+            Err(TargetCapabilityQueryErrorV1::InvalidRequirement(
+                TargetCapabilityRequirementErrorV1::ZeroCollectiveParticipants
+            ))
+        ));
+        for width in [3, 65, 128] {
+            assert_eq!(
+                outcome(&model, collective(ReduceMax, f32_type(), width)),
+                Unsupported
+            );
+        }
+        for participation in [
+            TargetCollectiveParticipationV1::Full,
+            TargetCollectiveParticipationV1::UniformPrefix(8),
+            TargetCollectiveParticipationV1::DynamicMask,
+        ] {
+            let requirement =
+                TargetCapabilityRequirementV1::Collective(TargetCollectiveRequirementV1::new(
+                    TargetExecutionScopeV1::Subgroup,
+                    ReduceMax,
+                    f32_type(),
+                    16,
+                    participation,
+                    None,
+                ));
+            assert!(matches!(
+                query_target_capability_v1(&model, requirement),
+                Err(TargetCapabilityQueryErrorV1::InvalidRequirement(
+                    TargetCapabilityRequirementErrorV1::InvalidCollectiveNumericalMode
+                ))
+            ));
+            if participation != TargetCollectiveParticipationV1::Full {
+                let requirement =
+                    TargetCapabilityRequirementV1::Collective(TargetCollectiveRequirementV1::new(
+                        TargetExecutionScopeV1::Subgroup,
+                        ReduceMax,
+                        f32_type(),
+                        16,
+                        participation,
+                        Some(TargetNumericalModeV1::IeeeStrict),
+                    ));
+                assert_eq!(outcome(&model, requirement), Unsupported);
+            }
+        }
+    }
+    assert_eq!(
+        outcome(
+            &model(ProductionAmdTargetProfileV1::Gfx942),
+            collective(ReduceMin, f32_type(), 16)
+        ),
+        Incomplete
+    );
+}
+
+#[test]
 fn neutral_source_and_canonical_records_do_not_leak_backend_terms() {
     let source = include_str!("../../fe2o3-target-spec/src/capability_v1.rs").to_ascii_lowercase();
     for forbidden in ["amd", "gfx", "hip", "hsa", "cuda", "spir-v", "spirv"] {

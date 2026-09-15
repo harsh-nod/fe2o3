@@ -23,7 +23,7 @@
       "status": "checked"
     }
   },
-  "compilerInputContractSha256": "f3374046e354c86a2e3ade18f703fe3112422f0b366db954fc4b8407797e10f4",
+  "compilerInputContractSha256": "3ae74f84b859f72880763ddac64b9996f756103e8102b60a28f1dc5edf0180db",
   "expectedArguments": [
     {
       "bytes": "0x803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f0000000000000000000000000000000000000000000000000000000000000000803f",
@@ -244,9 +244,9 @@
   },
   "productionExport": {
     "coordinates": null,
-    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
-    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
-    "diagnosticIdentitySha256": "5d3a80f00f474f29a8ea2f8a3ffccf0169a4a15c5b9ce4644bf2e5a9d8e2f107",
+    "diagnostic": "FE2O3-TUTORIAL-TXN-007: protected cargo-fe2o3 fixture build failed with exit status: 1: cargo fe2o3 authority release: cannot admit the fixed compiler-execution client profile: trusted client-profile directory \"profile root\" has invalid descriptor, type, owner, mode, or link state",
+    "diagnosticCode": "FE2O3-TUTORIAL-TXN-007",
+    "diagnosticIdentitySha256": "fcba63b979a5f10cb0c95c92d16427714a458581005a12efd0a8e3a84088447c",
     "identityContract": {
       "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
       "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
@@ -257,7 +257,7 @@
       ],
       "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
     },
-    "stage": "exporter-build",
+    "stage": "protected-completion",
     "status": "blocked"
   },
   "request": {
@@ -338,6 +338,6 @@
     ]
   },
   "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
-  "sourceClosureSha256": "d4f67cb1436289418850b3a0feb3b30886494ee914f5d6b761f2e47c5225681a",
+  "sourceClosureSha256": "6b5b2e4597eee6f7256367e79f4bdd390c9308a11e3e95896a9c5678ea25b664",
   "target": "gfx942"
 }

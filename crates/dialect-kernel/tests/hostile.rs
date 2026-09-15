@@ -871,6 +871,18 @@ fn predicated_checked_access_binds_index_success_and_physical_extent() {
     assert_eq!(access.indices(context), [tiled.result(context)]);
     assert_eq!(access.checked_success(context), tiled.success(context));
 
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::Float, 32).unwrap();
+    let value = SemanticTypedConstantOp::new(context, 0, scalar).result(context);
+    Operation::insert_operand(access.get_operation(), context, 2, value);
+    verify_op(&access, context).unwrap();
+    assert_eq!(access.indices(context), [tiled.result(context)]);
+    assert_eq!(access.stored_value(context), Some(value));
+    assert_eq!(access.checked_success(context), tiled.success(context));
+    Operation::replace_operand(access.get_operation(), context, 2, extent);
+    assert!(verify_op(&access, context).is_err());
+    Operation::remove_operand(access.get_operation(), context, 2);
+    verify_op(&access, context).unwrap();
+
     let other = CheckedRowStripedIndex2DOp::new_predicated(
         context,
         values[0].result(context),

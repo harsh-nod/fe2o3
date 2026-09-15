@@ -123,6 +123,7 @@ compile_error!("ablation-stage-tile4 requires kernel-stage-gradient-shard");
 ))]
 compile_error!("ablation-muon-broadcast16 requires kernel-muon-update");
 
+pub mod effect_reference;
 pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;

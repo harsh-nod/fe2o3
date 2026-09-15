@@ -277,6 +277,7 @@ fn original_ambient_certificates_initialize_each_call_and_each_loop_iteration() 
             owner.source_semantic().callables(),
             &transparent,
             &plan.frame_initializations,
+            &defined_math_results::DefinedMathResultsV1::default(),
             |block, statement, events| {
                 if entries.iter().any(|entry| {
                     entry.block().index() == block && Some(entry.statement()) == statement
@@ -386,6 +387,7 @@ fn deleted_frame_marker_cannot_receive_ambient_initialization() {
             owner.source_semantic().callables(),
             &transparent,
             relation,
+            &defined_math_results::DefinedMathResultsV1::default(),
             |_, _, _| {},
         ),
         Err(ProductionSemanticSsaErrorV1::ReplayMismatch)

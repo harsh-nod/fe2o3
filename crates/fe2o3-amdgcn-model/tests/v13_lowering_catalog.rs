@@ -317,6 +317,9 @@ mod catalog_fixture {
     }
 }
 
+#[path = "v13_lowering_catalog/numerical_policy_math.rs"]
+mod numerical_policy_math;
+
 fn target_operation_mut(module: &mut Module) -> &mut fe2o3_kernel_ir::Operation {
     module.functions[0].body.as_mut().unwrap().blocks[0]
         .operations
@@ -327,44 +330,69 @@ fn target_operation_mut(module: &mut Module) -> &mut fe2o3_kernel_ir::Operation 
 #[test]
 fn every_v13_operation_family_and_subkind_lowers_for_both_profiles() {
     let cases = catalog_fixture::lowering_cases();
-    assert_eq!(cases.len(), 32);
+    // The 46-entry shared roster replaces one atomic with six and adds four scans.
+    assert_eq!(cases.len(), 55);
     for (case_name, module) in cases {
-        let owner = VerifiedCanonicalKernelIrV13::from_module(module)
-            .unwrap_or_else(|error| panic!("{case_name}: invalid fixture: {error}"));
-        let evidence = ProductionTargetLaunchEvidenceV13::for_static_launches(&owner, 23)
-            .unwrap_or_else(|error| panic!("{case_name}: invalid launch evidence: {error}"));
-        for profile in [
-            ProductionAmdTargetProfileV1::Gfx942,
-            ProductionAmdTargetProfileV1::Gfx950,
-        ] {
-            let lowered =
-                lower_verified_canonical_kir_v13_to_amd_llvm_ir_v1(&owner, 23, &evidence, profile)
-                    .unwrap_or_else(|error| panic!("{case_name} {profile:?}: {error}"));
-            assert_ne!(
-                lowered.capability_closure_identity(),
-                [0; 32],
-                "{case_name}"
-            );
-            assert!(
-                !lowered.has_complete_operational_translation_derivation(),
-                "{case_name} {profile:?} unexpectedly claimed complete operational translation"
-            );
-            assert!(
-                lowered.structured_derivation().is_none(),
-                "{case_name} {profile:?} returned a partial structured derivation"
-            );
-            assert!(
-                !lowered.unsupported_operational_translation().is_empty(),
-                "{case_name} {profile:?} did not report unsupported source operations"
-            );
-            assert!(
-                lowered
-                    .unsupported_operational_translation()
-                    .iter()
-                    .all(|operation| operation.function_symbol() == "entry"),
-                "{case_name} {profile:?} lost source location custody"
-            );
-        }
+        assert_case_lowers_for_both_profiles(&case_name, module);
+    }
+}
+
+#[test]
+fn atomic_entry_custody_lowers_all_atomic_kinds_for_both_profiles() {
+    let cases = catalog_fixture::lowering_cases()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("Atomic::"))
+        .collect::<Vec<_>>();
+    assert_eq!(cases.len(), 6);
+    for (case_name, module) in cases {
+        assert_case_lowers_for_both_profiles(&case_name, module);
+    }
+}
+
+#[test]
+fn subgroup_partitions_lower_all_kinds_for_both_profiles() {
+    let cases = catalog_fixture::lowering_cases()
+        .into_iter()
+        .filter(|(name, _)| name == "SubgroupPartition")
+        .collect::<Vec<_>>();
+    assert_eq!(cases.len(), 4);
+    for (case_name, module) in cases {
+        assert_case_lowers_for_both_profiles(&case_name, module);
+    }
+}
+
+fn assert_case_lowers_for_both_profiles(case_name: &str, module: Module) {
+    let owner = VerifiedCanonicalKernelIrV13::from_module(module)
+        .unwrap_or_else(|error| panic!("{case_name}: invalid fixture: {error}"));
+    let evidence = ProductionTargetLaunchEvidenceV13::for_static_launches(&owner, 23)
+        .unwrap_or_else(|error| panic!("{case_name}: invalid launch evidence: {error}"));
+    for profile in [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        let lowered =
+            lower_verified_canonical_kir_v13_to_amd_llvm_ir_v1(&owner, 23, &evidence, profile)
+                .unwrap_or_else(|error| panic!("{case_name} {profile:?}: {error}"));
+        assert_ne!(lowered.capability_closure_identity(), [0; 32], "{case_name}");
+        assert!(
+            !lowered.has_complete_operational_translation_derivation(),
+            "{case_name} {profile:?} unexpectedly claimed complete operational translation"
+        );
+        assert!(
+            lowered.structured_derivation().is_none(),
+            "{case_name} {profile:?} returned a partial structured derivation"
+        );
+        assert!(
+            !lowered.unsupported_operational_translation().is_empty(),
+            "{case_name} {profile:?} did not report unsupported source operations"
+        );
+        assert!(
+            lowered
+                .unsupported_operational_translation()
+                .iter()
+                .all(|operation| operation.function_symbol() == "entry"),
+            "{case_name} {profile:?} lost source location custody"
+        );
     }
 }
 

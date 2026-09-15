@@ -483,7 +483,10 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::SemanticExpressionCommitment)
-    } else if operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
+    } else if operation
+        .downcast_ref::<dialect_kernel::SemanticTypedReadOp>()
+        .is_some()
+        || operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
         || operation
             .downcast_ref::<TensorResultComponentOp>()
             .is_some()
@@ -594,6 +597,10 @@ struct RankedBoundsBudget {
     storage_items: usize,
     work_units: usize,
 }
+
+#[cfg(test)]
+#[path = "pliron_ranked_bounds_stored_value_tests.rs"]
+mod stored_value_tests;
 
 impl RankedBoundsBudget {
     fn reserve(
@@ -729,6 +736,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     // hide an unmetered nested graph from this analysis.
     for (block_index, block) in blocks.iter().enumerate() {
         let terminator = block.deref(context).get_terminator(context);
+        let mut previous_operation = None;
         for site in inventory.block_operations(block_index) {
             let operation_index = site.operation();
             let operation_pointer = site.pointer();
@@ -736,6 +744,25 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 return finding_failure(finding);
             }
             let operation = Operation::get_op_dyn(operation_pointer, context);
+            let previous = previous_operation.replace(operation_pointer);
+            if let Some(read) = operation.downcast_ref::<dialect_kernel::SemanticTypedReadOp>() {
+                let site = crate::pliron_semantic_memory_v1::PlironSemanticMemorySiteV1::new(
+                    block_index,
+                    operation_index,
+                );
+                if crate::pliron_semantic_memory_v1::paired_read_access_v1(
+                    context, read, previous, site,
+                )
+                .is_err()
+                {
+                    return finding_failure(RankedBoundsFindingV1::UnsupportedOperation {
+                        block: block_index,
+                        operation: operation_index,
+                        kind: "typed read lacks its immediately preceding exact ranked access"
+                            .into(),
+                    });
+                }
+            }
             let canonical_safety =
                 match canonical_kir_safety_semantic_projection_v1(operation.as_ref(), context) {
                     Ok(projection) => projection,
@@ -1392,6 +1419,9 @@ fn sparse_bound_is_proven(
 
 fn sparse_index_failure(failure: SparseIndexFailureV1) -> RankedBoundsFindingV1 {
     let detail = match failure {
+        SparseIndexFailureV1::InvalidExecutionLayout => {
+            "execution layout is malformed or conflicts with invocation declarations".to_owned()
+        }
         SparseIndexFailureV1::ResourceLimit {
             resource,
             limit,

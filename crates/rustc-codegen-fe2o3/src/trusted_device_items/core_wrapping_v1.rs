@@ -1,5 +1,6 @@
 //! Closed safe-core wrapper authentication, not an intrinsic or effect summary.
-//! Accepted bodies remain in the ordinary collected call graph.
+//! Add/subtract/multiply bodies remain in the ordinary collected call graph. Wrapping
+//! shift has a separate, fully checked source proof and explicit MIR expansion.
 
 use super::{
     BinOp, Body, ExternAbi, Instance, InstanceKind, Operand, Rvalue, Safety, StatementKind,
@@ -7,9 +8,23 @@ use super::{
 };
 use rustc_middle::mir::BasicBlockData;
 
+#[path = "core_wrapping_v1/wrapping_shr.rs"]
+mod wrapping_shr;
+pub(crate) use wrapping_shr::{ReviewedCoreWrappingShiftV1, prove_core_wrapping_shift_v1};
+pub(crate) use wrapping_shr::{ReviewedU32WrappingShrV1, prove_core_u32_wrapping_shr_v1};
+
+#[cfg(test)]
+#[path = "core_wrapping_v1/profile_tests.rs"]
+pub(crate) mod profile_tests;
+
+#[cfg(test)]
+#[path = "core_wrapping_v1/arithmetic_tests.rs"]
+mod arithmetic_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WrappingOperationV1 {
     Add,
+    Subtract,
     Multiply,
 }
 
@@ -17,6 +32,7 @@ impl WrappingOperationV1 {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "wrapping_add" => Some(Self::Add),
+            "wrapping_sub" => Some(Self::Subtract),
             "wrapping_mul" => Some(Self::Multiply),
             _ => None,
         }
@@ -25,6 +41,7 @@ impl WrappingOperationV1 {
     fn binary(self) -> BinOp {
         match self {
             Self::Add => BinOp::Add,
+            Self::Subtract => BinOp::Sub,
             Self::Multiply => BinOp::Mul,
         }
     }
@@ -314,7 +331,7 @@ mod tests {
             assert!(!changed.admits(), "{changed:?}");
         }
         for name in [
-            "wrapping_sub",
+            "unchecked_sub",
             "overflowing_add",
             "unchecked_mul",
             "wrapping_add_impostor",
@@ -327,6 +344,7 @@ mod tests {
     fn core_wrapping_helper_binary_requires_exact_operation_and_operands() {
         for (name, expected, operation) in [
             ("wrapping_add", WrappingOperationV1::Add, BinOp::Add),
+            ("wrapping_sub", WrappingOperationV1::Subtract, BinOp::Sub),
             ("wrapping_mul", WrappingOperationV1::Multiply, BinOp::Mul),
         ] {
             assert_eq!(WrappingOperationV1::from_name(name), Some(expected));
@@ -338,11 +356,22 @@ mod tests {
                 Some(2)
             ));
             for (observed, destination, left, right) in [
-                (BinOp::Sub, Some(0), Some(1), Some(2)),
+                (
+                    if operation == BinOp::Sub {
+                        BinOp::Add
+                    } else {
+                        BinOp::Sub
+                    },
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                ),
                 (BinOp::AddWithOverflow, Some(0), Some(1), Some(2)),
                 (BinOp::MulWithOverflow, Some(0), Some(1), Some(2)),
+                (BinOp::SubWithOverflow, Some(0), Some(1), Some(2)),
                 (BinOp::AddUnchecked, Some(0), Some(1), Some(2)),
                 (BinOp::MulUnchecked, Some(0), Some(1), Some(2)),
+                (BinOp::SubUnchecked, Some(0), Some(1), Some(2)),
                 (operation, None, Some(1), Some(2)),
                 (operation, Some(1), Some(1), Some(2)),
                 (operation, Some(0), None, Some(2)),
@@ -363,7 +392,11 @@ mod tests {
 
     #[test]
     fn core_wrapping_helper_binary_mir_rejects_extra_effects_and_wrong_return() {
-        for expected in [WrappingOperationV1::Add, WrappingOperationV1::Multiply] {
+        for expected in [
+            WrappingOperationV1::Add,
+            WrappingOperationV1::Subtract,
+            WrappingOperationV1::Multiply,
+        ] {
             let source_info = SourceInfo::outermost(DUMMY_SP);
             let statement = Statement::new(
                 source_info,

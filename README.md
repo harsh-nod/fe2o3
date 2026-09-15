@@ -135,6 +135,11 @@ numerical error replay, LLVM/ISA behavior, launch, hardware execution,
 performance, and full-model integration still fail closed unless a specific
 evidence record says otherwise.
 
+Bounded numerical equivalence requires an explicit, compiler-proved output
+contract: `abs(gpu - cpu) <= A + R * abs(cpu)`, with finite nonnegative absolute
+(A) and relative (R) limits and checked input domains. Production nonzero-error
+proofs are not yet available.
+
 ## CPU quick start
 
 ### Requirements

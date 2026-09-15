@@ -244,6 +244,28 @@ pub enum ProductionSemanticSsaErrorV1 {
         source_statement: Option<SemanticExpandedStatementOriginV1>,
         source_terminator: Option<SemanticExpandedTerminatorOriginV1>,
         source_local: Option<SemanticExpandedLocalOriginV1>,
+        /// Bounded, inert source/frame detail for an undefined return transfer.
+        /// This never supplies a definition or changes the underlying failure.
+        return_transfer_diagnostic: Option<String>,
+        error: Box<ProductionSemanticSsaErrorV1>,
+    },
+    /// Inert storage observation at the original rejecting gate.
+    ResourceStage {
+        stage: &'static str,
+        auxiliary_storage_words: usize,
+        plan_storage_words: Option<usize>,
+        live_storage_words: usize,
+        peak_storage_words: usize,
+        requested_storage_words: usize,
+        error: Box<ProductionSemanticSsaErrorV1>,
+    },
+    /// Inert attribution at the unchanged borrow-classifier work gate.
+    BorrowFlowWork {
+        stage: &'static str,
+        phase_work_units: [usize; 11],
+        ordered_proof_calls: usize,
+        remaining_work_units: usize,
+        requested_work_units: usize,
         error: Box<ProductionSemanticSsaErrorV1>,
     },
     ResourceOverflow,
@@ -317,6 +339,7 @@ impl fmt::Display for ProductionSemanticSsaErrorV1 {
                 source_statement,
                 source_terminator,
                 source_local,
+                return_transfer_diagnostic,
                 error,
             } => {
                 write!(
@@ -354,8 +377,41 @@ impl fmt::Display for ProductionSemanticSsaErrorV1 {
                         local.local().index()
                     )?;
                 }
-                write!(formatter, "; execution-coordinate cause: {error}")
+                write!(formatter, "; execution-coordinate cause: {error}")?;
+                if let Some(diagnostic) = return_transfer_diagnostic {
+                    write!(formatter, "; undefined-return detail: {diagnostic}")?;
+                }
+                Ok(())
             }
+            Self::ResourceStage {
+                stage,
+                auxiliary_storage_words,
+                plan_storage_words,
+                live_storage_words,
+                peak_storage_words,
+                requested_storage_words,
+                error,
+            } => {
+                write!(
+                    formatter,
+                    "{error}; storage-stage {stage} A={auxiliary_storage_words} P="
+                )?;
+                match plan_storage_words {
+                    Some(words) => write!(formatter, "{words}")?,
+                    None => formatter.write_str("not-planned")?,
+                }
+                write!(
+                    formatter,
+                    " live={live_storage_words} peak={peak_storage_words} requested={requested_storage_words}"
+                )
+            }
+            Self::BorrowFlowWork {
+                stage, phase_work_units: p, ordered_proof_calls,
+                remaining_work_units, requested_work_units, error,
+            } => write!(formatter,
+                "{error}; borrow-flow-stage {stage} remaining={remaining_work_units} requested={requested_work_units} ordered-proofs={ordered_proof_calls} facts={} candidates={} uses={} components={} owner-roots={} cfg={} owner-changes={} loans={} paths={} descendants={} transfers={}",
+                p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10],
+            ),
             Self::ResourceOverflow => formatter
                 .write_str("production semantic SSA aggregate resource accounting overflowed"),
             Self::AggregateResourceLimit {
@@ -403,7 +459,11 @@ impl Error for ProductionSemanticSsaErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::CallExpansion(error) => Some(error),
             Self::Planner { error, .. } => Some(error),
-            Self::ExpandedExecution { error, .. } => Some(error.as_ref()),
+            Self::ExpandedExecution { error, .. }
+            | Self::ResourceStage { error, .. }
+            | Self::BorrowFlowWork { error, .. } => {
+                Some(error.as_ref())
+            }
             Self::ResourceOverflow
             | Self::AggregateResourceLimit { .. }
             | Self::PartialMove { .. }
@@ -426,6 +486,7 @@ impl ProductionSemanticPartialMoveCertificateV1 {
         self.projected_moves
     }
 
+    /// Peak logical state-storage words, including live analysis workspace.
     pub const fn state_entries(self) -> usize {
         self.state_entries
     }
@@ -526,7 +587,14 @@ pub struct ProductionSemanticSsaFunctionPlanV1 {
     partial_moves: ProductionSemanticPartialMoveCertificateV1,
     implicit_entry_variables: Box<[SsaVariableIdV1]>,
     frame_initializations: frame_initialization::FrameInitializationsV1,
+    defined_math_results: defined_math_results::DefinedMathResultsV1,
+    defined_matrix_results: defined_matrix_results::DefinedMatrixResultsV1,
+    defined_reusable_lds_results: defined_reusable_lds_results::DefinedReusableLdsResultsV1,
+    guarded_grid_results: guarded_grid_results::GuardedGridResultsV1,
+    defined_reusable_phase_results: defined_reusable_phase_results::DefinedReusablePhaseResultsV1,
     retained_cross_edge_variables: Box<[SsaVariableIdV1]>,
+    event_origins: execution::ExecutionEventOriginsV1,
+    value_origins: source_uses_v1::definitions_v1::ValueOriginsV1,
     auxiliary_resources: SemanticSsaAuxiliaryResourcesV1,
 }
 
@@ -567,6 +635,28 @@ impl ProductionSemanticSsaFunctionPlanV1 {
     /// These are not function-entry definitions; lowering must honor each recorded site.
     pub fn frame_initializations(&self) -> &[ProductionSemanticSsaFrameInitializationV1] {
         self.frame_initializations.entries()
+    }
+
+    /// Closed getter/bridge results defined at their original return transfers.
+    /// These are structural SSA definitions, not branded Math issuers or proofs.
+    pub fn defined_matrix_results(&self) -> &[ProductionSemanticMatrixBridgeResultV1] {
+        self.defined_matrix_results.entries()
+    }
+    pub fn guarded_grid_leader_results(&self) -> &[ProductionGuardedGridLeaderResultV1] {
+        self.guarded_grid_results.entries()
+    }
+    pub fn defined_reusable_lds_results(&self) -> &[ProductionSemanticReusableLdsResultV1] {
+        self.defined_reusable_lds_results.entries()
+    }
+
+    pub fn defined_reusable_phase_results(&self) -> &[ProductionSemanticPhaseResultV1] {
+        self.defined_reusable_phase_results.results()
+    }
+    pub fn defined_reusable_phase_relays(&self) -> &[ProductionSemanticPhaseRelayV1] {
+        self.defined_reusable_phase_results.relays()
+    }
+    pub fn defined_math_results(&self) -> &[ProductionSemanticMathBridgeResultV1] {
+        self.defined_math_results.entries()
     }
 
     /// Returns storage-retained locals that need state across a reachable CFG
@@ -755,7 +845,7 @@ fn construct_semantic_ssa_plans_v1(
     };
     for (function_index, function) in semantic.functions().iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(function_index as u32);
-        let transparent_borrows = transparent_borrow_sites_v1(function, semantic.callables());
+        let transparent_borrows = adapter::typed_transparent_borrow_sites_v1(function, semantic.types(), semantic.callables());
         let function_plan = plan_semantic_function_ssa_with_borrow_sites_v1(
             function_id,
             function,
@@ -764,7 +854,10 @@ fn construct_semantic_ssa_plans_v1(
             limits,
             &transparent_borrows,
             None,
-        )?;
+        )
+        .map_err(|error| {
+            source_partial_move_diagnostic_v1::emit(semantic, function_id, error)
+        })?;
         accumulate_summary_v1(
             &mut summary,
             &function_plan,
@@ -829,7 +922,7 @@ pub fn plan_semantic_function_ssa_with_module_v1(
     callables: &[SemanticCallableDeclV1],
     limits: ProductionSemanticSsaLimitsV1,
 ) -> Result<ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaErrorV1> {
-    let transparent_borrows = transparent_borrow_sites_v1(function, callables);
+    let transparent_borrows = adapter::typed_transparent_borrow_sites_v1(function, types, callables);
     plan_semantic_function_ssa_with_borrow_sites_v1(
         function_id,
         function,
@@ -851,56 +944,125 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
     execution_view: Option<(
         &SemanticExpandedRootV1,
         frame_initialization::FrameInitializationsV1,
+        defined_math_results::DefinedMathResultsV1,
+        defined_matrix_results::DefinedMatrixResultsV1,
+        defined_reusable_lds_results::DefinedReusableLdsResultsV1,
+        defined_reusable_phase_results::DefinedReusablePhaseResultsV1,
+        guarded_grid_results::GuardedGridResultsV1,
     )>,
 ) -> Result<ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaErrorV1> {
     let mut event_origins = execution::ExecutionEventOriginsV1::default();
-    let (view, frame_initializations) = match execution_view {
-        Some((view, relation)) => (Some(view), relation),
+    let (view, frame_initializations, defined_math_results, defined_matrix_results, defined_reusable_lds_results, defined_reusable_phase_results, guarded_grid_results) = match execution_view {
+        Some((view, frames, math, matrix, reusable, phase, grid)) => (Some(view), frames, math, matrix, reusable, phase, grid),
         None => (
             None,
             frame_initialization::FrameInitializationsV1::default(),
+            defined_math_results::DefinedMathResultsV1::default(),
+            defined_matrix_results::DefinedMatrixResultsV1::default(),
+            defined_reusable_lds_results::DefinedReusableLdsResultsV1::default(),
+            defined_reusable_phase_results::DefinedReusablePhaseResultsV1::default(),
+            guarded_grid_results::GuardedGridResultsV1::default(),
         ),
     };
+    event_origins = execution::ExecutionEventOriginsV1::for_function(function_id, function, limits)
+        .map_err(|error| match view {
+            Some(view) => execution::wrap_error(view, &event_origins, error),
+            None => error,
+        })?;
     let (input, implicit_entry_variables, adapter_analysis_work) = if let Some(view) = view {
         frame_initializations
             .verify_view(view)
             .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
-        adapter::semantic_function_ssa_input_with_frame_initializations_v1(
+        defined_math_results
+            .verify_view(view)
+            .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
+        defined_matrix_results.verify_view(view)
+            .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
+        guarded_grid_results.verify_view(view)
+            .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
+        defined_reusable_lds_results.verify_view(view)
+            .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
+        defined_reusable_phase_results.verify_view(view)
+            .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
+        adapter::semantic_function_ssa_input_with_defined_results_v1(
             function,
             types,
             callables,
             transparent_borrows,
             &frame_initializations,
+            &defined_math_results,
+            &defined_matrix_results,
+            &defined_reusable_lds_results,
+            &defined_reusable_phase_results,
+            &guarded_grid_results,
             |block, statement, events| {
                 event_origins.record(block, statement, events);
             },
         )
         .map_err(|error| execution::wrap_error(view, &event_origins, error))?
     } else {
-        semantic_function_ssa_input_v1(function, types, callables, transparent_borrows)
+        adapter::semantic_function_ssa_input_with_event_origins_v1(
+            function, types, callables, transparent_borrows,
+            |block, statement, events| event_origins.record(block, statement, events),
+        )
     };
     let result = (|| {
         let mut auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
         let diagnostic_resources = event_origins.resources()?;
         let initialization_resources = frame_initializations.resources();
+        let result_resources = defined_math_results.resources();
+        let matrix_resources = defined_matrix_results.resources();
+        let reusable_resources = defined_reusable_lds_results.resources();
+        let guarded_grid_resources = guarded_grid_results.resources();
+        let phase_resources = defined_reusable_phase_results.resources();
         auxiliary_resources.storage_words = auxiliary_resources
             .storage_words
             .checked_add(diagnostic_resources.storage_words)
             .and_then(|words| words.checked_add(initialization_resources.storage_words))
+            .and_then(|words| words.checked_add(result_resources.storage_words))
+            .and_then(|words| words.checked_add(matrix_resources.storage_words))
+            .and_then(|words| words.checked_add(reusable_resources.storage_words))
+            .and_then(|words| words.checked_add(guarded_grid_resources.storage_words))
+            .and_then(|words| words.checked_add(phase_resources.storage_words))
             .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
         auxiliary_resources.work_units = auxiliary_resources
             .work_units
             .checked_add(adapter_analysis_work)
             .and_then(|work| work.checked_add(diagnostic_resources.work_units))
             .and_then(|work| work.checked_add(initialization_resources.work_units))
+            .and_then(|work| work.checked_add(result_resources.work_units))
+            .and_then(|work| work.checked_add(matrix_resources.work_units))
+            .and_then(|work| work.checked_add(reusable_resources.work_units))
+            .and_then(|work| work.checked_add(guarded_grid_resources.work_units))
+            .and_then(|work| work.checked_add(phase_resources.work_units))
             .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-        enforce_function_resource_limit_v1(function_id, auxiliary_resources, limits)?;
+        enforce_function_resource_limit_v1(function_id, auxiliary_resources, limits).map_err(
+            |error| {
+                resource_diagnostic_v1::wrap(
+                    error,
+                    resource_diagnostic_v1::Stage::Auxiliary,
+                    auxiliary_resources.storage_words,
+                    None,
+                    (0, 0, 0),
+                )
+            },
+        )?;
         let plan = plan_ssa_with_limits_v1(&input, limits.planner()).map_err(|error| {
             ProductionSemanticSsaErrorV1::Planner {
                 function: function_id,
                 error,
             }
         })?;
+        let origin_resources =
+            source_uses_v1::definitions_v1::ValueOriginsV1::resources_for(&plan)?;
+        auxiliary_resources.storage_words = auxiliary_resources
+            .storage_words
+            .checked_add(origin_resources.storage_words)
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+        auxiliary_resources.work_units = auxiliary_resources
+            .work_units
+            .checked_add(origin_resources.work_units)
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
         enforce_function_resource_limit_v1(
             function_id,
             SemanticSsaAuxiliaryResourcesV1 {
@@ -914,7 +1076,16 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
                     .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
             },
             limits,
-        )?;
+        )
+        .map_err(|error| {
+            resource_diagnostic_v1::wrap(
+                error,
+                resource_diagnostic_v1::Stage::Combined,
+                auxiliary_resources.storage_words,
+                Some(plan.resources().storage_words()),
+                (0, 0, 0),
+            )
+        })?;
         let partial_moves = validate_partial_moves_v1(
             function_id,
             function,
@@ -923,6 +1094,7 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
             auxiliary_resources,
             limits,
         )?;
+        let value_origins = source_uses_v1::definitions_v1::ValueOriginsV1::build(&input, &plan)?;
         let retained_cross_edge_variables =
             retained_cross_edge_variables_v1(&input, &plan).into_boxed_slice();
         Ok(ProductionSemanticSsaFunctionPlanV1 {
@@ -932,7 +1104,14 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
             partial_moves,
             implicit_entry_variables: implicit_entry_variables.into_boxed_slice(),
             frame_initializations,
+            defined_math_results,
+            defined_matrix_results,
+            defined_reusable_lds_results,
+            guarded_grid_results,
+            defined_reusable_phase_results,
             retained_cross_edge_variables,
+            event_origins: std::mem::take(&mut event_origins),
+            value_origins,
             auxiliary_resources,
         })
     })();
@@ -946,83 +1125,7 @@ fn semantic_ssa_auxiliary_resources_v1(
     function: &SemanticFunctionDeclV1,
     input: &SsaConstructionInputV1,
 ) -> Result<SemanticSsaAuxiliaryResourcesV1, ProductionSemanticSsaErrorV1> {
-    let blocks = input.blocks().len();
-    let variables = input.promotable().len();
-    let statements = function.blocks().iter().try_fold(0_usize, |total, block| {
-        total
-            .checked_add(block.statements().len())
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)
-    })?;
-    let (events, edges, edge_definitions) = input.blocks().iter().try_fold(
-        (0_usize, 0_usize, 0_usize),
-        |(events, edges, definitions), block| {
-            let events = events
-                .checked_add(block.events().len())
-                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-            let edges = edges
-                .checked_add(block.edges().len())
-                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-            let definitions = block.edges().iter().try_fold(definitions, |total, edge| {
-                total
-                    .checked_add(edge.definitions().len())
-                    .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)
-            })?;
-            Ok((events, edges, definitions))
-        },
-    )?;
-    let (projected_moves, maximum_projection_depth) = projected_local_move_metrics_v1(function)?;
-
-    // Logical words conservatively cover adapter rows, Option-dominance scratch,
-    // borrow/implicit-entry indices, retained-local scratch, and every persistent partial-move state.
-    // Each move-path entry reserves eight tree/header words plus its full path.
-    let adapter_items = variables
-        .checked_mul(8)
-        .and_then(|value| value.checked_add(blocks.checked_mul(12)?))
-        .and_then(|value| value.checked_add(statements.checked_mul(8)?))
-        .and_then(|value| value.checked_add(events.checked_mul(4)?))
-        .and_then(|value| value.checked_add(edges.checked_mul(6)?))
-        .and_then(|value| value.checked_add(edge_definitions.checked_mul(2)?))
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    let path_words = maximum_projection_depth
-        .checked_add(8)
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    let partial_state_copies = blocks
-        .checked_add(2)
-        .and_then(|value| value.checked_mul(projected_moves))
-        .and_then(|value| value.checked_mul(path_words))
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    let storage_words = adapter_items
-        .checked_add(partial_state_copies)
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-
-    // A block can be revisited once for each newly merged path. On each visit,
-    // every outgoing edge can clone and merge the complete path set.
-    let partial_rounds = edges
-        .checked_mul(
-            projected_moves
-                .checked_add(1)
-                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-        )
-        .and_then(|value| value.checked_add(blocks))
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    let partial_work = partial_rounds
-        .checked_mul(
-            projected_moves
-                .checked_add(1)
-                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-        )
-        .and_then(|value| value.checked_mul(path_words))
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    let adapter_work = adapter_items
-        .checked_add(events)
-        .and_then(|value| value.checked_add(edge_definitions))
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    Ok(SemanticSsaAuxiliaryResourcesV1 {
-        storage_words,
-        work_units: adapter_work
-            .checked_add(partial_work)
-            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-    })
+    partial_moves::auxiliary_resources_v1(function, input)
 }
 
 fn enforce_function_resource_limit_v1(
@@ -1056,19 +1159,41 @@ fn enforce_function_resource_limit_v1(
 
 mod accounting;
 mod adapter;
+mod defined_math_results;
+mod defined_matrix_results;
+mod defined_reusable_lds_results;
+mod guarded_grid_results;
+mod defined_reusable_phase_results;
 mod execution;
 mod frame_initialization;
 mod partial_moves;
+mod resource_diagnostic_v1;
+mod source_partial_move_diagnostic_v1;
+mod source_uses_v1;
+
+pub use source_uses_v1::{
+    ProductionSemanticSsaIncomingEdgeV1, ProductionSemanticSsaIncomingValuesV1,
+    ProductionSemanticSsaSourceQueryErrorV1, ProductionSemanticSsaSourceQueryV1,
+    ProductionSemanticSsaSourceOperandV1,
+    ProductionSemanticSsaSourceSiteV1, ProductionSemanticSsaSourceUseV1,
+    ProductionSemanticSsaValueOriginV1, ProductionSemanticSsaValueV1,
+};
 
 use accounting::{
     accumulate_summary_v1, derive_semantic_ssa_identity_v1, retained_cross_edge_variables_v1,
 };
 pub use adapter::authenticated_ambient_workgroup_lds_scope_zst_v1;
-use adapter::{
-    SemanticTransparentBorrowSiteV1, semantic_function_ssa_input_v1, transparent_borrow_sites_v1,
-};
+use adapter::{SemanticTransparentBorrowSiteV1, transparent_borrow_sites_v1};
+
+#[cfg(test)]
+use adapter::semantic_function_ssa_input_v1;
 pub use frame_initialization::ProductionSemanticSsaFrameInitializationV1;
-use partial_moves::{projected_local_move_metrics_v1, validate_partial_moves_v1};
+pub use defined_math_results::ProductionSemanticMathBridgeResultV1;
+pub use defined_matrix_results::ProductionSemanticMatrixBridgeResultV1;
+pub use defined_reusable_lds_results::ProductionSemanticReusableLdsResultV1;
+pub use guarded_grid_results::{ProductionGuardedGridLeaderResultV1, ProductionGuardedGridActionKindV1, ProductionGuardedGridActionV1, ProductionGuardedGridIndexV1, ProductionGuardedGridSourceV1};
+pub use defined_reusable_phase_results::{ProductionSemanticPhaseResultInputsV1, ProductionSemanticPhaseResultV1, ProductionSemanticPhaseRelayV1};
+use partial_moves::validate_partial_moves_v1;
 
 #[cfg(test)]
 mod tests;

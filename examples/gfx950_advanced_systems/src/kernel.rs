@@ -685,6 +685,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     not(feature = "ablation-combine-transposed"),
     kernel(
         typed,
+        reference = crate::effect_reference::combine_expert_ranks_point_v1,
         launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
@@ -1087,6 +1088,7 @@ pub fn gfx950_qwen_ngram_gather_v1(
     not(feature = "ablation-stage-tile4"),
     kernel(
         typed,
+        reference = crate::effect_reference::stage_gradient_shard_point_v1,
         launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]

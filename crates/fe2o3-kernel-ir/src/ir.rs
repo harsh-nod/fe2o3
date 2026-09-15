@@ -507,7 +507,7 @@ impl Operation {
                 AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_some()
                     || FloatOperation::from_intrinsic_call(callee, arguments).is_some()
             }
-            OperationKind::InlineAssembly(_) => false,
+            OperationKind::InlineAssembly(_) | OperationKind::ReusablePhase(_) => false,
             _ => true,
         }
     }
@@ -704,6 +704,7 @@ pub enum OperationKind {
     GlobalCapabilityIndex(GlobalCapabilityIndexV1),
     /// One exact target-neutral execution capability operation.
     ExecutionCapability(ExecutionCapabilityOpV1),
+    ReusablePhase(crate::ReusablePhaseOpV1),
 }
 
 impl OperationKind {
@@ -761,6 +762,7 @@ impl OperationKind {
             Self::GlobalCapabilityBind(bind) => vec![bind.context, bind.physical],
             Self::GlobalCapabilityIndex(index) => vec![index.capability, index.index],
             Self::ExecutionCapability(operation) => operation.operands.clone(),
+            Self::ReusablePhase(operation) => operation.operands.clone(),
             Self::Atomic(atomic) => atomic.operands(),
             Self::Wave(wave) => wave.operands(),
             Self::InlineAssembly(assembly) => assembly.operands(),

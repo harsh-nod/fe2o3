@@ -7307,7 +7307,7 @@ fn execute_operation(
         | OperationKind::KernelContextIssue(_)
         | OperationKind::GlobalCapabilityBind(_)
         | OperationKind::GlobalCapabilityIndex(_)
-        | OperationKind::ExecutionCapability(_) => Err(engine.at(
+        | OperationKind::ExecutionCapability(_) | OperationKind::ReusablePhase(_) => Err(engine.at(
             site,
             SimulationExecutionErrorKindV1::InternalInvariant(
                 "unsupported operation passed preflight",

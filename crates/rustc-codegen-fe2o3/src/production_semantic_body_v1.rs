@@ -44,6 +44,9 @@ use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 mod closure_once_v1;
 mod rust_call_v1;
 
+#[cfg(test)]
+mod array_reference_unsize_tests;
+
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1021,6 +1024,14 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                         SemanticCastKindV1::PointerWithExposedProvenance
                     }
                     CastKind::Transmute => SemanticCastKindV1::Transmute,
+                    CastKind::PointerCoercion(..)
+                        if array_reference_unsize_length_v1(
+                            self.tcx, self.instance, self.body, value,
+                        )
+                        .is_some() =>
+                    {
+                        SemanticCastKindV1::ArrayReferenceToSlice
+                    }
                     CastKind::PointerCoercion(..) => {
                         return Err(unsupported(
                             "unsupported PointerCoercion Cast rvalue",
@@ -2066,6 +2077,36 @@ fn collect_dense_bindings_v1<T>(
         .ok_or_else(|| table(table_name))
 }
 
+pub(crate) fn array_reference_unsize_length_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+    value: &Rvalue<'tcx>,
+) -> Option<u64> {
+    use rustc_middle::ty::adjustment::PointerCoercion;
+    let Rvalue::Cast(CastKind::PointerCoercion(PointerCoercion::Unsize, _), operand, target) =
+        value
+    else {
+        return None;
+    };
+    let input = normalize_type_v1(tcx, instance, operand.ty(body, tcx)).ok()?;
+    let output = normalize_type_v1(tcx, instance, *target).ok()?;
+    let (TyKind::Ref(_, array, input_mutability), TyKind::Ref(_, slice, output_mutability)) =
+        (input.kind(), output.kind())
+    else {
+        return None;
+    };
+    let (TyKind::Array(element, length), TyKind::Slice(target_element)) =
+        (array.kind(), slice.kind())
+    else {
+        return None;
+    };
+    if input_mutability != output_mutability || element != target_element {
+        return None;
+    }
+    length.try_to_target_usize(tcx)
+}
+
 fn normalize_type_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -2228,7 +2269,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => Some(3),
-        ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
+        ProductionTerminalExpansionV1::MathF32(function)
+        | ProductionTerminalExpansionV1::PolicyMathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
@@ -2241,6 +2283,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
+        | ProductionTerminalExpansionV1::GlobalBf16MatrixALoadZeroFilled
+        | ProductionTerminalExpansionV1::GlobalBf16MatrixBLoadZeroFilled
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128

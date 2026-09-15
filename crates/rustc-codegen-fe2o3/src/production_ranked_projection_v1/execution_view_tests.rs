@@ -212,14 +212,117 @@ fn ranked_execution_view_projects_each_memory_helper_instance() {
 }
 
 #[test]
-fn ranked_execution_view_does_not_neutralize_missing_helper_effects() {
+fn ranked_execution_view_accepts_memory_free_helpers_without_inventing_effects() {
     let (owner, _) = expanded_ranked_fixture_v1(true);
-    assert!(matches!(
-        project_expanded_ranked_fixture_v1(owner),
-        Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a kernel without a statically ranked indexed memory access"
-        )),
-    ));
+    let source = owner.source_semantic().canonical_encoding().to_vec();
+    let program = project_expanded_ranked_fixture_v1(owner).unwrap();
+    assert_eq!(
+        program
+            .semantic_ssa_owner
+            .source_semantic()
+            .canonical_encoding(),
+        source
+    );
+    assert!(program.roots[0].all_kernel_checks_are_clean());
+    assert!(program.roots[0].access_sources.is_empty());
+    assert!(program.roots[0].executable_effect_sources.is_empty());
+    let receipt = program.into_verified_roster_receipt().unwrap();
+    receipt.verify_equivalence().unwrap();
+    let (receipt, _) = receipt.into_module_verified_receipt().unwrap();
+    let lowered =
+        fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+            receipt,
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+        )
+        .expect("a genuinely memory-free helper must pass independent lowering");
+    lowered.verify_equivalence().unwrap();
+}
+
+#[test]
+fn ranked_execution_view_rejects_memory_free_projection_substitution() {
+    let (owner, _) = expanded_ranked_fixture_v1(false);
+    let mut receipt = project_expanded_ranked_fixture_v1(owner)
+        .unwrap()
+        .into_verified_roster_receipt()
+        .unwrap();
+    let (empty_owner, _) = expanded_ranked_fixture_v1(true);
+    let empty = project_expanded_ranked_fixture_v1(empty_owner)
+        .unwrap()
+        .into_verified_roster_receipt()
+        .unwrap();
+    let replacement = empty.source_order_roots.into_vec().remove(0);
+    let root = &mut receipt.source_order_roots[0];
+    assert!(!root.executable_effect_sources.is_empty());
+    // Remove only the projected effects, retaining the original effectful source.
+    root.lowering = replacement.lowering;
+    root.ranked_ir = replacement.ranked_ir;
+    root.access_sources = replacement.access_sources;
+    root.executable_effect_sources = replacement.executable_effect_sources;
+    let result = receipt.verify_equivalence();
+    assert!(
+        matches!(
+            result,
+            Err(ProductionRankedVerificationErrorV1::RosterMetadata(
+                "changed per-root ranked verification custody"
+            ))
+        ),
+        "projection substitution must invalidate retained verification: {result:?}"
+    );
+}
+
+#[test]
+fn ranked_execution_view_full_lowering_rejects_missing_source_effects() {
+    use fe2o3_lower_mir_kernel::{
+        ProductionMirPlironTranslationErrorV1, ProductionRankedSemanticProjectionModuleReceiptV1,
+        ProductionRankedSemanticProjectionRootV1, ProductionSemanticKirErrorV1,
+        ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    };
+
+    let original = neutral_ranked_program_v1();
+    let (valid_receipt, _) = original
+        .into_verified_roster_receipt()
+        .unwrap()
+        .into_module_verified_receipt()
+        .unwrap();
+    ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+        valid_receipt,
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .expect("the effectful source must independently lower before testing omission")
+    .verify_equivalence()
+    .unwrap();
+    let effectful_owner = neutral_ranked_program_v1().semantic_ssa_owner;
+    let (empty_owner, _) = expanded_ranked_fixture_v1(true);
+    let empty = project_expanded_ranked_fixture_v1(empty_owner).unwrap();
+    let replacement = empty.roots.into_vec().remove(0);
+    // Structural custody is not translation validation. Lowering must compare
+    // this empty candidate against the independently retained effectful source.
+    let receipt =
+        ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_ssa_projection_roster_candidate(
+            effectful_owner,
+            vec![ProductionRankedSemanticProjectionRootV1::new(
+                SemanticFunctionIdV1::from_index(0),
+                1,
+                replacement.lowering,
+                replacement.ranked_ir,
+                replacement.access_sources,
+                replacement.executable_effect_sources,
+            )],
+        )
+        .unwrap();
+    let result = ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+        receipt,
+        ProductionSemanticKirLimitsV1::default(),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch { .. }
+            ))
+        ),
+        "lowering must reject the omitted source effects: {result:?}"
+    );
 }
 
 #[test]

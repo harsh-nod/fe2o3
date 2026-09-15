@@ -526,7 +526,7 @@ fn encode(
             .to_le_bytes(),
     );
     bytes.extend_from_slice(&semantic_mir_sha256);
-    bytes.extend_from_slice(&encode_kir_version(source_kir_version).to_le_bytes());
+    bytes.extend_from_slice(&encode_kir_version(source_kir_version)?.to_le_bytes());
     bytes.extend_from_slice(&0_u16.to_le_bytes());
     bytes.extend_from_slice(&source_kir_bytes.to_le_bytes());
     bytes.extend_from_slice(&source_kir_sha256);
@@ -582,14 +582,19 @@ fn derive_identity(bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-const fn encode_kir_version(version: ProductionCanonicalKernelIrVersionV1) -> u16 {
-    match version {
+const fn encode_kir_version(
+    version: ProductionCanonicalKernelIrVersionV1,
+) -> Result<u16, ProductionSourceRefinementEvidenceErrorV1> {
+    Ok(match version {
         ProductionCanonicalKernelIrVersionV1::V8 => 8,
         ProductionCanonicalKernelIrVersionV1::V9 => 9,
         ProductionCanonicalKernelIrVersionV1::V11 => 11,
         ProductionCanonicalKernelIrVersionV1::V12 => 12,
         ProductionCanonicalKernelIrVersionV1::V13 => 13,
-    }
+        ProductionCanonicalKernelIrVersionV1::V14 => {
+            return Err(ProductionSourceRefinementEvidenceErrorV1::UnsupportedCanonicalKirVersion);
+        }
+    })
 }
 
 fn decode_kir_version(
@@ -603,6 +608,20 @@ fn decode_kir_version(
         13 => Ok(ProductionCanonicalKernelIrVersionV1::V13),
         _ => Err(ProductionSourceRefinementEvidenceErrorV1::UnsupportedCanonicalKirVersion),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn legacy_source_refinement_versions_do_not_admit_phase_kir() {
+    use ProductionCanonicalKernelIrVersionV1 as V;
+    for (version, tag) in [(V::V8, 8), (V::V9, 9), (V::V11, 11), (V::V12, 12), (V::V13, 13)] {
+        assert_eq!(encode_kir_version(version).unwrap(), tag);
+        assert_eq!(decode_kir_version(tag).unwrap(), version);
+    }
+    assert!(matches!(encode_kir_version(V::V14),
+        Err(ProductionSourceRefinementEvidenceErrorV1::UnsupportedCanonicalKirVersion)));
+    assert!(matches!(decode_kir_version(14),
+        Err(ProductionSourceRefinementEvidenceErrorV1::UnsupportedCanonicalKirVersion)));
 }
 
 struct ReaderV1<'a> {
