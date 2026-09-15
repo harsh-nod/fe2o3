@@ -2,6 +2,9 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_mir_model::semantic_option_producers_v1;
 use sha2::{Digest, Sha256};
 
+#[path = "semantic_mir_v1/slice_reborrow_v1.rs"]
+mod slice_reborrow_v1;
+
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }

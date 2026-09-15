@@ -45,3 +45,53 @@ Lengths are checked before inert receipt allocation. A successful decode may ret
 up to the exported decoder-owned allocation bound because it keeps both stage
 preimages and a complete canonical encoding. These bounds limit, but do not
 eliminate CPU and memory denial-of-service risk when decoding untrusted input.
+
+## Native Neutral Graph Framing
+
+`InertNativeNeutralSubjectV1` commits to two distinct constituents: a canonical
+V12 mixed-SSA graph and its import-contract catalog. Its fixed 96-byte frame
+contains both digests and lengths; the frame has its own domain-separated
+identity. It is not interchangeable with the graph identity or any legacy KIR
+identity.
+
+`NativeNeutralModuleRefV1` borrows an envelope containing that subject and the
+exact graph/catalog byte slices. Decoding checks framing and lengths, not the
+truth of the constituent digests. The envelope shares the 4 MiB non-semantic
+receipt limit. Constructing or decoding either format grants no authority.
+
+Consumers must admit the graph through
+`VerifiedCanonicalKernelIrModuleV12::from_canonical_bytes_with_verification_budget_v12`,
+decode the catalog through `InertCanonicalKernelIrContractCatalogV1`, and compare
+both actual identities and lengths with the subject. Direct graph admission
+retains the single freshly decoded and semantically checked executable; it does
+not clone or decode a second graph. Each successful admission transfers a
+retained-storage receipt that callers must reserve while that owner remains live.
+Logical payload accounting is not an allocator or process-RSS bound.
+
+`CanonicalKirInventoryV1` indexes that exact graph.
+`check_kernel_ir_contract_catalog_v1` uses the inventory to resolve catalog
+bindings to allocation occurrences and check all six pipeline-marker kinds,
+their storage, contract keys, and epoch types. Catalog bindings identify direct
+physical allocations. Marker operands may carry those allocations through block
+arguments or pointer selects when the owner-bound `CanonicalKirMustAliasV1`
+analysis resolves every incoming origin to the same allocation. Conflicting or
+ungrounded cycles, external pointer inputs, calls, casts, and offsets remain
+unknown. This check does not authenticate source declarations or prove
+pipeline-event ordering. Source replay, checked optimization-origin transport,
+target binding, and protected host admission are separate requirements. These
+framing APIs do not activate a new production route or establish compiler-wide
+formal verification.
+
+## Native Root Rosters
+
+`MultiRootProofRosterTranscriptV3` and `MultiRootTargetBindingTranscriptV3`
+provide bounded, association-only framing for the full native graph/catalog
+subject. Their distinct V3 headers accept singleton or multiple-root rosters;
+legacy V2 bytes and the multiple-root minimum remain unchanged. Proof rows
+retain semantic-root order and an explicit descriptor-canonical permutation.
+Target workgroup rows retain the supplied semantic-root order.
+
+Neither codec validates payload derivation or joins those rows to an actual
+source, graph, or launch configuration. Those checks belong to admitted
+consumers. Exporting these codecs does not activate native production
+compilation or grant proof, artifact, load, or launch authority.

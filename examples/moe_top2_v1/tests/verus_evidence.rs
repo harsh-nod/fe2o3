@@ -12,8 +12,8 @@ const NEGATIVE_MANIFEST: &str = include_str!("../verus/NEGATIVE_SHA256");
 const PROFILE_IDENTITY: &str = "fe2o3.moe_top2_v1.logits_f32.t8_e4_k2.capacity4.token_major.lower_expert_ties.stable_drop.gfx942_xnack_minus.wave64";
 const MODEL_SCHEMA: &str =
     "fe2o3.moe_top2_verus_v1.int_scores.t8_e4_k2_c4.top2_counts_scan_stable_pack_inverse";
-const PROOF_SHA256: &str = "4a5a60b66284567522ab3f07d93309c7002abf75870f4aa9db752f8260cb296c";
-const KERNEL_SHA256: &str = "0e4570bd52866dd23b8b00d83983aadc818c77580de8f7f5e2982e12a57e20e2";
+const PROOF_SHA256: &str = "f0a287599107f17c1ede293fddda978ac7b781f87f99c436476f864eb70a4faa";
+const KERNEL_SHA256: &str = "8b8b3477b7d9670b7a0356b05ff2aaab2aaec9f0b919bf26c4c46215d1a81eb4";
 const PROFILE_SHA256: &str = "4180ef61545684e646bd5227333e7514d22a2d379d7d657397df4d41f7a192d1";
 const MODEL_SCHEMA_SHA256: &str =
     "f8543b27093777890dd0d1fab076792421c1d3c64df6571c83c91b3ffa361da7";
@@ -196,15 +196,18 @@ fn matching_version_fake_verus_is_rejected_by_executable_digest() {
 
 #[test]
 fn documentation_states_the_exact_claim_and_remaining_boundary() {
+    let readme = README.split_whitespace().collect::<Vec<_>>().join(" ");
     for statement in [
-        "28 obligations",
-        "Nine independently pinned\nmutations",
+        "requires 28 verified obligations",
+        "Nine independently pinned mutations",
+        "Fresh Verus qualification of both reanchored proof files is pending.",
+        "Historical runs for the prior kernel/proof hashes do not qualify these bytes.",
         "not an IEEE-754 `f32` refinement",
-        "a refinement of\n`src/kernel.rs`",
+        "a refinement of `src/kernel.rs`",
         "a compiler or machine-code refinement",
-        "a GPU memory-safety or\ndata-race proof",
+        "a GPU memory-safety or data-race proof",
         "or a GPU execution result",
     ] {
-        assert!(README.contains(statement), "README is missing {statement}");
+        assert!(readme.contains(statement), "README is missing {statement}");
     }
 }

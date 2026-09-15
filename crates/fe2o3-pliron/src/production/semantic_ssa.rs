@@ -510,6 +510,7 @@ pub struct ProductionSemanticSsaOwnerV1 {
     plans: Box<[ProductionSemanticSsaFunctionPlanV1]>,
     summary: ProductionSemanticSsaSummaryV1,
     identity: ProductionSemanticSsaIdentityV1,
+    occurrences: Option<occurrences_v1::Attachment>,
 }
 
 impl fmt::Debug for ProductionSemanticSsaOwnerV1 {
@@ -541,22 +542,45 @@ impl ProductionSemanticSsaOwnerV1 {
             plans,
             summary,
             identity,
+            occurrences: None,
         })
     }
 
     /// Reconstructs every semantic adapter input and requires exact planner
     /// replay before custody may advance.
     pub fn verify_replay(&self) -> Result<(), ProductionSemanticSsaErrorV1> {
+        self.replay_with_driver_v1(&mut occurrences_v1::PlainReplay)
+    }
+
+    fn replay_with_driver_v1<D: occurrences_v1::ReplayDriver>(
+        &self,
+        driver: &mut D,
+    ) -> Result<(), D::Error> {
         self.source_owner
             .verify_equivalence()
             .map_err(ProductionSemanticSsaErrorV1::SemanticOwner)?;
         if self.source_semantic_sha256 != *self.source_semantic().semantic_sha256().as_bytes() {
-            return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
+            return Err(ProductionSemanticSsaErrorV1::ReplayMismatch.into());
         }
-        let (plans, summary, identity) =
-            construct_semantic_ssa_plans_v1(self.source_semantic(), self.limits)?;
-        if plans != self.plans || summary != self.summary || identity != self.identity {
-            return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
+        let semantic = self.source_semantic();
+        let mut expected = self.plans.iter();
+        let mut plans_match = self.plans.len() == semantic.functions().len();
+        let mut digest = begin_semantic_ssa_identity_v1(
+            semantic.semantic_sha256().as_bytes(),
+            semantic.functions().len(),
+        );
+        // Keep construction/limit errors ahead of ReplayMismatch, but release
+        // each fresh function plan before constructing the next one.
+        let summary =
+            walk_semantic_ssa_plans_with_driver_v1(semantic, self.limits, driver, |plan| {
+                hash_semantic_ssa_function_plan_v1(&mut digest, &plan);
+                if expected.next().is_none_or(|expected| expected != &plan) {
+                    plans_match = false;
+                }
+            })?;
+        let identity = finish_semantic_ssa_identity_v1(digest, summary);
+        if !plans_match || summary != self.summary || identity != self.identity {
+            return Err(ProductionSemanticSsaErrorV1::ReplayMismatch.into());
         }
         Ok(())
     }
@@ -599,6 +623,8 @@ impl ProductionSemanticSsaOwnerV1 {
         false
     }
 
+    /// Replays and consumes this SSA owner, dropping any optional occurrence capture.
+    /// The caller releases a previously reserved occurrence receipt after consumption.
     pub fn into_source_owner(
         self,
     ) -> Result<ProductionSemanticMirOwnerV1, ProductionSemanticSsaErrorV1> {
@@ -619,6 +645,33 @@ fn construct_semantic_ssa_plans_v1(
     ProductionSemanticSsaErrorV1,
 > {
     let mut plans = Vec::with_capacity(semantic.functions().len());
+    let summary = walk_semantic_ssa_plans_v1(semantic, limits, |plan| plans.push(plan))?;
+    let plans = plans.into_boxed_slice();
+    let identity =
+        derive_semantic_ssa_identity_v1(semantic.semantic_sha256().as_bytes(), &plans, summary);
+    Ok((plans, summary, identity))
+}
+
+fn walk_semantic_ssa_plans_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    limits: ProductionSemanticSsaLimitsV1,
+    visit: impl FnMut(ProductionSemanticSsaFunctionPlanV1),
+) -> Result<ProductionSemanticSsaSummaryV1, ProductionSemanticSsaErrorV1> {
+    walk_semantic_ssa_plans_with_driver_v1(
+        semantic,
+        limits,
+        &mut occurrences_v1::PlainReplay,
+        visit,
+    )
+}
+
+fn walk_semantic_ssa_plans_with_driver_v1<D: occurrences_v1::ReplayDriver>(
+    semantic: &AdmittedInertSemanticMirV1,
+    limits: ProductionSemanticSsaLimitsV1,
+    driver: &mut D,
+    mut visit: impl FnMut(ProductionSemanticSsaFunctionPlanV1),
+) -> Result<ProductionSemanticSsaSummaryV1, D::Error> {
+    driver.start(semantic.functions().len())?;
     let mut summary = ProductionSemanticSsaSummaryV1 {
         function_count: semantic.functions().len(),
         ..ProductionSemanticSsaSummaryV1::default()
@@ -626,13 +679,14 @@ fn construct_semantic_ssa_plans_v1(
     for (function_index, function) in semantic.functions().iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(function_index as u32);
         let transparent_borrows = transparent_borrow_sites_v1(function, semantic.callables());
-        let function_plan = plan_semantic_function_ssa_with_borrow_sites_v1(
+        let function_plan = plan_semantic_function_ssa_with_driver_v1(
             function_id,
             function,
             Some(semantic.types()),
             semantic.callables(),
             limits,
             &transparent_borrows,
+            driver,
         )?;
         accumulate_summary_v1(
             &mut summary,
@@ -640,12 +694,9 @@ fn construct_semantic_ssa_plans_v1(
             function.locals().len(),
             limits,
         )?;
-        plans.push(function_plan);
+        visit(function_plan);
     }
-    let plans = plans.into_boxed_slice();
-    let identity =
-        derive_semantic_ssa_identity_v1(semantic.semantic_sha256().as_bytes(), &plans, summary);
-    Ok((plans, summary, identity))
+    Ok(summary)
 }
 
 /// Constructs the canonical bounded SSA plan for one admitted semantic function.
@@ -715,8 +766,28 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
     limits: ProductionSemanticSsaLimitsV1,
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
 ) -> Result<ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaErrorV1> {
+    plan_semantic_function_ssa_with_driver_v1(
+        function_id,
+        function,
+        types,
+        callables,
+        limits,
+        transparent_borrows,
+        &mut occurrences_v1::PlainReplay,
+    )
+}
+
+fn plan_semantic_function_ssa_with_driver_v1<D: occurrences_v1::ReplayDriver>(
+    function_id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    callables: &[SemanticCallableDeclV1],
+    limits: ProductionSemanticSsaLimitsV1,
+    transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+    driver: &mut D,
+) -> Result<ProductionSemanticSsaFunctionPlanV1, D::Error> {
     let (input, implicit_entry_variables, adapter_analysis_work) =
-        semantic_function_ssa_input_v1(function, types, callables, transparent_borrows);
+        driver.input(function, types, callables, transparent_borrows)?;
     let mut auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
     auxiliary_resources.work_units = auxiliary_resources
         .work_units
@@ -753,7 +824,7 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
     )?;
     let retained_cross_edge_variables =
         retained_cross_edge_variables_v1(&input, &plan).into_boxed_slice();
-    Ok(ProductionSemanticSsaFunctionPlanV1 {
+    let function_plan = ProductionSemanticSsaFunctionPlanV1 {
         function: function_id,
         function_identity: function.identity(),
         plan,
@@ -761,7 +832,9 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
         implicit_entry_variables: implicit_entry_variables.into_boxed_slice(),
         retained_cross_edge_variables,
         auxiliary_resources,
-    })
+    };
+    driver.join(&input, &function_plan)?;
+    Ok(function_plan)
 }
 
 fn semantic_ssa_auxiliary_resources_v1(
@@ -878,10 +951,23 @@ fn enforce_function_resource_limit_v1(
 
 mod accounting;
 mod adapter;
+mod occurrences_v1;
 mod partial_moves;
 
+pub use occurrences_v1::{
+    ProductionSemanticSsaConstantOccurrenceV1, ProductionSemanticSsaEdgeDefinitionOccurrenceV1,
+    ProductionSemanticSsaEntryDefinitionOccurrenceV1, ProductionSemanticSsaEntryOriginV1,
+    ProductionSemanticSsaEventOccurrenceV1, ProductionSemanticSsaEventRoleV1,
+    ProductionSemanticSsaFunctionOccurrencesV1, ProductionSemanticSsaOccurrenceErrorV1,
+    ProductionSemanticSsaOccurrenceSiteV1, ProductionSemanticSsaOccurrenceStorageV1,
+    ProductionSemanticSsaOccurrenceViewV1, ProductionSemanticSsaOperandRoleV1,
+    ProductionSemanticSsaSuccessorOccurrenceV1,
+};
+
 use accounting::{
-    accumulate_summary_v1, derive_semantic_ssa_identity_v1, retained_cross_edge_variables_v1,
+    accumulate_summary_v1, begin_semantic_ssa_identity_v1, derive_semantic_ssa_identity_v1,
+    finish_semantic_ssa_identity_v1, hash_semantic_ssa_function_plan_v1,
+    retained_cross_edge_variables_v1,
 };
 pub use adapter::authenticated_ambient_workgroup_lds_scope_zst_v1;
 use adapter::{

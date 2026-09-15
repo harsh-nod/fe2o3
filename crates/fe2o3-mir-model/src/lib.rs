@@ -83,15 +83,18 @@ pub use semantic_u32_induction::{
     SemanticU32InductionAnalysisErrorV1, SemanticU32InductionAnalysisLimitsV1,
     SemanticU32InductionBlockSiteV1, SemanticU32InductionNoOverflowCertificateV1,
     SemanticU32InductionNoOverflowReportV1, SemanticU32InductionPlaceBindingV1,
-    SemanticU32InductionStatementSiteV1, analyze_semantic_u32_induction_no_overflow_v1,
+    SemanticU32InductionStatementSiteV1,
+    analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2,
+    analyze_semantic_u32_induction_no_overflow_v1,
     analyze_semantic_u32_induction_no_overflow_with_limits_v1,
+    analyze_semantic_u32_induction_no_overflow_with_ssa_plan_v2,
 };
 pub use semantic_u32_induction_evidence_v1::{
     InertCanonicalSemanticU32InductionEvidenceV1, MAX_SEMANTIC_U32_INDUCTION_EVIDENCE_BYTES_V1,
     SEMANTIC_U32_INDUCTION_EVIDENCE_POLICY_V1, SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V1,
-    SemanticU32InductionBlockSiteEvidenceV1, SemanticU32InductionEvidenceErrorV1,
-    SemanticU32InductionNoOverflowCertificateEvidenceV1, SemanticU32InductionPlaceEvidenceV1,
-    SemanticU32InductionStatementSiteEvidenceV1,
+    SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V2, SemanticU32InductionBlockSiteEvidenceV1,
+    SemanticU32InductionEvidenceErrorV1, SemanticU32InductionNoOverflowCertificateEvidenceV1,
+    SemanticU32InductionPlaceEvidenceV1, SemanticU32InductionStatementSiteEvidenceV1,
 };
 pub use ssa::{
     HARD_MAX_SSA_BLOCKS_V1, HARD_MAX_SSA_EDGE_DEFINITIONS_V1, HARD_MAX_SSA_EDGES_V1,

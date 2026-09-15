@@ -675,10 +675,10 @@
         )
     }
 
-    fn neutral_ranked_program_for_operation_v1(
+    fn neutral_ranked_source_for_operation_v1(
         operation: SemanticCompilerIntrinsicOperationV1,
         elements: u32,
-    ) -> ProductionRankedSemanticProgramV1 {
+    ) -> ProductionSemanticSsaOwnerV1 {
         let scope_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
             neutral_test_place_v1(2, NEUTRAL_LDS_SCOPE_REFERENCE_TYPE),
             SemanticRvalueV1::new(
@@ -859,11 +859,18 @@
             fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
         )
         .unwrap();
-        let owner = ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticSsaOwnerV1::try_new(
             owner,
             fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    fn neutral_ranked_program_for_operation_v1(
+        operation: SemanticCompilerIntrinsicOperationV1,
+        elements: u32,
+    ) -> ProductionRankedSemanticProgramV1 {
+        let owner = neutral_ranked_source_for_operation_v1(operation, elements);
         project_and_verify_ranked_semantic_mir_v1(
             owner,
             &[ranked_root_input_1d(

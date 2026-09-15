@@ -673,6 +673,9 @@ fn canonical_verified_inverse(
     })
 }
 
+#[path = "canonical_kir_v12_bytes_admission.rs"]
+mod bytes_admission;
+
 #[cfg(test)]
 #[path = "canonical_kir_v12_module_tests.rs"]
 mod module_tests;

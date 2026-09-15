@@ -1,4 +1,8 @@
 use super::*;
+
+mod native_source_queries {
+    include!("canonical_kir_inventory_native_source_queries_v1_tests.rs");
+}
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, CanonicalKernelIrWorkBudgetV1, CheckedBinaryOperator,
     Constant, CopyNonOverlappingContract, FunctionRole, IntegerSwitchCase, Kernel, LaunchDomain,

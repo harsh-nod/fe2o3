@@ -245,6 +245,9 @@ impl SparseIndexFactV1 {
     pub fn constant_value(&self) -> Option<u64> {
         match self {
             Self::Affine(affine) => affine.is_constant(),
+            Self::Remainder { dividend, modulus } if *modulus != 0 => {
+                dividend.is_constant().map(|value| value % modulus)
+            }
             Self::Unknown
             | Self::MachineOverflow(_)
             | Self::Remainder { .. }
@@ -1096,6 +1099,10 @@ const fn limit(resource: &'static str, limit: usize, actual: usize) -> SparseInd
 
 include!("pliron_sparse_index/resource_tests.rs");
 include!("pliron_sparse_index/local_bound_tests.rs");
+
+#[cfg(test)]
+#[path = "pliron_sparse_index/constant_remainder_tests.rs"]
+mod constant_remainder_tests;
 
 #[cfg(test)]
 #[path = "pliron_sparse_index/native_control_v1_tests.rs"]

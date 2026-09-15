@@ -1,5 +1,11 @@
 use super::*;
 
+#[path = "adapter_emission_v1.rs"]
+pub(super) mod emission_v1;
+
+#[path = "adapter_prepared_v1.rs"]
+pub(super) mod prepared_v1;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SemanticTransparentBorrowSiteV1 {
     block: u32,
@@ -9,9 +15,11 @@ pub(super) struct SemanticTransparentBorrowSiteV1 {
 #[derive(Clone, Copy)]
 struct SemanticBorrowCandidateV1 {
     site: SemanticTransparentBorrowSiteV1,
+    reference_local: u32,
     source_local: u32,
     source_type: SemanticTypeIdV1,
     source_reference: Option<u32>,
+    parent: Option<usize>,
     valid: bool,
     consumers: u32,
     intrinsic_consumer: bool,
@@ -48,20 +56,22 @@ pub(super) fn transparent_borrow_sites_v1(
                     block: block_index as u32,
                     statement: statement_index as u32,
                 },
+                reference_local,
                 source_local: place.local().index(),
                 source_type: place.ty(),
                 source_reference,
+                parent: None,
                 valid: true,
                 consumers: 0,
                 intrinsic_consumer: false,
             };
             let index = candidates.len();
             candidates.push(candidate);
-            if duplicate_references.contains(&reference_local) {
-                candidates[index].valid = false;
-            } else if let Some(previous) = candidate_by_reference.insert(reference_local, index) {
-                candidates[previous].valid = false;
-                candidates[index].valid = false;
+            if !duplicate_references.contains(&reference_local)
+                && candidate_by_reference
+                    .insert(reference_local, index)
+                    .is_some()
+            {
                 candidate_by_reference.remove(&reference_local);
                 duplicate_references.insert(reference_local);
             }
@@ -70,25 +80,94 @@ pub(super) fn transparent_borrow_sites_v1(
     if candidates.is_empty() {
         return BTreeSet::new();
     }
+    let return_local = (!matches!(
+        function.abi().return_value().mode(),
+        SemanticAbiPassModeV1::Ignore,
+    ))
+    .then(|| {
+        function
+            .locals()
+            .iter()
+            .position(|local| matches!(local.role(), SemanticLocalRoleV1::Return))
+    })
+    .flatten();
+    let mut unscoped_references = BTreeSet::new();
+    let mut events = Vec::new();
+    let mut next_candidate = 0;
+    // Repeated MIR temporaries are indexed by their definition occurrence within
+    // a block. A use without a local definition disqualifies every occurrence
+    // of that temporary; this is not a cross-block reference alias analysis.
     for (block_index, block) in function.blocks().iter().enumerate() {
+        let first_candidate = next_candidate;
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let site = SemanticTransparentBorrowSiteV1 {
                 block: block_index as u32,
                 statement: statement_index as u32,
             };
+            events.clear();
+            if !duplicate_references.is_empty() {
+                append_statement_events_v1(statement.kind(), &mut events);
+                record_unscoped_reference_uses_v1(
+                    &events,
+                    &duplicate_references,
+                    &candidate_by_reference,
+                    &mut unscoped_references,
+                );
+            }
+            let definition = candidates
+                .get(next_candidate)
+                .filter(|candidate| candidate.site == site)
+                .map(|candidate| candidate.reference_local);
+            if let Some(reference) = definition {
+                if duplicate_references.contains(&reference) {
+                    candidate_by_reference.insert(reference, next_candidate);
+                }
+                next_candidate += 1;
+            }
             invalidate_reference_uses_in_statement_v1(
                 statement.kind(),
                 site,
                 &candidate_by_reference,
                 &mut candidates,
             );
+            for event in &events {
+                let reference = event.variable().get();
+                if duplicate_references.contains(&reference)
+                    && (matches!(event, SsaEventV1::Kill(_))
+                        || (matches!(event, SsaEventV1::Define(_))
+                            && definition != Some(reference)))
+                {
+                    candidate_by_reference.remove(&reference);
+                }
+            }
+        }
+        events.clear();
+        if !duplicate_references.is_empty() {
+            append_terminator_events_v1(block.terminator().kind(), return_local, &mut events);
+            record_unscoped_reference_uses_v1(
+                &events,
+                &duplicate_references,
+                &candidate_by_reference,
+                &mut unscoped_references,
+            );
         }
         validate_reference_uses_in_terminator_v1(
             block.terminator().kind(),
+            return_local,
             callables,
             &candidate_by_reference,
             &mut candidates,
         );
+        for candidate in &candidates[first_candidate..next_candidate] {
+            if duplicate_references.contains(&candidate.reference_local) {
+                candidate_by_reference.remove(&candidate.reference_local);
+            }
+        }
+    }
+    for candidate in &mut candidates {
+        if unscoped_references.contains(&candidate.reference_local) {
+            candidate.valid = false;
+        }
     }
 
     let mut accepted = BTreeSet::new();
@@ -105,11 +184,11 @@ pub(super) fn transparent_borrow_sites_v1(
                 break;
             }
             chain.push(current);
-            let Some(source_reference) = candidate.source_reference else {
+            if candidate.source_reference.is_none() {
                 accepted.extend(chain);
                 break;
-            };
-            let Some(parent) = candidate_by_reference.get(&source_reference).copied() else {
+            }
+            let Some(parent) = candidate.parent else {
                 break;
             };
             current = parent;
@@ -119,6 +198,23 @@ pub(super) fn transparent_borrow_sites_v1(
         .into_iter()
         .map(|candidate| candidates[candidate].site)
         .collect()
+}
+
+fn record_unscoped_reference_uses_v1(
+    events: &[SsaEventV1],
+    duplicate_references: &BTreeSet<u32>,
+    candidate_by_reference: &BTreeMap<u32, usize>,
+    unscoped_references: &mut BTreeSet<u32>,
+) {
+    for event in events {
+        let reference = event.variable().get();
+        if matches!(event, SsaEventV1::Use(_))
+            && duplicate_references.contains(&reference)
+            && !candidate_by_reference.contains_key(&reference)
+        {
+            unscoped_references.insert(reference);
+        }
+    }
 }
 
 fn invalidate_reference_place_v1(
@@ -202,6 +298,7 @@ fn invalidate_reference_uses_in_statement_v1(
                 if let Some(source_reference) = candidates[candidate].source_reference {
                     match candidate_by_reference.get(&source_reference).copied() {
                         Some(parent) if parent != candidate => {
+                            candidates[candidate].parent = Some(parent);
                             candidates[parent].consumers =
                                 candidates[parent].consumers.saturating_add(1);
                         }
@@ -273,6 +370,7 @@ fn invalidate_reference_uses_in_statement_v1(
 
 fn validate_reference_uses_in_terminator_v1(
     terminator: &SemanticTerminatorKindV1,
+    return_local: Option<usize>,
     callables: &[SemanticCallableDeclV1],
     candidate_by_reference: &BTreeMap<u32, usize>,
     candidates: &mut [SemanticBorrowCandidateV1],
@@ -347,9 +445,16 @@ fn validate_reference_uses_in_terminator_v1(
             invalidate_reference_operand_v1(condition, candidate_by_reference, candidates);
             invalidate_reference_assert_message_v1(message, candidate_by_reference, candidates);
         }
+        SemanticTerminatorKindV1::Return => {
+            // The ABI can make Return read a local without an explicit operand.
+            if let Some(local) = return_local
+                && let Some(candidate) = candidate_by_reference.get(&(local as u32))
+            {
+                candidates[*candidate].valid = false;
+            }
+        }
         SemanticTerminatorKindV1::Goto(_)
         | SemanticTerminatorKindV1::FalseEdge { .. }
-        | SemanticTerminatorKindV1::Return
         | SemanticTerminatorKindV1::UnwindResume
         | SemanticTerminatorKindV1::UnwindTerminate
         | SemanticTerminatorKindV1::Abort
@@ -532,97 +637,33 @@ pub(super) fn semantic_function_ssa_input_v1(
     callables: &[SemanticCallableDeclV1],
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
 ) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize) {
-    let mut promotable = vec![true; function.locals().len()];
-    classify_storage_observable_locals_v1(function, transparent_borrows, &mut promotable);
-    let (elided_grid_leader_borrows, adapter_analysis_work) =
-        authenticated_elided_grid_leader_borrow_sites_v1(
-            function,
-            types,
-            callables,
-            transparent_borrows,
-        );
-    let return_local = (!matches!(
-        function.abi().return_value().mode(),
-        SemanticAbiPassModeV1::Ignore,
-    ))
-    .then(|| {
-        function
-            .locals()
-            .iter()
-            .position(|declaration| matches!(declaration.role(), SemanticLocalRoleV1::Return))
-    })
-    .flatten();
-    let blocks = function
-        .blocks()
-        .iter()
-        .enumerate()
-        .map(|(block_index, block)| {
-            let mut events = Vec::new();
-            for (statement_index, statement) in block.statements().iter().enumerate() {
-                let site = SemanticTransparentBorrowSiteV1 {
-                    block: block_index as u32,
-                    statement: statement_index as u32,
-                };
-                if elided_grid_leader_borrows.contains(&site) {
-                    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                        unreachable!("authenticated borrow site must be an assignment");
-                    };
-                    append_place_definition_v1(assignment.destination(), &mut events);
-                } else {
-                    append_statement_events_v1(statement.kind(), &mut events);
-                }
-            }
-            append_terminator_events_v1(block.terminator().kind(), return_local, &mut events);
-            let mut edges = Vec::with_capacity(block.terminator().kind().edge_count());
-            block
-                .terminator()
-                .kind()
-                .try_for_each_edge::<std::convert::Infallible>(|edge| {
-                    let definitions = call_edge_definitions_v1(block.terminator().kind(), edge);
-                    edges.push(SsaEdgeInputV1::new(
-                        SsaEdgeRoleV1::new(semantic_edge_role_v1(edge.role())),
-                        SsaBlockIdV1::new(edge.target().index()),
-                        definitions,
-                    ));
-                    Ok(())
-                })
-                .expect("infallible semantic edge collection");
-            SsaBlockInputV1::new(events, edges)
-        })
-        .collect::<Vec<_>>();
-    let implicit_entry_variables = authenticated_implicit_entry_variables_v1(
+    emission_v1::infallible_v1(semantic_function_ssa_input_with_observer_v1(
         function,
         types,
         callables,
         transparent_borrows,
-        &promotable,
-        &blocks,
-    );
-    let implicit = implicit_entry_variables
-        .iter()
-        .map(|variable| variable.get())
-        .collect::<BTreeSet<_>>();
-    let entry_definitions = function
-        .locals()
-        .iter()
-        .enumerate()
-        .filter_map(|(local, declaration)| {
-            (matches!(declaration.role(), SemanticLocalRoleV1::Argument(_))
-                || implicit.contains(&(local as u32)))
-            .then_some(SsaVariableIdV1::new(local as u32))
-        })
-        .collect();
-    (
-        SsaConstructionInputV1::new(
-            SsaBlockIdV1::new(function.entry().index()),
-            function.locals().len() as u32,
-            promotable,
-            entry_definitions,
-            blocks,
-        ),
-        implicit_entry_variables,
-        adapter_analysis_work,
-    )
+        &mut emission_v1::NoSemanticSsaEmissionObserverV1,
+    ))
+}
+
+pub(super) fn semantic_function_ssa_input_with_observer_v1<
+    O: emission_v1::SemanticSsaEmissionObserverV1,
+>(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    callables: &[SemanticCallableDeclV1],
+    transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+    observer: &mut O,
+) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), O::Error> {
+    prepared_v1::prepare_semantic_ssa_adapter_with_observer_v1(
+        function,
+        types,
+        callables,
+        transparent_borrows,
+        observer,
+    )?
+    .into_entries(observer)?
+    .finish(observer)
 }
 
 fn authenticated_elided_grid_leader_borrow_sites_v1(
@@ -972,99 +1013,13 @@ fn mark_local_storage_observable_v1(place: &SemanticPlaceV1, promotable: &mut [b
 }
 
 fn append_statement_events_v1(statement: &SemanticStatementKindV1, events: &mut Vec<SsaEventV1>) {
-    match statement {
-        SemanticStatementKindV1::Assign(assignment) => {
-            append_rvalue_events_v1(assignment.value().kind(), events);
-            append_place_definition_v1(assignment.destination(), events);
-        }
-        SemanticStatementKindV1::Store(store) => {
-            append_operand_events_v1(store.value(), events);
-            append_place_use_v1(store.destination(), events);
-        }
-        SemanticStatementKindV1::AtomicRmw(operation) => {
-            append_place_use_v1(operation.address(), events);
-            append_operand_events_v1(operation.value(), events);
-            append_place_definition_v1(operation.destination(), events);
-        }
-        SemanticStatementKindV1::AtomicCompareExchange(operation) => {
-            append_place_use_v1(operation.address(), events);
-            append_operand_events_v1(operation.expected(), events);
-            append_operand_events_v1(operation.replacement(), events);
-            append_place_definition_v1(operation.destination(), events);
-        }
-        SemanticStatementKindV1::SetDiscriminant { place, .. }
-        | SemanticStatementKindV1::Deinitialize(place) => append_place_use_v1(place, events),
-        SemanticStatementKindV1::Assume(condition) => append_operand_events_v1(condition, events),
-        SemanticStatementKindV1::StorageLive(local)
-        | SemanticStatementKindV1::StorageDead(local) => {
-            events.push(SsaEventV1::Kill(SsaVariableIdV1::new(local.index())))
-        }
-        SemanticStatementKindV1::Nop => {}
-    }
-}
-
-fn append_rvalue_events_v1(value: &SemanticRvalueKindV1, events: &mut Vec<SsaEventV1>) {
-    match value {
-        SemanticRvalueKindV1::Use(operand)
-        | SemanticRvalueKindV1::Unary { operand, .. }
-        | SemanticRvalueKindV1::Cast { operand, .. } => append_operand_events_v1(operand, events),
-        SemanticRvalueKindV1::Binary { left, right, .. } => {
-            append_operand_events_v1(left, events);
-            append_operand_events_v1(right, events);
-        }
-        SemanticRvalueKindV1::CheckedBinary(operation) => {
-            append_operand_events_v1(operation.left(), events);
-            append_operand_events_v1(operation.right(), events);
-        }
-        SemanticRvalueKindV1::UncheckedBinary(operation) => {
-            append_operand_events_v1(operation.left(), events);
-            append_operand_events_v1(operation.right(), events);
-        }
-        SemanticRvalueKindV1::Borrow { place, .. }
-        | SemanticRvalueKindV1::AddressOf { place, .. }
-        | SemanticRvalueKindV1::Length(place)
-        | SemanticRvalueKindV1::Discriminant(place) => append_place_use_v1(place, events),
-        SemanticRvalueKindV1::Aggregate(aggregate) => {
-            for operand in aggregate.operands() {
-                append_operand_events_v1(operand, events);
-            }
-        }
-        SemanticRvalueKindV1::Load(load) => append_place_use_v1(load.source(), events),
-    }
-}
-
-fn append_operand_events_v1(operand: &SemanticOperandV1, events: &mut Vec<SsaEventV1>) {
-    match operand {
-        SemanticOperandV1::Copy(place) => append_place_use_v1(place, events),
-        SemanticOperandV1::Move(place) => {
-            append_place_use_v1(place, events);
-            if place.projections().is_empty() {
-                events.push(SsaEventV1::Kill(SsaVariableIdV1::new(
-                    place.local().index(),
-                )));
-            }
-        }
-        SemanticOperandV1::Constant(_) => {}
-    }
-}
-
-fn append_place_use_v1(place: &SemanticPlaceV1, events: &mut Vec<SsaEventV1>) {
-    events.push(SsaEventV1::Use(SsaVariableIdV1::new(place.local().index())));
-    for projection in place.projections() {
-        if let SemanticProjectionKindV1::Index(local) = projection.kind() {
-            events.push(SsaEventV1::Use(SsaVariableIdV1::new(local.index())));
-        }
-    }
-}
-
-fn append_place_definition_v1(place: &SemanticPlaceV1, events: &mut Vec<SsaEventV1>) {
-    if place.projections().is_empty() {
-        events.push(SsaEventV1::Define(SsaVariableIdV1::new(
-            place.local().index(),
-        )));
-    } else {
-        append_place_use_v1(place, events);
-    }
+    emission_v1::infallible_v1(emission_v1::emit_statement_events_v1(
+        statement,
+        false,
+        emission_v1::SemanticSsaEmissionSiteV1::Auxiliary,
+        events,
+        &mut emission_v1::NoSemanticSsaEmissionObserverV1,
+    ));
 }
 
 fn append_terminator_events_v1(
@@ -1072,86 +1027,25 @@ fn append_terminator_events_v1(
     return_local: Option<usize>,
     events: &mut Vec<SsaEventV1>,
 ) {
-    match terminator {
-        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
-            append_operand_events_v1(discriminant, events);
-        }
-        SemanticTerminatorKindV1::Call(call) => {
-            for argument in call.arguments() {
-                append_operand_events_v1(argument, events);
-            }
-        }
-        SemanticTerminatorKindV1::TailCall(call) => {
-            for argument in call.arguments() {
-                append_operand_events_v1(argument, events);
-            }
-        }
-        SemanticTerminatorKindV1::Drop { place, .. } => append_place_use_v1(place, events),
-        SemanticTerminatorKindV1::Assert {
-            condition, message, ..
-        } => {
-            append_operand_events_v1(condition, events);
-            append_assert_message_events_v1(message, events);
-        }
-        SemanticTerminatorKindV1::Return => {
-            if let Some(local) = return_local {
-                events.push(SsaEventV1::Use(SsaVariableIdV1::new(local as u32)));
-            }
-        }
-        SemanticTerminatorKindV1::Goto(_)
-        | SemanticTerminatorKindV1::FalseEdge { .. }
-        | SemanticTerminatorKindV1::UnwindResume
-        | SemanticTerminatorKindV1::UnwindTerminate
-        | SemanticTerminatorKindV1::Abort
-        | SemanticTerminatorKindV1::Unreachable => {}
-    }
+    emission_v1::infallible_v1(emission_v1::emit_terminator_events_v1(
+        terminator,
+        return_local,
+        emission_v1::SemanticSsaEmissionSiteV1::Auxiliary,
+        events,
+        &mut emission_v1::NoSemanticSsaEmissionObserverV1,
+    ));
 }
 
-fn append_assert_message_events_v1(
-    message: &SemanticAssertMessageV1,
-    events: &mut Vec<SsaEventV1>,
-) {
-    match message {
-        SemanticAssertMessageV1::BoundsCheck { length, index } => {
-            append_operand_events_v1(length, events);
-            append_operand_events_v1(index, events);
-        }
-        SemanticAssertMessageV1::Overflow { left, right, .. } => {
-            append_operand_events_v1(left, events);
-            append_operand_events_v1(right, events);
-        }
-        SemanticAssertMessageV1::DivisionByZero(operand)
-        | SemanticAssertMessageV1::RemainderByZero(operand) => {
-            append_operand_events_v1(operand, events);
-        }
-        SemanticAssertMessageV1::MisalignedPointerDereference {
-            required_alignment,
-            found_alignment,
-        } => {
-            append_operand_events_v1(required_alignment, events);
-            append_operand_events_v1(found_alignment, events);
-        }
-        SemanticAssertMessageV1::NullPointerDereference
-        | SemanticAssertMessageV1::ResumedAfterReturn
-        | SemanticAssertMessageV1::ResumedAfterPanic => {}
-    }
-}
-
-fn call_edge_definitions_v1(
+fn call_edge_definition_v1(
     terminator: &SemanticTerminatorKindV1,
     edge: SemanticControlFlowEdgeV1,
-) -> Vec<SsaVariableIdV1> {
+) -> Option<SsaVariableIdV1> {
     let SemanticTerminatorKindV1::Call(call) = terminator else {
-        return vec![];
+        return None;
     };
-    let Some(destination) = call.destination() else {
-        return vec![];
-    };
-    if destination.edge() == edge && destination.place().projections().is_empty() {
-        vec![SsaVariableIdV1::new(destination.place().local().index())]
-    } else {
-        vec![]
-    }
+    let destination = call.destination()?;
+    (destination.edge() == edge && destination.place().projections().is_empty())
+        .then(|| SsaVariableIdV1::new(destination.place().local().index()))
 }
 
 pub(super) fn semantic_edge_role_v1(role: SemanticEdgeRoleV1) -> u16 {

@@ -56,6 +56,7 @@
 
 mod canonical_graph_visitors_v1;
 mod canonical_kir_coordinates_v1;
+mod canonical_kir_transition_receipt_v1;
 mod canonical_kir_transition_v1;
 mod canonical_kir_v10;
 mod canonical_kir_v11;
@@ -66,6 +67,7 @@ mod canonical_kir_v7;
 mod canonical_kir_v8;
 mod canonical_kir_v9;
 mod canonical_work_budget_v1;
+mod contract_catalog_v1;
 mod control_flow;
 mod debug_source_map_v1;
 mod debug_source_map_v2;
@@ -119,6 +121,7 @@ mod wire;
 
 pub use canonical_graph_visitors_v1::*;
 pub use canonical_kir_coordinates_v1::*;
+pub use canonical_kir_transition_receipt_v1::*;
 pub use canonical_kir_transition_v1::*;
 pub use canonical_kir_v5::*;
 pub use canonical_kir_v6::*;
@@ -129,6 +132,7 @@ pub use canonical_kir_v10::*;
 pub use canonical_kir_v11::*;
 pub use canonical_kir_v12::*;
 pub use canonical_work_budget_v1::*;
+pub use contract_catalog_v1::*;
 pub use control_flow::*;
 pub use debug_source_map_v1::*;
 pub use debug_source_map_v2::*;

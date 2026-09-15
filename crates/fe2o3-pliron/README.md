@@ -50,6 +50,52 @@ handoff; Pliron handles, printer text, and diagnostics do not. The isolated
 pinned upstream LLVM 22.1.8 target machine and in-process LLD remain the sole
 machine-code and HSACO authority.
 
+## Immutable Canonical Analysis Scope
+
+`with_canonical_analysis_scope_v1` borrows one connected V12 owner, derives its
+inventory once, and lazily caches sparse scalar facts on first request. It
+cannot replace the owner or reuse facts by matching hashes. Mutation requires
+ending the scope and deriving fresh analyses for the changed graph. Returned
+values cannot borrow the local inventory or cached report.
+
+The caller reserves the graph's retained payload. Inventory and cached-report
+payloads remain reserved on the shared ledger until dropped; success and Result
+errors restore the incoming floor without rewinding work, peak storage, or
+failure history. Each cache request charges one lookup before inspecting the
+cache. Callbacks must not release live analysis floors. Stack-only scope framing,
+unrelated caller allocations, and panic recovery are outside this contract.
+This API is not a pass, a preservation proof, or production-pipeline activation.
+
+## Checked Occurrence Execution
+
+The additive connected V12 bridge borrows an already admitted canonical owner.
+Its one-shot neutral execution lease observes the existing literal seven-pass
+scalar/CFG roster and extracts the actual successor with complete operand,
+successor, edge-argument, block-chain, and value-descendant candidate rows.
+The independent kernel-analysis checker must accept those rows against both
+actual graph inventories before consuming checked-output custody is returned.
+The old value map and optimizer report are not semantic rule oracles.
+
+These checks establish only the named input-to-final local rewrite rules.
+They do not seal every intermediate pass, supply a general equivalence theorem,
+verify source/ranked memory, or grant artifact or launch authority. The checked
+owner retains one executable output and historical input bytes. Optional owned
+origin callbacks cannot replace either checked graph or bypass the checker.
+
+Input, session growth, observed output, inventories, rows, and returned owners
+have distinct logical storage transfers on the shared work/storage ledger.
+Drop restores the appropriate floor without refunding accepted work or failure
+history. Capture, rule, resource, extraction, or panic failures discard the
+candidate; there is no fallback to an unchecked map or source graph. The native
+bridge profile bounds structural/signature work and is not NativeSource compiler
+proof admission. Allocator overhead and upstream primitive execution costs are
+not claimed as exact measurements.
+
+This library surface does not activate default backend optimization or change
+the existing target optimizer's pass/report policy. Source-origin transport,
+final optimized-graph mandatory checks, and compiler publication remain separate
+integration obligations.
+
 ## Boundary
 
 This crate does not define fe2o3 dialect operations, select a production
@@ -134,6 +180,22 @@ Checked accumulation rejects arithmetic overflow before comparing the summary
 with the fixed module envelope. A stricter validated module policy may lower
 these ceilings, but no public limit value can exceed them.
 
+Optional source-to-SSA occurrence capture performs one full replay on the same
+move-only SSA owner. Its sealed ordered rows preserve original event and edge
+occurrences, constants as source locators, and actual elision/entry categories.
+Only borrowed descriptive views escape; these rows do not prove scalar,
+lifecycle, output, or formal equivalence. Ordinary construction/replay does not
+allocate capture arrays, and native materialization is not activated by this API.
+
+Capture uses a separate logical byte/work ledger for its count/fill/join actions,
+not for inherited source checks, classification, planning, hashing, or allocator
+overhead. Fresh fixed-row Vecs use one prepaid exact reservation and never grow
+or convert to boxes. Exact capacity relies on pinned nightly-2026-04-03
+RawVec/Global behavior; a mismatch fails without retrospective top-up, and a
+toolchain change requires re-audit. Success transfers a receipt at the caller
+entry floor; errors/unwind drop pending rows before restoring that floor.
+An already captured owner is rejected without work or ledger changes.
+
 ## Closed generic kernel-check production path
 
 The implementation lives in private `src/production_analysis/` modules. The
@@ -179,6 +241,57 @@ worst-case proof for every upstream operation. Generic verifier and dominance-tr
 allocation, along with other retained hash-table costs, still need resource
 closure. These checks do not establish formal compiler verification. Native
 Switch and vector memory operations are not admitted by this migration.
+
+Concrete pipeline lifecycles may span an acyclic CFG when all normal paths
+consume the same exact Create, event and access occurrences in order. A shared
+control view validates actual successor ordinals, including repeated edges;
+per-pipeline cursors check joins and normal returns without enumerating paths.
+Empty diamonds and reordered block storage are supported. Normal bypasses,
+distinct branch-local event copies, unreachable lifecycle sites and reachable
+cycles are rejected. A trap may precede the lifecycle or follow Create alone,
+but cannot discharge a partially executed lifecycle. Existing same-block and
+recognized dynamic-loop routes retain their separate semantics.
+
+This check retains the existing constant epoch/slot and initialized-coordinate
+requirements. It does not infer values from ambiguous edge arguments, establish
+new barrier convergence facts, or grant source/output refinement authority.
+The fixed resource preflight includes the cached CFG and one pipeline's scratch;
+standalone diagnostics reserve the same bound before discovery. These remain
+logical phase bounds, not allocator/RSS or formal execution-cost proofs.
+
+Concrete epoch/slot queries also use the existing function-bound sparse cache,
+including constant affine remainders with nonzero divisors and block arguments
+whose incoming facts agree. Unknown values, conflicting joins, zero divisors
+and machine overflow remain unproven. Literal-only and recognized dynamic
+routes do not initialize this cache on demand. Query work is prepaid; a missing
+cache is admitted once with its peak overlapping live pipeline scratch, and
+admission or analysis failure returns `AnalysisIncomplete`. Current nested
+barrier/workgroup callers already prepare the cache before entering this check;
+future callers with additional live scratch must account for that overlap too.
+This adds neither a recursive evaluator nor new refinement authority.
+
+Concrete initialized-coordinate checks compare a read only with earlier writes
+in the same epoch, using the existing budgeted structural index-equivalence
+checker. Separately emitted equal constants and supported equivalent expressions
+can match; unequal or unproved coordinate pairs cannot. Borrowed write rows retain
+source order, making resource-sensitive comparison order deterministic. The
+existing access-pair query bound covers this route; dynamic-loop matching and
+its separate rules are unchanged.
+
+Dynamic staging and consuming windows also retain coordinate occurrences in
+source order, so shared equivalence-memo warming and exhaustion are deterministic.
+Matching remains bidirectional set membership: duplicate access counts need not
+agree, but every coordinate must have an equivalent counterpart. Actual access
+counters and lifecycle/empty-window checks are unchanged, and the existing
+access-pair resource bound includes all occurrences without deduplication.
+Matching stops at shared equivalence-budget exhaustion; a later identical or
+memoized candidate cannot revive it, and the protocol report remains incomplete.
+
+Cross-block regressions also run through the closed public entry point:
+
+```sh
+cargo test -p fe2o3-pliron --test production_static_pipeline_cfg
+```
 
 The relocated textual suites are under `src/production_analysis/tests/lit/`
 and `src/production_analysis/tests/protocol-lit/`. Run them with:

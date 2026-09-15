@@ -299,9 +299,12 @@ fn verify_dynamic_accesses(
 
     let mut staging = None::<(Value, usize)>;
     let mut consuming = None::<(Value, usize)>;
-    let mut staging_coordinates = HashSet::<Vec<Value>>::new();
-    let mut consuming_coordinates = HashSet::<Vec<Value>>::new();
-    let mut canonical_coordinates = None::<HashSet<Vec<Value>>>;
+    // Keep occurrence order: shared memo warming and bounded equivalence
+    // attempts must not depend on a randomized hash-set traversal. Duplicate
+    // rows do not change the bidirectional membership predicate below.
+    let mut staging_coordinates = Vec::<Vec<Value>>::new();
+    let mut consuming_coordinates = Vec::<Vec<Value>>::new();
+    let mut canonical_coordinates = None::<Vec<Vec<Value>>>;
     let mut empty_staging_windows = 0_usize;
     let mut empty_consuming_windows = 0_usize;
     let mut staged_writes = 0;
@@ -394,10 +397,10 @@ fn verify_dynamic_accesses(
                     ));
                 }
                 if is_write {
-                    staging_coordinates.insert(access.indices[1..].to_vec());
+                    staging_coordinates.push(access.indices[1..].to_vec());
                     staged_writes += 1;
                 } else {
-                    consuming_coordinates.insert(access.indices[1..].to_vec());
+                    consuming_coordinates.push(access.indices[1..].to_vec());
                     consuming_reads += 1;
                 }
             }
@@ -418,13 +421,13 @@ fn require_matching_pipeline_coordinates_v1(
     pipeline: PlironOperationSiteV1,
     event: PlironOperationSiteV1,
     phase: &str,
-    coordinates: &HashSet<Vec<Value>>,
-    canonical: &mut Option<HashSet<Vec<Value>>>,
+    coordinates: &[Vec<Value>],
+    canonical: &mut Option<Vec<Vec<Value>>>,
     equivalence_resources: &mut EquivalenceResourceMeterV1,
 ) -> Result<(), PlironPipelineProtocolFindingV1> {
     debug_assert!(!coordinates.is_empty());
     match canonical {
-        None => *canonical = Some(coordinates.clone()),
+        None => *canonical = Some(coordinates.to_vec()),
         Some(expected)
             if coordinate_sets_equivalent_v1(
                 context,
@@ -447,13 +450,19 @@ fn require_matching_pipeline_coordinates_v1(
 
 fn coordinate_sets_equivalent_v1(
     context: &Context,
-    left: &HashSet<Vec<Value>>,
-    right: &HashSet<Vec<Value>>,
+    left: &[Vec<Value>],
+    right: &[Vec<Value>],
     equivalence_resources: &mut EquivalenceResourceMeterV1,
 ) -> bool {
-    let mut contains_equivalent = |haystack: &HashSet<Vec<Value>>, needle: &[Value]| {
-        haystack.iter().any(|candidate| {
-            candidate.len() == needle.len()
+    if equivalence_resources.exhausted() {
+        return false;
+    }
+    let mut contains_equivalent = |haystack: &[Vec<Value>], needle: &[Value]| {
+        for candidate in haystack {
+            if equivalence_resources.exhausted() {
+                return false;
+            }
+            if candidate.len() == needle.len()
                 && candidate
                     .iter()
                     .copied()
@@ -461,7 +470,11 @@ fn coordinate_sets_equivalent_v1(
                     .all(|(left, right)| {
                         index_values_equivalent(context, left, right, equivalence_resources)
                     })
-        })
+            {
+                return true;
+            }
+        }
+        false
     };
     left.iter()
         .all(|coordinate| contains_equivalent(right, coordinate))

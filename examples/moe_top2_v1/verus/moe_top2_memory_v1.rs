@@ -16,8 +16,8 @@ pub open spec fn drop_route_v1() -> nat { 4294967295 }
 
 pub open spec fn source_identity_v1() -> Seq<u64> {
     seq![
-        0x0e4570bd52866dd2u64, 0x3b8b00d83983aadcu64,
-        0x818c77580de8f7f5u64, 0xe2982e12a57e20e2u64,
+        0x8b8b3477b7d9670bu64, 0x7a0356b05ff2aaabu64,
+        0x2aaec9f0b919bf26u64, 0xc4c46215d1a81eb4u64,
     ]
 }
 

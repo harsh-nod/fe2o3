@@ -1,15 +1,24 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod canonical_analysis_scope_v1;
 mod graph_analysis_v1;
 mod kir_bridge_v1;
+mod kir_optimization_map_v12;
 mod optimization_v1;
+mod optimization_v12;
 mod production;
 mod production_analysis;
 
+pub use canonical_analysis_scope_v1::*;
 pub use graph_analysis_v1::*;
 pub use kir_bridge_v1::*;
+pub use kir_optimization_map_v12::{
+    KirOptimizationDispositionV12, KirOptimizationEndpointV12, KirOptimizationMapErrorV12,
+    KirOptimizationMapV12, KirOptimizationRelationV12,
+};
 pub use optimization_v1::*;
+pub use optimization_v12::*;
 pub use production_analysis::*;
 
 // Neutral models are private imports for the session-owned analysis implementation.
@@ -63,18 +72,25 @@ pub use production::{
     ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticMirErrorV1,
     ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
     ProductionSemanticPartialMoveCertificateV1, ProductionSemanticScalarTypeV2,
-    ProductionSemanticSsaErrorV1, ProductionSemanticSsaFunctionPlanV1,
-    ProductionSemanticSsaIdentityV1, ProductionSemanticSsaLimitsV1,
-    ProductionSemanticSsaModuleLimitsErrorV1, ProductionSemanticSsaModuleLimitsV1,
-    ProductionSemanticSsaOwnerV1, ProductionSemanticSsaSummaryV1, ProductionSemanticUnaryOpV2,
-    ProductionSessionErrorV1, ProductionSessionLimitErrorV1, ProductionSessionLimitsV1,
-    ProductionStageHandleV1, ProductionStagedArithmeticCoverageV2,
-    ProductionTensorInstructionSiteV1, ProductionTensorRefinementContractV1,
-    ProductionTensorResultComponentV1, ProductionTotalOutputStagingErrorV2,
-    ProductionTotalOutputStagingReportV2, ProductionTypedSemanticCommitmentReconciliationV2,
-    ProductionTypedSemanticObligationSummaryV2, SemanticPartialMoveViolationV1,
-    authenticated_ambient_workgroup_lds_scope_zst_v1, compile_ranked_kernel_for_gfx942_lowering_v1,
-    compile_ranked_kernel_for_lowering_v1, derive_and_reconcile_mir_pliron_semantic_contract_v1,
+    ProductionSemanticSsaConstantOccurrenceV1, ProductionSemanticSsaEdgeDefinitionOccurrenceV1,
+    ProductionSemanticSsaEntryDefinitionOccurrenceV1, ProductionSemanticSsaEntryOriginV1,
+    ProductionSemanticSsaErrorV1, ProductionSemanticSsaEventOccurrenceV1,
+    ProductionSemanticSsaEventRoleV1, ProductionSemanticSsaFunctionOccurrencesV1,
+    ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaIdentityV1,
+    ProductionSemanticSsaLimitsV1, ProductionSemanticSsaModuleLimitsErrorV1,
+    ProductionSemanticSsaModuleLimitsV1, ProductionSemanticSsaOccurrenceErrorV1,
+    ProductionSemanticSsaOccurrenceSiteV1, ProductionSemanticSsaOccurrenceStorageV1,
+    ProductionSemanticSsaOccurrenceViewV1, ProductionSemanticSsaOperandRoleV1,
+    ProductionSemanticSsaOwnerV1, ProductionSemanticSsaSuccessorOccurrenceV1,
+    ProductionSemanticSsaSummaryV1, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
+    ProductionSessionLimitErrorV1, ProductionSessionLimitsV1, ProductionStageHandleV1,
+    ProductionStagedArithmeticCoverageV2, ProductionTensorInstructionSiteV1,
+    ProductionTensorRefinementContractV1, ProductionTensorResultComponentV1,
+    ProductionTotalOutputStagingErrorV2, ProductionTotalOutputStagingReportV2,
+    ProductionTypedSemanticCommitmentReconciliationV2, ProductionTypedSemanticObligationSummaryV2,
+    SemanticPartialMoveViolationV1, authenticated_ambient_workgroup_lds_scope_zst_v1,
+    compile_ranked_kernel_for_gfx942_lowering_v1, compile_ranked_kernel_for_lowering_v1,
+    derive_and_reconcile_mir_pliron_semantic_contract_v1,
     derive_and_require_parallel_reference_contract_v1, derive_noncanonical_loop_proof_request_v1,
     derive_noncanonical_loop_proof_requirement_v1, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
@@ -1916,3 +1932,13 @@ mod owner_handle_tests {
         assert!(session.operations.is_empty());
     }
 }
+
+mod kir_occurrence_capture_v1;
+mod neutral_optimization_v1;
+pub use kir_occurrence_capture_v1::KirNeutralOccurrenceRowsV1;
+pub use neutral_optimization_v1::{
+    CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
+    KirCheckedNeutralOptimizationStorageV1, KirNeutralOptimizationErrorV1,
+    KirNeutralOptimizationLeaseV1, KirNeutralOptimizationOutputV1, KirNeutralOptimizationStorageV1,
+    KirNeutralOwnedOriginStorageV1, optimize_native_neutral_kernel_ir_v1,
+};

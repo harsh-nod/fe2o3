@@ -71,6 +71,14 @@ fn any_source_identity_mutation_is_rejected() {
     let wrong = String::from_utf8(wrong).unwrap();
     assert!(validate_kernel_source_identity_v1(&wrong).is_err());
     assert!(validate_kernel_source_identity_v1("").is_err());
+    // Removing unreachable returns after diverging traps still changes the
+    // exact source identity; historical proof-source pins must not be accepted.
+    assert!(
+        validate_kernel_source_identity_v1(
+            "0e4570bd52866dd23b8b00d83983aadc818c77580de8f7f5e2982e12a57e20e2"
+        )
+        .is_err()
+    );
 }
 
 #[test]

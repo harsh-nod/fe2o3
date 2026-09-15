@@ -1175,6 +1175,7 @@
                 semantic_type: scalar,
                 kernel_type: Type::Scalar(ScalarType::U64),
                 alignment: 8,
+                array: None,
             },
         )]);
         let reachable = BTreeSet::from([0, 1, 2, 3]);

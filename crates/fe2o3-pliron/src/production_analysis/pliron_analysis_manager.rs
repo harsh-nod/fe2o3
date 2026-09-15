@@ -332,6 +332,10 @@ impl PlironAnalysisManagerV1 {
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }
 
+    pub(crate) fn sparse_indices_prepared(&self) -> bool {
+        self.sparse_indices.is_some()
+    }
+
     pub(crate) fn sparse_indices(&self) -> Result<&SparseIndexAnalysisV1, SparseIndexFailureV1> {
         self.sparse_indices
             .as_ref()

@@ -12,11 +12,19 @@ use fe2o3_kernel_ir::{
 };
 use std::{error::Error as StdError, fmt, mem::size_of};
 
+mod catalog_transport;
 mod control;
+mod control_index;
 mod index;
 mod payload;
+#[path = "canonical_kir_transition_receipt_v1.rs"]
+mod receipt;
 mod structure;
 mod values;
+
+pub use catalog_transport::*;
+pub use control_index::*;
+pub use receipt::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalKirTransitionErrorV1 {

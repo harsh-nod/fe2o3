@@ -146,26 +146,48 @@ impl SemanticControlFlowSsaPlanV1 {
         let private_slot_candidates =
             private_slot_candidate_locals_v1(function, &shared_promoted, &retained_cross_edge);
         let mut retained_local_slots = BTreeMap::new();
+        let mut has_retained_arrays = false;
         let mut unsupported_retained_locals = Vec::new();
         for local in private_slot_candidates {
             let declaration = function
                 .locals()
                 .get(local as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            let Some((kernel_type, alignment)) =
+            let slot = if matches!(
+                types[declaration.ty().index() as usize].shape(),
+                SemanticTypeShapeV1::Array { .. }
+            ) {
+                if matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)) {
+                    return Err(unsupported(
+                        semantic_function.index(),
+                        None,
+                        None,
+                        "retained by-value array arguments require source-effect-bound entry scatter",
+                    ));
+                }
+                retained_array_slot_plan_v1(types, declaration.ty(), max_analysis_work).map_err(
+                    |error| match error {
+                        ProductionSemanticKirErrorV1::Unsupported { detail, .. } => {
+                            unsupported(semantic_function.index(), None, None, detail)
+                        }
+                        error => error,
+                    },
+                )?
+            } else if let Some((kernel_type, alignment)) =
                 retained_local_slot_type_v1(types, declaration.ty())
-            else {
-                unsupported_retained_locals.push((local, declaration.ty().index()));
-                continue;
-            };
-            retained_local_slots.insert(
-                local,
+            {
                 SemanticRetainedLocalSlotPlanV1 {
                     semantic_type: declaration.ty(),
                     kernel_type,
                     alignment,
-                },
-            );
+                    array: None,
+                }
+            } else {
+                unsupported_retained_locals.push((local, declaration.ty().index()));
+                continue;
+            };
+            has_retained_arrays |= slot.array.is_some();
+            retained_local_slots.insert(local, slot);
         }
         if !unsupported_retained_locals.is_empty() {
             const MAX_RETAINED_LOCAL_DIAGNOSTICS_V1: usize = 32;
@@ -390,6 +412,7 @@ impl SemanticControlFlowSsaPlanV1 {
             max_analysis_storage,
         )?;
         Ok(Self {
+            has_retained_arrays,
             compiler_issued_bindings,
             implicit_entry_locals,
             ssa_value_locals: shared_promoted,

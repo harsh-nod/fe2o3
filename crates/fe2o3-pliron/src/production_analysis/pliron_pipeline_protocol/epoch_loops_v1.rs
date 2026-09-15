@@ -231,7 +231,11 @@ fn discover_epoch_loops(
             bound: branch.rhs(context),
         });
     }
-    EpochLoopDiscoveryV1 { loops, dominators }
+    EpochLoopDiscoveryV1 {
+        loops,
+        dominators,
+        cfg_successors,
+    }
 }
 
 fn pipeline_dominators_v1(
