@@ -37,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x96, 0x24, 0x84, 0x97, 0x93, 0x27, 0x54, 0xc7, 0x54, 0x57, 0x48, 0xb4, 0xeb, 0xc8, 0xab, 0x8c,
-    0x2e, 0xc8, 0xf6, 0x47, 0x7a, 0x63, 0x81, 0x1c, 0x13, 0x3f, 0x04, 0x67, 0xb3, 0xad, 0x6b, 0x74,
+    0x1f, 0x56, 0x3f, 0x18, 0x87, 0xe0, 0x08, 0x40, 0xe1, 0xd5, 0xf1, 0x56, 0x61, 0x00, 0xe0, 0x62,
+    0x7e, 0xcd, 0x0c, 0x67, 0xb6, 0xa8, 0x4a, 0xf7, 0x52, 0x27, 0x72, 0x88, 0x7d, 0x66, 0x8d, 0xbd,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -309,11 +309,14 @@ pub(crate) enum TrustedDeviceItem {
     F32AccumulatorFragmentZero,
     F32AccumulatorFragmentIntoValues,
     Bf16MfmaMatrixView,
+    Bf16MfmaBColumnMajorMatrixView,
     Bf16MfmaMatrixViewError,
     Bf16MfmaMatrixARowMajor,
     Bf16MfmaMatrixBRowMajor,
+    Bf16MfmaBColumnMajor,
     Bf16MfmaMatrixALoadZeroFilledV2,
     Bf16MfmaMatrixBLoadZeroFilledV2,
+    Bf16MfmaBColumnMajorLoadZeroFilledV1,
     DeviceMatrixMultiplyAccumulate,
     Gfx950Fp4E2M1Format,
     Gfx950Fp8E4M3Format,
@@ -1010,6 +1013,21 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Bf16MfmaMatrixViewError,
         "fe2o3_device_bf16_mfma_matrix_view_error_v1",
         "fe2o3_device::Bf16MatrixViewError",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView,
+        "fe2o3_device_bf16_mfma_b_column_major_matrix_v1",
+        "fe2o3_device::Bf16MfmaBColumnMajorMatrix",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaBColumnMajor,
+        "fe2o3_device_bf16_mfma_b_column_major_v1",
+        "fe2o3_device::Bf16MfmaBColumnMajorMatrix::column_major",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1,
+        "fe2o3_device_bf16_mfma_b_column_major_load_zero_filled_v1",
+        "fe2o3_device::Bf16MfmaBColumnMajorMatrix::load_k16n16",
     ),
     (
         TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
@@ -1730,6 +1748,15 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
             "fe2o3_device::tensor::{impl#5}::into_values"
         }
         TrustedDeviceItem::Bf16MfmaMatrixView => "fe2o3_device::tensor::Bf16MfmaMatrix",
+        TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView => {
+            "fe2o3_device::tensor::column_major::Bf16MfmaBColumnMajorMatrix"
+        }
+        TrustedDeviceItem::Bf16MfmaBColumnMajor => {
+            "fe2o3_device::tensor::column_major::{impl#0}::column_major"
+        }
+        TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1 => {
+            "fe2o3_device::tensor::column_major::{impl#0}::load_k16n16"
+        }
         TrustedDeviceItem::Bf16MfmaMatrixViewError => "fe2o3_device::tensor::Bf16MatrixViewError",
         TrustedDeviceItem::Bf16MfmaMatrixARowMajor => "fe2o3_device::tensor::{impl#7}::row_major",
         TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => "fe2o3_device::tensor::{impl#8}::row_major",
@@ -1906,6 +1933,9 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::F32AccumulatorFragmentZero
             | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
             | TrustedDeviceItem::Bf16MfmaMatrixView
+            | TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView
+            | TrustedDeviceItem::Bf16MfmaBColumnMajor
+            | TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1
             | TrustedDeviceItem::Bf16MfmaMatrixViewError
             | TrustedDeviceItem::Bf16MfmaMatrixARowMajor
             | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
@@ -3190,6 +3220,9 @@ mod tests {
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
             TrustedDeviceItem::StridedReadView2DLoadOr,
             TrustedDeviceItem::Bf16MfmaMatrixView,
+            TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView,
+            TrustedDeviceItem::Bf16MfmaBColumnMajor,
+            TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1,
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
@@ -3332,7 +3365,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("96248497932754c7545748b4ebc8ab8c2ec8f6477a63811c133f0467b3ad6b74")
+            digest("1f563f1887e00840e1d5f1566100e0627ecd0c67b6a84af7522772887d668dbd")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3869,6 +3902,9 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
+            TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView,
+            TrustedDeviceItem::Bf16MfmaBColumnMajor,
+            TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1,
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
@@ -4026,6 +4062,9 @@ mod tests {
             TrustedDeviceItem::DeviceMatrixCurrent,
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
+            TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView,
+            TrustedDeviceItem::Bf16MfmaBColumnMajor,
+            TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::Gfx950Fp4E2M1Format,
             TrustedDeviceItem::Gfx950Fp8E4M3Format,

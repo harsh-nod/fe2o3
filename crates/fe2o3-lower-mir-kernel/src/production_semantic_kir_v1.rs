@@ -16153,6 +16153,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *view,
                 *error,
                 Type::Scalar(ScalarType::U16),
+                SemanticMfmaStorageLayoutV1::RowMajor,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+                result,
+                view,
+                error,
+            } => self.lower_checked_strided_read_view(
+                block,
+                call,
+                operations,
+                *result,
+                *view,
+                *error,
+                Type::Scalar(ScalarType::U16),
+                SemanticMfmaStorageLayoutV1::ColumnMajor,
             )?,
             SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
                 result,
@@ -16173,6 +16188,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *view,
                 *error,
                 Type::Scalar(ScalarType::U8),
+                SemanticMfmaStorageLayoutV1::RowMajor,
             )?,
             SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
                 result,
@@ -16187,6 +16203,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *view,
                 *error,
                 lower_scalar_type(self.types, *element)?,
+                SemanticMfmaStorageLayoutV1::RowMajor,
             )?,
             SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. } => self
                 .lower_strided_read_view_load_or(
@@ -16488,6 +16505,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         wave: accumulator_wave,
                     }
                 } else {
+                    if !matches!(
+                        lhs_storage,
+                        SemanticMfmaStorageLayoutV1::RowMajor
+                            | SemanticMfmaStorageLayoutV1::LdsXor4
+                    ) || !matches!(
+                        rhs_storage,
+                        SemanticMfmaStorageLayoutV1::RowMajor
+                            | SemanticMfmaStorageLayoutV1::LdsXor4
+                            | SemanticMfmaStorageLayoutV1::ColumnMajor
+                    ) {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "BF16 matrix source layout is not admitted for its operand role",
+                        ));
+                    }
                     let lhs = require_components(
                         block,
                         lhs,
@@ -17759,6 +17793,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         view_type: SemanticTypeIdV1,
         error_type: SemanticTypeIdV1,
         element_type: Type,
+        storage_layout: SemanticMfmaStorageLayoutV1,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         self.require_call_argument_count(block, call, 5)?;
         let bits = self.lower_operand(block, None, &call.arguments()[0], operations)?;
@@ -17797,6 +17832,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let [offset, rows, columns, stride] = indices
             .try_into()
             .expect("four checked row-major view indices");
+        let (physical_rows, physical_columns) = match storage_layout {
+            SemanticMfmaStorageLayoutV1::RowMajor => (rows, columns),
+            SemanticMfmaStorageLayoutV1::ColumnMajor => (columns, rows),
+            SemanticMfmaStorageLayoutV1::LdsXor4 => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "LDS layout is not a global checked strided view",
+                ));
+            }
+        };
         let zero = self.emit_index_constant(operations, 0)?;
         let one = self.emit_index_constant(operations, 1)?;
         let rows_zero = self.emit_compare(operations, ComparePredicate::Equal, rows, zero)?;
@@ -17805,21 +17852,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let stride_wide_enough = self.emit_compare(
             operations,
             ComparePredicate::LessThanOrEqual,
-            columns,
+            physical_columns,
             stride,
         )?;
         let stride_valid = self.emit_bool_or(operations, empty, stride_wide_enough)?;
 
-        let (rows_minus_one, rows_safe) =
-            self.emit_checked_index(operations, CheckedBinaryOperator::Subtract, rows, one)?;
+        let (rows_minus_one, rows_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Subtract,
+            physical_rows,
+            one,
+        )?;
         let (row_extent, multiply_safe) = self.emit_checked_index(
             operations,
             CheckedBinaryOperator::Multiply,
             rows_minus_one,
             stride,
         )?;
-        let (matrix_extent, columns_safe) =
-            self.emit_checked_index(operations, CheckedBinaryOperator::Add, row_extent, columns)?;
+        let (matrix_extent, columns_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Add,
+            row_extent,
+            physical_columns,
+        )?;
         let (required_nonempty, offset_safe) = self.emit_checked_index(
             operations,
             CheckedBinaryOperator::Add,
@@ -18199,6 +18254,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if storage_layout != SemanticMfmaStorageLayoutV1::RowMajor
+            && !(storage_layout == SemanticMfmaStorageLayoutV1::ColumnMajor
+                && contract.role == SemanticMfmaOperandRoleV1::B
+                && contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16)
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "BF16 global load storage layout is incompatible with its operand",
+            ));
+        }
         self.require_call_argument_count(block, call, 4)?;
         let view = self.lower_operand(block, None, &call.arguments()[0], operations)?;
         let view = view
@@ -18328,8 +18395,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, rows)?;
             let column_valid =
                 self.emit_compare(operations, ComparePredicate::LessThan, column, columns)?;
-            let (row_offset, row_safe) =
-                self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, stride)?;
+            let (major, minor) = if storage_layout == SemanticMfmaStorageLayoutV1::ColumnMajor {
+                (column, row)
+            } else {
+                (row, column)
+            };
+            let (row_offset, row_safe) = self.emit_checked_index(
+                operations,
+                CheckedBinaryOperator::Multiply,
+                major,
+                stride,
+            )?;
             let (index, offset_safe) = self.emit_checked_index(
                 operations,
                 CheckedBinaryOperator::Add,
@@ -18337,7 +18413,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 row_offset,
             )?;
             let (index, column_safe) =
-                self.emit_checked_index(operations, CheckedBinaryOperator::Add, index, column)?;
+                self.emit_checked_index(operations, CheckedBinaryOperator::Add, index, minor)?;
             let index_in_bounds =
                 self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
             let mut guard = self.emit_bool_and(operations, present, row_valid)?;
@@ -27589,12 +27665,434 @@ mod resource_tests {
         }
     }
 
+    fn lower_bf16_storage_load_for_test(
+        role: SemanticMfmaOperandRoleV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    ) -> Result<(Vec<Operation>, SemanticValueBindingV1), ProductionSemanticKirErrorV1> {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let index = SemanticTypeIdV1::from_index(1);
+        let lane_type = SemanticTypeIdV1::from_index(2);
+        let view_type = SemanticTypeIdV1::from_index(3);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let types = vec![
+            unit_type(),
+            u64_type(),
+            unsigned_scalar_type(171, 32),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([173; 32]),
+                SemanticLayoutIdentityV1::from_sha256([174; 32]),
+                SemanticTypeLayoutV1::new(Some(48), 8).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+        ];
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([175; 32]),
+            SemanticLayoutIdentityV1::from_sha256([176; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let locals = [unit, view_type, lane_type, index, index]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, ty)| {
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([180 + ordinal as u8; 32]),
+                    ty,
+                    if ordinal == 0 {
+                        SemanticLocalRoleV1::Return
+                    } else {
+                        SemanticLocalRoleV1::Temporary
+                    },
+                    source,
+                )
+            })
+            .collect();
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([185; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([186; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([187; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([188; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([189; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([190; 32]),
+            source,
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap();
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &[],
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+                local_bindings: None,
+            },
+            None,
+            None,
+            BTreeSet::new(),
+            1,
+            false,
+            1024,
+        )?;
+        let value = |id, ty| SemanticValueBindingV1::Value {
+            id: ValueId(id),
+            ty,
+        };
+        lowering.locals[1] = Some(SemanticValueBindingV1::Aggregate(vec![
+            value(
+                0,
+                Type::slice(
+                    Type::Scalar(ScalarType::U16),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+            ),
+            value(1, Type::INDEX),
+            value(2, Type::INDEX),
+            value(3, Type::INDEX),
+            value(4, Type::INDEX),
+        ]));
+        lowering.locals[2] = Some(SemanticValueBindingV1::WaveLane {
+            value: ValueId(5),
+            wave: SemanticCurrentWaveV1::new(64),
+        });
+        lowering.locals[3] = Some(value(6, Type::INDEX));
+        lowering.locals[4] = Some(value(7, Type::INDEX));
+        lowering.next_value = 8;
+        let arguments = [(1, view_type), (2, lane_type), (3, index), (4, index)]
+            .into_iter()
+            .map(|(local, ty)| {
+                SemanticOperandV1::Copy(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap(),
+                )
+            })
+            .collect();
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            arguments,
+            None,
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let mut operations = Vec::new();
+        let binding = lowering.lower_bf16_matrix_load(
+            SemanticBlockIdV1::from_index(0),
+            &call,
+            &mut operations,
+            operand_contract(role),
+            storage_layout,
+        )?;
+        Ok((operations, binding))
+    }
+
+    #[test]
+    fn column_major_b_lowering_changes_only_the_checked_physical_address_axes() {
+        let (row, _) = lower_bf16_storage_load_for_test(
+            SemanticMfmaOperandRoleV1::B,
+            SemanticMfmaStorageLayoutV1::RowMajor,
+        )
+        .unwrap();
+        let (column, binding) = lower_bf16_storage_load_for_test(
+            SemanticMfmaOperandRoleV1::B,
+            SemanticMfmaStorageLayoutV1::ColumnMajor,
+        )
+        .unwrap();
+        assert!(matches!(
+            binding,
+            SemanticValueBindingV1::MatrixFragment {
+                storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+                ..
+            }
+        ));
+        assert_eq!(row.len(), column.len());
+        let mut major_axes = Vec::new();
+        let mut minor_axes = Vec::new();
+        let mut guarded_loads = 0;
+        for (old, new) in row.iter().zip(&column) {
+            assert_eq!(old.results, new.results);
+            if old.kind == new.kind {
+                if matches!(new.kind, OperationKind::GuardedLoad { .. }) {
+                    guarded_loads += 1;
+                }
+                continue;
+            }
+            match (&old.kind, &new.kind) {
+                (
+                    OperationKind::Binary {
+                        op: BinaryOp::Checked(CheckedBinaryOperator::Multiply),
+                        lhs: old_axis,
+                        rhs: ValueId(4),
+                    },
+                    OperationKind::Binary {
+                        op: BinaryOp::Checked(CheckedBinaryOperator::Multiply),
+                        lhs: new_axis,
+                        rhs: ValueId(4),
+                    },
+                ) => {
+                    assert_ne!(old_axis, new_axis);
+                    major_axes.push((*old_axis, *new_axis));
+                }
+                (
+                    OperationKind::Binary {
+                        op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                        lhs: old_base,
+                        rhs: old_minor,
+                    },
+                    OperationKind::Binary {
+                        op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                        lhs: new_base,
+                        rhs: new_minor,
+                    },
+                ) => {
+                    assert_eq!(old_base, new_base);
+                    assert_ne!(old_minor, new_minor);
+                    minor_axes.push((*old_minor, *new_minor));
+                }
+                unexpected => panic!("unexpected change to checked load lowering: {unexpected:?}"),
+            }
+        }
+        assert_eq!(
+            (major_axes.len(), minor_axes.len(), guarded_loads),
+            (4, 4, 4)
+        );
+        for ((old_major, new_major), (old_minor, new_minor)) in
+            major_axes.into_iter().zip(minor_axes)
+        {
+            assert_eq!(old_major, new_minor);
+            assert_eq!(new_major, old_minor);
+        }
+        assert!(
+            lower_bf16_storage_load_for_test(
+                SemanticMfmaOperandRoleV1::A,
+                SemanticMfmaStorageLayoutV1::ColumnMajor
+            )
+            .is_err()
+        );
+        assert!(
+            lower_bf16_storage_load_for_test(
+                SemanticMfmaOperandRoleV1::B,
+                SemanticMfmaStorageLayoutV1::LdsXor4
+            )
+            .is_err()
+        );
+    }
+
     fn accumulator_contract() -> SemanticMfmaAccumulatorContractV1 {
         SemanticMfmaAccumulatorContractV1 {
             profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
             distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
             wave_width: 64,
         }
+    }
+
+    fn lower_bf16_multiply_storage_for_test(
+        lhs_storage: SemanticMfmaStorageLayoutV1,
+        rhs_storage: SemanticMfmaStorageLayoutV1,
+    ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let fragment = SemanticTypeIdV1::from_index(1);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let types = [
+            unit_type(),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([151; 32]),
+                SemanticLayoutIdentityV1::from_sha256([152; 32]),
+                SemanticTypeLayoutV1::new(Some(16), 4).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+        ];
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([153; 32]),
+            SemanticLayoutIdentityV1::from_sha256([154; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let callables = [SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256([155; 32]),
+                SemanticItemDefinitionIdentityV1::from_sha256([156; 32]),
+                SemanticMonomorphizationIdentityV1::from_sha256([157; 32]),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256([158; 32]),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256([159; 32]),
+                source,
+                abi.clone(),
+            ),
+            operation: SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                context: unit,
+                lhs_fragment: fragment,
+                rhs_fragment: fragment,
+                accumulator_fragment: fragment,
+                lhs: operand_contract(SemanticMfmaOperandRoleV1::A),
+                rhs: operand_contract(SemanticMfmaOperandRoleV1::B),
+                accumulator: accumulator_contract(),
+            },
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([160; 32]),
+        }];
+        let locals = [unit, unit, fragment, fragment, fragment, fragment]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, ty)| {
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([161 + ordinal as u8; 32]),
+                    ty,
+                    if ordinal == 0 {
+                        SemanticLocalRoleV1::Return
+                    } else {
+                        SemanticLocalRoleV1::Temporary
+                    },
+                    source,
+                )
+            })
+            .collect();
+        let blocks = [
+            SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::Goto,
+                SemanticBlockIdV1::from_index(1),
+            )),
+            SemanticTerminatorKindV1::Return,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, terminator)| {
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([170 + ordinal as u8; 32]),
+                source,
+                vec![],
+                SemanticTerminatorV1::new(source, terminator),
+            )
+            .unwrap()
+        })
+        .collect();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([172; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([173; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([174; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([175; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([176; 32]),
+            source,
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap();
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &callables,
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+                local_bindings: None,
+            },
+            None,
+            None,
+            BTreeSet::new(),
+            1,
+            false,
+            64,
+        )?;
+        lowering.locals[1] = Some(SemanticValueBindingV1::MatrixContext);
+        for (local, role, storage, base) in [
+            (2, SemanticMfmaOperandRoleV1::A, lhs_storage, 0),
+            (3, SemanticMfmaOperandRoleV1::B, rhs_storage, 4),
+        ] {
+            lowering.locals[local] = Some(SemanticValueBindingV1::MatrixFragment {
+                values: (base..base + 4)
+                    .map(|id| (ValueId(id), Type::Scalar(ScalarType::Bf16)))
+                    .collect(),
+                contract: operand_contract(role),
+                storage_layout: storage,
+                wave: SemanticCurrentWaveV1::new(64),
+            });
+        }
+        lowering.locals[4] = Some(SemanticValueBindingV1::AccumulatorFragment {
+            values: (8..12)
+                .map(|id| (ValueId(id), Type::Scalar(ScalarType::F32)))
+                .collect(),
+            contract: accumulator_contract(),
+            wave: SemanticCurrentWaveV1::new(64),
+        });
+        lowering.next_value = 12;
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            [(1, unit), (2, fragment), (3, fragment), (4, fragment)]
+                .into_iter()
+                .map(|(local, ty)| SemanticOperandV1::Copy(place(local, ty)))
+                .collect(),
+            Some(SemanticCallDestinationV1::new(
+                place(5, fragment),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let mut operations = Vec::new();
+        lowering.lower_call(SemanticBlockIdV1::from_index(0), &call, &mut operations)?;
+        Ok(operations)
+    }
+
+    #[test]
+    fn bf16_multiply_preserves_the_register_operation_and_rejects_column_major_a() {
+        let row = lower_bf16_multiply_storage_for_test(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::RowMajor,
+        )
+        .unwrap();
+        let column = lower_bf16_multiply_storage_for_test(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::ColumnMajor,
+        )
+        .unwrap();
+        assert_eq!(row, column);
+        assert_eq!(
+            column
+                .iter()
+                .filter(|operation| matches!(operation.kind, OperationKind::Matrix(_)))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            lower_bf16_multiply_storage_for_test(
+                SemanticMfmaStorageLayoutV1::ColumnMajor,
+                SemanticMfmaStorageLayoutV1::RowMajor
+            ),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "BF16 matrix source layout is not admitted for its operand role",
+                ..
+            })
+        ));
     }
 
     #[test]

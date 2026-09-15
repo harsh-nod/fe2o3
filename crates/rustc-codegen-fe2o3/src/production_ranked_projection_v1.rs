@@ -6066,6 +6066,31 @@ fn transfer_capability_terminator_v1(
             };
             (origin, None)
         }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor { result, .. } => {
+            let allocation = call
+                .arguments()
+                .first()
+                .and_then(transparent_operand_place)
+                .and_then(|place| local_allocations.get(place.local().index() as usize))
+                .copied()
+                .flatten();
+            let origin = match allocation {
+                Some(allocation)
+                    if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                {
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                        ProjectedMfmaViewV1 {
+                            role: SemanticMfmaOperandRoleV1::B,
+                            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                            storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+                            allocation,
+                        },
+                    ))
+                }
+                _ => ProjectedCapabilityValueV1::Invalid,
+            };
+            (origin, None)
+        }
         SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
             result,
             role,
@@ -6326,7 +6351,11 @@ fn authenticate_tensor_load_v1(
     contract: SemanticMfmaOperandContractV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
 ) -> Option<ProjectedMfmaOperandV1> {
-    if call.arguments().len() != 4 {
+    if call.arguments().len() != 4
+        || (storage_layout == SemanticMfmaStorageLayoutV1::ColumnMajor
+            && (contract.role != SemanticMfmaOperandRoleV1::B
+                || contract.profile != SemanticMfmaProfileV1::Bf16F32M16N16K16))
+    {
         return None;
     }
     let view = capability_known_origin_v1(state, &call.arguments()[0])?;
@@ -6451,7 +6480,9 @@ fn authenticate_tensor_instruction_v1(
             if lhs_contract.register_distribution
                 == SemanticMfmaRegisterDistributionV1::Tile16x16
                 && rhs_contract.register_distribution
-                    == SemanticMfmaRegisterDistributionV1::Tile16x16 =>
+                    == SemanticMfmaRegisterDistributionV1::Tile16x16
+                && matches!(lhs.storage_layout, SemanticMfmaStorageLayoutV1::RowMajor | SemanticMfmaStorageLayoutV1::LdsXor4)
+                && matches!(rhs.storage_layout, SemanticMfmaStorageLayoutV1::RowMajor | SemanticMfmaStorageLayoutV1::LdsXor4 | SemanticMfmaStorageLayoutV1::ColumnMajor) =>
         {
             fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
                 .with_zero_filled_predicate_inputs()
@@ -6515,6 +6546,7 @@ fn tensor_operand_root_v1(operand: ProjectedMfmaOperandV1) -> DigestV1 {
             match operand.storage_layout {
                 SemanticMfmaStorageLayoutV1::RowMajor => 1,
                 SemanticMfmaStorageLayoutV1::LdsXor4 => 2,
+                SemanticMfmaStorageLayoutV1::ColumnMajor => 3,
             },
         ],
     )
@@ -10709,6 +10741,7 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
             | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }

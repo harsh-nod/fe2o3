@@ -90,10 +90,11 @@ pub use sync::{
 pub use tensor::DeviceMatrix as Matrix;
 pub use tensor::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
-    Bf16F32M16N16K16, Bf16MatrixViewError, Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment,
-    Bf16MfmaBMatrix, Bf16MfmaFragment, Bf16MfmaMatrix, DeviceMatrix, F32AccumulatorFragment,
-    LdsTile16x16, LdsTileShapeError, MATRIX_CONTRACT_VERSION_V1, MfmaAccumulatorRowMajor,
-    MfmaLdsTile16x16, MfmaLdsXor4, MfmaOperandA, MfmaOperandB, MfmaRegisterTile16x16, RowMajorXor4,
+    Bf16F32M16N16K16, Bf16MatrixViewError, Bf16MfmaAFragment, Bf16MfmaAMatrix,
+    Bf16MfmaBColumnMajorMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix, Bf16MfmaFragment,
+    Bf16MfmaMatrix, DeviceMatrix, F32AccumulatorFragment, LdsTile16x16, LdsTileShapeError,
+    MATRIX_CONTRACT_VERSION_V1, MfmaAccumulatorRowMajor, MfmaLdsTile16x16, MfmaLdsXor4,
+    MfmaOperandA, MfmaOperandB, MfmaRegisterTile16x16, RowMajorXor4,
 };
 pub use thread::{
     Blocked, DisjointBlock, DisjointIndex, DisjointRowStripe2D, DisjointTile2D, GlobalGridSize,

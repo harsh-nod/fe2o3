@@ -321,6 +321,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes the closed V15 schema for checked column-major BF16 B storage.
+    pub fn decode_exact_v15_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V15),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -360,6 +372,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V12
                         | SemanticMirWireVersionV1::V13
                         | SemanticMirWireVersionV1::V14
+                        | SemanticMirWireVersionV1::V15
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1607,7 +1620,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V14 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V15 {
+            68
+        } else if self.wire_version == SemanticMirWireVersionV1::V14 {
             67
         } else if self.wire_version == SemanticMirWireVersionV1::V13 {
             66
@@ -2041,6 +2056,11 @@ impl<'a> CanonicalDecoderV1<'a> {
                 lanes_per_block: self.u64()?,
                 elements_per_lane: self.u64()?,
             },
+            68 => SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+                result: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                error: SemanticTypeIdV1(self.u32()?),
+            },
             _ => unreachable!(),
         })
     }
@@ -2082,9 +2102,15 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn mfma_storage_layout(
         &mut self,
     ) -> Result<SemanticMfmaStorageLayoutV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("MFMA storage layout", 1)? {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V15 {
+            2
+        } else {
+            1
+        };
+        Ok(match self.tagged("MFMA storage layout", maximum_tag)? {
             0 => SemanticMfmaStorageLayoutV1::RowMajor,
             1 => SemanticMfmaStorageLayoutV1::LdsXor4,
+            2 => SemanticMfmaStorageLayoutV1::ColumnMajor,
             _ => unreachable!(),
         })
     }
@@ -4080,6 +4106,130 @@ mod tests {
     }
 
     #[test]
+    fn column_major_b_constructor_and_load_require_exact_v15_encoding() {
+        let constructor = SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+            result: SemanticTypeIdV1::from_index(7),
+            view: SemanticTypeIdV1::from_index(8),
+            error: SemanticTypeIdV1::from_index(9),
+        };
+        let load = SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment: SemanticTypeIdV1::from_index(7),
+            view: SemanticTypeIdV1::from_index(8),
+            lane: SemanticTypeIdV1::from_index(9),
+            contract: SemanticMfmaOperandContractV1 {
+                role: SemanticMfmaOperandRoleV1::B,
+                profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16,
+                wave_width: 64,
+            },
+            storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+        };
+        for operation in [constructor, load] {
+            let bytes = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V15);
+            assert_eq!(
+                minimum_wire_version(&version_selection_request([operation])),
+                SemanticMirWireVersionV1::V15
+            );
+            for version in 2..=14 {
+                let wire_version = SemanticMirWireVersionV1::from_u16(version).unwrap();
+                let mut writer = CanonicalWriterV1::new(128);
+                assert_eq!(
+                    encode_compiler_intrinsic_operation(&mut writer, operation, wire_version),
+                    Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                        requested: wire_version,
+                        required: SemanticMirWireVersionV1::V15
+                    })
+                );
+                assert!(writer.finish().is_empty());
+                let mut decoder = CanonicalDecoderV1::new(&bytes, SemanticMirLimitsV1::default());
+                decoder.wire_version = wire_version;
+                assert!(decoder.compiler_intrinsic().is_err());
+            }
+            for end in 0..bytes.len() {
+                let mut decoder =
+                    CanonicalDecoderV1::new(&bytes[..end], SemanticMirLimitsV1::default());
+                decoder.wire_version = SemanticMirWireVersionV1::V15;
+                assert!(decoder.compiler_intrinsic().is_err());
+            }
+        }
+        assert_eq!(
+            compiler_intrinsic_round_trip(constructor, SemanticMirWireVersionV1::V15),
+            [68, 7, 0, 0, 0, 8, 0, 0, 0, 9, 0, 0, 0]
+        );
+        let mut invalid = compiler_intrinsic_round_trip(load, SemanticMirWireVersionV1::V15);
+        *invalid.last_mut().unwrap() = 3;
+        let mut decoder = CanonicalDecoderV1::new(&invalid, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V15;
+        assert!(matches!(
+            decoder.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "MFMA storage layout",
+                ..
+            })
+        ));
+
+        let mut row_major = load;
+        let SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            storage_layout, ..
+        } = &mut row_major
+        else {
+            unreachable!()
+        };
+        *storage_layout = SemanticMfmaStorageLayoutV1::RowMajor;
+        let old_bytes = compiler_intrinsic_round_trip(row_major, SemanticMirWireVersionV1::V14);
+        assert_eq!(
+            compiler_intrinsic_round_trip(row_major, SemanticMirWireVersionV1::V15),
+            old_bytes
+        );
+        assert_ne!(
+            compiler_intrinsic_round_trip(load, SemanticMirWireVersionV1::V15),
+            old_bytes
+        );
+    }
+
+    #[test]
+    fn exact_v15_canonical_round_trip_preserves_the_closed_version_boundary() {
+        let limits = SemanticMirLimitsV1::default();
+        let baseline = minimal_request().admit_current_production(limits).unwrap();
+        assert_eq!(baseline.wire_version(), SemanticMirWireVersionV1::V5);
+        let v14 = minimal_request().admit_exact_v14(limits).unwrap();
+        let v15 = minimal_request().admit_exact_v15(limits).unwrap();
+        let exact = AdmittedInertSemanticMirV1::decode_exact_v15_canonical(
+            v15.canonical_encoding(),
+            limits,
+        )
+        .unwrap();
+        let current = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            v15.canonical_encoding(),
+            limits,
+        )
+        .unwrap();
+        assert_eq!(exact.canonical_encoding(), v15.canonical_encoding());
+        assert_eq!(current.canonical_encoding(), v15.canonical_encoding());
+        assert_eq!(exact.semantic_sha256(), v15.semantic_sha256());
+        assert!(matches!(
+            AdmittedInertSemanticMirV1::decode_exact_v14_canonical(
+                v15.canonical_encoding(),
+                limits
+            ),
+            Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected: SemanticMirWireVersionV1::V14,
+                actual: SemanticMirWireVersionV1::V15
+            })
+        ));
+        assert!(matches!(
+            AdmittedInertSemanticMirV1::decode_exact_v15_canonical(
+                v14.canonical_encoding(),
+                limits
+            ),
+            Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected: SemanticMirWireVersionV1::V15,
+                actual: SemanticMirWireVersionV1::V14
+            })
+        ));
+    }
+
+    #[test]
     fn disjoint_block_component_index_is_exactly_v14_tag_67() {
         let operation = SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
             block_witness: SemanticTypeIdV1::from_index(7),
@@ -4486,6 +4636,10 @@ mod tests {
         decoder.wire_version = SemanticMirWireVersionV1::V14;
         for operation in [scan, volatile, trap, reduce, scope, component] {
             assert_eq!(decoder.compiler_intrinsic().unwrap(), operation);
+            assert_eq!(
+                compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V14),
+                compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V15)
+            );
         }
         decoder.finish().unwrap();
 

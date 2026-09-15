@@ -869,6 +869,193 @@
     }
 
     #[test]
+    fn column_major_b_load_requires_its_exact_view_role_layout_and_wave() {
+        let call = tensor_test_call();
+        let contract = mfma_operand_contract(SemanticMfmaOperandRoleV1::B);
+        let view = ProjectedMfmaViewV1 {
+            role: SemanticMfmaOperandRoleV1::B,
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+            allocation: tensor_test_allocation(),
+        };
+        let mut state = authenticated_tensor_load_state();
+        state.insert(
+            0,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(view)),
+        );
+        let actual = authenticate_tensor_load_v1(
+            &call,
+            &state,
+            contract,
+            SemanticMfmaStorageLayoutV1::ColumnMajor,
+        )
+        .unwrap();
+        assert_eq!(
+            actual.storage_layout,
+            SemanticMfmaStorageLayoutV1::ColumnMajor
+        );
+        assert!(
+            authenticate_tensor_load_v1(
+                &call,
+                &state,
+                contract,
+                SemanticMfmaStorageLayoutV1::RowMajor
+            )
+            .is_none()
+        );
+        assert!(
+            authenticate_tensor_load_v1(
+                &call,
+                &state,
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                SemanticMfmaStorageLayoutV1::ColumnMajor
+            )
+            .is_none()
+        );
+        state.insert(
+            0,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(
+                ProjectedMfmaViewV1 {
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    ..view
+                },
+            )),
+        );
+        assert!(
+            authenticate_tensor_load_v1(
+                &call,
+                &state,
+                contract,
+                SemanticMfmaStorageLayoutV1::ColumnMajor
+            )
+            .is_none()
+        );
+        state.insert(
+            0,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(view)),
+        );
+        state.insert(
+            1,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
+                root: 20,
+                wave_width: 32,
+            }),
+        );
+        assert!(
+            authenticate_tensor_load_v1(
+                &call,
+                &state,
+                contract,
+                SemanticMfmaStorageLayoutV1::ColumnMajor
+            )
+            .is_none()
+        );
+    }
+
+    fn authenticated_tensor_state(
+        lhs_storage: SemanticMfmaStorageLayoutV1,
+        rhs_storage: SemanticMfmaStorageLayoutV1,
+    ) -> ProjectedCapabilityStateV1 {
+        HashMap::from([
+            (
+                0,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                    root: 10,
+                }),
+            ),
+            (
+                1,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                        storage_layout: lhs_storage,
+                        lane_root: 20,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
+            ),
+            (
+                2,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                        storage_layout: rhs_storage,
+                        lane_root: 20,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
+            ),
+            (
+                3,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                    ProjectedMfmaAccumulatorV1 {
+                        contract: mfma_accumulator_contract(),
+                        lane_root: 20,
+                        value_root: 30,
+                        flow_root: 30,
+                    },
+                )),
+            ),
+        ])
+    }
+
+    #[test]
+    fn column_major_b_preserves_register_layout_but_has_distinct_source_identity() {
+        let call = tensor_test_call();
+        let authenticate = |lhs, rhs| {
+            authenticate_tensor_instruction_v1(
+                &call,
+                &authenticated_tensor_state(lhs, rhs),
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                mfma_accumulator_contract(),
+            )
+        };
+        let row = authenticate(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::RowMajor,
+        )
+        .unwrap();
+        let column = authenticate(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::ColumnMajor,
+        )
+        .unwrap();
+        assert_eq!(row.contract, column.contract);
+        assert_ne!(
+            tensor_operand_root_v1(row.rhs),
+            tensor_operand_root_v1(column.rhs)
+        );
+        assert!(
+            authenticate(
+                SemanticMfmaStorageLayoutV1::ColumnMajor,
+                SemanticMfmaStorageLayoutV1::RowMajor
+            )
+            .is_err()
+        );
+        let mut state = authenticated_tensor_state(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::ColumnMajor,
+        );
+        let Some(ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(rhs))) =
+            state.get_mut(&2)
+        else {
+            panic!("checked B producer")
+        };
+        rhs.lane_root += 1;
+        assert!(
+            authenticate_tensor_instruction_v1(
+                &call,
+                &state,
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                mfma_accumulator_contract()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn authenticated_mfma_producers_derive_independent_storage_and_zero_fill() {
         let call = tensor_test_call();
         let state = authenticated_tensor_state(

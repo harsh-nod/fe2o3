@@ -39,6 +39,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V11: u16 = 11;
 pub const INERT_SEMANTIC_MIR_VERSION_V12: u16 = 12;
 pub const INERT_SEMANTIC_MIR_VERSION_V13: u16 = 13;
 pub const INERT_SEMANTIC_MIR_VERSION_V14: u16 = 14;
+pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -60,6 +61,7 @@ pub enum SemanticMirWireVersionV1 {
     V12,
     V13,
     V14,
+    V15,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -78,6 +80,7 @@ impl SemanticMirWireVersionV1 {
             Self::V12 => INERT_SEMANTIC_MIR_VERSION_V12,
             Self::V13 => INERT_SEMANTIC_MIR_VERSION_V13,
             Self::V14 => INERT_SEMANTIC_MIR_VERSION_V14,
+            Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
         }
     }
 
@@ -96,6 +99,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V12 => Some(Self::V12),
             INERT_SEMANTIC_MIR_VERSION_V13 => Some(Self::V13),
             INERT_SEMANTIC_MIR_VERSION_V14 => Some(Self::V14),
+            INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             _ => None,
         }
     }
@@ -5257,6 +5261,7 @@ pub enum SemanticMfmaRegisterDistributionV1 {
 pub enum SemanticMfmaStorageLayoutV1 {
     RowMajor,
     LdsXor4,
+    ColumnMajor,
 }
 
 /// Register lane/component mapping of the four accumulator values.
@@ -5457,6 +5462,12 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         error: SemanticTypeIdV1,
         role: SemanticMfmaOperandRoleV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Checks a BF16 B view backed by column-major logical K,N storage.
+    Bf16MatrixViewColumnMajor {
+        result: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        error: SemanticTypeIdV1,
     },
     /// Loads one role-specific, zero-filled operand fragment from a checked view.
     Bf16MatrixLoad {
@@ -6208,13 +6219,22 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V14, limits)
     }
 
+    /// Admits under V15, which adds checked column-major BF16 B storage.
+    pub fn admit_exact_v15(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V15, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
     /// workgroup pipelines occur together, V10 for target-neutral scans, and
     /// V11 when the compiler trap terminal is present, V12 for checked
     /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
-    /// and V14 for checked disjoint-block component projection.
+    /// V14 for checked disjoint-block component projection, and V15 for checked
+    /// column-major BF16 B operands.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7859,6 +7879,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor { .. }
@@ -8311,6 +8332,18 @@ fn compiler_intrinsic_signature_matches(
                 )
                 && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
         }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+            result,
+            view,
+            error,
+        } => {
+            inputs.len() == 5
+                && output == result
+                && inputs[1..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && result_value_error_matches(request, result, view, error)
+        }
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
             option_fragment,
             view,
@@ -8345,7 +8378,10 @@ fn compiler_intrinsic_signature_matches(
                     .iter()
                     .all(|input| is_integer_type(request, *input))
                 && mfma_operand_contract_valid(contract)
-                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+                && (storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+                    || (storage_layout == SemanticMfmaStorageLayoutV1::ColumnMajor
+                        && contract.role == SemanticMfmaOperandRoleV1::B
+                        && contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16))
         }
         SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
             result,
@@ -15785,6 +15821,11 @@ fn enqueue_compiler_intrinsic_type_references(
             view,
             error,
             ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+            result,
+            view,
+            error,
         } => {
             pending.push_back(result);
             pending.push_back(view);
@@ -16717,6 +16758,21 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     }) {
         required = required.max(SemanticMirWireVersionV1::V14);
     }
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                        storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+                        ..
+                    },
+                ..
+            }
+        )
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V15);
+    }
     required
 }
 
@@ -17564,6 +17620,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
                 && wire_version != SemanticMirWireVersionV1::V14
+                && wire_version != SemanticMirWireVersionV1::V15
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17575,6 +17632,7 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
             if wire_version != SemanticMirWireVersionV1::V13
                 && wire_version != SemanticMirWireVersionV1::V14
+                && wire_version != SemanticMirWireVersionV1::V15
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17655,6 +17713,7 @@ fn encode_compiler_intrinsic_operation(
             if wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
                 && wire_version != SemanticMirWireVersionV1::V14
+                && wire_version != SemanticMirWireVersionV1::V15
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17923,6 +17982,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
                 && wire_version != SemanticMirWireVersionV1::V14
+                && wire_version != SemanticMirWireVersionV1::V15
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17947,6 +18007,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
                 && wire_version != SemanticMirWireVersionV1::V14
+                && wire_version != SemanticMirWireVersionV1::V15
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -18044,6 +18105,22 @@ fn encode_compiler_intrinsic_operation(
             encode_mfma_role(writer, role)?;
             encode_mfma_storage_layout(writer, storage_layout)
         }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+            result,
+            view,
+            error,
+        } => {
+            if wire_version < SemanticMirWireVersionV1::V15 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V15,
+                });
+            }
+            writer.u8(68)?;
+            writer.u32(result.0)?;
+            writer.u32(view.0)?;
+            writer.u32(error.0)
+        }
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
             option_fragment,
             view,
@@ -18077,6 +18154,14 @@ fn encode_compiler_intrinsic_operation(
             contract,
             storage_layout,
         } => {
+            if storage_layout == SemanticMfmaStorageLayoutV1::ColumnMajor
+                && wire_version < SemanticMirWireVersionV1::V15
+            {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V15,
+                });
+            }
             writer.u8(36)?;
             writer.u32(fragment.0)?;
             writer.u32(view.0)?;
@@ -18170,7 +18255,7 @@ fn encode_compiler_intrinsic_operation(
             lanes_per_block,
             elements_per_lane,
         } => {
-            if wire_version != SemanticMirWireVersionV1::V14 {
+            if wire_version < SemanticMirWireVersionV1::V14 {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V14,
@@ -18398,6 +18483,7 @@ fn encode_mfma_storage_layout(
     writer.u8(match layout {
         SemanticMfmaStorageLayoutV1::RowMajor => 0,
         SemanticMfmaStorageLayoutV1::LdsXor4 => 1,
+        SemanticMfmaStorageLayoutV1::ColumnMajor => 2,
     })
 }
 
@@ -20072,6 +20158,148 @@ mod private_tests {
             },
             &bf16_abi_for_test(bf16_id, u16_id),
         ));
+    }
+
+    #[test]
+    fn column_major_storage_is_admitted_only_for_bf16_b_zero_filled_loads() {
+        let view = SemanticTypeIdV1::from_index(0);
+        let lane = SemanticTypeIdV1::from_index(1);
+        let fragment = SemanticTypeIdV1::from_index(2);
+        let index = SemanticTypeIdV1::from_index(3);
+        let view_reference = SemanticTypeIdV1::from_index(4);
+        let lane_reference = SemanticTypeIdV1::from_index(5);
+        let mut types = vec![
+            test_type(
+                1,
+                SemanticTypeLayoutV1::new(Some(40), 8).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+            test_type(
+                2,
+                SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+            test_type(
+                3,
+                SemanticTypeLayoutV1::new(Some(8), 2).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+            test_type(
+                4,
+                SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 64,
+                }),
+            ),
+        ];
+        for (tag, pointee) in [(5, view), (6, lane)] {
+            types.push(test_type(
+                tag,
+                SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    SemanticPointerTypeV1::new_with_kind(
+                        pointee,
+                        SemanticPointerKindV1::Reference,
+                        SemanticMutabilityV1::Immutable,
+                        0,
+                        64,
+                        SemanticPointerMetadataV1::None,
+                    )
+                    .unwrap(),
+                ),
+            ));
+        }
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([6; 32])),
+            types,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let abi_value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([7; 32]),
+            SemanticLayoutIdentityV1::from_sha256([8; 32]),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![
+                abi_value(view_reference),
+                abi_value(lane_reference),
+                abi_value(index),
+                abi_value(index),
+            ],
+            abi_value(fragment),
+        )
+        .unwrap();
+        for (role, layout, expected) in [
+            (
+                SemanticMfmaOperandRoleV1::A,
+                SemanticMfmaStorageLayoutV1::RowMajor,
+                true,
+            ),
+            (
+                SemanticMfmaOperandRoleV1::B,
+                SemanticMfmaStorageLayoutV1::RowMajor,
+                true,
+            ),
+            (
+                SemanticMfmaOperandRoleV1::B,
+                SemanticMfmaStorageLayoutV1::ColumnMajor,
+                true,
+            ),
+            (
+                SemanticMfmaOperandRoleV1::A,
+                SemanticMfmaStorageLayoutV1::ColumnMajor,
+                false,
+            ),
+            (
+                SemanticMfmaOperandRoleV1::B,
+                SemanticMfmaStorageLayoutV1::LdsXor4,
+                false,
+            ),
+        ] {
+            let operation = SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                fragment,
+                view,
+                lane,
+                contract: SemanticMfmaOperandContractV1 {
+                    role,
+                    profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                    register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16,
+                    wave_width: 64,
+                },
+                storage_layout: layout,
+            };
+            assert_eq!(
+                compiler_intrinsic_signature_matches(&request, operation, &abi),
+                expected
+            );
+        }
+        for profile in [
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        ] {
+            let operation = SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                fragment,
+                view,
+                lane,
+                contract: SemanticMfmaOperandContractV1 {
+                    role: SemanticMfmaOperandRoleV1::B,
+                    profile,
+                    register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+                    wave_width: 64,
+                },
+                storage_layout: SemanticMfmaStorageLayoutV1::ColumnMajor,
+            };
+            assert!(!compiler_intrinsic_signature_matches(
+                &request, operation, &abi
+            ));
+        }
     }
 
     fn gfx950_mfma_signature_matches(

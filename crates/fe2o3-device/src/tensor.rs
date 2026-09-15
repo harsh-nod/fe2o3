@@ -10,6 +10,9 @@
 
 use core::marker::PhantomData;
 
+mod column_major;
+pub use column_major::Bf16MfmaBColumnMajorMatrix;
+
 use crate::{
     Bf16, DynamicLds, LdsElement, LdsInitialized, LdsUninitialized, Wave64, WaveLane, WaveWidth,
     views::{CheckedStridedExtentError, check_strided_2d_extent},

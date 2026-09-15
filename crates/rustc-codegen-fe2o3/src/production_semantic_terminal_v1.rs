@@ -85,8 +85,10 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     MatrixContextCurrent,
     Bf16MatrixARowMajor,
     Bf16MatrixBRowMajor,
+    Bf16MatrixBColumnMajor,
     Bf16MatrixALoadZeroFilledV2,
     Bf16MatrixBLoadZeroFilledV2,
+    Bf16MatrixBColumnMajorLoadZeroFilledV1,
     F32MatrixAccumulatorZero,
     F32MatrixAccumulatorIntoValues,
     MatrixMultiplyAccumulate,
@@ -359,6 +361,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => {
                 Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBRowMajor)
+            }
+            TrustedDeviceItem::Bf16MfmaBColumnMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor)
+            }
+            TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1 => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1)
             }
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2 => {
                 Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2)
@@ -680,6 +688,12 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBRowMajor) => {
                 TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
             }
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor) => {
+                TrustedDeviceItem::Bf16MfmaBColumnMajor
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1) => {
+                TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1
+            }
             Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2) => {
                 TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
             }
@@ -988,6 +1002,14 @@ mod tests {
             (
                 TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
                 ProductionTerminalExpansionV1::Bf16MatrixBRowMajor,
+            ),
+            (
+                TrustedDeviceItem::Bf16MfmaBColumnMajor,
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor,
+            ),
+            (
+                TrustedDeviceItem::Bf16MfmaBColumnMajorLoadZeroFilledV1,
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1,
             ),
             (
                 TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,

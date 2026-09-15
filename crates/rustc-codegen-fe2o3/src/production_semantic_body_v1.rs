@@ -2200,6 +2200,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
@@ -2207,6 +2208,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::StridedReadView2DLoadOr => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor

@@ -1533,7 +1533,8 @@ fn terminal_operation_v1<'tcx>(
             })
         }
         expansion @ (ProductionTerminalExpansionV1::Bf16MatrixARowMajor
-        | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor)
+        | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor)
             if inputs.len() == 5
                 && rust_inputs.len() == 5
                 && rust_shared_u16_slice_v1(rust_inputs[0])
@@ -1548,9 +1549,18 @@ fn terminal_operation_v1<'tcx>(
             let expected_role = match expansion {
                 ProductionTerminalExpansionV1::Bf16MatrixARowMajor => SemanticMfmaOperandRoleV1::A,
                 ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => SemanticMfmaOperandRoleV1::B,
-                _ => unreachable!("matched row-major expansion"),
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor => {
+                    SemanticMfmaOperandRoleV1::B
+                }
+                _ => unreachable!("matched BF16 checked-view expansion"),
             };
+            let column_major = expansion == ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor;
             if role != expected_role
+                || rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_view,
+                    TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView,
+                ) != column_major
                 || !rust_is_trusted_adt_v1(
                     tcx,
                     rust_error,
@@ -1562,6 +1572,15 @@ fn terminal_operation_v1<'tcx>(
                 ));
             }
             let (view, error) = semantic_result_payloads_v1(types, output)?;
+            if column_major {
+                return Ok(
+                    SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+                        result: output,
+                        view,
+                        error,
+                    },
+                );
+            }
             Ok(
                 SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
                     result: output,
@@ -1740,7 +1759,8 @@ fn terminal_operation_v1<'tcx>(
             )
         }
         expansion @ (ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
-        | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2)
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1)
             if inputs.len() == 4
                 && rust_inputs.len() == 4
                 && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
@@ -1761,9 +1781,19 @@ fn terminal_operation_v1<'tcx>(
                 ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => {
                     SemanticMfmaOperandRoleV1::B
                 }
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1 => {
+                    SemanticMfmaOperandRoleV1::B
+                }
                 _ => unreachable!("matched MFMA load expansion"),
             };
+            let column_major =
+                expansion == ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1;
             if role != expected_role
+                || rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_view,
+                    TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView,
+                ) != column_major
                 || contract.role != expected_role
                 || !rust_wave_lane64_v1(tcx, rust_lane)
             {
@@ -1775,7 +1805,11 @@ fn terminal_operation_v1<'tcx>(
                     view: pointer_pointee_v1(types, inputs[0])?,
                     lane: pointer_pointee_v1(types, inputs[1])?,
                     contract,
-                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    storage_layout: if column_major {
+                        SemanticMfmaStorageLayoutV1::ColumnMajor
+                    } else {
+                        SemanticMfmaStorageLayoutV1::RowMajor
+                    },
                 },
             )
         }
@@ -2723,8 +2757,10 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor
         | ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1
         | ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice
         | ProductionTerminalExpansionV1::StridedReadView2DLoadOr
         | ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
@@ -3397,6 +3433,9 @@ fn rust_mfma_matrix_role_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
 ) -> Option<SemanticMfmaOperandRoleV1> {
+    if rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Bf16MfmaBColumnMajorMatrixView) {
+        return Some(SemanticMfmaOperandRoleV1::B);
+    }
     let arguments =
         rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Bf16MfmaMatrixView)?;
     let [role] = arguments.as_slice() else {
@@ -4129,6 +4168,8 @@ const fn terminal_operation_tag_for_schema_v1(
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
+        ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor => 120,
+        ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1 => 121,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
