@@ -3838,6 +3838,153 @@ enum NormalizedScalarExpressionV1 {
     },
 }
 
+// This compares scalar values, not operation-definedness or overflow flags.
+// A checked KIR pair's first result implements modular source arithmetic;
+// the reverse implication would discard the source's no-overflow obligation.
+fn scalar_value_expressions_correspond_v1(
+    expected: &NormalizedScalarExpressionV1,
+    actual: &NormalizedScalarExpressionV1,
+    depth: usize,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<bool> {
+    use NormalizedScalarExpressionV1 as E;
+    budget.charge()?;
+    if depth > MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        return None;
+    }
+    let next = depth.checked_add(1)?;
+    let compare = |expected, actual, budget: &mut UnsupportedIndexCorrelationBudgetV1| {
+        scalar_value_expressions_correspond_v1(expected, actual, next, budget)
+    };
+    Some(match (expected, actual) {
+        (
+            E::Symbol {
+                symbol: left,
+                scalar,
+            },
+            E::Symbol {
+                symbol: right,
+                scalar: other,
+            },
+        ) => left == right && scalar == other,
+        (
+            E::Constant { scalar, bits },
+            E::Constant {
+                scalar: other,
+                bits: other_bits,
+            },
+        ) => scalar == other && bits == other_bits,
+        (
+            E::Load { site, scalar },
+            E::Load {
+                site: other_site,
+                scalar: other,
+            },
+        ) => site == other_site && scalar == other,
+        (
+            E::Unary {
+                operation,
+                scalar,
+                operand,
+            },
+            E::Unary {
+                operation: other_op,
+                scalar: other,
+                operand: other_operand,
+            },
+        ) => operation == other_op && scalar == other && compare(operand, other_operand, budget)?,
+        (
+            E::Binary {
+                operation,
+                scalar,
+                overflow,
+                lhs,
+                rhs,
+            },
+            E::Binary {
+                operation: other_op,
+                scalar: other,
+                overflow: other_overflow,
+                lhs: other_lhs,
+                rhs: other_rhs,
+            },
+        ) => {
+            let modular_value = *overflow == ProductionOverflowContractV2::Wrapping
+                && *other_overflow == ProductionOverflowContractV2::Checked
+                && scalar.is_integer()
+                && matches!(
+                    operation,
+                    ProductionSemanticBinaryOpV2::Add
+                        | ProductionSemanticBinaryOpV2::Subtract
+                        | ProductionSemanticBinaryOpV2::Multiply
+                );
+            operation == other_op
+                && scalar == other
+                && (overflow == other_overflow || modular_value)
+                && compare(lhs, other_lhs, budget)?
+                && compare(rhs, other_rhs, budget)?
+        }
+        (
+            E::Compare {
+                operation,
+                operand_scalar,
+                lhs,
+                rhs,
+            },
+            E::Compare {
+                operation: other_op,
+                operand_scalar: other_scalar,
+                lhs: other_lhs,
+                rhs: other_rhs,
+            },
+        ) => {
+            operation == other_op
+                && operand_scalar == other_scalar
+                && compare(lhs, other_lhs, budget)?
+                && compare(rhs, other_rhs, budget)?
+        }
+        (
+            E::Select {
+                scalar,
+                condition,
+                when_true,
+                when_false,
+            },
+            E::Select {
+                scalar: other,
+                condition: other_condition,
+                when_true: other_true,
+                when_false: other_false,
+            },
+        ) => {
+            scalar == other
+                && compare(condition, other_condition, budget)?
+                && compare(when_true, other_true, budget)?
+                && compare(when_false, other_false, budget)?
+        }
+        (
+            E::Cast {
+                kind,
+                source,
+                target,
+                operand,
+            },
+            E::Cast {
+                kind: other_kind,
+                source: other_source,
+                target: other_target,
+                operand: other_operand,
+            },
+        ) => {
+            kind == other_kind
+                && source == other_source
+                && target == other_target
+                && compare(operand, other_operand, budget)?
+        }
+        _ => false,
+    })
+}
+
 fn normalize_ranked_expression_v1(
     expression: &ProductionSemanticExpressionV2,
     lowering: &ProductionRankedKernelLoweringInputV1,
@@ -4223,6 +4370,21 @@ fn normalize_kir_binary_v1(
     definition: &Operation,
     value: ValueId,
 ) -> Option<(ProductionSemanticBinaryOpV2, ProductionOverflowContractV2)> {
+    if matches!(
+        operation,
+        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply
+    ) && definition
+        .results
+        .iter()
+        .find(|result| result.id == value)?
+        .ty
+        .as_scalar()?
+        .is_integer()
+    {
+        // Plain KIR arithmetic is partial on overflow. A value match alone
+        // cannot establish the no-overflow premise needed to use it here.
+        return None;
+    }
     let (operation, overflow) = match operation {
         BinaryOp::Add => (
             ProductionSemanticBinaryOpV2::Add,
@@ -6398,7 +6560,9 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                     location: consumer.location,
                 },
             )?;
-            if actual != expected {
+            if !scalar_value_expressions_correspond_v1(&expected, &actual, 0, &mut budget)
+                .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?
+            {
                 return Err(
                     ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch {
                         location: consumer.location,
@@ -13423,6 +13587,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         },
                     )
                 } else if let Some(operation) = lower_binary(*operation) {
+                    if left_ty.as_scalar().is_some_and(ScalarType::is_integer)
+                        && let Some(checked) = match operation {
+                            BinaryOp::Add => Some(CheckedBinaryOperator::Add),
+                            BinaryOp::Subtract => Some(CheckedBinaryOperator::Subtract),
+                            BinaryOp::Multiply => Some(CheckedBinaryOperator::Multiply),
+                            _ => None,
+                        }
+                    {
+                        // Ordinary integer MIR arithmetic wraps at its declared
+                        // width. Explicit checked MIR still retains both results.
+                        let SemanticValueBindingV1::Aggregate(parts) =
+                            self.emit_checked_binary(operations, left_ty, checked, left, right)?
+                        else {
+                            unreachable!("checked binary lowering returns value and overflow");
+                        };
+                        return Ok(parts
+                            .into_iter()
+                            .next()
+                            .expect("checked binary lowering returns its value first"));
+                    }
                     self.emit(
                         operations,
                         left_ty,
@@ -25504,6 +25688,8 @@ mod resource_tests {
     }
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
+    include!("production_semantic_kir_v1/wrapping_arithmetic_v1_tests.rs");
+    include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
 
     #[test]
     fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {
@@ -26146,7 +26332,7 @@ mod resource_tests {
             assert!(matches!(
                 &operations[1].kind,
                 OperationKind::Binary {
-                    op: BinaryOp::Add,
+                    op: BinaryOp::Checked(CheckedBinaryOperator::Add),
                     ..
                 }
             ));

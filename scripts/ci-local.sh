@@ -1343,6 +1343,12 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_source_float_casts_saturate_in_simulation -- \
         --ignored --exact
+  run_step rocm-production-simulation-wrapping-integers \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_source_wrapping_integers_match_rust_in_simulation -- \
+        --ignored --exact
   run_step rocm-production-simulation-sqrt \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

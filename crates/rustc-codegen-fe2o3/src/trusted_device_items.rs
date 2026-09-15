@@ -22,7 +22,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_middle::mir::{
     BinOp, Body, Operand, Rvalue, StatementKind, TerminatorKind, UnwindAction,
 };
-use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_middle::ty::{FloatTy, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
 
@@ -2110,6 +2110,107 @@ pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedSafeCoreWrappingIntegerContractV1<'a> {
+    item_instance: bool,
+    core_identity: bool,
+    generic_arguments: usize,
+    mir_available: bool,
+    canonical_path: &'a str,
+    safe_signature: bool,
+    rust_abi: bool,
+    variadic: bool,
+    input_count: usize,
+    first_integer: Option<&'a str>,
+    second_integer: Option<&'a str>,
+    result_integer: Option<&'a str>,
+}
+
+fn authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
+    contract: ReviewedSafeCoreWrappingIntegerContractV1<'_>,
+) -> bool {
+    let Some(integer) = contract.first_integer else {
+        return false;
+    };
+    if !matches!(
+        integer,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    ) {
+        return false;
+    }
+    let Some((owner, method)) = contract.canonical_path.rsplit_once("::") else {
+        return false;
+    };
+    contract.item_instance
+        && contract.core_identity
+        && contract.generic_arguments == 0
+        && contract.mir_available
+        && matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul")
+        && owner == format!("core::num::<impl {integer}>")
+        && contract.safe_signature
+        && contract.rust_abi
+        && !contract.variadic
+        && contract.input_count == 2
+        && contract.second_integer == Some(integer)
+        && contract.result_integer == Some(integer)
+}
+
+/// Admits only the safe primitive wrapping helpers in the trusted pinned core.
+///
+/// This uses the same core lang-item identity boundary as scalar bitcasts and
+/// abs, not cryptographic authentication of a replacement sysroot. It only
+/// discharges the external-HIR source-safety check: real MIR, nested calls and
+/// arithmetic remain subject to ordinary collection, import and verification.
+pub(crate) fn authenticate_reviewed_safe_core_wrapping_integer_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || !crate::production_rustc_intrinsic_v1::is_reviewed_core_function_v1(tcx, instance)
+        || !instance.args.is_empty()
+        || !tcx.is_mir_available(instance.def_id())
+    {
+        return false;
+    }
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let integer_name = |ty: Ty<'tcx>| match ty.kind() {
+        TyKind::Int(integer) => Some(integer.name_str()),
+        TyKind::Uint(integer) => Some(integer.name_str()),
+        _ => None,
+    };
+    authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
+        ReviewedSafeCoreWrappingIntegerContractV1 {
+            item_instance: matches!(instance.def, InstanceKind::Item(_)),
+            core_identity: crate::production_rustc_intrinsic_v1::is_reviewed_core_function_v1(
+                tcx, instance,
+            ),
+            generic_arguments: instance.args.len(),
+            mir_available: tcx.is_mir_available(instance.def_id()),
+            canonical_path: &tcx.def_path_str(instance.def_id()),
+            safe_signature: signature.safety == Safety::Safe,
+            rust_abi: signature.abi == ExternAbi::Rust,
+            variadic: signature.c_variadic,
+            input_count: signature.inputs().len(),
+            first_integer: signature.inputs().first().copied().and_then(integer_name),
+            second_integer: signature.inputs().get(1).copied().and_then(integer_name),
+            result_integer: integer_name(signature.output()),
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReviewedSafeCoreF32IsFiniteContractV1<'a> {
     item_instance: bool,
     core_lang_crate: bool,
@@ -3017,6 +3118,165 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 #[cfg(test)]
 mod tests {
     include!("trusted_device_items/core_01_tests.rs");
+
+    fn reviewed_wrapping_integer_contract(
+        canonical_path: &str,
+    ) -> super::ReviewedSafeCoreWrappingIntegerContractV1<'_> {
+        super::ReviewedSafeCoreWrappingIntegerContractV1 {
+            item_instance: true,
+            core_identity: true,
+            generic_arguments: 0,
+            mir_available: true,
+            canonical_path,
+            safe_signature: true,
+            rust_abi: true,
+            variadic: false,
+            input_count: 2,
+            first_integer: Some("u32"),
+            second_integer: Some("u32"),
+            result_integer: Some("u32"),
+        }
+    }
+
+    #[test]
+    fn safe_core_wrapping_integer_contract_admits_each_primitive_and_operation() {
+        for integer in [
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+        ] {
+            for method in ["wrapping_add", "wrapping_sub", "wrapping_mul"] {
+                let path = format!("core::num::<impl {integer}>::{method}");
+                let contract = super::ReviewedSafeCoreWrappingIntegerContractV1 {
+                    first_integer: Some(integer),
+                    second_integer: Some(integer),
+                    result_integer: Some(integer),
+                    ..reviewed_wrapping_integer_contract(&path)
+                };
+                assert!(
+                    super::authenticate_reviewed_safe_core_wrapping_integer_contract_v1(contract),
+                    "{path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn safe_core_wrapping_integer_contract_rejects_incomplete_authority_and_signature() {
+        use super::ReviewedSafeCoreWrappingIntegerContractV1 as Contract;
+        let reviewed = reviewed_wrapping_integer_contract("core::num::<impl u32>::wrapping_add");
+        for hostile in [
+            Contract {
+                item_instance: false,
+                ..reviewed
+            },
+            Contract {
+                core_identity: false,
+                ..reviewed
+            },
+            Contract {
+                generic_arguments: 1,
+                ..reviewed
+            },
+            Contract {
+                mir_available: false,
+                ..reviewed
+            },
+            Contract {
+                safe_signature: false,
+                ..reviewed
+            },
+            Contract {
+                rust_abi: false,
+                ..reviewed
+            },
+            Contract {
+                variadic: true,
+                ..reviewed
+            },
+            Contract {
+                input_count: 0,
+                ..reviewed
+            },
+            Contract {
+                input_count: 1,
+                ..reviewed
+            },
+            Contract {
+                input_count: 3,
+                ..reviewed
+            },
+            Contract {
+                first_integer: None,
+                ..reviewed
+            },
+            Contract {
+                second_integer: None,
+                ..reviewed
+            },
+            Contract {
+                result_integer: None,
+                ..reviewed
+            },
+            Contract {
+                first_integer: Some("i32"),
+                ..reviewed
+            },
+            Contract {
+                second_integer: Some("i32"),
+                ..reviewed
+            },
+            Contract {
+                result_integer: Some("i32"),
+                ..reviewed
+            },
+        ] {
+            assert!(
+                !super::authenticate_reviewed_safe_core_wrapping_integer_contract_v1(hostile),
+                "{hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_core_wrapping_integer_contract_rejects_forged_paths_and_noninteger_types() {
+        for path in [
+            "",
+            "wrapping_add",
+            "core::num::<impl u32>::wrapping_add_extra",
+            "core::num::<impl u32>::wrapping_add::helper",
+            "lookalike::core::num::<impl u32>::wrapping_add",
+            "fake_core::num::<impl u32>::wrapping_add",
+            "core::other::<impl u32>::wrapping_add",
+            "core::num::<impl i32>::wrapping_add",
+            "core::num::<impl u64>::wrapping_add",
+            "core::num::<impl u32>::checked_add",
+            "core::num::<impl u32>::unchecked_add",
+            "core::num::<impl u32>::wrapping_div",
+            "core::num::<impl u32>::wrapping_add_signed",
+        ] {
+            assert!(
+                !super::authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
+                    reviewed_wrapping_integer_contract(path)
+                ),
+                "{path}"
+            );
+        }
+        for noninteger in [
+            "bool", "f32", "f64", "char", "u256", "Scalar", "&u32", "(u32,)",
+        ] {
+            let path = format!("core::num::<impl {noninteger}>::wrapping_add");
+            let contract = super::ReviewedSafeCoreWrappingIntegerContractV1 {
+                first_integer: Some(noninteger),
+                second_integer: Some(noninteger),
+                result_integer: Some(noninteger),
+                ..reviewed_wrapping_integer_contract(&path)
+            };
+            assert!(
+                !super::authenticate_reviewed_safe_core_wrapping_integer_contract_v1(contract),
+                "{path}"
+            );
+        }
+    }
+
     #[test]
     fn exact_device_provider_rejects_same_name_path_and_source_substitution() {
         let item = TrustedDeviceItem::ThreadIndexCheckedBlock;

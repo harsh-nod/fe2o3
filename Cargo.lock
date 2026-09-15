@@ -1408,6 +1408,7 @@ dependencies = [
  "dialect-mir",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
  "fe2o3-mir-model",
  "fe2o3-pliron",
  "pliron",

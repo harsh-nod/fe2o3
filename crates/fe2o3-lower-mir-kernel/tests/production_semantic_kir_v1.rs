@@ -2900,10 +2900,16 @@ fn mutable_scalar_loop_uses_block_parameters_and_backedge_arguments() {
 
     let body_constant = body.operations[0].results[0].id;
     let body_value = body.operations[1].results[0].id;
+    assert_eq!(body.operations[1].results.len(), 2);
+    assert_eq!(
+        body.operations[1].results[0].ty,
+        Type::Scalar(ScalarType::U32)
+    );
+    assert_eq!(body.operations[1].results[1].ty, Type::BOOL);
     assert!(matches!(
         body.operations[1].kind,
         OperationKind::Binary {
-            op: BinaryOp::Add,
+            op: BinaryOp::Checked(CheckedBinaryOperator::Add),
             lhs,
             rhs,
         } if lhs == header.parameters[0].id && rhs == body_constant

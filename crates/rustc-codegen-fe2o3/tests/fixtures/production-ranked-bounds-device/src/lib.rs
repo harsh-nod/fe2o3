@@ -78,6 +78,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "debug_long_name",
     feature = "debug_mutated_argument",
     feature = "float_to_integer",
+    feature = "wrapping_integer",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",
@@ -142,6 +143,43 @@ pub fn float_to_integer(
     }
     if let Some(element) = unsigned.get_mut(thread::index_1d()) {
         *element = value as u32;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "wrapping_integer")]
+pub fn wrapping_integer(
+    lhs: u32,
+    rhs: u32,
+    mut unsigned_add: DisjointSlice<u32>,
+    mut unsigned_sub: DisjointSlice<u32>,
+    mut unsigned_mul: DisjointSlice<u32>,
+    mut signed_add: DisjointSlice<i32>,
+    mut signed_sub: DisjointSlice<i32>,
+    mut signed_mul: DisjointSlice<i32>,
+) {
+    if let Some(element) = unsigned_add.get_mut(thread::index_1d()) {
+        *element = lhs.wrapping_add(rhs);
+    }
+    if let Some(element) = unsigned_sub.get_mut(thread::index_1d()) {
+        *element = lhs.wrapping_sub(rhs);
+    }
+    if let Some(element) = unsigned_mul.get_mut(thread::index_1d()) {
+        *element = lhs.wrapping_mul(rhs);
+    }
+    let lhs = lhs as i32;
+    let rhs = rhs as i32;
+    if let Some(element) = signed_add.get_mut(thread::index_1d()) {
+        *element = lhs.wrapping_add(rhs);
+    }
+    if let Some(element) = signed_sub.get_mut(thread::index_1d()) {
+        *element = lhs.wrapping_sub(rhs);
+    }
+    if let Some(element) = signed_mul.get_mut(thread::index_1d()) {
+        *element = lhs.wrapping_mul(rhs);
     }
 }
 
