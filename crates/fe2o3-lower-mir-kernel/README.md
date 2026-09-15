@@ -218,3 +218,21 @@ materializing executable KIR and does not yet use these same-owner private-array
 queries. Its materialize-before-project transition and common-projector private
 effect support require separate qualification, including all tutorial compile
 gates; this library change does not activate that route.
+
+## Checked Output Memory Analysis
+
+`analyze_checked_output_formal_memory_v1` derives fresh memory obligations from
+the actual fixed-rule checked V12 output and returns a report borrowing that
+owner. Every actual kernel must have complete extraction and no inter-invocation
+conflict under the existing structural witness: exact static extents, extent two
+for dynamic active axes, and 64-bit indices. No old ranked or compiler discharge
+is accepted, and the executable is not copied.
+
+This is an analysis prerequisite, not final source/ranked admission. The formal
+engine does not model Private accesses, its witness does not authenticate runtime
+launches, and memory completeness does not exclude assertion traps. Its work,
+scratch and obligation payload retain the existing formal-analysis allocation
+policy and are not included in the canonical optimizer ledger or receipt.
+Source-qualified output occurrence transport, final ranked/formal consumers,
+and explicit V12 lineage/evidence migration remain required before activation.
+Existing final owners, wire formats and authority gates are unchanged.

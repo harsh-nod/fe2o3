@@ -600,3 +600,199 @@ fn in_place_heapsort_has_source_derived_21_16_and_two_field_22_boundaries() {
         assert_eq!(rows, [[0, 1], [0, 2]]);
     }
 }
+
+// Borrowed-operation components only; no source admission or output transport is implied.
+#[test]
+fn counted_allocation_helper_preserves_work_and_first_refusal() {
+    let facts = PrivateRetainedSlotFactsV1 {
+        element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32),
+        size: 4,
+        alignment: 4,
+    };
+    let allocation = Operation::new(
+        vec![ValueDef::new(
+            ValueId(11),
+            Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+        )],
+        OperationKind::Alloca {
+            element: Type::Scalar(ScalarType::U32),
+            count: Some(ValueId(10)),
+            address_space: AddressSpace::Private,
+            alignment: 4,
+        },
+    );
+    // Shape 2 + identity 4 + scalar 2 + pointer (1 + 2 + scalar 2).
+    for (limit, accepted) in [(13, 13), (12, 12)] {
+        let mut work = meter(limit);
+        let result = private_array_check_allocation_operation_v1(
+            &allocation,
+            ValueId(11),
+            ValueId(10),
+            facts,
+            &mut work,
+        );
+        if limit == 13 {
+            assert!(result.is_ok());
+        } else {
+            match result {
+                Err(PrivateArrayRelationErrorV1::Work(error)) => work_error(error, 13, 12),
+                _ => panic!("allocation must refuse the final scalar comparison"),
+            }
+        }
+        assert_eq!(work.work.work(), accepted);
+    }
+    let mut malformed = allocation.clone();
+    malformed.results.clear();
+    malformed.kind = OperationKind::Constant(Constant::U32(0));
+    let mut work = meter(2);
+    assert!(matches!(
+        private_array_check_allocation_operation_v1(
+            &malformed,
+            ValueId(11),
+            ValueId(10),
+            facts,
+            &mut work
+        ),
+        Err(PrivateArrayRelationErrorV1::Mismatch(
+            "private counted allocation result count changed"
+        ))
+    ));
+    assert_eq!(work.work.work(), 2);
+
+    let mut wrong_pointer = allocation.clone();
+    wrong_pointer.results[0].ty = Type::Scalar(ScalarType::U32);
+    let mut work = meter(6);
+    assert!(matches!(
+        private_array_check_allocation_operation_v1(
+            &wrong_pointer,
+            ValueId(99),
+            ValueId(10),
+            facts,
+            &mut work
+        ),
+        Err(PrivateArrayRelationErrorV1::Mismatch(
+            "private counted allocation identity or access changed"
+        ))
+    ));
+    assert_eq!(work.work.work(), 6);
+    let mut work = meter(9);
+    assert!(matches!(
+        private_array_check_allocation_operation_v1(
+            &wrong_pointer,
+            ValueId(11),
+            ValueId(10),
+            facts,
+            &mut work
+        ),
+        Err(PrivateArrayRelationErrorV1::Mismatch(
+            "private counted allocation element type changed"
+        ))
+    ));
+    assert_eq!(work.work.work(), 9);
+}
+
+#[test]
+fn memory_operation_helper_preserves_read_write_work_and_first_refusal() {
+    let facts = PrivateRetainedSlotFactsV1 {
+        element: PrivateRetainedElementFactsV1::Scalar(ScalarType::U32),
+        size: 4,
+        alignment: 4,
+    };
+    let read = Operation::new(
+        vec![ValueDef::new(ValueId(21), Type::Scalar(ScalarType::U32))],
+        OperationKind::Load {
+            pointer: ValueId(20),
+            access: MemoryAccess::new(AddressSpace::Private, 4),
+        },
+    );
+    let write = Operation::new(
+        Vec::new(),
+        OperationKind::Store {
+            pointer: ValueId(20),
+            value: ValueId(21),
+            access: MemoryAccess::new(AddressSpace::Private, 4),
+        },
+    );
+    // Read: dispatch 1 + shape/pointer 2 + scalar 2 + access 3.
+    // Write: dispatch 1 + shape/pointer 2 + access 3.
+    for (operation, access, total, prefix) in [
+        (&read, PrivateArrayAccessV1::Read, 8, 5),
+        (&write, PrivateArrayAccessV1::Write, 6, 3),
+    ] {
+        for limit in [total, total - 1] {
+            let mut work = meter(limit);
+            let result = private_array_check_memory_operation_v1(
+                operation,
+                access,
+                ValueId(20),
+                facts,
+                &mut work,
+            );
+            if limit == total {
+                assert!(result.is_ok());
+                assert_eq!(work.work.work(), total);
+            } else {
+                match result {
+                    Err(PrivateArrayRelationErrorV1::Work(error)) => {
+                        work_error(error, total, limit)
+                    }
+                    _ => panic!("memory check must refuse its final access batch"),
+                }
+                assert_eq!(work.work.work(), prefix);
+            }
+        }
+    }
+    let mut work = meter(1);
+    assert!(matches!(
+        private_array_check_memory_operation_v1(
+            &write,
+            PrivateArrayAccessV1::Read,
+            ValueId(99),
+            facts,
+            &mut work
+        ),
+        Err(PrivateArrayRelationErrorV1::Mismatch(
+            "private array memory effect kind changed"
+        ))
+    ));
+    assert_eq!(work.work.work(), 1);
+    let mut wrong_read = read.clone();
+    wrong_read.results[0].ty = Type::Scalar(ScalarType::U64);
+    let mut work = meter(3);
+    assert!(matches!(
+        private_array_check_memory_operation_v1(
+            &wrong_read,
+            PrivateArrayAccessV1::Read,
+            ValueId(99),
+            facts,
+            &mut work
+        ),
+        Err(PrivateArrayRelationErrorV1::Mismatch(
+            "private array load pointer or element changed"
+        ))
+    ));
+    assert_eq!(work.work.work(), 3);
+    let mut volatile_write = write;
+    let OperationKind::Store { access, .. } = &mut volatile_write.kind else {
+        unreachable!();
+    };
+    access.volatile = true;
+    let mut work = meter(6);
+    assert!(matches!(
+        private_array_check_memory_operation_v1(
+            &volatile_write,
+            PrivateArrayAccessV1::Write,
+            ValueId(20),
+            facts,
+            &mut work
+        ),
+        Err(PrivateArrayRelationErrorV1::Mismatch(
+            "private array memory access contract changed"
+        ))
+    ));
+    assert_eq!(work.work.work(), 6);
+}

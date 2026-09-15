@@ -308,6 +308,91 @@ fn private_array_slot_facts_equal_v1<W: PrivateArrayChargeV1>(
     })
 }
 
+fn private_array_check_allocation_operation_v1<W: PrivateArrayChargeV1>(
+    allocation: &Operation,
+    expected_pointer: ValueId,
+    expected_count: ValueId,
+    element_facts: PrivateRetainedSlotFactsV1,
+    work: &mut W,
+) -> Result<(), PrivateArrayRelationErrorV1<W::Error>> {
+    use PrivateArrayRelationErrorV1::Mismatch;
+    work.charge_private_array_work(2)?;
+    let [pointer] = allocation.results.as_slice() else {
+        return Err(Mismatch("private counted allocation result count changed"));
+    };
+    let OperationKind::Alloca {
+        element,
+        count,
+        address_space,
+        alignment,
+    } = &allocation.kind
+    else {
+        return Err(Mismatch("private array allocation is not a counted Alloca"));
+    };
+    work.charge_private_array_work(4)?;
+    if pointer.id != expected_pointer
+        || *count != Some(expected_count)
+        || *address_space != AddressSpace::Private
+        || *alignment != element_facts.alignment
+    {
+        return Err(Mismatch(
+            "private counted allocation identity or access changed",
+        ));
+    }
+    if !element_facts.element.matches_borrowed(element, work)?
+        || !private_array_pointer_matches_v1(&pointer.ty, element_facts.element, work)?
+    {
+        return Err(Mismatch("private counted allocation element type changed"));
+    }
+    Ok(())
+}
+
+fn private_array_check_memory_operation_v1<W: PrivateArrayChargeV1>(
+    memory: &Operation,
+    expected_access: PrivateArrayAccessV1,
+    expected_pointer: ValueId,
+    element_facts: PrivateRetainedSlotFactsV1,
+    work: &mut W,
+) -> Result<(), PrivateArrayRelationErrorV1<W::Error>> {
+    use PrivateArrayRelationErrorV1::Mismatch;
+    work.charge_private_array_work(1)?;
+    let access = match (&memory.kind, expected_access) {
+        (OperationKind::Load { pointer, access }, PrivateArrayAccessV1::Read) => {
+            work.charge_private_array_work(2)?;
+            let [result] = memory.results.as_slice() else {
+                return Err(Mismatch("private array load result count changed"));
+            };
+            if *pointer != expected_pointer
+                || !element_facts.element.matches_borrowed(&result.ty, work)?
+            {
+                return Err(Mismatch("private array load pointer or element changed"));
+            }
+            access
+        }
+        (
+            OperationKind::Store {
+                pointer, access, ..
+            },
+            PrivateArrayAccessV1::Write,
+        ) => {
+            work.charge_private_array_work(2)?;
+            if *pointer != expected_pointer || !memory.results.is_empty() {
+                return Err(Mismatch("private array store pointer or result changed"));
+            }
+            access
+        }
+        _ => return Err(Mismatch("private array memory effect kind changed")),
+    };
+    work.charge_private_array_work(3)?;
+    if access.address_space != AddressSpace::Private
+        || access.alignment != element_facts.alignment
+        || access.volatile
+    {
+        return Err(Mismatch("private array memory access contract changed"));
+    }
+    Ok(())
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "Compare source, physical body, and retained rows under the caller's shared budget"
@@ -406,34 +491,13 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
     }
     let allocation = private_array_operation_v1(body, slot.alloca_location, work)?
         .ok_or(Mismatch("private counted allocation is absent"))?;
-    work.charge_private_array_work(2)?;
-    let [pointer] = allocation.results.as_slice() else {
-        return Err(Mismatch("private counted allocation result count changed"));
-    };
-    let OperationKind::Alloca {
-        element,
-        count,
-        address_space,
-        alignment,
-    } = &allocation.kind
-    else {
-        return Err(Mismatch("private array allocation is not a counted Alloca"));
-    };
-    work.charge_private_array_work(4)?;
-    if pointer.id != slot.pointer
-        || *count != Some(slot.count)
-        || *address_space != AddressSpace::Private
-        || *alignment != slot.element_facts.alignment
-    {
-        return Err(Mismatch(
-            "private counted allocation identity or access changed",
-        ));
-    }
-    if !slot.element_facts.element.matches_borrowed(element, work)?
-        || !private_array_pointer_matches_v1(&pointer.ty, slot.element_facts.element, work)?
-    {
-        return Err(Mismatch("private counted allocation element type changed"));
-    }
+    private_array_check_allocation_operation_v1(
+        allocation,
+        slot.pointer,
+        slot.count,
+        slot.element_facts,
+        work,
+    )?;
 
     let expected_index = match (projection.kind(), effect.original_index) {
         (
@@ -559,44 +623,13 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
     }
     let memory = private_array_operation_v1(body, effect.memory_location, work)?
         .ok_or(Mismatch("private array memory operation is absent"))?;
-    work.charge_private_array_work(1)?;
-    let access = match (&memory.kind, effect.access) {
-        (OperationKind::Load { pointer, access }, PrivateArrayAccessV1::Read) => {
-            work.charge_private_array_work(2)?;
-            let [result] = memory.results.as_slice() else {
-                return Err(Mismatch("private array load result count changed"));
-            };
-            if *pointer != effect.gep
-                || !slot
-                    .element_facts
-                    .element
-                    .matches_borrowed(&result.ty, work)?
-            {
-                return Err(Mismatch("private array load pointer or element changed"));
-            }
-            access
-        }
-        (
-            OperationKind::Store {
-                pointer, access, ..
-            },
-            PrivateArrayAccessV1::Write,
-        ) => {
-            work.charge_private_array_work(2)?;
-            if *pointer != effect.gep || !memory.results.is_empty() {
-                return Err(Mismatch("private array store pointer or result changed"));
-            }
-            access
-        }
-        _ => return Err(Mismatch("private array memory effect kind changed")),
-    };
-    work.charge_private_array_work(3)?;
-    if access.address_space != AddressSpace::Private
-        || access.alignment != slot.element_facts.alignment
-        || access.volatile
-    {
-        return Err(Mismatch("private array memory access contract changed"));
-    }
+    private_array_check_memory_operation_v1(
+        memory,
+        effect.access,
+        effect.gep,
+        slot.element_facts,
+        work,
+    )?;
     Ok(expected_index)
 }
 

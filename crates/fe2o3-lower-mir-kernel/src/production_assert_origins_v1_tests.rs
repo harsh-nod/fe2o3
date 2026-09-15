@@ -9,6 +9,9 @@ use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticSsaLimitsV1}
 #[path = "production_issued_scope_legacy_source_v1_tests.rs"]
 mod issued_scope_legacy_source_v1_tests;
 
+#[path = "production_checked_output_formal_v1_tests.rs"]
+mod checked_output_formal_v1_tests;
+
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 const FLOOR: usize = 17;

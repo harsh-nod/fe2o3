@@ -1631,8 +1631,8 @@
           "fill"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "64f6f9aeee1bb73ebd320c69dbb9d7bddf1e819ac30a9aa14b2947527264517b",
-        "contractSha256": "38ede05d827141afcf3d0e01e187884d5e1b789d058f49de389b0c741834c835"
+        "cargoLockSha256": "d0ec26a0bb6ef3c5dbe2e7fba1f1c7266dc81e457b8bd2ce09f3484384c14d44",
+        "contractSha256": "8bf66e00c670c6281ecff90d5d88e0d8cf87269381c9349901a1d7f0a01e038a"
       },
       "simulation": {
         "requestPath": "scripts/quickstart/fill-request.json",
@@ -1901,8 +1901,8 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "64f6f9aeee1bb73ebd320c69dbb9d7bddf1e819ac30a9aa14b2947527264517b",
-        "contractSha256": "50d92578db3f06282f61ff3f5c713cbae28ec611017f1bbc8f7c0f6066f672f4"
+        "cargoLockSha256": "d0ec26a0bb6ef3c5dbe2e7fba1f1c7266dc81e457b8bd2ce09f3484384c14d44",
+        "contractSha256": "2d7ab415b09e7c670b11b498f86d2babbd4c5e3c8e36fcac0a626c1d07add577"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.request.json",
@@ -1991,8 +1991,8 @@
           "vecadd"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "64f6f9aeee1bb73ebd320c69dbb9d7bddf1e819ac30a9aa14b2947527264517b",
-        "contractSha256": "dcf243285479148a89bd1980d614daa12348f4282764ea6c54fadfc3f90164c7"
+        "cargoLockSha256": "d0ec26a0bb6ef3c5dbe2e7fba1f1c7266dc81e457b8bd2ce09f3484384c14d44",
+        "contractSha256": "3a0000dcf6be2ff80774672cd49eb8946716b0a55096868f8e0375aa96215e23"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",

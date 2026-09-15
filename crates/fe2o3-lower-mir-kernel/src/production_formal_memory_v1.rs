@@ -318,6 +318,98 @@ impl ProductionFormalMemoryKernelV1 {
     }
 }
 
+/// Fresh complete-only memory analysis borrowing the actual checked output.
+///
+/// This is not final source/ranked admission. The fixed structural witness does
+/// not authenticate a runtime launch, Private memory is outside the formal
+/// engine's modeled accesses, and a memory-complete graph may still trap. No
+/// historical ranked or compiler discharge is imported into these results.
+///
+/// The existing formal engine's work, scratch, and obligation payload are not
+/// charged to the canonical optimizer ledger or covered by its storage receipt.
+/// The report borrows the checked owner; it does not copy an executable graph.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{
+///     CheckedOutputFormalMemoryAnalysisV1, analyze_checked_output_formal_memory_v1,
+/// };
+/// use fe2o3_pliron::CheckedNeutralKernelIrOwnerV1;
+/// fn escape(owner: CheckedNeutralKernelIrOwnerV1) -> CheckedOutputFormalMemoryAnalysisV1<'static> {
+///     analyze_checked_output_formal_memory_v1(&owner).unwrap()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{
+///     CheckedOutputFormalMemoryAnalysisV1, ProductionFormalMemoryOwnerV1,
+/// };
+/// fn admit(report: CheckedOutputFormalMemoryAnalysisV1<'_>) -> ProductionFormalMemoryOwnerV1 {
+///     report
+/// }
+/// ```
+pub struct CheckedOutputFormalMemoryAnalysisV1<'o> {
+    checked: &'o fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    kernels: Box<[FormalMemoryObligations]>,
+}
+
+impl CheckedOutputFormalMemoryAnalysisV1<'_> {
+    /// The actual checked output borrowed by this analysis.
+    pub fn output(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
+        self.checked.owner()
+    }
+
+    /// Fresh complete obligations in the output module's kernel order.
+    pub fn kernels(&self) -> &[FormalMemoryObligations] {
+        &self.kernels
+    }
+}
+
+/// Analyze every actual output kernel using the existing fixed witness policy.
+/// Any incomplete extraction or inter-invocation conflict rejects; this path
+/// neither consults nor constructs a final source/ranked admission owner.
+pub fn analyze_checked_output_formal_memory_v1(
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+) -> Result<CheckedOutputFormalMemoryAnalysisV1<'_>, ProductionFormalMemoryErrorV1> {
+    let module = checked.owner().module();
+    if module.kernels.is_empty() {
+        return Err(ProductionFormalMemoryErrorV1::KernelCount { actual: 0 });
+    }
+    let mut kernels = Vec::with_capacity(module.kernels.len());
+    for kernel in &module.kernels {
+        let analysis = derive_kernel_memory_obligations_for_launch(
+            module,
+            &kernel.id,
+            ExplicitLaunchExtent::Exact {
+                rank: kernel.domain.rank(),
+                extents: witness_extents(&kernel.domain),
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
+        let obligations = match analysis {
+            FormalMemoryObligationAnalysis::Complete(obligations) => obligations,
+            FormalMemoryObligationAnalysis::Incomplete { reasons, .. } => {
+                return Err(ProductionFormalMemoryErrorV1::Incomplete {
+                    reasons: reasons.into_boxed_slice(),
+                });
+            }
+        };
+        if !obligations.inter_invocation_conflicts().is_empty() {
+            return Err(ProductionFormalMemoryErrorV1::InterInvocationConflicts {
+                conflicts: obligations
+                    .inter_invocation_conflicts()
+                    .to_vec()
+                    .into_boxed_slice(),
+            });
+        }
+        kernels.push(obligations);
+    }
+    Ok(CheckedOutputFormalMemoryAnalysisV1 {
+        checked,
+        kernels: kernels.into_boxed_slice(),
+    })
+}
+
 fn derive_admitted_obligations(
     semantic_kir: &ProductionSemanticKirOwnerV1,
 ) -> Result<Box<[ProductionFormalMemoryKernelV1]>, ProductionFormalMemoryErrorV1> {
