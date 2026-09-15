@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish = false
 
 [features]
+bf16_mfma_column_major_b = []
+bf16_mfma_row_major_b = []
 debug_scalar = []
 debug_helper = []
 debug_long_name = []

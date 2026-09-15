@@ -1,5 +1,17 @@
 #![no_std]
 
+#[cfg(all(
+    feature = "bf16_mfma_column_major_b",
+    feature = "bf16_mfma_row_major_b"
+))]
+compile_error!("select exactly one BF16 matrix storage fixture");
+
+#[cfg(any(
+    feature = "bf16_mfma_column_major_b",
+    feature = "bf16_mfma_row_major_b"
+))]
+mod bf16_matrix_storage;
+
 #[cfg(feature = "device_math_sqrt")]
 use fe2o3_device::DeviceMath;
 #[cfg(feature = "wave_reduce_f32")]
@@ -72,6 +84,8 @@ use fe2o3_device::{Wave64, WaveLane};
     launch(required = [64, 1, 1], max = [64, 1, 1]),
 )]
 #[cfg(not(any(
+    feature = "bf16_mfma_column_major_b",
+    feature = "bf16_mfma_row_major_b",
     feature = "oob",
     feature = "debug_scalar",
     feature = "debug_helper",
