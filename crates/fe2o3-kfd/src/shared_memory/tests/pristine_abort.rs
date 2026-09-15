@@ -5,7 +5,9 @@ use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
 use crate::shared_memory::{control_cleanup, transitions};
 
 mod cleanup_tests;
+pub(crate) use cleanup_tests::ControlReleasePrefixV1;
 pub(crate) use cleanup_tests::Snapshot as DataReleaseSnapshotV1;
+pub(crate) use cleanup_tests::Snapshot as ControlReleaseMemorySnapshotV1;
 
 type Code = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -340,15 +342,87 @@ impl PristineControlReleaseV1 for super::preparation::PreparationMemoryFixtureV1
         &mut self,
         custody: &mut ControlCleanupCustodyV1,
     ) -> Result<(), MemorySessionError> {
-        let identity = custody.observation().identity;
+        self.control_release_calls += 1;
+        if self.control_release_skip == Some(self.control_release_calls) {
+            return Ok(());
+        }
+        if let Some((ordinal, operation, panic)) = self.control_release_native_fault
+            && ordinal == self.control_release_calls
+        {
+            self.fail_cleanup(operation, panic);
+        }
+        let before = custody.observation();
+        let identity = before.identity;
         let f = &mut self.fixture;
-        control_cleanup::release_v1(
-            &mut f.engine,
-            &mut control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm),
-            custody,
-            || panic!("unexpected cleanup preflight failure"),
-        )?;
-        self.disposed_controls.push(identity);
-        Ok(())
+        let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
+        projection.fault = self
+            .control_release_projection_fault
+            .filter(|(ordinal, _, _)| *ordinal == self.control_release_calls)
+            .map(|(_, stage, fault)| (stage, fault));
+        let poisoned = &mut self.control_release_process_poisoned;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            control_cleanup::release_v1(&mut f.engine, &mut projection, custody, || *poisoned += 1)
+        }));
+        if !before.started {
+            let record = f
+                .engine
+                .allocations
+                .iter()
+                .find(|r| r.id == identity.id)
+                .unwrap();
+            assert_eq!(record.generation, identity.generation);
+            if record.phase == SharedAllocationPhaseV1::Released {
+                assert!(!self.disposed_controls.contains(&identity));
+                self.disposed_controls.push(identity);
+            }
+        }
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+}
+
+impl super::preparation::PreparationMemoryFixtureV1 {
+    pub(crate) fn arm_control_release_native_v1(
+        &mut self,
+        position: usize,
+        operation: &'static str,
+        panic: bool,
+    ) {
+        self.control_release_native_fault =
+            Some((self.control_release_calls + position + 1, operation, panic));
+    }
+
+    pub(crate) fn skip_control_release_v1(&mut self, position: usize) {
+        self.control_release_skip = Some(self.control_release_calls + position + 1);
+    }
+
+    pub(crate) fn control_release_calls_v1(&self) -> usize {
+        self.control_release_calls
+    }
+
+    pub(crate) fn arm_control_release_projection_v1(
+        &mut self,
+        position: usize,
+        stage: control_cleanup::CleanupStageV1,
+        panic: bool,
+    ) {
+        self.control_release_projection_fault = Some((
+            self.control_release_calls + position + 1,
+            stage,
+            if panic {
+                transitions::ProjectionFaultV1::Panic
+            } else {
+                transitions::ProjectionFaultV1::Error
+            },
+        ));
+    }
+
+    pub(crate) fn clear_control_release_faults_v1(&mut self) {
+        self.insertion_clear_faults_v1();
+        self.control_release_native_fault = None;
+        self.control_release_skip = None;
+        self.control_release_projection_fault = None;
     }
 }

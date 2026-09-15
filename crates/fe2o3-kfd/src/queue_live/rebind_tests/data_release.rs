@@ -1,7 +1,7 @@
 //! Concrete release routing and restoration with genuine data tokens and no Linux queue engine.
 use super::*;
 
-fn selected_parent(ordinal: usize) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
+pub(super) fn selected_parent(ordinal: usize) -> (ComputeAqlQueueSessionV1, ComputeAqlQueueLaneV1) {
     let (mut session, mut lane) = parent(ordinal != 0, false);
     if ordinal == 2 {
         let state = session.auxiliary_compute_lanes[0].state.take();
@@ -16,7 +16,7 @@ fn selected_parent(ordinal: usize) -> (ComputeAqlQueueSessionV1, ComputeAqlQueue
     (session, lane)
 }
 
-fn snapshot(s: &ComputeAqlQueueSessionV1) -> impl std::fmt::Debug + PartialEq + use<> {
+pub(super) fn snapshot(s: &ComputeAqlQueueSessionV1) -> impl std::fmt::Debug + PartialEq + use<> {
     (
         s.key,
         s.compute_lane_session,
@@ -31,6 +31,12 @@ fn snapshot(s: &ComputeAqlQueueSessionV1) -> impl std::fmt::Debug + PartialEq + 
         ),
         s.completion_owner.custody_snapshot_for_test(),
         s.dependency_owner.custody_snapshot_for_test(),
+        (
+            s.sdma_device_pool.limits,
+            s.sdma_device_pool.activity_started,
+            s.sdma_host_pool_limits,
+            s.sdma_pool_reuse_count,
+        ),
         (
             s.auxiliary_compute_lanes.as_ptr(),
             s.auxiliary_compute_lanes.capacity(),
@@ -59,7 +65,7 @@ fn snapshot(s: &ComputeAqlQueueSessionV1) -> impl std::fmt::Debug + PartialEq + 
     )
 }
 
-fn poison_snapshot(s: &ComputeAqlQueueSessionV1) -> (bool, bool, Vec<Option<bool>>) {
+pub(super) fn poison_snapshot(s: &ComputeAqlQueueSessionV1) -> (bool, bool, Vec<Option<bool>>) {
     (
         s.terminal_poisoned,
         s.completion_owner.is_poisoned_for_test(),

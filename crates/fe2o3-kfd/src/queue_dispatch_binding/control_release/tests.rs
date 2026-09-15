@@ -119,7 +119,7 @@ fn storage<T>(v: &Vec<T>) -> (usize, usize) {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Snapshot {
+pub(in crate::queue) struct Snapshot {
     mode: Mode,
     kernarg: Option<Control>,
     code: Vec<Control>,
@@ -213,8 +213,8 @@ fn assert_inputs(r: &Root, before: &Snapshot) {
     assert!(!after.complete);
 }
 
-fn new_root(owner: DispatchResourceOwnerV1, mode: Mode) -> Root {
-    let before = Snapshot {
+fn owner_snapshot(owner: &DispatchResourceOwnerV1, mode: Mode) -> Snapshot {
+    Snapshot {
         mode,
         kernarg: Some(Control {
             identity: Memory::kernarg_identity(&owner.kernarg),
@@ -253,7 +253,11 @@ fn new_root(owner: DispatchResourceOwnerV1, mode: Mode) -> Root {
         ],
         started: false,
         complete: false,
-    };
+    }
+}
+
+fn new_root(owner: DispatchResourceOwnerV1, mode: Mode) -> Root {
+    let before = owner_snapshot(&owner, mode);
     let root = Root::new(owner, mode);
     assert_eq!(
         snapshot(&root),
@@ -261,6 +265,75 @@ fn new_root(owner: DispatchResourceOwnerV1, mode: Mode) -> Root {
         "constructor changed original owner"
     );
     root
+}
+
+impl Snapshot {
+    pub(in crate::queue) fn assert_restored_v1(&self, mut after: Self, poisoned: bool) {
+        assert_eq!(after.generation.poisoned, poisoned);
+        after.generation.poisoned = self.generation.poisoned;
+        assert_eq!(&after, self, "restore the entire original control owner");
+    }
+
+    pub(in crate::queue) fn owner_v1(owner: &DispatchResourceOwnerV1, generation: u64) -> Self {
+        owner_snapshot(
+            owner,
+            Mode::DetachedPersistent {
+                expected_generation: generation,
+            },
+        )
+    }
+
+    pub(in crate::queue) fn root_v1(root: &Root) -> Self {
+        snapshot(root)
+    }
+
+    pub(in crate::queue) fn order_v1(&self) -> Vec<SharedGttAllocationIdentityV1> {
+        order(self)
+    }
+
+    pub(in crate::queue) fn active_v1(&self) -> Option<&ControlCleanupObservationV1> {
+        self.active.as_ref()
+    }
+
+    pub(in crate::queue) fn assert_detached_prefix_v1(
+        &self,
+        root: &Root,
+        completed: usize,
+        active: bool,
+        complete: bool,
+    ) {
+        let after = snapshot(root);
+        let touched = completed + usize::from(active);
+        let code_touched = touched.saturating_sub(1);
+        assert_eq!(after.mode, self.mode);
+        assert_eq!(after.code_identity, self.code_identity);
+        assert_eq!(after.packets, self.packets);
+        assert_eq!(after.data, self.data);
+        assert_eq!(after.premises, self.premises);
+        assert_eq!(after.generation, self.generation);
+        assert_eq!(after.slots_pointer, self.slots_pointer);
+        assert_eq!(after.persistent, self.persistent);
+        assert_eq!(after.storage, self.storage);
+        assert_eq!(after.returned, self.returned);
+        assert_eq!(after.returned_generation, None);
+        assert_eq!(after.persistent_returned, self.persistent_returned);
+        assert_eq!(after.persistent_output, self.persistent_output);
+        assert!(after.started);
+        assert_eq!(after.complete, complete);
+        assert_eq!(
+            after.kernarg.as_ref(),
+            (touched == 0).then_some(self.kernarg.as_ref()).flatten()
+        );
+        assert_eq!(after.code, self.code[code_touched..]);
+        assert_eq!(
+            after.code_pointer,
+            self.code_pointer + code_touched * size_of::<CodeAuthority>()
+        );
+        assert_eq!(
+            after.active.as_ref().map(|a| a.identity),
+            active.then(|| self.order_v1()[completed])
+        );
+    }
 }
 
 struct NoEntry;

@@ -9,6 +9,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[path = "control_release/tests.rs"]
 mod tests;
 
+#[cfg(test)]
+pub(in crate::queue) use tests::Snapshot as RetainedControlSnapshotV1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::queue) enum ReturningControlModeV1 {
     Ordinary,
@@ -79,6 +82,10 @@ impl ReturningControlCleanupCustodyV1 {
             #[cfg(test)]
             return_capacity_override: None,
         }
+    }
+
+    pub(in crate::queue) const fn is_complete(&self) -> bool {
+        self.complete
     }
 
     pub(in crate::queue) fn release_in_place(
@@ -376,6 +383,7 @@ pub(super) fn release_persistent_with_v1(
     }
 }
 
+#[cfg(test)]
 pub(super) fn release_detached_persistent_with_v1(
     mut root: ReturningControlCleanupCustodyV1,
     memory: &mut impl PristineControlReleaseV1,

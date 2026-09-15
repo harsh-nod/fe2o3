@@ -20,11 +20,22 @@ pub(in crate::queue) fn control_release_fixture_v1() -> (Memory, DispatchResourc
 pub(in crate::queue) fn single_persistent_control_fixture_v1() -> (Memory, DispatchResourceOwnerV1)
 {
     let mut memory = Memory::new(true);
+    let owner = single_persistent_control_in_memory_v1(
+        &mut memory,
+        super::super::tests::persistent_control_test_queue(41),
+    );
+    (memory, owner)
+}
+
+pub(in crate::queue) fn single_persistent_control_in_memory_v1(
+    memory: &mut Memory,
+    queue: QueueKeyV1,
+) -> DispatchResourceOwnerV1 {
     let data = memory.device(true);
     let programs = programs();
     let packets = [packet(0)];
     let identity = persistent_fixed_dispatch_control_identity_v1(
-        super::super::tests::persistent_control_test_queue(41),
+        queue,
         &programs,
         &packets,
         data.layout(),
@@ -35,17 +46,29 @@ pub(in crate::queue) fn single_persistent_control_fixture_v1() -> (Memory, Dispa
     .unwrap();
     let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, vec![data]);
     prepare_persistent_fixed_dispatch_resources_v1(
-        &mut memory,
+        memory,
         &programs,
         &mut preparation,
         Some(7),
         identity,
     )
     .unwrap();
-    (memory, preparation.take_completed().unwrap())
+    preparation.take_completed().unwrap()
 }
 
 pub(in crate::queue) fn three_persistent_control_fixture_v1() -> (Memory, DispatchResourceOwnerV1) {
+    let mut memory = Memory::new(true);
+    let owner = three_persistent_control_in_memory_v1(
+        &mut memory,
+        super::super::tests::persistent_control_test_queue(42),
+    );
+    (memory, owner)
+}
+
+pub(in crate::queue) fn three_persistent_control_in_memory_v1(
+    memory: &mut Memory,
+    queue: QueueKeyV1,
+) -> DispatchResourceOwnerV1 {
     use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
     let image =
         include_bytes!("../../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
@@ -78,14 +101,13 @@ pub(in crate::queue) fn three_persistent_control_fixture_v1() -> (Memory, Dispat
         ]
         .into_boxed_slice(),
     )];
-    let mut memory = Memory::new(true);
     let data = vec![
         memory.device(true),
         memory.device(true),
         memory.device(true),
     ];
     let identity = three_binding_persistent_fixed_dispatch_control_identity_v1(
-        super::super::tests::persistent_control_test_queue(42),
+        queue,
         core::slice::from_ref(&program),
         &packets,
         core::array::from_fn(|i| data[i].layout()),
@@ -96,14 +118,41 @@ pub(in crate::queue) fn three_persistent_control_fixture_v1() -> (Memory, Dispat
     .unwrap();
     let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
     prepare_three_binding_persistent_fixed_dispatch_resources_v1(
-        &mut memory,
+        memory,
         &[program],
         &mut preparation,
         Some(7),
         identity,
     )
     .unwrap();
-    (memory, preparation.take_completed().unwrap())
+    preparation.take_completed().unwrap()
+}
+
+pub(in crate::queue) fn recycle_and_detach_persistent_fixture_v1(
+    owner: &mut DispatchResourceOwnerV1,
+) -> (u64, Vec<Gfx942FixedDispatchDataV1>) {
+    let PersistentFixedDispatchControlStateV1::Attached(identity) = owner.persistent_control else {
+        panic!("prepared persistent fixture must start attached");
+    };
+    let generation = owner.generation.next_generation;
+    // Exercise real logical transitions; this occurrence is not a GPU observation.
+    let mut completion = test_completion_occurrence_v1(generation);
+    completion.queue = identity.queue;
+    completion.dispatch_roster.queue = identity.queue;
+    completion.signal_mapping.allocation.vm = identity.queue.vm;
+    let epoch = owner
+        .generation
+        .reserve(identity.queue, completion.dispatch_roster)
+        .unwrap();
+    owner.generation.mark_published(epoch, completion).unwrap();
+    owner.generation.complete_epoch(epoch, completion).unwrap();
+    owner.generation.recycle_epoch(epoch, completion).unwrap();
+    let (returned_generation, data) = owner
+        .detach_persistent_replay_data_after_recycle_v1()
+        .unwrap();
+    assert_eq!(returned_generation, generation);
+    assert_eq!(data.len(), identity.binding_count());
+    (generation, data)
 }
 
 #[test]

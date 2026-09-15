@@ -2226,6 +2226,7 @@ impl DispatchResourceOwnerV1 {
 
     /// Consumes only retained immutable dispatch control after its exact data
     /// authority was already detached and restored to the SDMA owner.
+    #[cfg(test)]
     pub(super) fn release_detached_persistent_control_v1(
         self,
         memory: &mut SharedGttMemorySessionV1,

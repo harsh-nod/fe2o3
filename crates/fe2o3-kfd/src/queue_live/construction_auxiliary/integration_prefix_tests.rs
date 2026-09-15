@@ -18,6 +18,9 @@ mod roster_slot_cases;
 #[path = "integration_insertion_tests.rs"]
 mod insertion_cases;
 
+#[path = "integration_retained_control_tests.rs"]
+mod retained_control_cases;
+
 type PrefixCaseResult = (
     Box<Scope>,
     Result<(), Box<dyn std::any::Any + Send>>,

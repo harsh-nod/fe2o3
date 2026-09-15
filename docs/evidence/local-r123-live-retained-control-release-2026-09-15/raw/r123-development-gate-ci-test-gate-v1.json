@@ -1,0 +1,81 @@
+{
+  "source_head": "d1c87064bd10e513f5aad328e0b3445bd78c296a",
+  "source_map_sha256": "8380746325d6717df78a608eb5be8f3ff3c48e42f32eec19aba2ab0677fdcb08",
+  "started_at": "2026-09-15T14:25:02.349Z",
+  "finished_at": "2026-09-15T14:25:19.737Z",
+  "command": [
+    "bash",
+    "scripts/tests/ci-local-test-gate.sh"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r123-development-gate-ci-test-gate-v1.log",
+  "source": "/home/harsh/.codex-tmp/r123-development-gate-ci-test-gate-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r123-development-gate-ci-test-gate-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r123-development-run-v2.js",
+    "sha256": "7de31471420b3177c6f84738b778bd16302305f4309924db08bbc59b5d3d361a"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 3941997,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789482319744,
+        "monotonic_ns": "79028400366131",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 17.38787622,
+  "verification_elapsed_seconds": 0.333882521,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r123-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r123-development-gate-dependency-tests-v1.json",
+      "sha256": "4417f75cfd570479132629d25142526a17ce8ed376345d95d18d355e7952f4fa",
+      "observation": {
+        "utc_ms": 1789482301787,
+        "monotonic_ns": "79010443678096",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789482302349,
+      "monotonic_ns": "79011005788144",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789482319737,
+      "monotonic_ns": "79028393664364",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789482320071,
+      "monotonic_ns": "79028727546885",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

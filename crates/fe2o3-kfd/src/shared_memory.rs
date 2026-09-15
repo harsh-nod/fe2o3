@@ -6794,6 +6794,8 @@ pub(crate) use tests::pristine_abort::DataReleaseSnapshotV1;
 #[cfg(test)]
 pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
 #[cfg(test)]
+pub(crate) use tests::pristine_abort::{ControlReleaseMemorySnapshotV1, ControlReleasePrefixV1};
+#[cfg(test)]
 pub(crate) use tests::queue_construction::{
     QueueConstructionFaultV1, QueueConstructionMemoryFixtureV1,
 };

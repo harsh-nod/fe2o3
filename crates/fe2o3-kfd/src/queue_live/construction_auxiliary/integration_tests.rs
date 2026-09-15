@@ -46,6 +46,7 @@ struct Faults {
     reclaim_before: Outcome,
     reclaim_after: Outcome,
     regress_revision: bool,
+    poison_panic: bool,
 }
 
 struct Parent {
@@ -172,6 +173,10 @@ impl AuxiliaryParentV1 for Parent {
             |parent| {
                 parent.poison();
                 Fixture::poison();
+                if parent.faults.poison_panic {
+                    record("auxiliary-poison-panic");
+                    std::panic::panic_any("model driver poison");
+                }
             },
         )
     }

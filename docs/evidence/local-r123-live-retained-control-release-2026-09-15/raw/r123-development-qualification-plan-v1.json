@@ -1,0 +1,776 @@
+{
+  "accepted": false,
+  "scope": "R123 local CPU/test qualification only",
+  "source_parent": "d1c87064bd10e513f5aad328e0b3445bd78c296a",
+  "source_map_sha256": "8380746325d6717df78a608eb5be8f3ff3c48e42f32eec19aba2ab0677fdcb08",
+  "source_identities": 5703,
+  "runner": {
+    "name": "r123-development-run-v2.js",
+    "sha256": "7de31471420b3177c6f84738b778bd16302305f4309924db08bbc59b5d3d361a"
+  },
+  "inputs": {
+    "r119-integrated-qualification-evidence-v1.js": "fbbfdd4862e0fe1aabbe386afff7ad521ea563f3729f246cd7b1b3ad0e065bf2",
+    "r119-integrated-qualification-plan-v1.js": "41c3488e37b9532752ee85387e7744660290dfedb618add692ddb1f105be11d7",
+    "r119-integrated-mutation-core-v1.js": "8e7cd26968fc9c0de65cecc10f644717febdfcd1af75e13845201ebfd2859583",
+    "r119-persistent-mutations-v1.js": "31ade03bb907f7a7a8f0de2f457dcbc473ac821223ab9d516a0bb0bc1aba6cad",
+    "r119-persistent-mutations-v2.js": "416c1c0f1e0dd75b87780c0d2fa88dd5ec07aa14f5876714fcbf978c6bd3098a",
+    "r123-development-run-v1.js": "26e0f5387eabcd676b4ff22f39e2278d14addd351600ebbfff2397bf352bb25a",
+    "r123-development-run-v2.js": "7de31471420b3177c6f84738b778bd16302305f4309924db08bbc59b5d3d361a",
+    "r123-development-full-plan-v1.json": "049a06fa35d9933cba77c0717fbc769f8244f3d160cb541ba7f4d3efc2213ee7",
+    "r123-development-mutations-v1.json": "592a345f8a8876ea789cae1385f33b62224f04f24c2135c62d46c0f63e481c52",
+    "r123-development-evidence-v1.js": "8cebce6de789abe13c1191237091d1443ba392912fcec82c0b790d633a978c8b",
+    "r123-development-check-v1.js": "d83f5ab4a189ab67e52d1a938bfacf85d01081b8bdcd3646ca96023387892c4e",
+    "r123-development-gate-check-v2.js": "10ceeaf5d5635ea08646bc399f72a4c9bcf28d8097ff07b167d852b1eee7fd65",
+    "r123-development-mutation-check-v2.js": "143f0e5dd9747a6ab4436ea8c78de351f9598d2b783c948b657bdfda0d5d3d23",
+    "r123-development-parser-tests-v1.js": "28e80c3c8efeca279536f2535ae90af3a7f8d428c90cb5cdffedbf22e0867c97",
+    "r123-development-mutation-parser-tests-v2.js": "6e3b534e6336dfb75c0a7ab3cf77382428f9c788cacf49e6c5a3e339bb1e4587",
+    "r123-development-gate-parser-tests-v2.js": "2ca383158bcaceb6692b13ca8c939921facba333c035031a612f095b51a8546d",
+    "r123-development-source-bundle-v1.js": "83833c4a7105b3aa0b9303c7ce111100f20f5c7772e145a61e08fc825a7921a4",
+    "r123-development-source-bundle-v1.json": "e670a525c7cc0bc94f73d4e7dcf592be21d3714a367d5963e6d64d62c5967879",
+    "r119-integrated-linux-helpers.log": "b78cb48f28f17aaad884d876e8fce4b4cae038155be715c5b678d77113956815"
+  },
+  "full_checker": "r123-development-check-v1.js",
+  "gate_checker": "r123-development-gate-check-v2.js",
+  "mutation_checker": "r123-development-mutation-check-v2.js",
+  "source_bundle": "r123-development-source-bundle-v1.json",
+  "source_snapshot": {
+    "name": "r123-development-source-snapshot-01",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r123-development-source-bundle-v1.js"
+    ],
+    "predecessor": "r123-development-mutation-parser-calibration-01.json"
+  },
+  "bootstrap": [
+    {
+      "name": "r123-development-gnu-check-v1",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r123-development-check-v1.js",
+        "baseline",
+        "gnu"
+      ],
+      "predecessor": "r123-development-gnu-all-v1.json"
+    },
+    {
+      "name": "r123-development-parser-calibration-01",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r123-development-parser-tests-v1.js"
+      ],
+      "predecessor": "r123-development-gnu-check-v1.json",
+      "cases": [
+        {
+          "name": "actual GNU exact executable and test roster",
+          "expected": "accept"
+        },
+        {
+          "name": "GNU missing new KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU duplicate new KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing preserved KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU duplicate preserved KFD test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU missing preserved runtime test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU duplicate preserved runtime test",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU wrong measured",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU wrong filtered",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU unknown executable",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU unknown passing row",
+          "expected": "reject"
+        },
+        {
+          "name": "GNU contradictory failed row",
+          "expected": "reject"
+        },
+        {
+          "name": "actual GNU 60-minute record",
+          "expected": "accept"
+        },
+        {
+          "name": "record rejects old full deadline",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects excess full deadline",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong runner version",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong command",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects unclosed child",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects timed-out child",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects recorded live group",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects changed source endpoint",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong source identity",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong predecessor identity",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects nonmonotonic finish",
+          "expected": "reject"
+        },
+        {
+          "name": "record rejects wrong elapsed time",
+          "expected": "reject"
+        },
+        {
+          "name": "actual ordinary runner-v1 record",
+          "expected": "accept"
+        },
+        {
+          "name": "ordinary record cannot borrow full-run deadline",
+          "expected": "reject"
+        },
+        {
+          "name": "actual focused executable and exact filtered roster",
+          "expected": "accept"
+        },
+        {
+          "name": "focused replacement preserves count but changes identity",
+          "expected": "reject"
+        },
+        {
+          "name": "focused unexpected ignored row",
+          "expected": "reject"
+        },
+        {
+          "name": "focused wrong executable",
+          "expected": "reject"
+        },
+        {
+          "name": "focused duplicate passing row",
+          "expected": "reject"
+        }
+      ],
+      "helper_sha256": "d83f5ab4a189ab67e52d1a938bfacf85d01081b8bdcd3646ca96023387892c4e"
+    },
+    {
+      "name": "r123-development-mutation-parser-calibration-01",
+      "command": [
+        "node",
+        "/home/harsh/.codex-tmp/r123-development-mutation-parser-tests-v2.js"
+      ],
+      "predecessor": "r123-development-gate-parser-calibration-01.json",
+      "cases": [
+        {
+          "name": "01-opening-terminal synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "01-opening-terminal wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "01-opening-terminal authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "01-opening-terminal out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "02-retake-error synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "02-retake-error wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "02-retake-error authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "02-retake-error out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "03-lower-panic synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "03-lower-panic wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "03-lower-panic authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "03-lower-panic out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "04-poison-kind synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "04-poison-kind wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "04-poison-kind authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "04-poison-kind out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "05-final-poison synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "05-final-poison wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "05-final-poison authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "05-final-poison out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "06-original-restore synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "06-original-restore wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "06-original-restore authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "06-original-restore out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "07-direct-transport synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "07-direct-transport wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "07-direct-transport authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "07-direct-transport out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "08-sticky-transport synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "08-sticky-transport wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "08-sticky-transport authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "08-sticky-transport out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "09-generation synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "09-generation wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "09-generation authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "09-generation out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "10-currentness synthetic diagnostic shape",
+          "expected": "accept"
+        },
+        {
+          "name": "10-currentness wrong assertion location",
+          "expected": "reject"
+        },
+        {
+          "name": "10-currentness authenticated forward/reverse derivation",
+          "expected": "accept"
+        },
+        {
+          "name": "10-currentness out-of-scope source",
+          "expected": "reject"
+        },
+        {
+          "name": "negative unknown failed test",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong executable",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra executable",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra doctest",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong filtered count",
+          "expected": "reject"
+        },
+        {
+          "name": "negative compilation error",
+          "expected": "reject"
+        },
+        {
+          "name": "negative subprocess abort",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong diagnostic",
+          "expected": "reject"
+        },
+        {
+          "name": "negative missing panic PID",
+          "expected": "reject"
+        },
+        {
+          "name": "negative wrong panic owner",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra passing row",
+          "expected": "reject"
+        },
+        {
+          "name": "negative extra ignored row",
+          "expected": "reject"
+        },
+        {
+          "name": "negative unrelated final panic",
+          "expected": "reject"
+        },
+        {
+          "name": "source wrong declared mutant hash",
+          "expected": "reject"
+        },
+        {
+          "name": "source mismatched inverse patch",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky outer unwrap alone is insufficient",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky missing outer unwrap",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky unrelated intervening panic",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky wrong following location",
+          "expected": "reject"
+        },
+        {
+          "name": "sticky wrong following diagnostic",
+          "expected": "reject"
+        },
+        {
+          "name": "negative prior caught panic remains distinguishable",
+          "expected": "accept"
+        },
+        {
+          "name": "negative malformed trailing header cannot hide later failure",
+          "expected": "reject"
+        },
+        {
+          "name": "negative complete header outside selected body",
+          "expected": "reject"
+        },
+        {
+          "name": "negative malformed header outside selected body",
+          "expected": "reject"
+        }
+      ],
+      "helper_sha256": "143f0e5dd9747a6ab4436ea8c78de351f9598d2b783c948b657bdfda0d5d3d23"
+    }
+  ],
+  "musl_check": {
+    "name": "r123-development-musl-gate-check-v2",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r123-development-gate-check-v2.js",
+      "full",
+      "musl"
+    ],
+    "predecessor": "r123-development-musl-all-v1.json"
+  },
+  "gate_calibration": {
+    "name": "r123-development-gate-parser-calibration-02",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r123-development-gate-parser-tests-v2.js"
+    ],
+    "predecessor": "r123-development-musl-gate-check-v2.json",
+    "cases": [
+      {
+        "name": "actual GNU target and complete summary roster",
+        "expected": "accept"
+      },
+      {
+        "name": "GNU measured count",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU filtered count",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU executable identity",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU unknown successful row",
+        "expected": "reject"
+      },
+      {
+        "name": "historical observed Linux split normalization",
+        "expected": "accept"
+      },
+      {
+        "name": "Linux malformed extra row",
+        "expected": "reject"
+      },
+      {
+        "name": "Linux unknown partial row",
+        "expected": "reject"
+      },
+      {
+        "name": "Linux whitespace orphan",
+        "expected": "reject"
+      },
+      {
+        "name": "Linux intervening named result",
+        "expected": "reject"
+      },
+      {
+        "name": "Linux synthetic corrected-cohort filtered count",
+        "expected": "accept"
+      },
+      {
+        "name": "Linux stale filtered count",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU exact relocated doctest roster",
+        "expected": "accept"
+      },
+      {
+        "name": "GNU stale doctest location",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU stale dispatch-binding doctest 3018",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU missing dispatch-binding doctest 3018",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU stale dispatch-binding doctest 3028",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU missing dispatch-binding doctest 3028",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU stale dispatch-binding doctest 3036",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU missing dispatch-binding doctest 3036",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU stale dispatch-binding doctest 3062",
+        "expected": "reject"
+      },
+      {
+        "name": "GNU missing dispatch-binding doctest 3062",
+        "expected": "reject"
+      },
+      {
+        "name": "Python declared test count",
+        "expected": "accept"
+      },
+      {
+        "name": "Python wrong test count",
+        "expected": "reject"
+      },
+      {
+        "name": "strict Clippy completion",
+        "expected": "accept"
+      },
+      {
+        "name": "Clippy warning",
+        "expected": "reject"
+      },
+      {
+        "name": "empty formatting transcript",
+        "expected": "accept"
+      },
+      {
+        "name": "nonempty formatting transcript",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone exact lockfile roster",
+        "expected": "accept"
+      },
+      {
+        "name": "standalone synthetic exact cache wait",
+        "expected": "accept"
+      },
+      {
+        "name": "standalone repeated exact cache waits",
+        "expected": "accept"
+      },
+      {
+        "name": "standalone unknown cache wait suffix",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone missing lockfile with cache wait",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone duplicate lockfile with cache wait",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone wrong completion count with cache wait",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone completion without roster",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone error with cache wait",
+        "expected": "reject"
+      },
+      {
+        "name": "standalone warning with cache wait",
+        "expected": "reject"
+      }
+    ],
+    "helper_sha256": "10ceeaf5d5635ea08646bc399f72a4c9bcf28d8097ff07b167d852b1eee7fd65"
+  },
+  "gate_check": {
+    "name": "r123-development-gate-check-all-v2",
+    "command": [
+      "node",
+      "/home/harsh/.codex-tmp/r123-development-gate-check-v2.js",
+      "all"
+    ],
+    "predecessor": "r123-development-gate-production-audit-v1.json"
+  },
+  "mutations": [
+    {
+      "id": "01-opening-terminal",
+      "negative": "r123-development-negative-01-opening-terminal-v1",
+      "check": "r123-development-negative-check-01-opening-terminal-v1",
+      "restored": "r123-development-restored-01-opening-terminal-v1"
+    },
+    {
+      "id": "02-retake-error",
+      "negative": "r123-development-negative-02-retake-error-v1",
+      "check": "r123-development-negative-check-02-retake-error-v1",
+      "restored": "r123-development-restored-02-retake-error-v1"
+    },
+    {
+      "id": "03-lower-panic",
+      "negative": "r123-development-negative-03-lower-panic-v1",
+      "check": "r123-development-negative-check-03-lower-panic-v1",
+      "restored": "r123-development-restored-03-lower-panic-v1"
+    },
+    {
+      "id": "04-poison-kind",
+      "negative": "r123-development-negative-04-poison-kind-v1",
+      "check": "r123-development-negative-check-04-poison-kind-v1",
+      "restored": "r123-development-restored-04-poison-kind-v1"
+    },
+    {
+      "id": "05-final-poison",
+      "negative": "r123-development-negative-05-final-poison-v1",
+      "check": "r123-development-negative-check-05-final-poison-v1",
+      "restored": "r123-development-restored-05-final-poison-v1"
+    },
+    {
+      "id": "06-original-restore",
+      "negative": "r123-development-negative-06-original-restore-v1",
+      "check": "r123-development-negative-check-06-original-restore-v1",
+      "restored": "r123-development-restored-06-original-restore-v1"
+    },
+    {
+      "id": "07-direct-transport",
+      "negative": "r123-development-negative-07-direct-transport-v1",
+      "check": "r123-development-negative-check-07-direct-transport-v1",
+      "restored": "r123-development-restored-07-direct-transport-v1"
+    },
+    {
+      "id": "08-sticky-transport",
+      "negative": "r123-development-negative-08-sticky-transport-v1",
+      "check": "r123-development-negative-check-08-sticky-transport-v1",
+      "restored": "r123-development-restored-08-sticky-transport-v1"
+    },
+    {
+      "id": "09-generation",
+      "negative": "r123-development-negative-09-generation-v1",
+      "check": "r123-development-negative-check-09-generation-v1",
+      "restored": "r123-development-restored-09-generation-v1"
+    },
+    {
+      "id": "10-currentness",
+      "negative": "r123-development-negative-10-currentness-v1",
+      "check": "r123-development-negative-check-10-currentness-v1",
+      "restored": "r123-development-restored-10-currentness-v1"
+    }
+  ],
+  "restored": [
+    {
+      "name": "r123-development-final-restored-focused-v1",
+      "kind": "kfd",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "--all-features",
+        "-p",
+        "fe2o3-kfd",
+        "--lib",
+        "--",
+        "retained_control_",
+        "persistent_control_replay_uses_the_active_queue_currentness_policy",
+        "control_release::tests",
+        "preparation::tests",
+        "pristine_abort::cleanup_tests"
+      ],
+      "filters": [
+        "retained_control_",
+        "persistent_control_replay_uses_the_active_queue_currentness_policy",
+        "control_release::tests",
+        "preparation::tests",
+        "pristine_abort::cleanup_tests"
+      ],
+      "passed": 128,
+      "filtered": 1081,
+      "predecessor": "r123-development-restored-10-currentness-v1.json"
+    },
+    {
+      "name": "r123-development-final-restored-r122-v1",
+      "kind": "kfd",
+      "command": [
+        "cargo",
+        "+nightly-2026-04-03",
+        "test",
+        "--locked",
+        "--offline",
+        "--all-features",
+        "-p",
+        "fe2o3-kfd",
+        "--lib",
+        "--",
+        "queue::live::rebind_tests::data_release::",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::"
+      ],
+      "filters": [
+        "queue::live::rebind_tests::data_release::",
+        "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::insertion_cases::release_cases::"
+      ],
+      "passed": 17,
+      "filtered": 1192,
+      "predecessor": "r123-development-final-restored-focused-v1.json"
+    }
+  ],
+  "collector_run": "r123-development-qualification-collect-v1",
+  "collector_predecessor": "r123-development-final-restored-r122-v1.json",
+  "helper_calibrations": 134,
+  "superseded_gate_calibration": "r123-development-gate-parser-calibration-01",
+  "exclusions": [
+    "native execution",
+    "authenticated formal refinement",
+    "continuous source immutability",
+    "aggregate retained-memory bounds",
+    "multi-device acceptance",
+    "HIP/HSA performance parity"
+  ]
+}

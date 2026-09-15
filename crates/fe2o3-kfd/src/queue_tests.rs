@@ -342,6 +342,51 @@ fn live_certificate_checks_do_not_repeat_global_validation() {
 }
 
 #[test]
+fn retained_control_revision_reseal_authentication_rejects_identity_and_seal_corruption() {
+    let mut fixture = fixture();
+    let issuer = fixture.foundation.issuer().unwrap();
+    let vm = fixture.vm.model_key();
+    fixture
+        .foundation
+        .set_certificate_revision_for_test(17)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .foundation
+            .authenticate(1, fixture.device, vm, issuer),
+        Ok(())
+    );
+    let before = fixture.foundation.certificate_snapshot_for_test();
+    for corrupt_seal in [false, true] {
+        let certificate = fixture.foundation.certificate.as_mut().unwrap();
+        if corrupt_seal {
+            certificate.revision_seal ^= 1;
+        } else {
+            certificate.session_id ^= 1;
+        }
+        assert_eq!(
+            fixture
+                .foundation
+                .authenticate(1, fixture.device, vm, issuer),
+            Err("queue foundation certificate binding")
+        );
+        let certificate = fixture.foundation.certificate.as_mut().unwrap();
+        if corrupt_seal {
+            certificate.revision_seal ^= 1;
+        } else {
+            certificate.session_id ^= 1;
+        }
+        assert_eq!(fixture.foundation.certificate_snapshot_for_test(), before);
+        assert_eq!(
+            fixture
+                .foundation
+                .authenticate(1, fixture.device, vm, issuer),
+            Ok(())
+        );
+    }
+}
+
+#[test]
 fn certificate_revision_capacity_rejects_boundaries_without_model_mutation() {
     let mut fixture = fixture();
     let original = fixture.foundation.memory().clone();

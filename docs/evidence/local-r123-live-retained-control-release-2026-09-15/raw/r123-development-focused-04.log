@@ -1,0 +1,37 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.31s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 27 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_exhausted_real_opening_restores_exact_owner_without_poison_or_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_currentness_failure_preserves_unconsumed_owner ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_lower_panic_survives_model_driver_poison_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_opening_panic_preserves_payload_and_restores_original_controls ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_malformed_post_callback_envelope_never_restores_disposed_owner ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_generation_rejection_precedes_currentness_and_loan ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_prepared_primary_and_auxiliary_success_leave_data_and_ledger_unchanged ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_release_commit_failure_keeps_native_disposal_receipt ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_secondary_panic_destructors_cannot_replace_lower_payload ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_absent_and_ordinary_owners_return_false_without_engine_access ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_direct_missing_engine_transports_parent_before_returning_error ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport ... ok
+test queue::live::rebind_tests::retained_control_release::retained_control_public_preflight_preserves_exact_owner_and_does_not_request_transport ... ok
+test queue::live::tests::persistent_control_replay_uses_the_active_queue_currentness_policy ... ok
+test queue::live::tests::retained_control_replay_authority_carriers_are_move_only_and_private ... ok
+test queue::live::tests::retained_control_replay_cancellation_and_quarantine_preserve_prepared_authority ... ok
+test queue::live::tests::retained_control_replay_failure_matrix_requires_an_exact_clean_round_trip ... ok
+test queue::live::tests::retained_control_replay_loan_resolution_distinguishes_open_retake_and_ready ... ok
+test queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan ... ok
+test queue::live::tests::retained_control_replay_public_input_failure_is_retryable_only_for_clean_round_trip ... ok
+test queue::live::tests::retained_control_replay_script_executes_the_production_pipeline_and_preserves_stage_custody ... ok
+test queue::live::tests::retained_control_replay_terminal_custody_variants_preserve_exact_native_stage ... ok
+test queue::tests::retained_control_revision_reseal_authentication_rejects_identity_and_seal_corruption ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_skipped_callback_restores_owner_and_incomplete_lower_success_is_terminal ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 1182 filtered out; finished in 108.89s
+

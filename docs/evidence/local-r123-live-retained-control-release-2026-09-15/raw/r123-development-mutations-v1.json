@@ -1,0 +1,316 @@
+{
+  "accepted": false,
+  "scope": "Ten predeclared R123 behavioral negatives; compile failures, aborts and unrelated assertions do not qualify.",
+  "source_plan": "r123-development-full-plan-v1.json",
+  "source_plan_sha256": "049a06fa35d9933cba77c0717fbc769f8244f3d160cb541ba7f4d3efc2213ee7",
+  "checker": "r123-development-check-v1.js",
+  "checker_sha256": "d83f5ab4a189ab67e52d1a938bfacf85d01081b8bdcd3646ca96023387892c4e",
+  "source_parent": "d1c87064bd10e513f5aad328e0b3445bd78c296a",
+  "source_map_sha256": "8380746325d6717df78a608eb5be8f3ff3c48e42f32eec19aba2ab0677fdcb08",
+  "source_count": 5703,
+  "runner": "r123-development-run-v2.js",
+  "runner_sha256": "7de31471420b3177c6f84738b778bd16302305f4309924db08bbc59b5d3d361a",
+  "test_command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib"
+  ],
+  "test_count": 1209,
+  "diagnostic_path_aliases": {
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs"
+  },
+  "excluded_source_only_guards": [
+    "completed-root acceptance is additionally guarded by the lower borrowed driver; deleting the final is_complete guard alone has no decisive reachable negative"
+  ],
+  "mutations": [
+    {
+      "id": "01-opening-terminal",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_exhausted_real_opening_restores_exact_owner_without_poison_or_retake",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "terminal_on_error = entered;\n                return Err(error);",
+            "terminal_on_error = true;\n                return Err(error);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "f2800388aa2d5ac32af0299e44a90b0e756e8e1ce3f7654705dbc9b6d006665a",
+      "expected_source_map_sha256": "be359a51dbb3a21d1c0a09fdc3d13d122e4e9ed32dca358769c7250a32b3b4e9",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:498:13",
+        "fragments": [
+          "assertion failed: !released.transport"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "02-retake-error",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "retake?;",
+            "let _ = retake;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "dc047945ad81396105408546f2fa29b98836d1992117ed40560fed6309fdbe02",
+      "expected_source_map_sha256": "2f664bf18595180fbf43de72ddf5ef6a302ceb77db00f7e6ec5da974d4edb23b",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:564:14",
+        "fragments": [
+          "unexpected retained-control retake provenance"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "03-lower-panic",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_lower_panic_survives_model_driver_poison_panic",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "core::mem::forget(result);\n            Err(payload)",
+            "core::mem::forget(payload);\n            result"
+          ]
+        ]
+      },
+      "expected_file_sha256": "33cae8858e22c564cb659a8288c56e3e6939283d8e3e5347fba553a4f16f34e8",
+      "expected_source_map_sha256": "58f9502412ab2c1a7a4f23303577ca18cdea7191ac43ec617272a6f6fb4c9456",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:986:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: None",
+          "right: Some((\"N2 native panic\", \"free\"))"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "04-poison-kind",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_lower_panic_survives_model_driver_poison_panic",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "context.poison(result.is_err())",
+            "context.poison(false)"
+          ]
+        ]
+      },
+      "expected_file_sha256": "d72f0e012c196aaba1ada821f47bb5ccfc5b64f2dc9210717c43f1db704e34a8",
+      "expected_source_map_sha256": "e99a60da20db32affa980ecf93103fd36d3c3204617a44e3c30b2222c895b9d6",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:993:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: (1, false)",
+          "right: (1, true)"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "05-final-poison",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "if result.is_err() {\n                core::mem::forget(payload);",
+            "if result.is_err() {\n                result = Err(payload);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "94e06c4498e120b8a75765d80866291041bc2eff769e5c4732d17386a4e89cf4",
+      "expected_source_map_sha256": "f510f72089affc1f2739e3db529e2a3e83006640722a1fb9bd52f643a016f6b9",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:778:17",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: None",
+          "right: Some((\"N2 native panic\", \"free\"))"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "06-original-restore",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_exhausted_real_opening_restores_exact_owner_without_poison_or_retake",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "*context.dispatch() = Some(dispatch);",
+            "core::mem::forget(dispatch);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "61f5db9fef3ad817982b4f3bc6346a9a7291bb08b2bf964c3051a90614e69d10",
+      "expected_source_map_sha256": "81091c4d0fb74b549083319fbdc667692faad5700615925f4cc9335ef3bae684",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:505:13",
+        "fragments": [
+          "opening rejection restores dispatch custody"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "07-direct-transport",
+      "kind": "kfd",
+      "test": "queue::live::rebind_tests::retained_control_release::retained_control_direct_missing_engine_transports_parent_before_returning_error",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+        "scope": {
+          "start": "    pub fn release_retained_persistent_fixed_dispatch_control_v1(",
+          "end": "\n    pub(super) fn detach_recycled_fixed_dispatch_inner("
+        },
+        "edits": [
+          [
+            "if settled.transport {",
+            "if false && settled.transport {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "af28ca6a2880bcd2e87b2d3948e45b01526867cefddd00997f57fcce0a123a70",
+      "expected_source_map_sha256": "7ded4569e92215eb855082d0dce1b09c392e7cf91eaeb717083c8980b96a0e71",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests.rs:187:5",
+        "fragments": [
+          "assertion failed: session.completion_owner.0.is_none()"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "08-sticky-transport",
+      "kind": "kfd",
+      "test": "queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live.rs",
+        "scope": {
+          "start": "    pub fn release_retained_persistent_fixed_dispatch_control_v1(",
+          "end": "\n    pub fn bind_fixed_dispatch<const N: usize>("
+        },
+        "edits": [
+          [
+            "*self.terminal_transport |= settled.transport;",
+            "*self.terminal_transport = settled.transport;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "5a0b346431eff9f489afdeb953516a17ec8ae27f94cd8b9a7cb77be49b13bb0e",
+      "expected_source_map_sha256": "b494b55ce21264a1a796c0b1a491cba0fa8106feaa7e8494e23c94c0a9950d43",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/retained_control_release.rs:155:25",
+        "fragments": [
+          "retry cannot erase prior terminal transport"
+        ]
+      },
+      "final_panic": "caught_then_unwrap",
+      "following_panic": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/retained_control_release.rs:199:35",
+        "fragments": [
+          "called `Result::unwrap()` on an `Err` value"
+        ]
+      }
+    },
+    {
+      "id": "09-generation",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_generation_rejection_precedes_currentness_and_loan",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            ".validate_detached_persistent_control_release_v1(generation)?;",
+            ".validate_detached_persistent_control_release_v1(generation).unwrap_or(());"
+          ]
+        ]
+      },
+      "expected_file_sha256": "631864d9f17e65708c37a4739ca5db9aae712eb27d702e2f4b7ce32d992b618c",
+      "expected_source_map_sha256": "5d93cb7b1d8409e1ecc12df4cd5ac37487d9b9b34018a9f8195a863c56b0b8a7",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:906:13",
+        "fragments": [
+          "preflight preserves original control custody"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "10-currentness",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_currentness_failure_preserves_unconsumed_owner",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/retained_control_release.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_retained_control_release_v1(",
+          "end": "\nimpl RetainedControlReleaseContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "context.check_currentness()?;",
+            "context.check_currentness().unwrap_or(());"
+          ]
+        ]
+      },
+      "expected_file_sha256": "b3c09facfaf7d5d7200b40bcf5eed2503788bb960375d2969e43a9a6e8a1dcd2",
+      "expected_source_map_sha256": "948ccbfd6ee03f01a34a1aaaefdcd92d52213bbc8511325c39cf244a6e9fc3af",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_retained_control_tests.rs:944:17",
+        "fragments": [
+          "assertion failed: matches!(released.result,",
+          "MemorySessionError::Injected(\"currentness\")"
+        ]
+      },
+      "final_panic": "primary"
+    }
+  ]
+}

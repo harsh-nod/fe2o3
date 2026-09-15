@@ -6,6 +6,9 @@ use transitions::ProjectionFaultV1 as Fault;
 #[path = "data_tests.rs"]
 mod data;
 
+// Completed controls, unmap progress, partial calls, and the active native state.
+pub(crate) type ControlReleasePrefixV1 = (usize, bool, usize, Option<(bool, usize, bool, bool)>);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum MappingBytesV1 {
     Zeroes(usize),
@@ -280,6 +283,28 @@ impl PristineAbortMemoryFixtureV1 {
 }
 
 impl crate::shared_memory::PreparationMemoryFixtureV1 {
+    pub(crate) fn control_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            self.coherent_active_foundation_v1(queue),
+            self.control_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn control_release_loan_snapshot_v1(&self) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. }
+        ));
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned,
+        )
+    }
+
     pub(crate) fn data_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
         self.assert_disposed_controls_v1();
         Snapshot::from_fixture(
@@ -327,6 +352,53 @@ impl Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn assert_currentness_only_v1(&self, mut after: Self, checks: usize) {
+        assert_eq!(after.currentness, self.currentness + checks);
+        after.currentness = self.currentness;
+        assert_eq!(&after, self);
+    }
+
+    pub(crate) fn assert_currentness_failure_v1(&self, mut after: Self, panicked: bool) {
+        assert_eq!(
+            after.phase,
+            if panicked {
+                self.phase
+            } else {
+                SharedMemorySessionPhaseV1::Quarantined
+            }
+        );
+        after.phase = self.phase;
+        self.assert_currentness_only_v1(after, 1);
+    }
+
+    pub(crate) fn assert_after_retake_v1(&self, mut after: Self, opening: &Self, regressed: bool) {
+        if regressed {
+            // The live snapshot authenticates its active certificate first. The
+            // deliberate revision regression also recomputes that checked seal.
+            let certificate = after.certificate.as_mut().unwrap();
+            assert_eq!(
+                certificate.6,
+                opening
+                    .certificate
+                    .as_ref()
+                    .unwrap()
+                    .6
+                    .checked_sub(1)
+                    .unwrap()
+            );
+            certificate.6 = self.certificate.as_ref().unwrap().6;
+            certificate.7 = self.certificate.as_ref().unwrap().7;
+        }
+        assert_eq!(
+            after.certificate, self.certificate,
+            "exact settled certificate"
+        );
+        assert_eq!(
+            &after, self,
+            "retake and poison preserve the exact completed cleanup state"
+        );
+    }
+
     pub(crate) fn assert_control_transition(
         &self,
         memory: &PristineAbortMemoryFixtureV1,
@@ -337,14 +409,29 @@ impl Snapshot {
         active_native: Option<(bool, usize, bool, bool)>,
     ) {
         let after = memory.memory_snapshot();
+        self.assert_control_transition_snapshot_v1(
+            &after,
+            (memory.fixture.vm, memory.fixture.engine.session_id),
+            order,
+            (completed, unmapped, partial_calls, active_native),
+        );
+    }
+
+    pub(crate) fn assert_control_transition_snapshot_v1(
+        &self,
+        after: &Self,
+        owner: (VmKeyV1, u64),
+        order: &[SharedGttAllocationIdentityV1],
+        prefix: ControlReleasePrefixV1,
+    ) {
+        let (completed, unmapped, partial_calls, active_native) = prefix;
         let mut expected_model = self.model.clone();
         for (index, id) in order
             .iter()
             .enumerate()
             .take(completed + usize::from(unmapped))
         {
-            let (reservation, allocation, mapping) =
-                model_keys(memory.fixture.vm, id.id, id.generation);
+            let (reservation, allocation, mapping) = model_keys(owner.0, id.id, id.generation);
             expected_model = project_unmap(&expected_model, mapping).unwrap();
             if index < completed {
                 expected_model =
@@ -361,7 +448,7 @@ impl Snapshot {
             .enumerate()
             .take(completed + usize::from(partial_calls > 0))
         {
-            assert_eq!(id.session_id, memory.fixture.engine.session_id);
+            assert_eq!(id.session_id, owner.1);
             let r = self
                 .records
                 .iter()

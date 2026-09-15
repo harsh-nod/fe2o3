@@ -1,6 +1,18 @@
 # Runtime Swarm: Remaining Packets
 
-Current Native checkpoint: [R121 ordinary and typed-data cleanup](runtime-ordinary-data-cleanup-v1.md),
+Current Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
+above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each
+pass 2,865 tests with five ignored; seventeen source gates, ten auxiliary checks,
+restored 128/17 suites, ten compiled negatives across ten maps and 134 checker
+calibrations pass. Two independent reviews verify all 5,703 source identities,
+76 absent owned process groups and
+[336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md).
+Acceptance is CPU/test only. Native next takes ordinary recycled detach and
+remaining live/control routes, applicable queue cleanup and N5 data adoption.
+Native execution, formal correspondence, aggregate-memory and performance gates
+remain open; neither A1/A2 nor issue #182 is complete.
+
+Preceding Native checkpoint: [R121 ordinary and typed-data cleanup](runtime-ordinary-data-cleanup-v1.md),
 above R119 `be50052c74a7956ba0a50df0e2efe8d9568de78a`. GNU/musl each
 pass 2,818 tests with five ignored. All seventeen source gates, ten auxiliary
 checks, restored 59/17 suites, 26 compiled negatives across 25 maps and thirty
@@ -8,7 +20,8 @@ parser calibrations pass. Two independent reviews verify all 5,696 source
 identities and [665 raw artifacts](evidence/local-r121-ordinary-data-cleanup-2026-09-15/README.md).
 This accepts lower ordinary/typed-data cleanup at the local CPU/test boundary,
 not live composition, native execution, formal correspondence, total memory or
-performance parity. Native next takes N4-L and the runtime's outer data roster.
+performance parity. R122 and R123 subsequently add the live data/retained-control
+integrations and runtime outer data-roster retention at the CPU/test boundary.
 
 The [current dispatch](runtime-swarm-dispatch-r114.md) gives the latest
 three-lane assignments and explicit exits. R116 locally accepts the executable
@@ -152,7 +165,7 @@ Primary integrates one reviewed packet at a time.
 
 | Worker | First Deliverable | Review Boundary |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | N4-L live data/control cleanup and the runtime outer data roster | Compose [R121 lower cleanup](runtime-ordinary-data-cleanup-v1.md#subsequent-integration) across model loan/retake and ledger commit; restore auxiliary lanes before terminal-parent transport; retain active data and untouched suffix |
+| Native: `native_replacement_handoff` | Remaining N4-L live detach/control routes above R123 | Compose applicable lower cleanup across model loan/retake and ledger commit; R122 data release and R123 retained-control release are locally accepted. Restore auxiliary lanes before terminal-parent transport; retain returned data and completed disposal receipts |
 | Admission: `submission_identity_handoff` | Joint I2 ISSUE and C4 COMPLETE handoff | Retain accepted R118B identity/lifecycle oracles; production integration needs N5 adoption and real publication/completion custody |
 | Resources: `r102_evidence_review` | V4-J1 issuance proofs, then membership/settlement proofs | Existing journal semantics; actual positive/negative solver evidence and separate Rust/model correspondence |
 | Primary | Integrate one reviewed packet at a time; Q1/Q2/Q3 contracts | Shared Context/backend/queue modules, immutable validation campaigns, evidence review and dual-remote publication |

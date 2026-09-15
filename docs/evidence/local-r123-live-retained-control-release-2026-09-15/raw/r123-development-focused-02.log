@@ -1,0 +1,458 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.87s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-9280442e7aa71d90)
+
+running 18 tests
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_exhausted_real_opening_restores_exact_owner_without_poison_or_retake' (3695602) panicked at crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:355:9:
+assertion `left == right` failed
+  left: []
+ right: ["currentness"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_exhausted_real_opening_restores_exact_owner_without_poison_or_retake ... FAILED
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:135:13:
+retained control poison
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:135:13:
+retained control poison
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_malformed_post_callback_envelope_never_restores_disposed_owner' (3695604) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:135:13:
+retained control poison
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:135:13:
+retained control poison
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_malformed_post_callback_envelope_never_restores_disposed_owner' (3695604) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:135:13:
+retained control poison
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic' (3695603) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:135:13:
+retained control poison
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_final_poison_panic_stays_settled_and_preserves_existing_lower_panic ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_malformed_post_callback_envelope_never_restores_disposed_owner' (3695604) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_malformed_post_callback_envelope_never_restores_disposed_owner ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_opening_panic_preserves_payload_and_restores_original_controls' (3695718) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_opening_panic_preserves_payload_and_restores_original_controls' (3695718) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_opening_panic_preserves_payload_and_restores_original_controls' (3695718) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_opening_panic_preserves_payload_and_restores_original_controls ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_release_commit_failure_keeps_native_disposal_receipt' (3695803) panicked at crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs:288:21:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_prepared_primary_and_auxiliary_success_leave_data_and_ledger_unchanged ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_release_commit_failure_keeps_native_disposal_receipt' (3695803) panicked at crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs:288:21:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_release_commit_failure_keeps_native_disposal_receipt' (3695803) panicked at crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs:288:21:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_release_commit_failure_keeps_native_disposal_receipt ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_skipped_callback_restores_owner_and_incomplete_lower_success_is_terminal ... ok
+test queue::live::tests::retained_control_replay_authority_carriers_are_move_only_and_private ... ok
+test queue::live::tests::retained_control_replay_cancellation_and_quarantine_preserve_prepared_authority ... ok
+test queue::live::tests::retained_control_replay_failure_matrix_requires_an_exact_clean_round_trip ... ok
+test queue::live::tests::retained_control_replay_loan_resolution_distinguishes_open_retake_and_ready ... ok
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19765:21:
+Box<dyn Any>
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19897:25:
+secondary retake
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19765:21:
+Box<dyn Any>
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19897:25:
+secondary retake
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19765:21:
+Box<dyn Any>
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19897:25:
+secondary retake
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19765:21:
+Box<dyn Any>
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19897:25:
+secondary retake
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19765:21:
+Box<dyn Any>
+
+thread 'queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan' (3696317) panicked at crates/fe2o3-kfd/src/queue_live.rs:19897:25:
+secondary retake
+test queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan ... ok
+test queue::live::tests::retained_control_replay_public_input_failure_is_retryable_only_for_clean_round_trip ... ok
+test queue::live::tests::retained_control_replay_script_executes_the_production_pipeline_and_preserves_stage_custody ... ok
+test queue::live::tests::retained_control_replay_terminal_custody_variants_preserve_exact_native_stage ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix has been running for over 60 seconds
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake' (3695601) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_completed_cleanup_remains_rooted_across_every_failed_retake ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic has been running for over 60 seconds
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:37:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic' (3696005) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic ... ok
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix' (3695605) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6965:17:
+Box<dyn Any>
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_native_failures_keep_exact_completed_prefix_and_unfinished_suffix ... ok
+
+failures:
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_exhausted_real_opening_restores_exact_owner_without_poison_or_retake
+
+test result: FAILED. 17 passed; 1 failed; 0 ignored; 0 measured; 1182 filtered out; finished in 307.05s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

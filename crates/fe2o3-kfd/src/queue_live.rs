@@ -268,6 +268,8 @@ pub(in crate::queue) mod rebind;
 #[cfg(test)]
 #[path = "queue_live/rebind_tests.rs"]
 mod rebind_tests;
+#[path = "queue_live/retained_control_release.rs"]
+pub(in crate::queue) mod retained_control_release;
 #[path = "queue_live/sdma_logical_mux.rs"]
 mod sdma_logical_mux;
 #[path = "queue_live/sdma_multi_queue.rs"]
@@ -4393,8 +4395,9 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
     pub fn release_retained_persistent_fixed_dispatch_control_v1(
         &mut self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
-        self.session
-            .release_retained_persistent_fixed_dispatch_control_v1()
+        let settled = self.session.release_retained_control_settled_v1();
+        *self.terminal_transport |= settled.transport;
+        settled.into_result()
     }
 
     pub fn bind_fixed_dispatch<const N: usize>(
@@ -16528,7 +16531,7 @@ mod tests {
         }
     }
 
-    fn persistent_compute_gate_test_session_v1(
+    pub(super) fn persistent_compute_gate_test_session_v1(
         queue: QueueKeyV1,
         binding_count: usize,
     ) -> ComputeAqlQueueSessionV1 {
@@ -20459,11 +20462,41 @@ mod tests {
             .split("fn detach_recycled_fixed_dispatch_inner")
             .next()
             .unwrap();
-        let close_audit = release.find(".check_queue_currentness()").unwrap();
-        let consume_control = release.find("let mut dispatch = Some(").unwrap();
+        let sequencer = include_str!("queue_live/retained_control_release.rs");
+        let close_audit = sequencer.find("context.check_currentness()?").unwrap();
+        let consume_control = sequencer
+            .find("original = context.dispatch().take()")
+            .unwrap();
         assert!(close_audit < consume_control);
-        assert!(release.contains("std::panic::catch_unwind"));
-        assert!(release.contains("with_live_queue_memory_model_custody"));
+        assert!(sequencer.contains("catch_unwind(AssertUnwindSafe"));
+        assert!(sequencer.contains("self.with_live_queue_memory_model_custody(operation)"));
+        assert!(
+            sequencer.find("let mut cleanup = None").unwrap()
+                < sequencer.find("let result = catch_unwind").unwrap()
+        );
+        assert!(
+            sequencer.find("retake?;").unwrap()
+                < sequencer
+                    .find("ReturningControlCleanupCustodyV1::is_complete")
+                    .unwrap()
+        );
+        assert!(
+            sequencer
+                .find("*context.dispatch() = Some(dispatch)")
+                .unwrap()
+                < sequencer.find("context.poison(result.is_err())").unwrap()
+        );
+        assert!(
+            sequencer.find("context.retain(root)").unwrap()
+                < sequencer.find("context.poison(result.is_err())").unwrap()
+        );
+        assert!(release.contains("self.release_retained_control_settled_v1()"));
+        assert!(
+            release
+                .find("self.retain_terminal_rebind_parent_v1")
+                .unwrap()
+                < release.find("settled.into_result()").unwrap()
+        );
 
         let shared_memory = include_str!("shared_memory.rs");
         let operational = shared_memory

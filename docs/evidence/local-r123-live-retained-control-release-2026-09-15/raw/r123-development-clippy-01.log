@@ -1,0 +1,21 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs:422:17
+    |
+422 |         prefix: (usize, bool, usize, Option<(bool, usize, bool, bool)>),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:401:17
+    |
+401 |         prefix: (usize, bool, usize, Option<(bool, usize, bool, bool)>),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

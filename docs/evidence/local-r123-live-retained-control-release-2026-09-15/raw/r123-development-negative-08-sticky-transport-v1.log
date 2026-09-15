@@ -1,0 +1,25 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.86s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport ... FAILED
+
+failures:
+
+---- queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport stdout ----
+
+thread 'queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport' (3969268) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/retained_control_release.rs:155:25:
+retry cannot erase prior terminal transport
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport' (3969268) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/retained_control_release.rs:199:35:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+
+failures:
+    queue::live::rebind_tests::retained_control_release::retained_control_facade_restores_exact_selected_owner_before_sticky_parent_transport
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1208 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

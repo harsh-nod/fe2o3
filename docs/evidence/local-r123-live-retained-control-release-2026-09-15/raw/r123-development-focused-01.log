@@ -1,0 +1,19 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0609]: no field `complete` on type `&shared_memory::control_cleanup::ControlCleanupObservationV1`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:601:44
+    |
+601 | ...                   && !active.complete
+    |                                  ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `identity`, `layout`, `profile_type`, `state_type`, `owner` ... and 6 others
+
+error[E0609]: no field `complete` on type `&shared_memory::control_cleanup::ControlCleanupObservationV1`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_retained_control_tests.rs:798:72
+    |
+798 |             assert!(active.native_disposed && active.failed && !active.complete);
+    |                                                                        ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `identity`, `layout`, `profile_type`, `state_type`, `owner` ... and 6 others
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

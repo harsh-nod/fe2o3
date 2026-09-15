@@ -1,0 +1,93 @@
+{
+  "source_head": "d1c87064bd10e513f5aad328e0b3445bd78c296a",
+  "source_map_sha256": "8380746325d6717df78a608eb5be8f3ff3c48e42f32eec19aba2ab0677fdcb08",
+  "started_at": "2026-09-15T13:00:09.031Z",
+  "finished_at": "2026-09-15T13:06:12.612Z",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "--",
+    "retained_control_",
+    "persistent_control_replay_uses_the_active_queue_currentness_policy",
+    "control_release::tests",
+    "preparation::tests",
+    "pristine_abort::cleanup_tests"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r123-development-focused-05.log",
+  "source": "/home/harsh/.codex-tmp/r123-development-focused-05-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r123-development-focused-05-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r123-development-run-v1.js",
+    "sha256": "26e0f5387eabcd676b4ff22f39e2278d14addd351600ebbfff2397bf352bb25a"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 3741986,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789477572616,
+        "monotonic_ns": "74281273068113",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 363.581146014,
+  "verification_elapsed_seconds": 0.312309275,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r123-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r123-development-clippy-02.json",
+      "sha256": "6e417ad86018d633497b2c9da684bc267aa83b17ec1469f4e9ad33727b1e408b",
+      "observation": {
+        "utc_ms": 1789477198514,
+        "monotonic_ns": "73907171024898",
+        "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789477209031,
+      "monotonic_ns": "73917687558552",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789477572612,
+      "monotonic_ns": "74281268704566",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789477572924,
+      "monotonic_ns": "74281581013841",
+      "boot_id": "f78ad468-d752-4634-8e79-45a154b73909",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

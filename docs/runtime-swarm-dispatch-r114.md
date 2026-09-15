@@ -1,6 +1,17 @@
 # Runtime Swarm Dispatch After R114
 
-Current Native checkpoint: [R122 live detached-data release is locally accepted](runtime-live-data-release-v1.md),
+Current Native checkpoint: [R123 live retained-control release is locally accepted](runtime-live-retained-control-release-v1.md),
+with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,865 tests with
+five ignored; seventeen source gates, ten auxiliary checks, restored 128/17
+suites, ten compiled negatives across ten maps and 134 checker calibrations
+pass. All 5,703 source identities match and all 76 recorded owned process groups
+are absent. This accepts live retained persistent-control release at the CPU/test
+boundary. Remaining live detach/control routes, queue cleanup, N5 adoption,
+native execution, formal correspondence, aggregate-memory and performance
+acceptance remain open; A1/A2 are not complete.
+
+Preceding Native checkpoint: [R122 live detached-data release is locally accepted](runtime-live-data-release-v1.md),
 with [402 raw artifacts](evidence/local-r122-live-data-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,846 tests with
 five ignored; seventeen source gates, ten auxiliary checks, restored 35/10
@@ -92,7 +103,7 @@ A1/A2 and full HIP/HSA parity are not complete.
 
 The original work breakdown was refreshed against accepted source
 `9eaf19141e8af6ade490feba3062c8b49d9b38ca` and the open issues on 2026-09-13.
-The R115/R116/R117/R118B/R119/R121/R122 progressions above update the current assignments; the original
+The R115/R116/R117/R118B/R119/R121/R122/R123 progressions above update the current assignments; the original
 R114 boundary and handoff details remain historical evidence.
 
 ## Historical R114 Boundary
@@ -119,7 +130,7 @@ serialized builds, proof/hardware scheduling and signed dual-remote publication.
 
 | Owner | Immediate Packet | Following Queue |
 | --- | --- | --- |
-| Native: `native_replacement_handoff` | Integrate remaining N4-L retained-control release and live detach above R122 | Applicable queue teardown, then N5 DATA-ADOPT |
+| Native: `native_replacement_handoff` | Integrate ordinary recycled detach and remaining N4-L live/control routes above R123 | Applicable queue teardown, then N5 DATA-ADOPT |
 | Admission: `submission_identity_handoff` | Prepare joint I2/C4 after locally accepted R118B C1/C2/C3; production integration needs N5 | Actual ISSUE, COMPLETE, C5 typed future/join, C6 generated GRAPH/DRAIN |
 | Resources: `r102_evidence_review` | V4-J1 issuance proofs above accepted executable V1/V2/V3 models | Membership/settlement proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
 | Primary | Integrate one reviewed packet at a time; own Q1/Q2/Q3 and release gate #277 | Coordinate A3-A7 and publish only the evidence actually obtained |
@@ -133,7 +144,7 @@ Native's tests, and Resources supplies settlement/accounting contracts.
 
 | Lane | Independent Start | Does Not Yet Close |
 | --- | --- | --- |
-| Native | Compose lower control cleanup across live retake/commit; R122 accepts live data release and outer data-roster ownership | Remaining live detach, queue teardown, N5 adoption and native qualification |
+| Native | Compose remaining live detach across model retake/commit; R123 accepts retained persistent-control release above R122 data release | Remaining live/control routes, queue teardown, N5 adoption and native qualification |
 | Admission | Retain accepted R118B identity/lifecycle regressions; prepare the joint I2/C4 handoff | Actual generated ISSUE, COMPLETE, typed output or graph execution |
 | Resources | Implement V4-J1's reviewed issuance-proof handoff; M1-M3 design remains independently ready | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
 | Primary | Specify Q1/Q2/Q3 evidence contracts and #277's missing feature-enabled release audit | New proof, hardware, release-policy or performance acceptance |
@@ -164,7 +175,8 @@ solver or hardware jobs running unattended.
    Native device accounting remains distinct from coherent-host model keys.
    These lower routines now require live and queue composition.
 3. **N4-L/N4-Q:** R122 accepts live detached-data release and runtime outer-roster
-   retention at the CPU/test boundary. Remaining routes must retain original
+   retention; R123 adds live retained persistent-control release at the CPU/test
+   boundary. Remaining routes must retain original
    parents and taken lanes across model retake,
    commit and every teardown prefix. A failed disposal cannot expose a reusable
    allocation hole or queue slot. Each route consumes its applicable lower

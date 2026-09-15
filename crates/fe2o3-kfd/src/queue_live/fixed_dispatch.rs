@@ -4148,85 +4148,11 @@ impl ComputeAqlQueueSessionV1 {
     pub fn release_retained_persistent_fixed_dispatch_control_v1(
         &mut self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
-        if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        let settled = self.release_retained_control_settled_v1();
+        if settled.transport {
+            self.retain_terminal_rebind_parent_v1(core::mem::forget);
         }
-        if !self.unpublished_dispatch.is_clear() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
-        }
-        if self.has_any_persistent_compute_attachment_v1() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
-        }
-        let Some(dispatch) = self.dispatch.as_ref() else {
-            return Ok(false);
-        };
-        if !dispatch.persistent_data_is_detached_v1() {
-            return Ok(false);
-        }
-        let Some(generation) = self.detached_dispatch_generation else {
-            self.poison_terminal();
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "retained persistent control lost its detached generation",
-            ));
-        };
-        if let Err(error) = dispatch.validate_detached_persistent_control_release_v1(generation) {
-            self.poison_terminal();
-            return Err(error.into());
-        }
-        let full_currentness = self
-            .engine
-            .as_mut()
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                "missing queue engine",
-            ))
-            .and_then(|engine| {
-                engine
-                    .backend
-                    .session
-                    .check_queue_currentness()
-                    .map_err(Into::into)
-            });
-        if let Err(error) = full_currentness {
-            self.poison_terminal();
-            return Err(error);
-        }
-        let mut dispatch = Some(
-            self.dispatch
-                .take()
-                .expect("validated detached persistent control remains retained"),
-        );
-        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_live_queue_memory_model_custody(|memory| {
-                dispatch
-                    .take()
-                    .expect("custody operation executes at most once")
-                    .release_detached_persistent_control_v1(memory, generation)
-            })
-        }));
-        let envelope = match envelope {
-            Ok(envelope) => envelope,
-            Err(payload) => {
-                self.dispatch = dispatch;
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                std::panic::resume_unwind(payload)
-            }
-        };
-        match envelope {
-            Ok((Ok(()), Ok(()))) => Ok(true),
-            Ok((Err(error), Ok(()))) => {
-                self.poison_terminal();
-                Err(error.into())
-            }
-            Ok((_, Err(error))) => {
-                self.poison_terminal();
-                Err(error)
-            }
-            Err(error) => {
-                self.dispatch = dispatch;
-                Err(error)
-            }
-        }
+        settled.into_result()
     }
 
     pub(super) fn detach_recycled_fixed_dispatch_inner(
