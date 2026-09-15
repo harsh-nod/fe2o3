@@ -196,15 +196,18 @@ fn matching_version_fake_verus_is_rejected_by_executable_digest() {
 
 #[test]
 fn documentation_states_the_exact_claim_and_remaining_boundary() {
+    let readme = README.split_whitespace().collect::<Vec<_>>().join(" ");
     for statement in [
-        "28 obligations",
-        "Nine independently pinned\nmutations",
+        "requires 28 verified obligations",
+        "Nine independently pinned mutations",
+        "Fresh Verus qualification of both reanchored proof files is pending.",
+        "Historical runs for the prior kernel/proof hashes do not qualify these bytes.",
         "not an IEEE-754 `f32` refinement",
-        "a refinement of\n`src/kernel.rs`",
+        "a refinement of `src/kernel.rs`",
         "a compiler or machine-code refinement",
-        "a GPU memory-safety or\ndata-race proof",
+        "a GPU memory-safety or data-race proof",
         "or a GPU execution result",
     ] {
-        assert!(README.contains(statement), "README is missing {statement}");
+        assert!(readme.contains(statement), "README is missing {statement}");
     }
 }
