@@ -20520,8 +20520,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "projected local assignment is not a dereferenced store",
             ));
         }
-        let (pointer, pointer_ty) = self
-            .resolve_place(block, statement, destination, operations)?
+        let address = if volatility == SemanticVolatilityV1::NonVolatile
+            && self.is_direct_mutable_slice_index_v1(destination)
+        {
+            self.lower_indexed_place_address(block, statement, destination, operations)?
+        } else {
+            self.resolve_place(block, statement, destination, operations)?
+        };
+        let (pointer, pointer_ty) = address
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
         let (value, value_ty) = value
@@ -20670,6 +20676,51 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         }
         Ok(())
+    }
+
+    fn is_direct_mutable_slice_index_v1(&self, place: &SemanticPlaceV1) -> bool {
+        let [dereference, index] = place.projections() else {
+            return false;
+        };
+        if dereference.kind() != SemanticProjectionKindV1::Dereference
+            || !matches!(index.kind(), SemanticProjectionKindV1::Index(_))
+        {
+            return false;
+        }
+        let Some(local) = self.function.locals().get(place.local().index() as usize) else {
+            return false;
+        };
+        let Some(SemanticTypeShapeV1::Pointer(pointer)) = self
+            .types
+            .get(local.ty().index() as usize)
+            .map(SemanticTypeDeclV1::shape)
+        else {
+            return false;
+        };
+        if pointer.kind() != SemanticPointerKindV1::Reference
+            || pointer.mutability() != SemanticMutabilityV1::Mutable
+            || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+            || pointer.pointer_width_bits() != 64
+            || pointer.pointee() != dereference.result_type()
+        {
+            return false;
+        }
+        let Some(SemanticTypeShapeV1::Slice { element }) = self
+            .types
+            .get(pointer.pointee().index() as usize)
+            .map(SemanticTypeDeclV1::shape)
+        else {
+            return false;
+        };
+        if *element != index.result_type() || *element != place.ty() {
+            return false;
+        }
+        matches!(
+            self.locals.get(place.local().index() as usize).and_then(Option::as_ref),
+            Some(SemanticValueBindingV1::Value { ty: Type::Slice(slice), .. })
+                if slice.access == AccessMode::ReadWrite
+                    && Some(slice.address_space) == lower_address_space(pointer.address_space()).ok()
+        )
     }
 
     fn lower_indexed_place_address(

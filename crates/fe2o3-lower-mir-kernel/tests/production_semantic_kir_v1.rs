@@ -34,6 +34,8 @@ mod pre_ranked_materialization_v1;
 mod pre_ranked_multiroot_v1;
 #[path = "production_semantic_kir_v1/retained_array_v1.rs"]
 mod retained_array_v1;
+#[path = "production_semantic_kir_v1/slice_indexed_store_v1.rs"]
+mod slice_indexed_store_v1;
 #[path = "production_semantic_kir_v1/slice_reborrow_v1.rs"]
 mod slice_reborrow_v1;
 #[path = "production_semantic_kir_v1/source_launch_roster_v1.rs"]
