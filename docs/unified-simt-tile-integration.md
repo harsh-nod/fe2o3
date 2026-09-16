@@ -156,8 +156,10 @@ semantic-operation V3 are independent namespaces, not one shared version. MIR
 intrinsics81-86, KIR operations32-37 and KIR role types9-12 are reserved;
 [MIR role types14-17](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5700545180)
 are separately allocated. Historical incompatible versions remain rejected.
-The inert MIR V29 and canonical KIR V15/SO3 codecs now implement these allocated
-roles and operations. They do not provide production admission or M0/M1 approval.
+The inert MIR V29 codec implements the four roles and five callable descriptors
+81/82/84/85/86; MIR83 remains reserved and rejected. Canonical KIR V15/SO3
+implements all six operations, including synthetic ScopeEnd. Neither provides
+production admission or M0/M1 approval.
 Private entry-receipt custody alone does not authorize logical-root selection,
 a new role, or a new accepted program.
 

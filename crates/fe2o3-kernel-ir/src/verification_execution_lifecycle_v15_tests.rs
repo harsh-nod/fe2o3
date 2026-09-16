@@ -166,17 +166,23 @@ fn execution_v15_accepts_complete_consumption_discard_and_repeated_scopes() {
 
 #[test]
 fn execution_v15_registered_checks_reject_operations_without_role_definitions() {
-    for operation in [
-        Operation::effect_free(
-            ValueDef::new(ValueId(2), Type::INDEX),
-            OperationKind::Execution(Execution::ContextIssue),
+    for (operation, expected_code) in [
+        (
+            Operation::effect_free(
+                ValueDef::new(ValueId(2), Type::INDEX),
+                OperationKind::Execution(Execution::ContextIssue),
+            ),
+            DiagnosticCode::TypeMismatch,
         ),
-        execution(
-            None,
-            Execution::ScopeEnd {
-                workgroup: ValueId(1),
-                discarded: vec![],
-            },
+        (
+            execution(
+                None,
+                Execution::ScopeEnd {
+                    workgroup: ValueId(1),
+                    discarded: vec![],
+                },
+            ),
+            DiagnosticCode::InvalidOperandType,
         ),
     ] {
         assert!(
@@ -187,9 +193,16 @@ fn execution_v15_registered_checks_reject_operations_without_role_definitions() 
         );
         let candidate = module(vec![operation]);
         assert_eq!(candidate.functions[0].signature.parameters[1], Type::INDEX);
-        rejects(
-            &candidate,
-            "registered checks must reject malformed execution even without lifecycle roles",
+        let errors = verify_module(&candidate).expect_err(
+            "registered checks must reject malformed execution without lifecycle roles",
+        );
+        assert_eq!(
+            errors
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            vec![expected_code],
         );
     }
 }

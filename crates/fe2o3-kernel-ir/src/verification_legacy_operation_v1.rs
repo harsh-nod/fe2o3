@@ -2,8 +2,8 @@ use crate::{
     AccessMode, AddressSpace, BinaryOp, CanonicalKernelIrVerificationResourceErrorV1, CastKind,
     CheckedBinaryOperator, ComparePredicate, DiagnosticCode, Operation, OperationKind, ScalarType,
     Type, ValueId, VerificationDiagnosticLocationV1, VerificationFunctionPassV1,
-    identifier_message_work_v1, valid_scalar_cast, verification_type_message_work_upper_v1,
-    verification_types_equal_v1,
+    identifier_message_work_v1, valid_scalar_cast, verification_type_is_storable_v15,
+    verification_type_message_work_upper_v1, verification_types_equal_v1,
 };
 
 // Borrow the expected pointee while reproducing Type::Pointer's compact Debug form.
@@ -207,7 +207,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 address_space,
                 alignment,
             } => {
-                if !element.is_storable()
+                if !verification_type_is_storable_v15(element, self.budget)?
                     || !matches!(
                         address_space,
                         AddressSpace::Private | AddressSpace::Workgroup
@@ -740,7 +740,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 "read requires a readable pointer",
             )?;
         }
-        if !pointer_ty.pointee.is_storable() {
+        if !verification_type_is_storable_v15(&pointer_ty.pointee, self.budget)? {
             self.emit_fixed(
                 location,
                 DiagnosticCode::InvalidMemoryAccess,

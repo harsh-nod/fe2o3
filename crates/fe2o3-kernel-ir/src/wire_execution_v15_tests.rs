@@ -24,7 +24,11 @@ fn execution_v15_wire_roundtrips_all_roles_operations_and_geometry_boundaries() 
         assert_eq!(module, decoded);
         crate::verify_module(&decoded).unwrap();
         assert_eq!(encode_module_v15(&decoded).unwrap(), bytes);
+        assert!(encode_module_v8(&module).is_err());
+        assert!(encode_module_v9(&module).is_err());
         assert!(encode_module_v12(&module).is_err());
+        assert!(decode_module_v8(&bytes).is_err());
+        assert!(decode_module_v9(&bytes).is_err());
         assert!(decode_module_v12(&bytes).is_err());
     }
     for role in [

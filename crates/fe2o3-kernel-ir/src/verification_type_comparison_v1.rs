@@ -64,6 +64,7 @@ pub(crate) struct VerificationTypeFactsV15 {
     pub(crate) vector_error: Option<FixedVectorTypeErrorV12>,
     pub(crate) invalid_execution_role: bool,
     pub(crate) contains_execution_role: bool,
+    pub(crate) storable: bool,
 }
 
 /// Validates vector and execution nodes in one traversal, charging each type
@@ -73,12 +74,17 @@ pub(crate) fn verification_type_facts_v15(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<VerificationTypeFactsV15, CanonicalKernelIrVerificationResourceErrorV1> {
     let mut nested = false;
+    let mut storable = false;
     loop {
         budget.charge_work(1)?;
+        if !nested {
+            storable = matches!(ty, Type::Scalar(_) | Type::Vector(_) | Type::Pointer(_));
+        }
         match ty {
             Type::Vector(vector) => {
                 return Ok(VerificationTypeFactsV15 {
                     vector_error: vector.validate().err(),
+                    storable,
                     ..VerificationTypeFactsV15::default()
                 });
             }
@@ -87,13 +93,34 @@ pub(crate) fn verification_type_facts_v15(
                     vector_error: None,
                     invalid_execution_role: nested || role.validate().is_err(),
                     contains_execution_role: true,
+                    storable: false,
                 });
             }
             Type::Pointer(pointer) => ty = &pointer.pointee,
             Type::Slice(slice) => ty = &slice.element,
-            Type::Unit | Type::Scalar(_) => return Ok(VerificationTypeFactsV15::default()),
+            Type::Unit | Type::Scalar(_) => {
+                return Ok(VerificationTypeFactsV15 {
+                    storable,
+                    ..VerificationTypeFactsV15::default()
+                });
+            }
         }
         nested = true;
+    }
+}
+
+/// The caller's fixed operation charge covers the root tag; pointer descendants
+/// need their own paid traversal before recursive storability can be decided.
+pub(crate) fn verification_type_is_storable_v15(
+    ty: &Type,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
+    match ty {
+        Type::Unit | Type::Slice(_) | Type::Execution(_) => Ok(false),
+        Type::Scalar(_) | Type::Vector(_) => Ok(true),
+        Type::Pointer(pointer) => {
+            Ok(!verification_type_facts_v15(&pointer.pointee, budget)?.contains_execution_role)
+        }
     }
 }
 
