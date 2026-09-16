@@ -57,6 +57,28 @@ pub struct ProductionScopedCompleteFormalMemoryV1<'formal, 'scope, 'source, 'out
 }
 
 impl ProductionScopedCompleteFormalMemoryV1<'_, '_, '_, '_> {
+    /// Require the original live analysis ledger and the exact retained source
+    /// owner borrowed by R1. Equal bytes or root IDs from another owner do not
+    /// satisfy this relation. This grants no functional or final authority.
+    /// The caller must preserve the existing ledger and retained-storage
+    /// precondition; this is not protection against replacing a mutable ledger.
+    pub fn require_borrowed_source_v1(
+        &self,
+        source: &crate::ProductionBorrowedRankedCorrespondenceV1<'_>,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<(), ProductionSourceOutputErrorV1> {
+        self.analysis.require_live_v1(budget)?;
+        budget
+            .charge_work(1)
+            .map_err(ProductionSourceOutputErrorV1::Resource)?;
+        if !std::ptr::eq(self.analysis.view().source(), source.materialized()) {
+            return Err(ProductionSourceOutputErrorV1::Invalid(
+                "formal analysis and borrowed correspondence have different source owners",
+            ));
+        }
+        Ok(())
+    }
+
     /// The same actual immutable O borrowed by the completed analysis.
     pub fn output(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
         self.analysis.output()

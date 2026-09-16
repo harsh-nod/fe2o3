@@ -394,23 +394,10 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
     let target = envelope.target().to_string();
     let geometries =
         validate_production_v1_descriptor_evidence(module, typed_roots, formal, &target)?;
-    let producer_version = match envelope.target().as_amd_target_id().processor() {
-        "gfx942" => "production-v1-gfx942-cov6-v1",
-        "gfx950" => "production-v1-gfx950-cov6-v1",
-        _ => "production-v1-unsupported-target-v1",
-    };
+    let producer_version = production_descriptor_version_v1(envelope);
     let profiles = geometries
         .into_iter()
-        .map(|geometry| DescriptorConstructionProfileV1 {
-            rank: geometry.rank(),
-            workgroup: geometry.workgroup(),
-            max_grid: geometry.max_grid(),
-            max_flat_workgroup_size: geometry.max_flat_workgroup_size(),
-            static_shared_memory_bytes: geometry.static_shared_memory_bytes(),
-            allow_exact_tiled_matrix: geometry.allow_exact_tiled_matrix(),
-            allow_workgroup_memory: geometry.allow_workgroup_memory(),
-            producer_version,
-        })
+        .map(|geometry| production_descriptor_profile_v1(geometry, producer_version))
         .collect::<Vec<_>>();
     construct_compiler_descriptor_source_with_profiles_v1(
         envelope,
@@ -422,6 +409,307 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
     .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
         "complete typed descriptor closure",
     ))
+}
+
+fn production_descriptor_version_v1(envelope: &CompilerFfiEnvelopeV1) -> &'static str {
+    match envelope.target().as_amd_target_id().processor() {
+        "gfx942" => "production-v1-gfx942-cov6-v1",
+        "gfx950" => "production-v1-gfx950-cov6-v1",
+        _ => "production-v1-unsupported-target-v1",
+    }
+}
+
+fn production_descriptor_profile_v1(
+    geometry: crate::production_geometry_v1::ProductionGeometryV1,
+    producer_version: &'static str,
+) -> DescriptorConstructionProfileV1 {
+    DescriptorConstructionProfileV1 {
+        rank: geometry.rank(),
+        workgroup: geometry.workgroup(),
+        max_grid: geometry.max_grid(),
+        max_flat_workgroup_size: geometry.max_flat_workgroup_size(),
+        static_shared_memory_bytes: geometry.static_shared_memory_bytes(),
+        allow_exact_tiled_matrix: geometry.allow_exact_tiled_matrix(),
+        allow_workgroup_memory: geometry.allow_workgroup_memory(),
+        producer_version,
+    }
+}
+
+/// Source-owned descriptor construction for the exact checked O. The result
+/// is still inert source metadata, not functional, final or launch authority.
+/// Existing ABI/geometry/encoder internals retain their own resource domains;
+/// the new roster traversal and temporary profile vector use the live ledger.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn construct_checked_output_source_descriptor_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    source: &fe2o3_lower_mir_kernel::ProductionBorrowedRankedCorrespondenceV1<'_>,
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    formals: &[fe2o3_lower_mir_kernel::ProductionScopedCompleteFormalMemoryV1<'_, '_, '_, '_>],
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let resource = CompilerDescriptorError::CheckedOutputResource;
+    let floor = budget.storage();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let output = checked.owner();
+        let module = output.module();
+        let semantic = source.materialized().semantic_ssa().source_semantic();
+        budget.charge_work(6).map_err(resource)?;
+        let count = typed_roots.len();
+        if count == 0
+            || count != semantic.roots().len()
+            || count != source.root_count()
+            || count != formals.len()
+            || count != module.kernels.len()
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "complete checked-output source/formal root roster",
+            ));
+        }
+
+        // Admission makes source exports unique. Sealed formal rows each
+        // belong to O; matching every source-ordered export and full counts
+        // therefore covers O exactly without assuming kernel-table ordinals.
+        for (((typed, root), correspondence), formal) in typed_roots
+            .iter()
+            .zip(semantic.roots())
+            .zip(source.roots())
+            .zip(formals)
+        {
+            formal
+                .require_borrowed_source_v1(source, budget)
+                .map_err(CompilerDescriptorError::CheckedOutputSource)?;
+            budget.charge_work(6).map_err(resource)?;
+            if !std::ptr::eq(formal.output(), output)
+                || formal.selected_root() != *root
+                || correspondence.selected_root() != *root
+            {
+                return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "checked-output source/owner/root identity",
+                ));
+            }
+            let function = semantic.functions().get(root.index() as usize).ok_or(
+                CompilerDescriptorError::ProductionDescriptorMismatch("semantic root function"),
+            )?;
+            let entry = function.kernel_entry().ok_or(
+                CompilerDescriptorError::ProductionDescriptorMismatch("semantic root entry"),
+            )?;
+            let export = entry.export_symbol().as_bytes();
+            let typed_export = typed.entry_symbol().as_bytes();
+            let actual = formal.kernel();
+            let obligations = formal.obligations();
+            charge_checked_output_descriptor_bytes_v1(
+                [
+                    export.len(),
+                    typed_export.len(),
+                    export.len(),
+                    actual.id.as_str().len(),
+                    actual.id.as_str().len(),
+                    obligations.kernel().as_str().len(),
+                    actual.entry.as_str().len(),
+                    obligations.entry().as_str().len(),
+                ],
+                budget,
+            )?;
+            if entry.kernel_binding_identity().as_bytes() != &typed.kernel_binding_bytes()
+                || export != typed_export
+                || export != actual.id.as_str().as_bytes()
+                || obligations.kernel() != &actual.id
+                || obligations.entry() != &actual.entry
+            {
+                return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "checked-output typed/source/kernel/formal identity",
+                ));
+            }
+        }
+        validate_production_v1_semantic_ownership_evidence(typed_roots, semantic)?;
+
+        let target = envelope.target().to_string();
+        let producer_version = production_descriptor_version_v1(envelope);
+        let mut profiles = checked_output_descriptor_profiles_v1(count, budget)?;
+        for ((typed, root), formal) in typed_roots.iter().zip(semantic.roots()).zip(formals) {
+            budget.charge_work(2).map_err(resource)?;
+            let function = semantic.functions().get(root.index() as usize).ok_or(
+                CompilerDescriptorError::ProductionDescriptorMismatch("semantic root function"),
+            )?;
+            let geometry = validate_production_v1_descriptor_root_evidence(
+                module,
+                typed,
+                semantic,
+                function,
+                formal.kernel(),
+                formal.obligations(),
+                &target,
+            )?;
+            profiles.push(production_descriptor_profile_v1(geometry, producer_version));
+        }
+        let descriptor = construct_compiler_descriptor_source_with_profiles_v1(
+            envelope,
+            module,
+            compiler_module,
+            typed_roots,
+            &profiles,
+        )?
+        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "complete typed descriptor closure",
+        ))?;
+        for formal in formals {
+            formal
+                .require_borrowed_source_v1(source, budget)
+                .map_err(CompilerDescriptorError::CheckedOutputSource)?;
+        }
+        Ok(descriptor)
+    }));
+    // The profile vector has dropped, including on errors/unwind, before its
+    // visible capacity reservation is released. Accounting failures win.
+    let released = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or_else(|| resource(Resource::Accounting))?;
+    budget.release_storage(released).map_err(resource)?;
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn charge_checked_output_descriptor_bytes_v1(
+    lengths: [usize; 8],
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), CompilerDescriptorError> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let resource = CompilerDescriptorError::CheckedOutputResource;
+    let work = lengths
+        .into_iter()
+        .try_fold(32_usize, usize::checked_add)
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    budget.charge_work(work).map_err(resource)
+}
+
+fn checked_output_descriptor_profiles_v1(
+    count: usize,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Vec<DescriptorConstructionProfileV1>, CompilerDescriptorError> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let resource = CompilerDescriptorError::CheckedOutputResource;
+    budget.charge_work(1).map_err(resource)?;
+    let size = std::mem::size_of::<DescriptorConstructionProfileV1>();
+    let requested = count
+        .checked_mul(size)
+        .and_then(|bytes| {
+            bytes.checked_add(std::mem::size_of::<Vec<DescriptorConstructionProfileV1>>())
+        })
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    budget.reserve_storage(requested).map_err(resource)?;
+    let mut profiles = Vec::new();
+    profiles
+        .try_reserve_exact(count)
+        .map_err(|_| resource(Resource::Allocation))?;
+    let excess = profiles
+        .capacity()
+        .checked_sub(count)
+        .and_then(|n| n.checked_mul(size))
+        .ok_or_else(|| resource(Resource::Arithmetic))?;
+    budget.reserve_storage(excess).map_err(resource)?;
+    Ok(profiles)
+}
+
+#[cfg(test)]
+pub(crate) enum CheckedOutputDescriptorFixtureMutationV1 {
+    TypeIdentity,
+    Ownership,
+    Abi,
+    Layout,
+}
+
+#[cfg(test)]
+pub(crate) fn checked_output_descriptor_mutated_fixture_v1(
+    root: &TypedDescriptorRootV1,
+    mutation: CheckedOutputDescriptorFixtureMutationV1,
+) -> TypedDescriptorRootV1 {
+    let mut root = root.clone();
+    let mut arguments = root.arguments.as_slice().to_vec();
+    let argument = &mut arguments[0];
+    match mutation {
+        CheckedOutputDescriptorFixtureMutationV1::TypeIdentity => {
+            let other = SemanticTypeIdentityV1::from_sha256([241; 32]);
+            assert_ne!(argument.semantic_type_identity, other);
+            argument.semantic_type_identity = other;
+        }
+        CheckedOutputDescriptorFixtureMutationV1::Ownership => {
+            argument.kind = DescriptorArgumentKindV1::GlobalMutPointer(ScalarTypeV1::U32);
+        }
+        CheckedOutputDescriptorFixtureMutationV1::Abi => {
+            argument.rustc_abi_class = RustcAbiClassV1::ScalarPair;
+        }
+        CheckedOutputDescriptorFixtureMutationV1::Layout => {
+            argument.source_size += 4;
+        }
+    }
+    root.arguments = TypedArgumentListV1::new(arguments).unwrap();
+    root
+}
+
+#[cfg(test)]
+pub(crate) fn checked_output_scalar_descriptor_fixture_v1(
+    function: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1,
+    scalar: &fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1,
+    logical_name: &str,
+    launch: &LaunchContract,
+) -> TypedDescriptorRootV1 {
+    // Compiler metadata fixture only. The caller still needs genuine admitted
+    // source/R1 and checked O/formal scopes; no completed proof is fabricated.
+    use fe2o3_artifacts::{
+        PointerWidth, RustPhysicalComponentKindV1, RustPhysicalComponentV1,
+        RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1,
+    };
+    assert_eq!(function.abi().source_input_types().len(), 1);
+    assert_eq!(scalar.layout().size_bytes(), Some(4));
+    assert_eq!(scalar.layout().alignment_bytes(), 4);
+    let layout = RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::scalar(RustScalarElementTypeV1::U32)),
+        RustcAbiClassV1::Scalar,
+        PointerWidth::Bits64,
+        4,
+        4,
+        vec![
+            RustPhysicalComponentV1::new(
+                0,
+                4,
+                4,
+                RustPhysicalComponentKindV1::Scalar {
+                    scalar: RustScalarElementTypeV1::U32,
+                },
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let entry = function.kernel_entry().unwrap();
+    TypedDescriptorRootV1 {
+        logical_name: logical_name.to_owned(),
+        export_name: std::str::from_utf8(entry.export_symbol().as_bytes())
+            .unwrap()
+            .to_owned(),
+        kernel_binding: KernelBindingIdV1::from_bytes(*entry.kernel_binding_identity().as_bytes()),
+        arguments: TypedArgumentListV1::new(vec![TypedDescriptorArgumentV1 {
+            name: "argument".to_owned(),
+            kind: DescriptorArgumentKindV1::Scalar(ScalarTypeV1::U32),
+            access: AccessMode::ByValue,
+            offset: 0,
+            layout: Some(layout),
+            source_size: 4,
+            source_alignment: 4,
+            rustc_abi_class: RustcAbiClassV1::Scalar,
+            semantic_type_identity: scalar.identity(),
+        }])
+        .unwrap(),
+        explicit_argument_bytes: 4,
+        kernarg_alignment_bytes: 8,
+        source_launch: Some(launch.clone()),
+    }
 }
 
 fn validate_production_v1_descriptor_evidence(
@@ -1542,6 +1830,8 @@ pub(crate) enum CompilerDescriptorError {
     MissingTypedKernel(String),
     UnexpectedWorkgroupSize { kernel: String, expected: [u32; 3] },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    CheckedOutputSource(fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1),
+    CheckedOutputResource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
     UnsupportedCapability(String),
@@ -1631,6 +1921,18 @@ impl fmt::Display for CompilerDescriptorError {
             }
             Self::ProductionGeometry(error) => {
                 write!(formatter, "production geometry evidence failed: {error}")
+            }
+            Self::CheckedOutputSource(error) => {
+                write!(
+                    formatter,
+                    "checked-output descriptor source failed: {error}"
+                )
+            }
+            Self::CheckedOutputResource(error) => {
+                write!(
+                    formatter,
+                    "checked-output descriptor resource failed: {error}"
+                )
             }
             Self::ProductionDescriptorMismatch(field) => write!(
                 formatter,
@@ -2748,6 +3050,103 @@ mod tests {
             first.table().kernels()[0].executable_ir_evidence(),
             second.table().kernels()[0].executable_ir_evidence()
         );
+    }
+
+    #[test]
+    fn checked_output_descriptor_byte_work_is_exact_and_preserves_prior_denial_prefix() {
+        use fe2o3_kernel_ir::{
+            CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work,
+        };
+        let lengths = [257, 257, 257, 257, 257, 257, 263, 263];
+        let visits = 32 + 6 * 257 + 2 * 263;
+        for exact in [true, false] {
+            let mut work = Work::new(7 + visits - usize::from(!exact));
+            let mut budget = Budget::new(&mut work, 97);
+            budget.charge_work(7).unwrap();
+            budget.reserve_storage(97).unwrap();
+            let result = charge_checked_output_descriptor_bytes_v1(lengths, &mut budget);
+            if exact {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(CompilerDescriptorError::CheckedOutputResource(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)
+                    ))
+                ));
+            }
+            assert_eq!(budget.work(), if exact { 7 + visits } else { 7 });
+            assert_eq!(budget.storage(), 97);
+            assert_eq!(budget.failed_storage(), None);
+            assert_eq!(work.failed_work().is_none(), exact);
+        }
+        let mut work = Work::new(7);
+        let mut budget = Budget::new(&mut work, 97);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(97).unwrap();
+        assert!(matches!(
+            charge_checked_output_descriptor_bytes_v1([usize::MAX; 8], &mut budget),
+            Err(CompilerDescriptorError::CheckedOutputResource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic
+            ))
+        ));
+        assert_eq!(budget.work(), 7);
+        assert_eq!(budget.storage(), 97);
+        assert_eq!(work.failed_work(), None);
+    }
+
+    #[test]
+    fn checked_output_descriptor_profile_storage_tracks_capacity_and_minimum_denial() {
+        use fe2o3_kernel_ir::{
+            CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work,
+        };
+        const FLOOR: usize = 97;
+        let header = std::mem::size_of::<Vec<DescriptorConstructionProfileV1>>();
+        let row = std::mem::size_of::<DescriptorConstructionProfileV1>();
+        let minimum = header + 3 * row;
+        let mut work = Work::new(8);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        let profiles = checked_output_descriptor_profiles_v1(3, &mut budget).unwrap();
+        let actual = header + profiles.capacity() * row;
+        assert!(actual >= minimum);
+        assert_eq!(budget.storage(), FLOOR + actual);
+        assert_eq!(budget.work(), 8);
+        drop(profiles);
+        budget.release_storage(actual).unwrap();
+        assert_eq!(budget.storage(), FLOOR);
+        assert_eq!(budget.failed_storage(), None);
+
+        let mut work = Work::new(8);
+        let mut budget = Budget::new(&mut work, FLOOR + minimum - 1);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        assert!(matches!(
+            checked_output_descriptor_profiles_v1(3, &mut budget),
+            Err(CompilerDescriptorError::CheckedOutputResource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Storage(_)
+            ))
+        ));
+        assert_eq!(budget.storage(), FLOOR);
+        assert_eq!(budget.work(), 8);
+        assert!(budget.failed_storage().is_some());
+
+        let mut work = Work::new(7);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        assert!(matches!(
+            checked_output_descriptor_profiles_v1(3, &mut budget),
+            Err(CompilerDescriptorError::CheckedOutputResource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)
+            ))
+        ));
+        assert_eq!(budget.storage(), FLOOR);
+        assert_eq!(budget.work(), 7);
+        assert_eq!(budget.failed_storage(), None);
     }
 
     #[test]

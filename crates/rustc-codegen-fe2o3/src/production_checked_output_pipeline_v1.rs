@@ -5,6 +5,7 @@ pub(crate) enum CheckedOutputMemoryTargetErrorV1 {
     Optimization(fe2o3_pliron::KirNeutralOptimizationErrorV1),
     Transition(fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1),
     Join(crate::production_ranked_projection_v1::CheckedOutputModuleJoinErrorV1),
+    LocalRelation(crate::production_ranked_projection_v1::CheckedOutputLocalRelationErrorV1),
 }
 
 impl fmt::Display for CheckedOutputMemoryTargetErrorV1 {
@@ -15,6 +16,7 @@ impl fmt::Display for CheckedOutputMemoryTargetErrorV1 {
             Self::Optimization(error) => error.fmt(f),
             Self::Transition(error) => error.fmt(f),
             Self::Join(error) => error.fmt(f),
+            Self::LocalRelation(error) => error.fmt(f),
         }
     }
 }
@@ -27,6 +29,7 @@ impl std::error::Error for CheckedOutputMemoryTargetErrorV1 {
             Self::Optimization(error) => Some(error),
             Self::Transition(error) => Some(error),
             Self::Join(error) => Some(error),
+            Self::LocalRelation(error) => Some(error),
         }
     }
 }
@@ -48,6 +51,13 @@ const CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1: &str = "checked-output producti
 /// Binder raw temporaries, projector, formal engine and native LLVM retain their
 /// existing separate limits; this is not whole-compiler allocator metering.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "#271 historical checked-output differential endpoint"
+    )
+)]
 pub(crate) fn with_checked_output_memory_target_v1<T>(
     materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     root_inputs: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
@@ -73,6 +83,56 @@ pub(crate) fn with_checked_output_memory_target_v1<T>(
         ProductionScopedFormalMemoryErrorV1 as Formal, ProductionSourceOutputErrorV1 as Output,
     };
     let error = ProductionPipelineError::CheckedOutputMemoryTarget;
+    let mut callback_error = None;
+    with_checked_output_target_endpoint_v1(
+        materialized,
+        profile,
+        budget,
+        |bound, checked, budget| {
+            let result =
+                crate::production_ranked_projection_v1::with_projected_checked_output_module_v1(
+                    materialized,
+                    bound,
+                    checked,
+                    profile,
+                    root_inputs,
+                    references,
+                    budget,
+                    |formals, budget| match next(bound, checked, formals, budget) {
+                        Ok(value) => Ok(value),
+                        Err(error) => {
+                            callback_error = Some(error);
+                            Err(Formal::SourceOutput(Output::Invalid(
+                                CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1,
+                            )))
+                        }
+                    },
+                );
+            match result {
+                Err(Join::Formal(Formal::SourceOutput(Output::Invalid(
+                    CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1,
+                )))) => Err(callback_error
+                    .take()
+                    .unwrap_or_else(|| checked_output_pipeline_resource_v1(Resource::Accounting))),
+                other => other.map_err(|e| error(Error::Join(e))),
+            }
+        },
+    )
+}
+
+fn with_checked_output_target_endpoint_v1<T>(
+    materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl FnOnce(
+        &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<T, ProductionPipelineError>,
+) -> Result<T, ProductionPipelineError> {
+    use CheckedOutputMemoryTargetErrorV1 as Error;
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let error = ProductionPipelineError::CheckedOutputMemoryTarget;
     let source_bytes = materialized
         .executable_storage()
         .retained_storage()
@@ -82,7 +142,6 @@ pub(crate) fn with_checked_output_memory_target_v1<T>(
     if floor < source_bytes {
         return Err(checked_output_pipeline_resource_v1(Resource::Accounting));
     }
-    let mut callback_error = None;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         budget
             .charge_work(1)
@@ -113,35 +172,7 @@ pub(crate) fn with_checked_output_memory_target_v1<T>(
         budget
             .reserve_storage(checked.storage().retained_storage())
             .map_err(checked_output_pipeline_resource_v1)?;
-        let result =
-            crate::production_ranked_projection_v1::with_projected_checked_output_module_v1(
-                materialized,
-                &bound,
-                &checked,
-                profile,
-                root_inputs,
-                references,
-                budget,
-                |formals, budget| match next(&bound, &checked, formals, budget) {
-                    Ok(value) => Ok(value),
-                    Err(error) => {
-                        callback_error = Some(error);
-                        Err(Formal::SourceOutput(Output::Invalid(
-                            CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1,
-                        )))
-                    }
-                },
-            );
-        // Only the exact originating marker restores the typed callback error.
-        // Later surrounding resource/accounting failures always win instead.
-        match result {
-            Err(Join::Formal(Formal::SourceOutput(Output::Invalid(
-                CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1,
-            )))) => Err(callback_error
-                .take()
-                .unwrap_or_else(|| checked_output_pipeline_resource_v1(Resource::Accounting))),
-            other => other.map_err(|e| error(Error::Join(e))),
-        }
+        next(&bound, &checked, budget)
     }));
     let released = budget
         .storage()
@@ -181,6 +212,14 @@ impl CheckedOutputMemoryPreparedProductionCompilation<'_, '_, '_, '_, '_> {
         self,
         budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<String, ProductionPipelineError> {
+        self.validate_inert_target_geometry_v1(budget)?;
+        lower_checked_output_native_text_v1(self.checked, self.bindings.rustc_target.profile())
+    }
+
+    fn validate_inert_target_geometry_v1(
+        &self,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), ProductionPipelineError> {
         let semantic = self.source.semantic_ssa().source_semantic();
         let output = self.checked.owner();
         budget
@@ -258,7 +297,7 @@ impl CheckedOutputMemoryPreparedProductionCompilation<'_, '_, '_, '_, '_> {
             )
             .map_err(ProductionPipelineError::Geometry)?;
         }
-        lower_checked_output_native_text_v1(self.checked, self.bindings.rustc_target.profile())
+        Ok(())
     }
 }
 
@@ -282,36 +321,267 @@ pub(crate) fn lower_checked_output_native_text_v1(
         .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)
 }
 
+/// Held private production continuation. Original reference and transaction
+/// custody remain in bindings; this emits no worker/final/publication owner.
+#[expect(dead_code, reason = "#271 source-owned checked-output attachment")]
+fn with_source_checked_output_descriptor_text_v1<T>(
+    bindings: &AuthenticatedProductionBindings,
+    source: &fe2o3_lower_mir_kernel::ProductionBorrowedRankedCorrespondenceV1<'_>,
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    formals: &[fe2o3_lower_mir_kernel::ProductionScopedCompleteFormalMemoryV1<'_, '_, '_, '_>],
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl FnOnce(
+        &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+        &fe2o3_compiler_ffi::CompilerDescriptorSourceV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<T, ProductionPipelineError>,
+) -> Result<T, ProductionPipelineError> {
+    with_checked_output_descriptor_text_v1(
+        source,
+        checked,
+        formals,
+        &bindings.typed_descriptor_roots,
+        bindings.rustc_target.profile(),
+        bindings.rustc_target.device_target(),
+        bindings.transaction.compiler_ffi_envelope.as_ref(),
+        budget,
+        next,
+    )
+}
+
+/// Shared inert core for the private collected-source continuation and genuine
+/// source tests. There is no alternate Module or caller LLVM input. Native L,
+/// descriptor encoding and LLVM buffers retain their established domains.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn with_checked_output_descriptor_text_v1<T>(
+    source: &fe2o3_lower_mir_kernel::ProductionBorrowedRankedCorrespondenceV1<'_>,
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    formals: &[fe2o3_lower_mir_kernel::ProductionScopedCompleteFormalMemoryV1<'_, '_, '_, '_>],
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    source_envelope: Option<&fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl FnOnce(
+        &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+        &fe2o3_compiler_ffi::CompilerDescriptorSourceV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<T, ProductionPipelineError>,
+) -> Result<T, ProductionPipelineError> {
+    use crate::production_worker_handoff::ProductionWorkerHandoffError as Handoff;
+    let source_error = |error| {
+        ProductionPipelineError::DescriptorEvidence(
+            crate::compiler_descriptor::CompilerDescriptorError::CheckedOutputSource(error),
+        )
+    };
+    let worker = ProductionPipelineError::WorkerHandoff;
+    let floor = budget.storage();
+    let mut callback_entered = false;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for formal in formals {
+            formal
+                .require_borrowed_source_v1(source, budget)
+                .map_err(source_error)?;
+        }
+        let module = checked.owner().module();
+        crate::compiler_module_contract::validate_exact_target_binding(target, module)
+            .map_err(|error| worker(Handoff::from(error)))?;
+        let text = lower_checked_output_native_text_v1(checked, profile)?;
+        let compiler_module =
+            crate::kernel_ir_codegen::retain_production_compiler_module_text_v1(module, text)
+                .map_err(|error| worker(Handoff::CompilerModule(error)))?;
+        let envelope =
+            crate::production_worker_handoff::derive_checked_output_compiler_ffi_envelope_v1(
+                target,
+                module,
+                &compiler_module,
+                source_envelope,
+                *checked.owner().canonical().identity().digest(),
+            )
+            .map_err(worker)?;
+        crate::compiler_module_contract::validate_exact_target_binding(envelope.target(), module)
+            .map_err(|error| worker(Handoff::from(error)))?;
+        crate::compiler_module_contract::validate_envelope_module_roles(
+            &envelope,
+            &compiler_module,
+        )
+        .map_err(|error| worker(Handoff::from(error)))?;
+        let descriptor = crate::compiler_descriptor::construct_checked_output_source_descriptor_v1(
+            &envelope,
+            &compiler_module,
+            typed_roots,
+            source,
+            checked,
+            formals,
+            budget,
+        )
+        .map_err(ProductionPipelineError::DescriptorEvidence)?;
+        let compiler_module = crate::kernel_ir_codegen::bind_compiler_descriptor_source_v1(
+            compiler_module,
+            &descriptor,
+        )
+        .map_err(|error| worker(Handoff::CompilerModule(error)))?;
+        callback_entered = true;
+        next(&compiler_module, &descriptor, budget)
+    }));
+    // Inert text/descriptor temporaries have dropped. Recheck the live scope
+    // even on callback Err/unwind. Every postflight resource/liveness failure,
+    // including Work exhaustion, takes precedence over the callback outcome.
+    let live = if callback_entered {
+        formals.iter().try_for_each(|formal| {
+            formal
+                .require_borrowed_source_v1(source, budget)
+                .map_err(source_error)
+        })
+    } else {
+        Ok(())
+    };
+    let released = budget.storage().checked_sub(floor).ok_or_else(|| {
+        checked_output_pipeline_resource_v1(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting,
+        )
+    })?;
+    budget
+        .release_storage(released)
+        .map_err(checked_output_pipeline_resource_v1)?;
+    live?;
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
-    /// Nondefault replacement hook through the same live N/B/O ledger. This
-    /// deliberately cannot publish: authenticated functional/refinement and
-    /// protected checked-output lineage stages are separate required follow-ons.
-    #[expect(dead_code, reason = "#271 checked-output final attachment pending")]
-    pub(crate) fn lower_checked_output_memory_target_v1(
+    fn with_source_checked_output_transaction_v1<T>(
         self,
-    ) -> Result<String, ProductionPipelineError> {
+        next: impl for<'scope> FnOnce(
+            &MaterializedNeutralProductionCompilation,
+            &crate::production_ranked_projection_v1::SourceRankedCustodyV1<'scope>,
+            &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+            &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, ProductionPipelineError>,
+    ) -> Result<T, ProductionPipelineError> {
         self.import_semantic_mir()?
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
-            .with_materialized_target_neutral_v1(|stage, budget| {
-                with_checked_output_memory_target_v1(
+            .with_captured_materialized_target_neutral_v1(|stage, budget| {
+                crate::production_ranked_projection_v1::with_source_ranked_custody_v1(
                     &stage.materialized,
                     &stage.ranked_roots,
                     &stage.bindings.reference_effect_bindings,
-                    stage.bindings.rustc_target.profile(),
                     budget,
-                    |_bound, checked, formals, budget| {
-                        CheckedOutputMemoryPreparedProductionCompilation {
-                            source: &stage.materialized,
-                            bindings: &stage.bindings,
-                            checked,
-                            formals,
-                        }
-                        .lower_inert_target_v1(budget)
+                    |source, budget| {
+                        with_checked_output_target_endpoint_v1(
+                            &stage.materialized,
+                            stage.bindings.rustc_target.profile(),
+                            budget,
+                            |bound, checked, budget| next(stage, source, bound, checked, budget),
+                        )
                     },
                 )
                 .map_err(Box::new)
             })
             .map_err(ProductionPipelineError::from)
+    }
+
+    /// Historical nondefault String hook; it retains its original checks and L.
+    /// Source/O functional equivalence and final attachment are not established.
+    #[expect(dead_code, reason = "#271 checked-output final attachment pending")]
+    pub(crate) fn lower_checked_output_memory_target_v1(
+        self,
+    ) -> Result<String, ProductionPipelineError> {
+        self.with_source_checked_output_transaction_v1(|stage, source, bound, checked, budget| {
+            use crate::production_ranked_projection_v1::CheckedOutputModuleJoinErrorV1 as Join;
+            use fe2o3_lower_mir_kernel::{
+                ProductionScopedFormalMemoryErrorV1 as Formal,
+                ProductionSourceOutputErrorV1 as Output,
+            };
+            let mut callback_error = None;
+            let result =
+                crate::production_ranked_projection_v1::with_source_checked_output_module_v1(
+                    source,
+                    bound,
+                    checked,
+                    stage.bindings.rustc_target.profile(),
+                    budget,
+                    |formals, budget| {
+                        let result = CheckedOutputMemoryPreparedProductionCompilation {
+                            source: &stage.materialized,
+                            bindings: &stage.bindings,
+                            checked,
+                            formals,
+                        }
+                        .lower_inert_target_v1(budget);
+                        result.map_err(|error| {
+                            callback_error = Some(error);
+                            Formal::SourceOutput(Output::Invalid(
+                                CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1,
+                            ))
+                        })
+                    },
+                );
+            match result {
+                Err(Join::Formal(Formal::SourceOutput(Output::Invalid(
+                    CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1,
+                )))) => Err(callback_error.take().unwrap_or_else(|| {
+                    checked_output_pipeline_resource_v1(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting,
+                    )
+                })),
+                other => other.map_err(|error| {
+                    ProductionPipelineError::CheckedOutputMemoryTarget(
+                        CheckedOutputMemoryTargetErrorV1::Join(error),
+                    )
+                }),
+            }
+        })
+    }
+
+    /// Held local composition only. Nothing is published, transported or given
+    /// authority. The callback preserves the ledger and all live reservations;
+    /// side-effect copies require their own explicit custody/accounting contract.
+    #[expect(dead_code, reason = "#271 local relation handoff remains nondefault")]
+    pub(crate) fn with_checked_output_local_relations_v1(
+        self,
+        next: impl FnOnce(
+            &fe2o3_kernel_opt::CheckedCanonicalPolicy3ExecutionReceiptV1<'_, '_>,
+            &dialect_amdgcn::ReplayedNativeV12TextDescriptorRelationV1<'_, '_, '_, '_>,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<(), ProductionPipelineError>,
+    ) -> Result<(), ProductionPipelineError> {
+        self.with_source_checked_output_transaction_v1(|stage, source, bound, checked, budget| {
+            use crate::production_ranked_projection_v1::CheckedOutputModuleJoinErrorV1 as Join;
+            use fe2o3_lower_mir_kernel::{ProductionScopedFormalMemoryErrorV1 as Formal, ProductionSourceOutputErrorV1 as Output};
+            let mut callback_error = None;
+            let result = crate::production_ranked_projection_v1::with_source_checked_output_module_catalog_v1(
+                source, bound, checked, stage.bindings.rustc_target.profile(), budget,
+                |formals, catalog, budget| {
+                    let result = (|| {
+                        CheckedOutputMemoryPreparedProductionCompilation {
+                            source: &stage.materialized, bindings: &stage.bindings,
+                            checked, formals,
+                        }.validate_inert_target_geometry_v1(budget)?;
+                        crate::production_ranked_projection_v1::with_source_checked_output_local_relations_v1(
+                            source, bound, checked, catalog, formals,
+                            &stage.bindings.typed_descriptor_roots,
+                            stage.bindings.rustc_target.profile(),
+                            stage.bindings.rustc_target.device_target(),
+                            stage.bindings.transaction.compiler_ffi_envelope.as_ref(),
+                            budget, next,
+                        )
+                    })();
+                    result.map_err(|error| {
+                        callback_error = Some(error);
+                        Formal::SourceOutput(Output::Invalid(CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1))
+                    })
+                },
+            );
+            match result {
+                Err(Join::Formal(Formal::SourceOutput(Output::Invalid(CHECKED_OUTPUT_PIPELINE_CALLBACK_ERROR_V1)))) =>
+                    Err(callback_error.take().unwrap_or_else(|| checked_output_pipeline_resource_v1(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))),
+                other => other.map_err(|error| ProductionPipelineError::CheckedOutputMemoryTarget(CheckedOutputMemoryTargetErrorV1::Join(error))),
+            }
+        })
     }
 }

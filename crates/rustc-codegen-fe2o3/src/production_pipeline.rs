@@ -44,6 +44,7 @@ pub(crate) enum ProductionPipelineError {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
+    SemanticSsaCapture(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -113,6 +114,9 @@ impl fmt::Display for ProductionPipelineError {
             }
             Self::SemanticSsa(error) => {
                 write!(formatter, "production compilation semantic SSA planning failed: {error}")
+            }
+            Self::SemanticSsaCapture(error) => {
+                write!(formatter, "production compilation semantic SSA occurrence capture failed: {error}")
             }
             Self::RankedProjection(error) => {
                 write!(formatter, "production compilation general kernel verification failed: {error}")
@@ -276,6 +280,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
+            Self::SemanticSsaCapture(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
@@ -3512,8 +3517,72 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
         ) -> Result<T, Box<ProductionPipelineError>>,
     ) -> Result<T, Box<ProductionPipelineError>> {
+        self.with_materialized_capture_mode_v1(false, next)
+    }
+
+    fn with_captured_materialized_target_neutral_v1<T>(
+        self,
+        next: impl for<'source> FnOnce(
+            &'source MaterializedNeutralProductionCompilation,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, Box<ProductionPipelineError>>,
+    ) -> Result<T, Box<ProductionPipelineError>> {
+        self.with_materialized_capture_mode_v1(true, |stage, budget| {
+            budget
+                .charge_work(8)
+                .map_err(|error| Box::new(checked_output_pipeline_resource_v1(error)))?;
+            let floor = budget.storage();
+            let capture = stage
+                .materialized
+                .semantic_ssa()
+                .occurrence_storage()
+                .ok_or_else(|| {
+                    Box::new(checked_output_pipeline_resource_v1(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting,
+                    ))
+                })?;
+            let retained = stage
+                .materialized
+                .executable_storage()
+                .retained_storage()
+                .checked_add(stage.materialized.assert_origin_storage().payload_storage())
+                .and_then(|bytes| bytes.checked_add(capture.retained_storage()))
+                .ok_or_else(|| {
+                    Box::new(checked_output_pipeline_resource_v1(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                    ))
+                })?;
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next(&stage, budget)));
+            drop(stage);
+            let extra = budget.storage().checked_sub(floor).ok_or_else(|| {
+                Box::new(checked_output_pipeline_resource_v1(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting,
+                ))
+            })?;
+            budget
+                .release_storage(extra)
+                .map_err(|error| Box::new(checked_output_pipeline_resource_v1(error)))?;
+            budget
+                .release_storage(retained)
+                .map_err(|error| Box::new(checked_output_pipeline_resource_v1(error)))?;
+            match outcome {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
+        })
+    }
+
+    fn with_materialized_capture_mode_v1<T>(
+        self,
+        capture_occurrences: bool,
+        next: impl FnOnce(
+            MaterializedNeutralProductionCompilation,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, Box<ProductionPipelineError>>,
+    ) -> Result<T, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
-            semantic_ssa,
+            mut semantic_ssa,
             bindings,
         } = self.stage;
         crate::compiler_descriptor::validate_production_v1_semantic_ownership_evidence(
@@ -3564,6 +3633,15 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        if capture_occurrences {
+            let receipt = semantic_ssa
+                .try_capture_occurrences_with_budget_v1(&mut budget)
+                .map_err(ProductionPipelineError::SemanticSsaCapture)?;
+            if let Err(error) = budget.reserve_storage(receipt.retained_storage()) {
+                drop(semantic_ssa);
+                return Err(Box::new(resource_error(error)));
+            }
+        }
         let materialized =
             fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
                 semantic_ssa,

@@ -1,3 +1,490 @@
+fn checked_output_descriptor_argument_source_v1(
+    source: ProductionPreRankedKirOwnerV1,
+    inputs: &[ProductionRankedRootInputV1],
+) -> ProductionPreRankedKirOwnerV1 {
+    // The typed compiler descriptor contract requires a nonempty argument
+    // list. Re-admit a real unused scalar formal; do not relax that contract.
+    let semantic = source.semantic_ssa().source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    for root in semantic.roots() {
+        let function = &functions[root.index() as usize];
+        let abi = function.abi();
+        assert!(abi.source_input_types().is_empty());
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            abi.identity(),
+            abi.layout_identity(),
+            abi.canon_abi(),
+            abi.extern_abi(),
+            abi.can_unwind(),
+            abi.c_variadic(),
+            1,
+            vec![SemanticAbiArgumentV1::source(
+                neutral_plain_direct_abi_value_v1(A_U32),
+            )],
+            abi.return_value().clone(),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+        .unwrap();
+        let mut locals = function.locals().to_vec();
+        locals.push(local(250, A_U32, SemanticLocalRoleV1::Argument(0)));
+        functions[root.index() as usize] =
+            ordinary_rebuild_v1(function, abi, locals, function.blocks().to_vec());
+    }
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    let owner = ProductionSemanticMirOwnerV1::try_new(
+        admitted,
+        fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let ssa = ProductionSemanticSsaOwnerV1::try_new(
+        owner,
+        fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    materialize_ranked_fixture_v1(ssa, inputs).unwrap()
+}
+
+fn checked_output_descriptor_fixture_roots_v1(
+    source: &ProductionPreRankedKirOwnerV1,
+    inputs: &[ProductionRankedRootInputV1],
+) -> Vec<crate::compiler_descriptor::TypedDescriptorRootV1> {
+    let semantic = source.semantic_ssa().source_semantic();
+    assert_eq!(semantic.roots().len(), inputs.len());
+    semantic
+        .roots()
+        .iter()
+        .zip(inputs)
+        .map(|(id, input)| {
+            crate::compiler_descriptor::checked_output_scalar_descriptor_fixture_v1(
+                &semantic.functions()[id.index() as usize],
+                &semantic.types()[A_U32.index() as usize],
+                &input.logical_name,
+                &input.source_launch,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn source_descriptor_actual_r1_policy3_formals_and_native_text_stay_on_one_owner() {
+    use crate::production_pipeline::{
+        with_checked_output_descriptor_text_v1 as descriptor,
+        with_checked_output_memory_target_v1 as run,
+    };
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        for shape in 0..3 {
+            let (source, inputs) = match shape {
+                0 => (
+                    canonical_private_constant_store_source_v1(),
+                    vec![ranked_root_input_1d(A_NAME, 247, 64)],
+                ),
+                1 => packet_j_two_root_source_v1(),
+                _ => (
+                    scoped_formal_helper_before_entry_source_v1(),
+                    vec![ranked_root_input_1d(A_NAME, 247, 64)],
+                ),
+            };
+            let source = checked_output_descriptor_argument_source_v1(source, &inputs);
+            let typed = checked_output_descriptor_fixture_roots_v1(&source, &inputs);
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            let ProductionRankedSemanticProgramV1 {
+                materialized,
+                roots,
+            } = project_and_verify_ranked_materialized_semantic_mir_v1(
+                source,
+                &inputs,
+                &references,
+            )
+            .unwrap();
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+            budget
+                .reserve_storage(PREFIX + packet_j_source_bytes_v1(&materialized))
+                .unwrap();
+            let floor = budget.storage();
+            with_authenticated_borrowed_ranked_source_roster_v1(
+                &materialized,
+                roots,
+                &mut budget,
+                |correspondence, verification, budget| {
+                    assert!(verification.roots().iter().all(|root| {
+                        !root
+                            .verification()
+                            .has_authenticated_functional_verification()
+                    }));
+                    Ok(run(
+                        &materialized,
+                        &inputs,
+                        &references,
+                        profile,
+                        budget,
+                        |_, checked, formals, budget| {
+                            let before = budget.storage();
+                            let identity = checked.owner().canonical().identity();
+                            descriptor(
+                                correspondence,
+                                checked,
+                                formals,
+                                &typed,
+                                profile,
+                                fe2o3_compiler_ffi::DeviceTargetV1::parse(profile.device_target())
+                                    .unwrap(),
+                                None,
+                                budget,
+                                |text, source, budget| {
+                                    assert_eq!(
+                                        text.descriptor_source_identity(),
+                                        Some(source.identity())
+                                    );
+                                    assert_eq!(source.table().kernels().len(), inputs.len());
+                                    assert!(!source.authenticates_compiler_origin());
+                                    assert!(!source.grants_link_authority());
+                                    assert!(!source.grants_launch_authority());
+                                    let decoded =
+                                        fe2o3_compiler_ffi::CompilerDescriptorSourceV1::decode(
+                                            source.canonical_bytes(),
+                                        )
+                                        .unwrap();
+                                    assert_eq!(decoded.canonical_bytes(), source.canonical_bytes());
+                                    for formal in formals {
+                                        let descriptor = source.table().kernels().iter().find(|kernel|
+                                            kernel.entry_name().as_str() == formal.kernel().id.as_str()).unwrap();
+                                        assert_eq!(
+                                            descriptor.entry_name().as_str(),
+                                            formal.kernel().id.as_str()
+                                        );
+                                        assert_eq!(
+                                            descriptor
+                                                .descriptor_symbol()
+                                                .as_str()
+                                                .strip_suffix(".kd"),
+                                            Some(descriptor.entry_name().as_str())
+                                        );
+                                        assert!(std::ptr::eq(formal.output(), checked.owner()));
+                                        let query_start = budget.work();
+                                        formal
+                                            .require_borrowed_source_v1(correspondence, budget)
+                                            .unwrap();
+                                        // Store floor4 + analysis1 + control14 + N pointer1.
+                                        assert_eq!(budget.work() - query_start, 20);
+                                        let mut alien_work = Work::new(20);
+                                        let mut alien = Budget::new(&mut alien_work, budget.storage());
+                                        alien.reserve_storage(budget.storage()).unwrap();
+                                        assert!(matches!(formal.require_borrowed_source_v1(correspondence, &mut alien),
+                                            Err(fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1::Resource(
+                                                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting
+                                            ))));
+                                        assert_eq!(alien.work(), 19);
+                                        assert_eq!(budget.work() - query_start, 20);
+                                    }
+                                    let digest = identity
+                                        .digest()
+                                        .iter()
+                                        .map(|byte| format!("{byte:02x}"))
+                                        .collect::<String>();
+                                    assert!(text.llvm_ir().contains(&format!("sha256:{digest}")));
+                                    assert!(text.llvm_ir().contains("module asm \".byte "));
+                                    if shape != 0 {
+                                        assert!(
+                                            text.llvm_ir()
+                                                .contains("!fe2o3.semantic_anchor.absence.v1")
+                                        );
+                                    }
+                                    Ok(())
+                                },
+                            )?;
+                            assert_eq!(budget.storage(), before);
+                            Ok(())
+                        },
+                    ))
+                },
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.failed_storage(), None);
+        }
+    }
+}
+
+#[test]
+fn source_descriptor_rejects_foreign_r1_owner_even_when_bytes_and_root_ids_match() {
+    use crate::production_pipeline::{
+        with_checked_output_descriptor_text_v1 as descriptor,
+        with_checked_output_memory_target_v1 as run,
+    };
+    let source = canonical_private_constant_store_source_v1();
+    let inputs = [ranked_root_input_1d(A_NAME, 247, 64)];
+    let source = checked_output_descriptor_argument_source_v1(source, &inputs);
+    let typed = checked_output_descriptor_fixture_roots_v1(&source, &inputs);
+    let references = crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+    let ProductionRankedSemanticProgramV1 {
+        materialized: other,
+        roots,
+    } = project_and_verify_ranked_materialized_semantic_mir_v1(
+        checked_output_descriptor_argument_source_v1(
+            canonical_private_constant_store_source_v1(),
+            &inputs,
+        ),
+        &inputs,
+        &references,
+    )
+    .unwrap();
+    assert_eq!(
+        source.executable().canonical().canonical_bytes(),
+        other.executable().canonical().canonical_bytes()
+    );
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+    budget
+        .reserve_storage(
+            PREFIX + packet_j_source_bytes_v1(&source) + packet_j_source_bytes_v1(&other),
+        )
+        .unwrap();
+    let floor = budget.storage();
+    with_authenticated_borrowed_ranked_source_roster_v1(&other, roots, &mut budget, |correspondence, _, budget| {
+        Ok(run(&source, &inputs, &references, Profile::Gfx942, budget, |_, checked, formals, budget| {
+            let before = budget.storage();
+            let mut called = false;
+            let error = descriptor::<()>(correspondence, checked, formals, &typed, Profile::Gfx942,
+                fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap(), None, budget,
+                |_, _, _| { called = true; Ok(()) }).unwrap_err();
+            assert!(matches!(error, crate::production_pipeline::ProductionPipelineError::DescriptorEvidence(
+                crate::compiler_descriptor::CompilerDescriptorError::CheckedOutputSource(
+                    fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1::Invalid(
+                        "formal analysis and borrowed correspondence have different source owners"
+                    )
+                )
+            )));
+            assert!(!called);
+            assert_eq!(budget.storage(), before);
+            Ok(())
+        }))
+    }).unwrap().unwrap();
+    assert_eq!(budget.storage(), floor);
+}
+
+#[test]
+fn source_descriptor_rejects_missing_roots_foreign_output_and_target() {
+    use crate::production_pipeline::{
+        with_checked_output_descriptor_text_v1 as descriptor,
+        with_checked_output_memory_target_v1 as run,
+    };
+    let (source, inputs) = packet_j_two_root_source_v1();
+    let source = checked_output_descriptor_argument_source_v1(source, &inputs);
+    let typed = checked_output_descriptor_fixture_roots_v1(&source, &inputs);
+    let references = crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+    let ProductionRankedSemanticProgramV1 {
+        materialized,
+        roots,
+    } = project_and_verify_ranked_materialized_semantic_mir_v1(source, &inputs, &references)
+        .unwrap();
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+    budget
+        .reserve_storage(PREFIX + packet_j_source_bytes_v1(&materialized))
+        .unwrap();
+    let floor = budget.storage();
+    with_authenticated_borrowed_ranked_source_roster_v1(&materialized, roots, &mut budget, |correspondence, _, budget| {
+        Ok(run(&materialized, &inputs, &references, Profile::Gfx942, budget, |_, checked, formals, budget| {
+            let before = budget.storage();
+            let target = fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+            let mut reversed = typed.clone();
+            reversed.reverse();
+            for (rows, roots) in [(&formals[..1], &typed[..]), (formals, &typed[..1]), (formals, &reversed[..])] {
+                let mut called = false;
+                let error = descriptor(correspondence, checked, rows, roots, Profile::Gfx942, target, None, budget,
+                    |_, _, _| { called = true; Ok(()) }).unwrap_err();
+                assert!(matches!(error, crate::production_pipeline::ProductionPipelineError::DescriptorEvidence(
+                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(_)
+                )));
+                assert!(!called);
+                assert_eq!(budget.storage(), before);
+            }
+            use crate::compiler_descriptor::{CheckedOutputDescriptorFixtureMutationV1 as Mutation, checked_output_descriptor_mutated_fixture_v1 as mutate};
+            for mutation in [Mutation::TypeIdentity, Mutation::Ownership, Mutation::Abi, Mutation::Layout] {
+                let mut invalid = typed.clone();
+                invalid[0] = mutate(&invalid[0], mutation);
+                let error = descriptor::<()>(correspondence, checked, formals, &invalid, Profile::Gfx942, target, None, budget,
+                    |_, _, _| panic!("invalid source ABI metadata reached callback")).unwrap_err();
+                assert!(matches!(error, crate::production_pipeline::ProductionPipelineError::DescriptorEvidence(
+                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "rustc semantic argument type identity" | "rustc semantic argument layout/ownership"
+                    )
+                )));
+                assert_eq!(budget.storage(), before);
+            }
+            let error = descriptor::<()>(correspondence, checked, formals, &typed, Profile::Gfx942,
+                fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx950:xnack-").unwrap(), None, budget,
+                |_, _, _| panic!("foreign target reached descriptor callback")).unwrap_err();
+            assert!(matches!(error, crate::production_pipeline::ProductionPipelineError::WorkerHandoff(
+                crate::production_worker_handoff::ProductionWorkerHandoffError::TargetBindingMismatch { .. }
+            )));
+            run(&materialized, &inputs, &references, Profile::Gfx942, budget, |_, other_checked, _, budget| {
+                assert_eq!(other_checked.owner().canonical().canonical_bytes(), checked.owner().canonical().canonical_bytes());
+                let error = descriptor::<()>(correspondence, other_checked, formals, &typed, Profile::Gfx942, target, None, budget,
+                    |_, _, _| panic!("foreign O reached descriptor callback")).unwrap_err();
+                assert!(matches!(error, crate::production_pipeline::ProductionPipelineError::DescriptorEvidence(
+                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch("checked-output source/owner/root identity")
+                )));
+                Ok(())
+            })?;
+            assert_eq!(budget.storage(), before);
+            Ok(())
+        }))
+    }).unwrap().unwrap();
+    assert_eq!(budget.storage(), floor);
+}
+
+#[test]
+fn source_descriptor_callback_error_unwind_and_accounting_keep_the_original_scope() {
+    use crate::production_pipeline::{
+        ProductionPipelineError as Error, with_checked_output_descriptor_text_v1 as descriptor,
+        with_checked_output_memory_target_v1 as run,
+    };
+    for exit in 0..4 {
+        let source = canonical_private_constant_store_source_v1();
+        let inputs = [ranked_root_input_1d(A_NAME, 247, 64)];
+        let source = checked_output_descriptor_argument_source_v1(source, &inputs);
+        let typed = checked_output_descriptor_fixture_roots_v1(&source, &inputs);
+        let references =
+            crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+        let ProductionRankedSemanticProgramV1 {
+            materialized,
+            roots,
+        } = project_and_verify_ranked_materialized_semantic_mir_v1(source, &inputs, &references)
+            .unwrap();
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+        budget
+            .reserve_storage(PREFIX + packet_j_source_bytes_v1(&materialized))
+            .unwrap();
+        with_authenticated_borrowed_ranked_source_roster_v1(&materialized, roots, &mut budget, |correspondence, _, budget| {
+            Ok(run(&materialized, &inputs, &references, Profile::Gfx942, budget, |_, checked, formals, budget| {
+                let before = budget.storage();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    descriptor::<()>(correspondence, checked, formals, &typed, Profile::Gfx942,
+                        fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap(), None, budget,
+                        |_, _, budget| {
+                            if exit >= 2 { budget.release_storage(1).unwrap(); }
+                            if exit % 2 == 0 { Err(Error::ExtractionCannotPublish) }
+                            else { std::panic::panic_any(173_u32) }
+                        })
+                }));
+                match exit {
+                    0 => assert!(matches!(outcome.unwrap(), Err(Error::ExtractionCannotPublish))),
+                    1 => assert_eq!(*outcome.unwrap_err().downcast::<u32>().unwrap(), 173),
+                    _ => {
+                        assert!(matches!(outcome.unwrap(), Err(Error::CheckedOutputMemoryTarget(
+                            crate::production_pipeline::CheckedOutputMemoryTargetErrorV1::Resource(
+                                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting
+                            )
+                        ))));
+                        // The hostile callback is not allowed to corrupt the
+                        // enclosing genuine scope after this refusal is checked.
+                        assert_eq!(budget.storage(), before - 1);
+                        budget.reserve_storage(1).unwrap();
+                    }
+                }
+                assert_eq!(budget.storage(), before);
+                Ok(())
+            }))
+        }).unwrap().unwrap();
+    }
+}
+
+#[test]
+fn source_descriptor_postflight_work_preserves_mandatory_failure_precedence() {
+    use crate::production_pipeline::{
+        ProductionPipelineError as Error, with_checked_output_descriptor_text_v1 as descriptor,
+        with_checked_output_memory_target_v1 as run,
+    };
+    // This is the isolated live postflight query cost, not a calibrated bound
+    // for materialization, R1, optimization, descriptor construction or LLVM.
+    const QUERY: usize = 4 + 1 + 14 + 1;
+    for exact in [true, false] {
+        for panic in [false, true] {
+            let inputs = [ranked_root_input_1d(A_NAME, 247, 64)];
+            let source = checked_output_descriptor_argument_source_v1(
+                canonical_private_constant_store_source_v1(),
+                &inputs,
+            );
+            let typed = checked_output_descriptor_fixture_roots_v1(&source, &inputs);
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            let ProductionRankedSemanticProgramV1 {
+                materialized,
+                roots,
+            } = project_and_verify_ranked_materialized_semantic_mir_v1(
+                source,
+                &inputs,
+                &references,
+            )
+            .unwrap();
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+            budget
+                .reserve_storage(PREFIX + packet_j_source_bytes_v1(&materialized))
+                .unwrap();
+            let floor = budget.storage();
+            let mut reached = false;
+            let result = with_authenticated_borrowed_ranked_source_roster_v1(&materialized, roots, &mut budget, |correspondence, _, budget| {
+                Ok(run(&materialized, &inputs, &references, Profile::Gfx942, budget, |_, checked, formals, budget| {
+                    let before = budget.storage();
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        descriptor::<()>(correspondence, checked, formals, &typed, Profile::Gfx942,
+                            fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap(), None, budget,
+                            |_, _, budget| {
+                                reached = true;
+                                // Exhaust only the unused allowance, on the
+                                // same ledger without reset or replacement.
+                                let margin = QUERY - usize::from(!exact);
+                                budget.charge_work(LIMIT.checked_sub(budget.work()).unwrap().checked_sub(margin).unwrap()).unwrap();
+                                if panic { std::panic::panic_any(177_u32) }
+                                else { Err(Error::ExtractionCannotPublish) }
+                            })
+                    }));
+                    if !exact {
+                        assert!(matches!(outcome.unwrap(), Err(Error::DescriptorEvidence(
+                            crate::compiler_descriptor::CompilerDescriptorError::CheckedOutputSource(
+                                fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1::Resource(
+                                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)
+                                )
+                            )
+                        ))));
+                    } else if panic {
+                        assert_eq!(*outcome.unwrap_err().downcast::<u32>().unwrap(), 177);
+                    } else {
+                        assert!(matches!(outcome.unwrap(), Err(Error::ExtractionCannotPublish)));
+                    }
+                    assert_eq!(budget.work(), LIMIT);
+                    assert_eq!(budget.storage(), before);
+                    Ok(())
+                }))
+            }).unwrap();
+            // The outer genuine scope also performs mandatory live queries;
+            // it cannot return success after the component consumed the cap.
+            assert!(result.is_err());
+            assert!(reached);
+            assert_eq!(budget.storage(), floor);
+        }
+    }
+}
+
 fn packet_j_source_bytes_v1(source: &ProductionPreRankedKirOwnerV1) -> usize {
     source.executable_storage().retained_storage()
         + source.assert_origin_storage().payload_storage()

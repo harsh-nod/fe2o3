@@ -191,6 +191,16 @@ pub(super) struct CanonicalAssertionSessionV1<'r, 'i, 'g, 'b, 'w> {
     budget: &'b mut Budget<'w>,
 }
 impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
+    // Descriptive source recorders remain inside this N-analysis scope. Lending
+    // its original ledger does not enable any checked-output control query.
+    pub(super) fn with_recording_budget_v1<T>(
+        &mut self,
+        body: impl FnOnce(&mut Budget<'_>) -> Result<T, ProjectionError>,
+    ) -> Result<T, ProjectionError> {
+        self.budget.charge_work(1).map_err(resource)?;
+        body(self.budget)
+    }
+
     #[cfg(test)]
     pub(super) fn retained_floor_for_test_v1(&self) -> usize {
         self.budget.storage()
@@ -238,6 +248,10 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn reserve_checked_control_storage_v1(&mut self, bytes: usize) -> Result<(), ProjectionError> {
+        self.budget.reserve_storage(bytes).map_err(resource)
+    }
+
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.charge_work(amount).map_err(resource)
     }

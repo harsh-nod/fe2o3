@@ -137,8 +137,53 @@ fn derive_production_compiler_ffi_envelope(
         }
     };
 
+    derive_closed_production_compiler_ffi_envelope_v1(
+        profile,
+        target,
+        module,
+        compiler_module,
+        observed_source_envelope.as_ref(),
+        canonical_kernel_ir_identity,
+    )
+}
+
+/// Borrow the original source envelope for the nondefault actual-O producer.
+/// This does not make a worker handoff or admit source-authored device FFI.
+pub(crate) fn derive_checked_output_compiler_ffi_envelope_v1(
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    module: &Module,
+    compiler_module: &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+    observed_source_envelope: Option<&CompilerFfiEnvelopeV1>,
+    output_identity: [u8; 32],
+) -> Result<CompilerFfiEnvelopeV1, ProductionWorkerHandoffError> {
+    let profile = match target.to_string().as_str() {
+        "gfx942:xnack-" => ProductionOcmlTargetV1::Gfx942,
+        "gfx950:xnack-" => ProductionOcmlTargetV1::Gfx950,
+        _ => {
+            return Err(ProductionWorkerHandoffError::CompilerDescriptor(
+                CompilerDescriptorError::UnsupportedTarget(target.to_string()),
+            ));
+        }
+    };
+    derive_closed_production_compiler_ffi_envelope_v1(
+        profile,
+        target,
+        module,
+        compiler_module,
+        observed_source_envelope,
+        output_identity,
+    )
+}
+
+fn derive_closed_production_compiler_ffi_envelope_v1(
+    profile: ProductionOcmlTargetV1,
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    module: &Module,
+    compiler_module: &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+    observed_source_envelope: Option<&CompilerFfiEnvelopeV1>,
+    canonical_kernel_ir_identity: [u8; 32],
+) -> Result<CompilerFfiEnvelopeV1, ProductionWorkerHandoffError> {
     if observed_source_envelope
-        .as_ref()
         .is_some_and(|envelope| envelope.directional_symbols().total_count() != 0)
     {
         return Err(profile.source_ffi_not_admitted());
@@ -600,6 +645,117 @@ mod tests {
                 [0x37; 32],
             ),
             Err(ProductionWorkerHandoffError::Gfx942OcmlImportPolicy)
+        ));
+    }
+
+    #[test]
+    fn borrowed_closed_ffi_matches_historical_checks_and_preserves_exp_identity() {
+        for name in ["gfx942:xnack-", "gfx950:xnack-"] {
+            let target = DeviceTargetV1::parse(name).unwrap();
+            for (declared, called) in [
+                (vec![], vec![]),
+                (vec![F32MathFunction::Exp], vec![F32MathFunction::Exp]),
+                (vec![F32MathFunction::Exp], vec![]),
+                (
+                    vec![F32MathFunction::Exp, F32MathFunction::Sin],
+                    vec![F32MathFunction::Exp, F32MathFunction::Sin],
+                ),
+            ] {
+                let module = math_module(&declared, &called);
+                let text =
+                    construct_inert_compiler_module_text_for_target_v1(&module, Some(target))
+                        .unwrap();
+                let old =
+                    derive_production_compiler_ffi_envelope(target, &module, &text, None, [41; 32]);
+                let new = derive_checked_output_compiler_ffi_envelope_v1(
+                    target, &module, &text, None, [41; 32],
+                );
+                match (old, new) {
+                    (Ok(old), Ok(new)) => assert_eq!(old.canonical_bytes(), new.canonical_bytes()),
+                    (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string()),
+                    other => panic!("closed FFI factor changed outcome: {other:?}"),
+                }
+            }
+            let module = math_module(&[F32MathFunction::Exp], &[F32MathFunction::Exp]);
+            let text =
+                construct_inert_compiler_module_text_for_target_v1(&module, Some(target)).unwrap();
+            let output = derive_checked_output_compiler_ffi_envelope_v1(
+                target, &module, &text, None, [42; 32],
+            )
+            .unwrap();
+            match name {
+                "gfx942:xnack-" => assert_eq!(
+                    inspect_production_gfx942_compiler_ffi_envelope_v1(&output),
+                    Some(ProductionGfx942CompilerFfiEnvelopeKindV1::OcmlExpF32 {
+                        canonical_kernel_ir_identity: [42; 32]
+                    })
+                ),
+                _ => assert_eq!(
+                    inspect_production_gfx950_compiler_ffi_envelope_v1(&output),
+                    Some(ProductionGfx950CompilerFfiEnvelopeKindV1::OcmlExpF32 {
+                        canonical_kernel_ir_identity: [42; 32]
+                    })
+                ),
+            }
+            let foreign = construct_production_gfx942_ocml_exp_envelope_v1([9; 32]).unwrap();
+            let old = derive_production_compiler_ffi_envelope(
+                target,
+                &module,
+                &text,
+                Some(foreign.clone()),
+                [42; 32],
+            )
+            .unwrap_err();
+            let new = derive_checked_output_compiler_ffi_envelope_v1(
+                target,
+                &module,
+                &text,
+                Some(&foreign),
+                [42; 32],
+            )
+            .unwrap_err();
+            assert_eq!(old.to_string(), new.to_string());
+            assert!(matches!(
+                new,
+                ProductionWorkerHandoffError::Gfx942SourceFfiNotAdmitted
+                    | ProductionWorkerHandoffError::Gfx950SourceFfiNotAdmitted
+            ));
+        }
+    }
+
+    #[test]
+    fn borrowed_closed_ffi_does_not_change_historical_open_target_fallback() {
+        let target = DeviceTargetV1::parse("gfx942:xnack+").unwrap();
+        let module = math_module(&[], &[]);
+        let text = gfx942_compiler_module(&module);
+        let source = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            DeviceTargetV1::parse("gfx950:xnack-").unwrap(),
+            CodeObjectVersion::V6,
+        )
+        .unwrap();
+        let old = derive_production_compiler_ffi_envelope(
+            target,
+            &module,
+            &text,
+            Some(source.clone()),
+            [3; 32],
+        )
+        .unwrap();
+        assert_eq!(old.canonical_bytes(), source.canonical_bytes());
+        let old_default =
+            derive_production_compiler_ffi_envelope(target, &module, &text, None, [3; 32]).unwrap();
+        assert_eq!(old_default.target(), target);
+        assert!(matches!(
+            derive_checked_output_compiler_ffi_envelope_v1(
+                target,
+                &module,
+                &text,
+                Some(&source),
+                [3; 32]
+            ),
+            Err(ProductionWorkerHandoffError::CompilerDescriptor(
+                CompilerDescriptorError::UnsupportedTarget(_)
+            ))
         ));
     }
 

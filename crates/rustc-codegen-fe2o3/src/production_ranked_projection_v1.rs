@@ -3366,7 +3366,34 @@ fn prepare_projected_ranked_geometry_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     write_values: ProjectedGlobalWriteValuesV1,
+    recorder: Option<&mut canonical_memory_control_v1::CanonicalMemoryControlRecorderV1>,
+) -> Result<PreparedProjectedRankedGeometryV1, ProductionRankedProjectionErrorV1> {
+    prepare_projected_ranked_geometry_with_source_custody_v1(
+        semantic_ssa,
+        callable_effects,
+        selection,
+        input,
+        source_root,
+        reference_bindings,
+        assertion_facts,
+        write_values,
+        recorder,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_projected_ranked_geometry_with_source_custody_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    write_values: ProjectedGlobalWriteValuesV1,
     mut recorder: Option<&mut canonical_memory_control_v1::CanonicalMemoryControlRecorderV1>,
+    source_custody: Option<&SourceRankedRootCustodyV1<'_>>,
 ) -> Result<PreparedProjectedRankedGeometryV1, ProductionRankedProjectionErrorV1> {
     let source_launch = &input.source_launch;
     let semantic = semantic_ssa.source_semantic();
@@ -3420,7 +3447,24 @@ fn prepare_projected_ranked_geometry_v1(
     let constants = constant_locals(function)?;
     let mut entry_operations = vec![ranked_execution_layout_v1(source_root.layout())];
     let mut next_value = 0_u32;
-    let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
+    let reserved_reference_values = if let Some(source) = source_custody {
+        if !matches!(
+            write_values,
+            ProjectedGlobalWriteValuesV1::CanonicalSourceUse
+        ) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "source custody cannot bypass full Expression reference staging",
+            ));
+        }
+        source.require_v1(
+            semantic_ssa,
+            selection,
+            input,
+            reference_bindings,
+            assertion_facts,
+        )?;
+        None
+    } else if reference_bindings.as_slice().is_empty() {
         None
     } else {
         let output_ranks =
@@ -24300,6 +24344,8 @@ mod tests {
     }
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/borrowed_source_authentication_v1_tests.rs");
+    include!("production_ranked_projection_v1/checked_output_source_join_v1_tests.rs");
+    include!("production_ranked_projection_v1/checked_output_local_relations_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
@@ -39899,3 +39945,5 @@ mod canonical_memory_control_v1 {
 include!("production_ranked_projection_v1/canonical_memory_analysis_v1.rs");
 include!("production_ranked_projection_v1/checked_output_module_join_v1.rs");
 include!("production_ranked_projection_v1/borrowed_source_authentication_v1.rs");
+include!("production_ranked_projection_v1/checked_output_source_join_v1.rs");
+include!("production_ranked_projection_v1/checked_output_local_relations_v1.rs");

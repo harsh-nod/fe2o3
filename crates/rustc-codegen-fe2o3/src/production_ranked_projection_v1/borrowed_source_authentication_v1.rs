@@ -6,13 +6,6 @@
 /// Source authentication retains its existing allocation and execution domains.
 /// The caller keeps N and its receipts live on the original ledger; the lowerer
 /// lends that ledger and retains its paid temporary reports through the callback.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "#271 source-ranked attachment before final checked-output join"
-    )
-)]
 fn with_authenticated_borrowed_ranked_source_roster_v1<T>(
     materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,

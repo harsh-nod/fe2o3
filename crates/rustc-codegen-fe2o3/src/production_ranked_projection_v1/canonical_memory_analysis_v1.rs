@@ -44,6 +44,29 @@ fn project_canonical_memory_root_v1(
             "canonical memory analysis does not discharge authenticated reference obligations",
         ));
     }
+    project_canonical_memory_root_with_source_custody_v1(
+        semantic_ssa,
+        callable_effects,
+        selection,
+        input,
+        source_root,
+        references,
+        facts,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_canonical_memory_root_with_source_custody_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    facts: &mut impl ProjectedAssertionFactsV1,
+    source_custody: Option<&SourceRankedRootCustodyV1<'_>>,
+) -> Result<CanonicalMemoryProjectedRootV1, ProductionRankedProjectionErrorV1> {
     let mut control = canonical_memory_control_v1::CanonicalMemoryControlRecorderV1::new(facts)?;
     let PreparedProjectedRankedGeometryV1 {
         blocks,
@@ -55,7 +78,7 @@ fn project_canonical_memory_root_v1(
         semantic_u32_induction: _,
         kernel_binding,
         incomplete,
-    } = prepare_projected_ranked_geometry_v1(
+    } = prepare_projected_ranked_geometry_with_source_custody_v1(
         semantic_ssa,
         callable_effects,
         selection,
@@ -65,6 +88,7 @@ fn project_canonical_memory_root_v1(
         facts,
         ProjectedGlobalWriteValuesV1::CanonicalSourceUse,
         Some(&mut control),
+        source_custody,
     )?;
     if reserved_reference_values.is_some() {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -204,15 +228,47 @@ fn with_prepared_canonical_memory_session_v1<T>(
         fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1,
     >,
 ) -> Result<T, ProductionRankedProjectionErrorV1> {
+    with_prepared_canonical_memory_source_session_v1(
+        source,
+        root_inputs,
+        effects,
+        references,
+        session,
+        None,
+        body,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn with_prepared_canonical_memory_source_session_v1<T>(
+    source: &RankedProjectionSourceV1<'_>,
+    root_inputs: &[ProductionRankedRootInputV1],
+    effects: &DefinedCallableEmptyEffectSummariesV1,
+    references: &[crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1],
+    session: &mut checked_output_session_v1::CheckedOutputAssertionSessionV1<'_, '_, '_, '_, '_>,
+    source_custody: Option<&SourceRankedCustodyV1<'_>>,
+    body: impl for<'scope, 'source, 'output> FnOnce(
+        &[fe2o3_lower_mir_kernel::ProductionScopedCanonicalStoreAnalysisV1<
+            'scope,
+            'source,
+            'output,
+        >],
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<
+        T,
+        fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1,
+    >,
+) -> Result<T, ProductionRankedProjectionErrorV1> {
     use canonical_assertion_facts_v1::CanonicalAssertionErrorV1;
     use fe2o3_lower_mir_kernel::ProductionCanonicalMemoryAnalysisCandidateV1;
     session.with_canonical_memory_scope_v1(|session| {
         let semantic = source.semantic_ssa().source_semantic();
         let mut roots = Vec::with_capacity(root_inputs.len());
-        for ((input, source_root), references) in root_inputs
+        for (ordinal, ((input, source_root), references)) in root_inputs
             .iter()
             .zip(source.source_launch().roots())
             .zip(references)
+            .enumerate()
         {
             let selection = semantic
                 .select_kernel_body_for_root_v1(source_root.selected_root())
@@ -220,15 +276,31 @@ fn with_prepared_canonical_memory_session_v1<T>(
                     "canonical memory root has no direct body or transparent wrapper",
                 ))?;
             let mut facts = session.for_source(source_root.selected_root(), selection.body());
-            let root = project_canonical_memory_root_v1(
-                source.semantic_ssa(),
-                effects,
-                selection,
-                input,
-                *source_root,
-                references,
-                &mut facts,
-            )
+            let root = if let Some(custody) = source_custody {
+                project_canonical_memory_root_with_source_custody_v1(
+                    source.semantic_ssa(),
+                    effects,
+                    selection,
+                    input,
+                    *source_root,
+                    references,
+                    &mut facts,
+                    Some(&SourceRankedRootCustodyV1 {
+                        source: custody,
+                        ordinal,
+                    }),
+                )
+            } else {
+                project_canonical_memory_root_v1(
+                    source.semantic_ssa(),
+                    effects,
+                    selection,
+                    input,
+                    *source_root,
+                    references,
+                    &mut facts,
+                )
+            }
             .map_err(|error| {
                 error.with_deterministic_root_context(
                     source_root.selected_root(),
