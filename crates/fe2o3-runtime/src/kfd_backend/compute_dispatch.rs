@@ -4189,6 +4189,11 @@ impl KfdRuntimeBackendV1 {
                 "logical runtime resources remain live",
             ));
         }
+        // Multi-device shutdown may revisit a completed child after another
+        // child rejects cleanup. Never re-enter native teardown after retirement.
+        if self.queue_retired {
+            return Ok(());
+        }
         self.release_retained_persistent_control_v1()?;
         #[cfg(test)]
         if let Some(driver) = self.scripted_sdma.as_ref() {
@@ -4279,6 +4284,13 @@ impl KfdRuntimeBackendV1 {
                 shell,
                 PrimaryQueueReleaseCustodyV1::new(queue),
             ));
+            #[cfg(test)]
+            super::retained_release_tests::observe_primary_host_usage(
+                self.primary_teardown
+                    .as_ref()
+                    .expect("installed primary teardown"),
+                false,
+            );
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.primary_teardown
                     .as_mut()
@@ -4287,6 +4299,13 @@ impl KfdRuntimeBackendV1 {
             }));
             match result {
                 Ok(Ok(_)) => {
+                    #[cfg(test)]
+                    super::retained_release_tests::observe_primary_host_usage(
+                        self.primary_teardown
+                            .as_ref()
+                            .expect("completed primary teardown"),
+                        true,
+                    );
                     self.primary_teardown.take();
                 }
                 Ok(Err(error)) => {

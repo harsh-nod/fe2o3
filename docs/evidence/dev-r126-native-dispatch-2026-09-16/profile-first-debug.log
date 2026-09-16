@@ -1,0 +1,6 @@
+
+running 3 tests
+test kfd_backend::tests::profiler_omits_successful_host_read_events_after_sdma_read_failures ... 
+thread 'kfd_backend::tests::profiler_omits_successful_host_read_events_after_sdma_read_failures' (2387000) panicked at crates/fe2o3-runtime/src/kfd_backend.rs:23425:69:
+called `Result::unwrap()` on an `Err` value: "direct-KFD runtime profile rejected: IncompleteLifecycleMarkedComplete"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

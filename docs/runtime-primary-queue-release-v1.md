@@ -382,15 +382,61 @@ pass. Two read-only reviews checked the shared admission and exact failure
 oracles. See the [late-release development receipt](evidence/dev-r126-late-release-2026-09-16/README.md).
 These results close the listed late CPU joins, not R126 qualification.
 
+## Native Dispatch, Accounting And Read Observation
+
+Two opt-in, process-isolated MI300X probes now pass through public runtime
+workflows: allocation/pool return without dispatch, and the exact admitted
+typed gfx942 vecadd launch with three 4 MiB HostVisible allocations. The latter
+checks every byte of both preserved inputs and the output, observes the retained
+primary selector, and checks configured host accounting before release and
+before completed-root Drop. Both probes observe 532,480 retained bytes in three
+records fall to zero bytes/records, with no reserved, retained or quarantined
+records, unchanged budgets and no poison. Backend Drop completes.
+
+This is auxiliary compute followed by retained bootstrap-primary teardown,
+not primary-executed teardown. Allocation creates the bootstrap primary without
+assigning an ordinary compute lane; the typed launch currently creates auxiliary
+ordinal 1. The probe asserts this routing and one exact matching
+queue-created/published/completed/destroyed trace. Its three public readbacks
+must each have the correct allocation identity, offset and byte length.
+
+The expanded workflow checks exposed two concrete runtime defects. Repeated shutdown could
+re-enter SDMA teardown after retiring its queue; it is now inert after the
+existing terminal/busy checks, preserving partial multi-device shutdown retries.
+Successful SDMA-backed host reads omitted their profiler events; the public read
+now records exactly one event after complete download and staging cleanup,
+using returned bytes rather than a potentially stale shadow digest. CPU tests
+cover both storage/content modes, full/partial/empty ranges, chunked success,
+and pre/post-mutation failures with no false successful read event.
+
+GNU and musl runtime suites each pass 750 tests, with the two native probes
+ignored locally and then run explicitly on MI300X. Strict Clippy, formatting
+and the unchanged unsafe-source gate pass. See the
+[native-dispatch development receipt](evidence/dev-r126-native-dispatch-2026-09-16/README.md)
+for exact source, raw traces, regressions, checksums and cleanup. These results
+do not qualify native failure retention, primary-executed dispatch, other queue
+profiles, formal correspondence or matched performance. R125 remains accepted;
+R126, A1/A2 and #182 remain open.
+
+Fresh bootstrap-primary adoption needs a distinct initial binding path. Existing
+rebind APIs require a genuine recycled predecessor or pristine-abort continuation;
+neither can be fabricated for a fresh queue. Initial preparation must root each
+data owner before subsequent fallible initialization, retain the preparation
+through model retake and validation, and publish the primary lane only on success.
+Constructed-parent failure matrices and two-stream routing tests are required
+before advancing the native probe to actual primary execution.
+
 ## Remaining Qualification
 
-1. Extend the no-dispatch native successful-Drop probe to applicable dispatch and
-   failure-retention paths. Corrupted-observation model rejection, scripted native
-   errors and actual hardware outcomes retain distinct evidence scopes.
+1. Extend the successful allocation and auxiliary-dispatch native probes to actual
+   primary-executed dispatch and applicable failure-retention paths.
+   Corrupted-observation model rejection, scripted native errors and actual
+   hardware outcomes retain distinct evidence scopes.
 2. Qualify the new directional route through genuine public runtime workflows,
-   including failure retention, account observations and assigned compute-lane
-   destruction-profile events. A manually installed queue or scripted early
-   shutdown return is not public-workflow evidence. Pending ordinary/XGMI/window
+   including failure retention and additional account/assigned compute-lane
+   destruction observations beyond the qualified success probes. A manually
+   installed queue or scripted early shutdown return is not public-workflow
+   evidence. Pending ordinary/XGMI/window
    owner matrices and remaining integrated resource/model joins need completion.
 3. Qualify pool-trim failure retention and account observations through public
    native runtime workflows. Constructed-parent CPU matrices and the packetless

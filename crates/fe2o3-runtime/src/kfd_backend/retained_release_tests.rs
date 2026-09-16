@@ -2,9 +2,95 @@
 
 use super::*;
 use crate::RuntimeOwnedShutdownBackendV1;
+use fe2o3_kfd::Gfx942HostVisibleBackingUsageV1;
 use std::cell::Cell;
 
 thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }; }
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PrimaryHostUsage {
+    before: Option<Gfx942HostVisibleBackingUsageV1>,
+    completed: Option<Gfx942HostVisibleBackingUsageV1>,
+    observations: [usize; 2],
+}
+
+thread_local! {
+    static PRIMARY_HOST_USAGE: Cell<Option<PrimaryHostUsage>> = const { Cell::new(None) };
+}
+
+pub(super) fn observe_primary_host_usage(owner: &PrimaryQueueReleaseCustodyV1, completed: bool) {
+    PRIMARY_HOST_USAGE.with(|slot| {
+        if let Some(mut usage) = slot.get() {
+            let observation = owner.host_visible_backing_usage_v1();
+            if completed {
+                usage.completed = observation;
+            } else {
+                usage.before = observation;
+            }
+            usage.observations[usize::from(completed)] += 1;
+            slot.set(Some(usage));
+        }
+    });
+}
+
+fn native_device() -> u64 {
+    let value = std::env::var("FE2O3_TEST_NATIVE_UNIQUE_ID").expect("explicit device unique ID");
+    let device = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(&value), 16).unwrap();
+    assert_ne!(device, 0);
+    device
+}
+
+fn observe_shutdown(backend: &mut KfdRuntimeBackendV1) -> PrimaryHostUsage {
+    SELECTION.with(|selection| selection.set(Some(false)));
+    PRIMARY_HOST_USAGE.with(|slot| slot.set(Some(PrimaryHostUsage::default())));
+    backend.shutdown_owned_v1().unwrap();
+    assert_eq!(SELECTION.with(Cell::get), Some(true));
+    SELECTION.with(|selection| selection.set(None));
+    let usage = PRIMARY_HOST_USAGE.with(|slot| slot.take()).unwrap();
+    assert_eq!(usage.observations, [1, 1]);
+    let before = usage.before.expect("configured account before release");
+    let completed = usage
+        .completed
+        .expect("account inspected before completed root Drop");
+    assert!(before.used_backing_bytes > 0 && before.used_allocation_records > 0);
+    assert!(!before.poisoned && !completed.poisoned);
+    assert_eq!(completed.budget, before.budget);
+    assert_eq!(
+        (
+            completed.used_backing_bytes,
+            completed.used_allocation_records
+        ),
+        (0, 0)
+    );
+    assert_eq!(
+        (
+            completed.reserved_records,
+            completed.retained_records,
+            completed.quarantined_records
+        ),
+        (0, 0, 0)
+    );
+    assert!(backend.queue_retired && backend.queue.is_none() && backend.primary_teardown.is_none());
+    assert!(!backend.terminal);
+    usage
+}
+
+fn assert_retired_shutdown_is_inert(backend: &mut KfdRuntimeBackendV1) {
+    SELECTION.with(|selection| selection.set(Some(false)));
+    PRIMARY_HOST_USAGE.with(|slot| slot.set(Some(PrimaryHostUsage::default())));
+    backend.shutdown_owned_v1().unwrap();
+    assert_eq!(SELECTION.with(Cell::get), Some(false));
+    let usage = PRIMARY_HOST_USAGE.with(|slot| slot.take()).unwrap();
+    SELECTION.with(|selection| selection.set(None));
+    assert_eq!(usage.observations, [0, 0]);
+    assert!(usage.before.is_none() && usage.completed.is_none());
+    assert!(
+        backend.queue_retired
+            && !backend.terminal
+            && backend.queue.is_none()
+            && backend.primary_teardown.is_none()
+    );
+}
 
 pub(super) fn observe_selection(retained: bool) {
     SELECTION.with(|selection| {
@@ -12,6 +98,62 @@ pub(super) fn observe_selection(retained: bool) {
             selection.set(Some(retained));
         }
     });
+}
+
+#[test]
+fn runtime_retired_shutdown_is_inert_without_poison_or_native_work() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for sdma_enabled in [true, false] {
+        let mut backend = std::mem::ManuallyDrop::new(KfdRuntimeBackendV1::mock());
+        backend.shutdown_owned_v1().unwrap();
+        // Match the completed native SDMA route's flags without inventing a queue.
+        backend.sdma_enabled = sdma_enabled;
+        let result = catch_unwind(AssertUnwindSafe(|| backend.shutdown_owned_v1()));
+        let terminal = backend.terminal;
+        assert!(
+            backend.queue_retired && backend.queue.is_none() && backend.primary_teardown.is_none()
+        );
+        assert_eq!(backend.sdma_enabled, sdma_enabled);
+        assert!(
+            backend.allocations.is_empty()
+                && backend.native_compute_lanes.iter().all(Option::is_none)
+        );
+        // Preserve a diagnostic test failure on the old panic path, not abort-on-Drop.
+        backend.terminal = false;
+        drop(std::mem::ManuallyDrop::into_inner(backend));
+        assert!(matches!(result, Ok(Ok(()))));
+        assert!(!terminal);
+    }
+}
+
+#[test]
+fn runtime_multi_device_shutdown_retries_after_a_child_rejection() {
+    let mut left = KfdRuntimeBackendV1::mock();
+    let stream = left.create_stream_v1(7).unwrap();
+    let mut right = KfdRuntimeBackendV1::mock();
+    right.description.backend_device = 8;
+    let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+    assert!(
+        matches!(backend.shutdown_owned_v1(), Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
+    );
+    assert!(
+        !backend.terminal
+            && !backend.children[0].queue_retired
+            && backend.children[1].queue_retired
+    );
+    // The already completed child can retain its historical SDMA-enabled flag.
+    backend.children[1].sdma_enabled = true;
+    backend.children[0].destroy_stream_v1(stream).unwrap();
+    backend.shutdown_owned_v1().unwrap();
+    backend.shutdown_owned_v1().unwrap();
+    assert!(!backend.terminal);
+    assert!(
+        backend
+            .children
+            .iter()
+            .all(|child| child.queue_retired && !child.terminal && child.queue.is_none())
+    );
 }
 
 #[test]
@@ -78,9 +220,7 @@ fn runtime_pool_trim_error_and_panic_terminalize_before_returning() {
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
-    let value = std::env::var("FE2O3_TEST_NATIVE_UNIQUE_ID").expect("explicit device unique ID");
-    let device = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(&value), 16).unwrap();
-    assert_ne!(device, 0);
+    let device = native_device();
     // Any accidental compute authorization panics; no kernel authority is issued.
     let mut backend = KfdRuntimeBackendV1::open_default(device, TestPanickingAuthorityV1).unwrap();
     backend
@@ -118,12 +258,8 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
     assert_eq!(pool.retained_free_buffers, 1);
     assert_eq!(pool.retained_free_bytes, 4096);
     // Observe the real shutdown selector AFTER its own pool trim, without changing it.
-    SELECTION.with(|selection| selection.set(Some(false)));
-    backend.shutdown_owned_v1().unwrap();
-    assert_eq!(SELECTION.with(Cell::get), Some(true));
-    SELECTION.with(|selection| selection.set(None));
-    assert!(backend.queue_retired && backend.queue.is_none() && backend.primary_teardown.is_none());
-    assert!(!backend.terminal);
+    let usage = observe_shutdown(&mut backend);
+    assert_retired_shutdown_is_inert(&mut backend);
     assert!(matches!(
         backend.create_stream_v1(device),
         Err(RuntimeBackendFailureV1::Rejected(_))
@@ -143,7 +279,216 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
             | KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }
     )));
     drop(backend);
+    println!("primary_host_usage={usage:?}");
     println!(
         "native_runtime_retained_directional_release=complete allocation_workflow=public pooled_buffers=1 pooled_bytes=4096 selector=retained completed_root_drop=confirmed backend_drop=completed packets=0"
+    );
+}
+
+#[cfg(feature = "hardware-qualification")]
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary() {
+    use crate::qualification_gfx942_vecadd_v1::{
+        GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
+        GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES, Gfx942VecaddQualificationArgumentsV1,
+        admit_gfx942_vecadd_qualification_v1,
+    };
+    use crate::{RuntimeContextV1, RuntimePollV1};
+
+    let device = native_device();
+    let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
+    let buffers = admitted.host_buffers().unwrap();
+    let mut backend = KfdRuntimeBackendV1::open_gfx942_vecadd_qualification_v1(device).unwrap();
+    backend
+        .configure_host_visible_backing_budget_v1(
+            Gfx942HostVisibleBackingBudgetV1::new(64 * 1024 * 1024, 128).unwrap(),
+        )
+        .unwrap();
+    backend
+        .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x77; 32], 128).unwrap())
+        .unwrap();
+    let mut context = RuntimeContextV1::open(backend).unwrap();
+    assert_eq!(context.devices().len(), 1);
+    assert_eq!(context.devices()[0].target(), "gfx942:xnack-");
+    let device_id = context.devices()[0].id();
+    let stream = context.create_stream(device_id).unwrap();
+    let module = context.load_module(device_id, admitted.hsaco()).unwrap();
+    let kernel = context
+        .resolve_kernel::<Gfx942VecaddQualificationArgumentsV1>(module, admitted.kernel_name())
+        .unwrap();
+    let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
+        let allocation = context
+            .allocate(
+                device_id,
+                RuntimeMemoryKindV1::HostVisible,
+                BYTES as u64,
+                ALIGNMENT,
+            )
+            .unwrap();
+        context.write_allocation(allocation, 0, bytes).unwrap();
+        allocation
+    });
+    let arguments =
+        Gfx942VecaddQualificationArgumentsV1::new(allocations[0], allocations[1], allocations[2])
+            .unwrap();
+    let mut submission = context
+        .launch(stream, &kernel, &arguments, admitted.geometry(), &[])
+        .unwrap();
+    context.flush_stream(stream).unwrap();
+    assert_eq!(
+        context
+            .wait(&mut submission, Duration::from_secs(10))
+            .unwrap(),
+        RuntimePollV1::Succeeded
+    );
+    let mut observed = vec![0; BYTES];
+    for (allocation, expected) in
+        allocations
+            .into_iter()
+            .zip([buffers.left(), buffers.right(), buffers.expected_output()])
+    {
+        context
+            .read_allocation(allocation, 0, &mut observed)
+            .unwrap();
+        assert_eq!(observed, expected, "full-byte input/output comparison");
+    }
+    let output_sha256 = Sha256::digest(&observed)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        output_sha256,
+        "79fd0768604fe9de0ced87297f7d653343e998926b59e2cce7df5e38194c52b3"
+    );
+    let live = context.backend().host_visible_backing_usage_v1().unwrap();
+    assert!(live.used_backing_bytes >= 3 * BYTES as u64 && live.used_allocation_records >= 3);
+    assert!(!live.poisoned);
+    context.release_submission(submission).unwrap();
+    for allocation in allocations.into_iter().rev() {
+        context.release_allocation(allocation).unwrap();
+    }
+    context.unload_module(module).unwrap();
+    context.destroy_stream(stream).unwrap();
+    let mut backend = context.shutdown().unwrap();
+    assert!(backend.sdma_enabled && backend.queue.is_some());
+    let compute_lanes = backend
+        .native_compute_lanes
+        .iter()
+        .filter_map(|lane| *lane)
+        .collect::<Vec<_>>();
+    assert_eq!(compute_lanes.len(), 1);
+    // Public allocations create the SDMA bootstrap primary; ordinary compute
+    // currently materializes an auxiliary lane instead of adopting that primary.
+    assert_eq!(compute_lanes[0].ordinal(), 1);
+    assert_eq!(
+        backend
+            .queue
+            .as_ref()
+            .unwrap()
+            .auxiliary_compute_lane_count_v1(),
+        1
+    );
+    let usage = observe_shutdown(&mut backend);
+    assert!(matches!(
+        backend.create_stream_v1(device),
+        Err(RuntimeBackendFailureV1::Rejected(_))
+    ));
+    assert_retired_shutdown_is_inert(&mut backend);
+    let profile = backend.finish_profiler_v1().unwrap();
+    profile.validate().unwrap();
+    assert!(profile.coverage.complete_runtime_operation_history);
+    assert_eq!(profile.coverage.dropped_events, 0);
+    let allocation_identities = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::AllocationCreated { allocation, .. } => Some(allocation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(allocation_identities.len(), 3);
+    let reads = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::HostRead {
+                allocation,
+                byte_offset,
+                content,
+            } => Some((allocation, byte_offset, content)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reads,
+        allocation_identities
+            .into_iter()
+            .map(|allocation| (
+                allocation,
+                0,
+                KfdProfileHostContentV1::RangeOnly {
+                    byte_len: BYTES as u64,
+                }
+            ))
+            .collect::<Vec<_>>()
+    );
+    let created = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue } => {
+                Some((entry.sequence, queue))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let destroyed = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue } => {
+                Some((entry.sequence, queue))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(created.len(), 1);
+    assert_eq!(destroyed.len(), 1);
+    assert_eq!(created[0].1, destroyed[0].1);
+    let published = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::DispatchPublished {
+                dispatch, queue, ..
+            } => Some((entry.sequence, dispatch, queue)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let completed = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::DispatchCompleted { dispatch, .. } => {
+                Some((entry.sequence, dispatch))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(published.len(), 1);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(published[0].2, created[0].1);
+    assert_eq!(published[0].1, completed[0].1);
+    assert!(
+        created[0].0 < published[0].0
+            && published[0].0 < completed[0].0
+            && completed[0].0 < destroyed[0].0
+    );
+    drop(backend);
+    println!("profile_json={}", serde_json::to_string(&profile).unwrap());
+    println!("primary_host_usage={usage:?} live_host_usage={live:?}");
+    println!(
+        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinal=1 primary_ordinal=0 packets=1 readbacks=3 output_sha256={output_sha256} host_account_refund=complete queue_profile=matched auxiliary_destroy=confirmed completed_primary_root_drop=confirmed backend_drop=completed"
     );
 }

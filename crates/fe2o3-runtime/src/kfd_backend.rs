@@ -6441,6 +6441,16 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             .download_sdma_range_v1(allocation, byte_offset, destination)
             .map_err(Self::after_possible_host_mutation)?
         {
+            let profile_allocation =
+                self.profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocation);
+            let content = self.profile_host_content_v1(destination, None);
+            self.observe_profile_v1(profile_allocation.zip(content).map(
+                |(allocation, content)| KfdRuntimeProfileEventKindV1::HostRead {
+                    allocation,
+                    byte_offset,
+                    content,
+                },
+            ));
             return Ok(());
         }
         let record = self.allocations.get(&allocation).ok_or_else(|| {
@@ -23277,6 +23287,240 @@ mod tests {
                 ));
             } else {
                 assert!(capture.events.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn profiler_records_sdma_host_and_device_reads_with_exact_content_and_ranges() {
+        for content_identity in [false, true] {
+            for device_read in [false, true] {
+                for (offset, byte_len) in [(0, 8), (3, 2), (8, 0)] {
+                    let mut steps = if byte_len == 0 {
+                        Vec::new()
+                    } else if device_read {
+                        scripted_sync_copy_steps_v1(
+                            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+                            offset,
+                            byte_len,
+                            ScriptedFailureModeV1::Success,
+                        )
+                    } else {
+                        vec![ScriptedSdmaStepV1::Read {
+                            offset,
+                            byte_len: u64::from(byte_len),
+                        }]
+                    };
+                    steps.extend(scripted_release_steps_v1());
+                    let (mut backend, stream, host, device) =
+                        scripted_direct_backend_configured_v1(8, steps, |backend| {
+                            let config = KfdRuntimeProfilerConfigV1::new([0x78; 32], 32).unwrap();
+                            backend
+                                .enable_profiler_v1(if content_identity {
+                                    config.with_host_content_identities()
+                                } else {
+                                    config
+                                })
+                                .unwrap();
+                        });
+                    let allocation = if device_read { device } else { host };
+                    let identity = backend
+                        .profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocation)
+                        .unwrap();
+                    // Neither a stale shadow nor its cached digest describes the SDMA bytes.
+                    let record = backend.allocations.get_mut(&allocation).unwrap();
+                    record.bytes = vec![0xa5; 8].into();
+                    record.content_sha256 = Some(Sha256::digest([0xa5; 8]).into());
+                    let mut destination = vec![0xff; byte_len as usize];
+                    backend
+                        .read_allocation_v1(allocation, offset, &mut destination)
+                        .unwrap();
+                    assert_eq!(destination, vec![0; byte_len as usize]);
+                    clean_scripted_direct_backend_v1(&mut backend, stream, host, device, None);
+                    let capture = backend.finish_profiler_v1().unwrap();
+                    capture.validate().unwrap();
+                    assert!(capture.coverage.complete_runtime_operation_history);
+                    assert_eq!(capture.coverage.dropped_events, 0);
+                    let reads = capture
+                        .events
+                        .iter()
+                        .filter_map(|entry| match entry.event {
+                            KfdRuntimeProfileEventKindV1::HostRead {
+                                allocation,
+                                byte_offset,
+                                content,
+                            } => Some((allocation, byte_offset, content)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let expected = if content_identity {
+                        KfdProfileHostContentV1::ContentIdentity {
+                            content: ProfileContentIdentityV1::observed(&destination).unwrap(),
+                        }
+                    } else {
+                        KfdProfileHostContentV1::RangeOnly {
+                            byte_len: u64::from(byte_len),
+                        }
+                    };
+                    assert_eq!(reads, vec![(identity, offset, expected)]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn profiler_omits_successful_host_read_events_after_sdma_read_failures() {
+        for after_host_mutation in [false, true] {
+            let steps = if after_host_mutation {
+                let mut steps = scripted_sync_copy_steps_v1(
+                    Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+                    0,
+                    8,
+                    ScriptedFailureModeV1::Success,
+                );
+                *steps.last_mut().unwrap() =
+                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Recovered);
+                steps
+            } else {
+                // A mismatched observation fails before writing the destination.
+                vec![ScriptedSdmaStepV1::Read {
+                    offset: 1,
+                    byte_len: 8,
+                }]
+            };
+            let (mut backend, _, host, device) =
+                scripted_direct_backend_configured_v1(8, steps, |backend| {
+                    backend
+                        .enable_profiler_v1(
+                            KfdRuntimeProfilerConfigV1::new([0x79; 32], 32).unwrap(),
+                        )
+                        .unwrap();
+                });
+            let allocation = if after_host_mutation { device } else { host };
+            let mut destination = [0xff; 8];
+            assert!(matches!(
+                backend.read_allocation_v1(allocation, 1, &mut destination),
+                Err(RuntimeBackendFailureV1::Rejected(_))
+            ));
+            assert_eq!(destination, [0xff; 8]);
+            assert!(matches!(
+                backend.read_allocation_v1(allocation, 0, &mut destination),
+                Err(RuntimeBackendFailureV1::Terminal(_))
+            ));
+            assert_eq!(destination, [if after_host_mutation { 0 } else { 0xff }; 8]);
+            assert!(backend.terminal);
+            assert_eq!(backend.terminal_sdma_custody.is_some(), after_host_mutation);
+            let driver = backend.scripted_sdma.as_ref().unwrap();
+            assert!(driver.is_exhausted());
+            assert_eq!(
+                driver.live_owner_count(),
+                if after_host_mutation { 3 } else { 2 }
+            );
+            assert_eq!(driver.unexpected_drops(), 0);
+            assert!(matches!(
+                backend.finish_profiler_v1(),
+                Err(RuntimeBackendFailureV1::Terminal(_))
+            ));
+            // Inspect the internal recorder only; a terminal backend cannot publish it.
+            assert!(
+                !backend
+                    .profiler
+                    .as_ref()
+                    .unwrap()
+                    .recorded_events_for_test_v1()
+                    .iter()
+                    .any(|entry| matches!(
+                        entry.event,
+                        KfdRuntimeProfileEventKindV1::HostRead { .. }
+                    ))
+            );
+            disarm_scripted_drop_after_inspection_v1(&mut backend);
+        }
+    }
+
+    #[test]
+    fn profiler_records_only_complete_sdma_chunked_reads() {
+        let chunk = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
+        let offset = 3;
+        let byte_len = chunk + 8;
+        for fail_second_chunk in [false, true] {
+            let mut steps = vec![
+                ScriptedSdmaStepV1::Read {
+                    offset,
+                    byte_len: chunk,
+                },
+                ScriptedSdmaStepV1::Read {
+                    offset: offset + chunk + u64::from(fail_second_chunk),
+                    byte_len: 8,
+                },
+            ];
+            if !fail_second_chunk {
+                steps.extend(scripted_release_steps_v1());
+            }
+            let (mut backend, stream, host, device) = scripted_direct_backend_configured_v1(
+                (offset + byte_len) as usize,
+                steps,
+                |backend| {
+                    backend
+                        .enable_profiler_v1(
+                            KfdRuntimeProfilerConfigV1::new([0x7a; 32], 32).unwrap(),
+                        )
+                        .unwrap();
+                },
+            );
+            let identity = backend
+                .profile_resource_v1(KfdProfileResourceKindV1::Allocation, host)
+                .unwrap();
+            let mut destination = vec![0xff; byte_len as usize];
+            let result = backend.read_allocation_v1(host, offset, &mut destination);
+            assert!(destination[..chunk as usize].iter().all(|&byte| byte == 0));
+            let events = if fail_second_chunk {
+                assert!(matches!(result, Err(RuntimeBackendFailureV1::Terminal(_))));
+                assert_eq!(&destination[chunk as usize..], &[0xff; 8]);
+                assert!(backend.terminal);
+                let driver = backend.scripted_sdma.as_ref().unwrap();
+                assert!(driver.is_exhausted());
+                assert_eq!(driver.live_owner_count(), 2);
+                assert_eq!(driver.unexpected_drops(), 0);
+                assert!(matches!(
+                    backend.finish_profiler_v1(),
+                    Err(RuntimeBackendFailureV1::Terminal(_))
+                ));
+                disarm_scripted_drop_after_inspection_v1(&mut backend);
+                backend
+                    .profiler
+                    .as_ref()
+                    .unwrap()
+                    .recorded_events_for_test_v1()
+                    .to_vec()
+            } else {
+                result.unwrap();
+                assert_eq!(&destination[chunk as usize..], &[0; 8]);
+                clean_scripted_direct_backend_v1(&mut backend, stream, host, device, None);
+                backend.finish_profiler_v1().unwrap().events
+            };
+            let reads = events
+                .iter()
+                .filter_map(|entry| match entry.event {
+                    KfdRuntimeProfileEventKindV1::HostRead {
+                        allocation,
+                        byte_offset,
+                        content,
+                    } => Some((allocation, byte_offset, content)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if fail_second_chunk {
+                assert!(reads.is_empty());
+            } else {
+                assert_eq!(
+                    reads,
+                    vec![(
+                        identity,
+                        offset,
+                        KfdProfileHostContentV1::RangeOnly { byte_len }
+                    )]
+                );
             }
         }
     }

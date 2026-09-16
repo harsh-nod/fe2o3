@@ -1,0 +1,30 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.05s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-6457f2b90c780e5d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1308 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-6da97149b4b59494)
+
+running 1 test
+test kfd_backend::tests::profiler_records_sdma_host_and_device_reads_with_exact_content_and_ranges ... FAILED
+
+failures:
+
+---- kfd_backend::tests::profiler_records_sdma_host_and_device_reads_with_exact_content_and_ranges stdout ----
+
+thread 'kfd_backend::tests::profiler_records_sdma_host_and_device_reads_with_exact_content_and_ranges' (2381566) panicked at crates/fe2o3-runtime/src/kfd_backend.rs:23355:21:
+assertion `left == right` failed
+  left: []
+ right: [(ProfileIdentityV1([150, 53, 251, 34, 208, 2, 238, 6, 50, 203, 106, 166, 79, 85, 105, 102, 56, 60, 55, 112, 111, 4, 81, 39, 142, 119, 45, 8, 10, 91, 170, 72]), 0, RangeOnly { byte_len: 8 })]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    kfd_backend::tests::profiler_records_sdma_host_and_device_reads_with_exact_content_and_ranges
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 750 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

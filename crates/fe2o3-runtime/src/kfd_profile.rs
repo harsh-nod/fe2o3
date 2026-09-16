@@ -100,6 +100,11 @@ type FinishedKfdRuntimeProfileRecorderV1 = (
 );
 
 impl KfdRuntimeProfileRecorderV1 {
+    #[cfg(test)]
+    pub(crate) fn recorded_events_for_test_v1(&self) -> &[KfdRuntimeProfileEventV1] {
+        &self.events
+    }
+
     pub(crate) fn new(
         config: KfdRuntimeProfilerConfigV1,
         device_unique_id: u64,
