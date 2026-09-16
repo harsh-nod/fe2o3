@@ -343,10 +343,18 @@ mod legacy_scope_tests {
                     let SemanticStatementKindV1::Assign(index) = statements[0].kind() else {
                         panic!("index");
                     };
+                    // The value may be moved; the destination index must remain live.
+                    let value_local = 2;
+                    assert_eq!(old.locals()[value_local as usize].ty(), A_U32);
+                    assert_eq!(
+                        old.locals()[value_local as usize].role(),
+                        SemanticLocalRoleV1::Temporary
+                    );
+                    assert_ne!(index.destination().local().index(), value_local);
                     let operand = match operand_kind {
                         0 => typed_constant(A_U32, 99, 4),
-                        1 => SemanticOperandV1::Copy(index.destination().clone()),
-                        2 => SemanticOperandV1::Move(index.destination().clone()),
+                        1 => SemanticOperandV1::Copy(typed_place(value_local, A_U32)),
+                        2 => SemanticOperandV1::Move(typed_place(value_local, A_U32)),
                         _ => unreachable!(),
                     };
                     let SemanticStatementKindV1::Assign(write) = statements[2].kind() else {
@@ -368,7 +376,15 @@ mod legacy_scope_tests {
                             SemanticRvalueV1::new(A_U32, SemanticRvalueKindV1::Use(operand)),
                         ))
                     });
-                    attach_private_write_fixture_v1(
+                    statements.insert(
+                        2,
+                        typed_assignment(
+                            value_local,
+                            A_U32,
+                            SemanticRvalueKindV1::Use(typed_constant(A_U32, 99, 4)),
+                        ),
+                    );
+                    let _owner = attach_private_write_fixture_v1(
                         private_write_statements_v1(&old, statements),
                         legacy,
                         |materialized, root| {
@@ -377,7 +393,7 @@ mod legacy_scope_tests {
                             let row = root.access_sources.last().unwrap();
                             assert_eq!(
                                 (row.semantic_statement(), row.semantic_access_ordinal()),
-                                (Some(2), 0)
+                                (Some(3), 0)
                             );
                         },
                     )
@@ -400,7 +416,13 @@ mod legacy_scope_tests {
                     |materialized, root| {
                         assert_private_initializer_rows_v1(materialized, root, 1);
                         if missing {
-                            assert_eq!(root.access_sources.remove(3).semantic_access_ordinal(), 3);
+                            // Keep a dense prefix so receipt custody reaches the final relation.
+                            let removed: Vec<_> = root.access_sources.drain(3..8).collect();
+                            assert_eq!(removed.len(), 5);
+                            for (offset, row) in removed.into_iter().enumerate() {
+                                assert_eq!(row.semantic_statement(), Some(1));
+                                assert_eq!(row.semantic_access_ordinal() as usize, offset + 3);
+                            }
                             return;
                         }
                         let kernel = root.lowering.kernel();

@@ -319,10 +319,10 @@ fn actual_output_query_has_literal_work_and_live_storage_boundaries() {
         |view, live_budget| {
             // These are query-only component ledgers over genuine prebuilt owners,
             // not a production reset. The preceding test uses one live ledger end to end.
-            // N facade279 + floor4 + source/row25 + placement/ancestry15 +
-            // two Index definitions20 + three result lookups18 + physical45 =406.
+            // N facade280 + floor4 + source/row25 + placement/ancestry15 +
+            // two Index definitions20 + three result lookups18 + physical45 =407.
             let floor = live_budget.storage();
-            for (limit, accepted, attempted) in [(406, 406, None), (405, 405, Some(406))] {
+            for (limit, accepted, attempted) in [(407, 407, None), (406, 406, Some(407))] {
                 let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
                 let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
                 budget.reserve_storage(floor).unwrap();
