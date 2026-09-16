@@ -179,6 +179,12 @@ still rejects loads, stores, barriers and capability effects. Kernel-root
 aggregate arguments and helper results remain pointer-free. Context issuance,
 borrowed output captures and workgroup/epoch transport are separate work.
 
+The ordinary-source indexing negative currently stops earlier at MIR preflight:
+rustc emits an unsupported `FakeForPtrMetadata` rvalue. It checks that named
+refusal, source location, reachable helper chain and absence of a bundle. Separate
+admitted-MIR lowerer tests exercise the unchanged helper memory-effect gate.
+Neither test establishes support for reading through captured slices.
+
 The same scoped constructor is used by production correspondence validation.
 Complete representation checking precedes consumer callbacks. Temporary indices
 stay charged throughout the callback, which exclusively borrows the resource

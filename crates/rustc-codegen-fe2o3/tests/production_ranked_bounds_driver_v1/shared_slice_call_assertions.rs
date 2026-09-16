@@ -133,23 +133,23 @@ fn assert_shared_slice_source_v1(architecture: &str, target: &ScratchTarget) -> 
             None,
             "rust_call_slice_read",
         ),
-        "refuse retained slice helper memory effects",
+        "refuse unsupported source slice indexing",
     );
     assert!(
         !exported.status.success(),
         "slice-reading helper must remain refused"
     );
     assert!(
-        exported.stderr.contains(
-            "reachable deterministic scalar helper is not interprocedurally complete and pure"
-        ),
+        exported
+            .stderr
+            .contains("raw rustc MIR preflight rejected fake raw pointer for metadata rvalue"),
         "{}",
         exported.stderr
     );
     assert!(
-        exported
-            .stderr
-            .contains("helper declaration at Rust source"),
+        exported.stderr.contains("src/rust_call.rs:")
+            && exported.stderr.contains("reachable call chain:")
+            && exported.stderr.contains("rust_call::captured_len"),
         "{}",
         exported.stderr
     );
