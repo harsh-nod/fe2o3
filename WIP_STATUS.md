@@ -1,96 +1,100 @@
-# Issue 271 Captured SSA Index Regressions
+# Issue 271 Source-Preservation Checkpoint
 
-Reviewable WIP, not default activation or tutorial qualification. Do not merge
-this historical tree wholesale over current main. M5/M7 remain active; no
-acceptance milestone is newly complete.
+Reviewable WIP, not production activation or tutorial qualification. Do not
+merge this historical tree wholesale over current main. M5/M7 remain active;
+no acceptance milestone is newly complete. M8 remains incomplete.
 
 ## Exact Source
 
 - Host: XSJHARMENON01.
 - Checkout: /home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913.
 - Checkout HEAD: 10b190b8267c0c4011b4ef6bbb52680a3c44b391.
-- Source: 5,069 files, manifest SHA256
-  6c11fe39d96cd6b4d61d01201273fe6cae5c2550bed8f6a1abf00370eafb7700.
-- Previous published WIP: 2993fde04fdb46b08b6315a5bcc8b3eec0a3e95b,
-  source 4781066c8495229411633d0ade83450c1734468002d20afa1b35f64ef6abe8c0.
+- Source: 5,071 files, manifest SHA256
+  da475ae403553e4ed8670603b8d78a452c24ed8a17462fde9b21e87f1805548b.
+- Previous published WIP: e850450f837526650a6481ed260b03af0e56e219.
 
-The source checkout HEAD/index remain unchanged. This status is outside the
-source manifest; snapshot construction verifies every source Git blob.
+The original checkout HEAD/index remain unchanged. This status is outside the
+source manifest; snapshot construction verifies every source Git blob. Seven
+compiler paths change from the previous WIP, plus this status file.
 
-## New Work
+## Implemented
 
-Only two lowerer paths change from the previous WIP:
+An independently checked source-to-original-neutral-IR relation now covers a
+closed getter/Option/Store subset. It checks actual admitted source statements,
+operands, types, complete control/operation coverage and exact original IR.
+Importer replay, a matching digest or matching counts do not replace these
+rules. Source Store lookup uses a paid binary search over a privately checked
+ordered, unique roster. Retained queries bind to the same live ledger/floor;
+callback errors, panics and resource failures retain checked cleanup behavior.
 
-- production_semantic_kir_v1.rs: expose an existing admitted scalar factory
-  to sibling tests with pub(super), inside its existing cfg(test) module.
-- production_source_output_functional_address_v1.rs: three cfg(test)
-  regressions exercising genuine captured SSA rows and their event index.
+An additive private all-root consumer composes that relation with original
+Expression/R1 checks, N/B target binding, checked B/O, actual output D/P/R2,
+and complete final formal-memory analyses of the same optimized output. It
+preserves the original reference object and existing nonempty-reference gates.
+Empty references remain genuine functional None and aggregate absence. The
+consumer is not connected to production custody, lineage, artifacts or launch.
 
-The fixture adds an admitted self-copy to the existing source factory and
-captures occurrences through the real semantic SSA owner. It derives SSA
-values from those captured events rather than constructing private owners or
-fabricating SSA values. Tests cover absent keys, out-of-range and wrong real
-rows, wrong local/use/definition identities, and callback errors, exact panic
-payloads, reentry and restoration of existing storage floors. Production
-algorithms, budgets, APIs, admission and proof gates are unchanged.
+The admitted subset is direct Unit roots with authenticated Global U32 slices,
+Global-X/get_mut, the exact Option discriminator/control recipe, and U32
+constant/formal/copy Stores. It rejects uncovered operations, entry Defined-call
+wrappers, arbitrary helpers, loops, merges and unsupported arithmetic. It is
+not a universal Rust semantics proof or a formally verified whole compiler.
 
-## Current Qualification
+## Exact-Source Qualification
 
-The exact current source passed all three focused regressions and then all
-404 lowerer library tests, with zero failures or ignores. Source/helper
-checks passed before and after both runs. Diagnostics:
+All final-source runs passed their before/after source and helper checks:
 
-- v257-clean-v346-captured-index-focused.sgnw2l5T
-- v257-clean-v346-captured-index-lowerer.JSRQm3ot
+- 411 lowerer library tests, zero failures or ignores, 12.99 seconds.
+- 890 backend library tests, zero failures or ignores, 164.34 seconds.
+- 20 extractor binary tests, zero failures or ignores, 0.04 seconds.
+- Two selected compile-fail documentation tests, 0.13 seconds. The observed
+  errors are the intended non-Clone bound and escaping proof-borrow lifetime.
 
-Backend, extractor and actual-collector tests were not rerun on this test-only
-successor. Their preceding source-specific results below are retained as
-history, not claimed as fresh execution on this manifest.
+That is 1,321 ordinary tests plus two compile-fail tests, not the entire
+workspace or all tutorial kernels. Retained diagnostics are:
 
-## Previous Actual-Collector Checkpoint
+- v257-clean-v349-source-preservation-full-libraries.xXXe1xQE
+- v257-clean-v349-source-preservation-extractor.gcZgNqHY
+- v257-clean-v349-source-preservation-doc-tests.rc4o22F8
 
-The parent source 4781066c passed 401 lowerer, 883 backend and 20 extractor
-tests (1,304 total) and an integration harness build, all with source/helper
-checks. All seven explicitly enabled actual-collector integration tests then
-passed, followed by a retained positive transcript, in 1,769.55 seconds under
-the unchanged 1,800-second limit. Logs: v344-collected-r2-actual.It7lNDJZ.
+The seven new lowerer tests cover genuine admission/capture, both discriminator
+modes and target profiles, hostile original-IR changes and resource boundaries.
+Seven new backend tests exercise the actual conjunction for one/two roots,
+constant/formal values, reference gates, foreign owners/ledgers and callback
+error/panic/reentry. These use admitted semantic factories, not fresh rustc
+collection. Component resource thresholds are not whole-engine budget claims.
 
-Real rustc collection covered two-root getter programs on gfx942 and gfx950,
-a three-root roster, original nonempty-reference refusal, unsafe/ABI admission
-refusals, reference-shape checks and changed-reference identity. The direct
-gfx942 transcript reports two checked roots and two global accesses, functional
-None and aggregate absence. Complete logs, source/tool/configuration checks,
-reaping and owned scratch cleanup passed, with independent absence checks.
+Earlier failures remain recorded: an unused signed type in the unsigned fixture
+was removed only for that variant; an old source audit accidentally included the
+new consumer in its source-only text range. The latter now has checked function
+delimiters. Every original audit assertion and production gate remains intact.
 
-That diagnostic checks the original materialized N through full Expression/R1
-and each actual optimized O through D/P/R2. It preserves original references
-and grants no source-proof, functional, aggregate, artifact, launch, default
-route or all-tutorial authority. The original Some/aggregate gates remain.
+## Conditional Premises And Remaining Work
 
-## Remaining Work
+Standard slice validity, exclusivity, lifetime, alignment and extent premises
+remain conditional. The current rule also retains an inactive-address
+representability premise because the importer emits GEP unconditionally.
+That stronger premise does NOT follow from valid safe Rust get_mut on a short
+or empty slice. It must not become an extra user obligation merely to activate
+the compiler. A reviewed importer/operational-semantics correction and matching
+source/output/formal rules are required before production activation.
 
-Private prepare/Store one-short charge-boundary tests remain gaps. These new
-scalar captured-row tests do not establish GetMut/R1/D/P or private charge-site
-coverage. The inherited physical relation still refuses differing N/O function
-ordinals; arbitrary helpers, phi values and reordered functions are not covered.
+Entry-wrapper semantics, broader source-rule coverage, the exact runtime ABI
+join, optional user-reference refinement, production custody/lineage wiring and
+legacy retirement remain open. Fresh actual collection of this new conjunction
+has not run. The preceding source 4781066c passed seven actual-collector tests
+and a direct transcript, but that checked original R1 plus output D/P/R2 and did
+not execute this new source relation. Its result is not transferred here.
 
-An independently checked mandatory source-to-N semantic relation and exact
-all-root composition are being implemented separately. No optional-reference
-absence, importer replay or matched count replaces that relation. The draft is
-not included here; existing proof, default, lineage and aggregate gates remain.
+Both main branches separately contain ec2b88cfb050cb954a426f9968b8a73e1688ad37,
+whose 297 lowerer and 648 backend tests and repository publication checks passed.
+Its formal-contract CI passed; generic CI was still running at this checkpoint.
+Actual main attention compilation still fails: pipelined attention has the
+multiple-definition refusal; scalar attention has a missing private ranked
+effect. A separately reviewed private-write metadata fix is not included here.
 
-Both main branches separately contain 17701889a8f4e325ca8468b58a3cc26080509306,
-including the tested race-name accounting/Pliron changes and the new bounded
-numeric pipelined-scalar refusal diagnostic. Its 648 backend tests and final
-repository checks passed; hosted CI is running, not yet qualified here.
-Parent d5424f5 had complete green generic and formal-contract CI.
-
-Actual main-source attention compilation still fails: pipelined attention has
-a multiply-defined semantic scalar; scalar attention clears the old resource
-refusal but fails a later missing-ranked-effect correspondence join. A complete
-earlier-stage ranked IR dump is retained, not counted as final compilation.
-
-Approved Verus runtime qualification remains deferred, not passed. Full
-production integration, legacy retirement, tutorial compilation, simulator
-comparison, target-matched hardware and website qualification remain open.
-The tutorial evidence pin, CPU WIP and issue 272 WIP are unchanged.
+Full tutorial production compilation, deterministic simulator comparison,
+target-matched hardware and website qualification remain open. Approved Verus
+runtime qualification remains deferred, not passed. No new GPU observation or
+remote shared-machine work was performed for this checkpoint. The CPU and
+separate issue 272 WIP branches are unchanged.

@@ -296,6 +296,126 @@ fn with_source_ranked_prefix_v1<T>(
     }).map_err(SourceJoinPipelineErrorV1::RankedProjection)?
 }
 
+// Additive, local mandatory-rule conjunction only. This does not construct the
+// old SourceRankedCustodyV1, satisfy its Some gate, or activate any caller.
+// Optional references remain the exact original object; nonempty references
+// still require their existing genuine functional/aggregate producer.
+#[allow(dead_code, clippy::too_many_arguments)]
+fn with_source_preservation_output_v1<'owners>(
+    view: &fe2o3_lower_mir_kernel::ProductionSourceOutputOccurrencesV1<'owners, 'owners>,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    inputs: &[ProductionRankedRootInputV1],
+    references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl for<'proof, 'scope, 'formal, 'analysis, 'source, 'output> FnOnce(
+        &fe2o3_lower_mir_kernel::ProductionScopedSourcePreservationV1<'proof, 'scope>,
+        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        &[fe2o3_lower_mir_kernel::ProductionScopedCompleteFormalMemoryV1<
+            'formal,
+            'analysis,
+            'source,
+            'output,
+        >],
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<
+        (),
+        SourceJoinPipelineErrorV1,
+    >,
+) -> Result<(), SourceJoinPipelineErrorV1> {
+    use fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1 as Output;
+    let output_error = |error| {
+        SourceJoinPipelineErrorV1::RankedProjection(
+            ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Output(error),
+            ),
+        )
+    };
+    with_source_ranked_prefix_v1(
+        view.source(),
+        inputs,
+        references,
+        budget,
+        |source, original, verification, effects, partition, recorders, budget| {
+            // Complete cardinalities before every indexed or zipped consumer.
+            budget
+                .charge_work(7)
+                .map_err(|error| output_error(Output::Resource(error)))?;
+            if inputs.is_empty()
+                || original.root_count() != inputs.len()
+                || verification.root_count() != inputs.len()
+                || partition.len() != inputs.len()
+                || recorders.len() != inputs.len()
+                || !std::ptr::eq(original.materialized(), view.source())
+            {
+                return Err(output_error(Output::Invalid(
+                    "source preservation consumer roster differs",
+                )));
+            }
+            if !references.as_slice().is_empty() {
+                require_source_functional_roster_v1(verification, inputs.len(), budget)?;
+            }
+            for (ordinal, input) in inputs.iter().enumerate() {
+                let verified = &verification.roots()[ordinal];
+                budget.charge_work(9usize.checked_add(input.logical_name.len())
+                    .and_then(|n| n.checked_add(verified.logical_name().len()))
+                    .ok_or_else(|| output_error(Output::Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)))?)
+                    .map_err(|error| output_error(Output::Resource(error)))?;
+                if original.roots()[ordinal].selected_root() != verified.semantic_root()
+                    || verified.kernel_binding() != &input.kernel_binding
+                    || verified.logical_name() != input.logical_name
+                    || (references.as_slice().is_empty()
+                        && (verified
+                            .verification()
+                            .has_authenticated_functional_verification()
+                            || verified
+                                .verification()
+                                .aggregate_verus_execution()
+                                .is_some()))
+                {
+                    return Err(output_error(Output::Invalid(
+                        "source preservation consumer original root/reference differs",
+                    )));
+                }
+            }
+            original.with_source_preservation_v1(budget, |preservation, budget| {
+                preservation.require_original_v1(original, budget)?;
+                let catalog = view.input_pipeline_catalog(budget)?;
+                Ok(with_native_input_relations_v1(view.source(), view.bound(), catalog, profile, budget,
+                    |_, _, budget| {
+                        checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| {
+                            with_prepared_canonical_memory_session_v1(source, inputs, effects, partition, session, |analyses, budget| {
+                                budget.charge_work(2).map_err(Output::Resource)?;
+                                if analyses.len() != preservation.roots().len() {
+                                    return Err(Output::Invalid("source preservation consumer output roster differs"));
+                                }
+                                for (ordinal, (analysis, root)) in analyses.iter().zip(preservation.roots()).enumerate() {
+                                    budget.charge_work(4).map_err(Output::Resource)?;
+                                    if analysis.selected_root() != root.selected_root() {
+                                        return Err(Output::Invalid("source preservation consumer output root differs"));
+                                    }
+                                    analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                                        relation.check_borrowed_ranked_addresses_v1(original, ordinal, recorders[ordinal].candidate(), budget)
+                                    })?;
+                                }
+                                Ok(fe2o3_lower_mir_kernel::with_complete_formal_memory_module_v1(analyses, budget, |formals, budget| {
+                                    preservation.require_original_v1(original, budget)
+                                        .map_err(fe2o3_lower_mir_kernel::ProductionScopedFormalMemoryErrorV1::SourceOutput)?;
+                                    Ok(next(preservation, references, formals, budget))
+                                }))
+                            })
+                        }).map_err(SourceJoinPipelineErrorV1::RankedProjection)?
+                            .map_err(|error| SourceJoinPipelineErrorV1::CheckedOutputMemoryTarget(
+                                crate::production_pipeline::CheckedOutputMemoryTargetErrorV1::Join(
+                                    CheckedOutputModuleJoinErrorV1::Formal(error),
+                                ),
+                            ))?
+                    },
+                ))
+            }).map_err(output_error)?
+        },
+    )
+}
+
 // An extraction-only consistency diagnostic. No relation or proof owner escapes;
 // the final callback receives only observed counts. It is not the Some gate.
 pub(crate) fn observe_collected_ranked_addresses_v1<'owners>(

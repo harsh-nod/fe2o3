@@ -76,9 +76,38 @@ mod identity_getter_physical_tests {
     }
 
     fn with_admitted_source_fixture(
-        mut ssa: ProductionSemanticSsaOwnerV1,
+        ssa: ProductionSemanticSsaOwnerV1,
         collected_modes: bool,
         profile: Profile,
+        body: impl FnOnce(
+            &ProductionPreRankedKirOwnerV1,
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &[ProductionRankedRootInputV1],
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionRankedProjectionErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        with_admitted_source_inputs_fixture(
+            ssa,
+            profile,
+            || {
+                [ranked_root_input_1d(
+                    if collected_modes {
+                        "other_identity_entry"
+                    } else {
+                        A_NAME
+                    },
+                    if collected_modes { 246 } else { 247 },
+                    64,
+                )]
+            },
+            body,
+        )
+    }
+
+    fn with_admitted_source_inputs_fixture<I: AsRef<[ProductionRankedRootInputV1]>>(
+        mut ssa: ProductionSemanticSsaOwnerV1,
+        profile: Profile,
+        make_inputs: impl FnOnce() -> I,
         body: impl FnOnce(
             &ProductionPreRankedKirOwnerV1,
             &ProductionSourceOutputOccurrencesV1<'_, '_>,
@@ -93,16 +122,9 @@ mod identity_getter_physical_tests {
             .try_capture_occurrences_with_budget_v1(&mut budget)
             .unwrap();
         budget.reserve_storage(capture.retained_storage()).unwrap();
-        let inputs = [ranked_root_input_1d(
-            if collected_modes {
-                "other_identity_entry"
-            } else {
-                A_NAME
-            },
-            if collected_modes { 246 } else { 247 },
-            64,
-        )];
-        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
+        let inputs = make_inputs();
+        let inputs = inputs.as_ref();
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, inputs).unwrap();
         let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
             ssa,
             launch,
@@ -157,7 +179,7 @@ mod identity_getter_physical_tests {
                 budget.reserve_storage(view_bytes).unwrap();
                 assert!(std::ptr::eq(view.output(), checked.owner()));
                 let floor = budget.storage();
-                result = body(&source, &view, &inputs, &mut budget);
+                result = body(&source, &view, inputs, &mut budget);
                 assert_eq!(budget.storage(), floor);
                 drop(view);
                 budget.release_storage(view_bytes).unwrap();
@@ -174,6 +196,716 @@ mod identity_getter_physical_tests {
         budget.release_storage(capture.retained_storage()).unwrap();
         assert_eq!(budget.storage(), PREFIX);
         result
+    }
+
+    mod source_preservation_output_tests {
+        use super::*;
+        use crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1 as References;
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        use fe2o3_lower_mir_kernel::{
+            ProductionBorrowedRankedCorrespondenceV1 as Original,
+            ProductionSourceOutputErrorV1 as OutputError,
+        };
+
+        // Rebuild only admitted syntax from the existing getter factory. Every
+        // variant receives fresh admission, SSA planning, capture and N.
+        fn source_case(
+            value: u32,
+            mode: bool,
+            stores: usize,
+            formal: bool,
+            multiple: bool,
+        ) -> (
+            ProductionSemanticSsaOwnerV1,
+            Vec<ProductionRankedRootInputV1>,
+        ) {
+            let seed = identity_getter_shape_tests::source_ssa_options(value, mode, stores);
+            let semantic = seed.source_semantic();
+            let mut functions = semantic.functions().to_vec();
+            if formal {
+                let root = &functions[0];
+                let mut locals = root.locals().to_vec();
+                let argument = SemanticLocalIdV1::from_index(locals.len() as u32);
+                locals.push(local(249, A_U32, SemanticLocalRoleV1::Argument(1)));
+                let mut blocks = root.blocks().to_vec();
+                let mut changed = 0;
+                for block in &mut blocks {
+                    let statements = block
+                        .statements()
+                        .iter()
+                        .map(|statement| {
+                            let SemanticStatementKindV1::Assign(assignment) = statement.kind()
+                            else {
+                                return statement.clone();
+                            };
+                            if assignment.destination().projections().is_empty() {
+                                return statement.clone();
+                            }
+                            assert_eq!(assignment.destination().ty(), A_U32);
+                            changed += 1;
+                            SemanticStatementV1::new(
+                                statement.source(),
+                                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                                    assignment.destination().clone(),
+                                    SemanticRvalueV1::new(
+                                        A_U32,
+                                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                                            SemanticPlaceV1::new(argument, vec![], A_U32).unwrap(),
+                                        )),
+                                    ),
+                                )),
+                            )
+                        })
+                        .collect();
+                    *block = SemanticBasicBlockV1::new(
+                        block.identity(),
+                        block.source(),
+                        statements,
+                        block.terminator().clone(),
+                    )
+                    .unwrap();
+                }
+                assert_eq!(changed, stores);
+                let old = root.abi();
+                let mut arguments = old.arguments().to_vec();
+                arguments.push(SemanticAbiArgumentV1::source(
+                    neutral_plain_direct_abi_value_v1(A_U32),
+                ));
+                let abi = SemanticFunctionAbiV1::from_rustc(
+                    old.identity(),
+                    old.layout_identity(),
+                    old.canon_abi(),
+                    old.extern_abi(),
+                    old.can_unwind(),
+                    old.c_variadic(),
+                    2,
+                    arguments,
+                    old.return_value().clone(),
+                )
+                .unwrap()
+                .with_source_argument_ownership(vec![
+                    SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                ])
+                .unwrap();
+                functions[0] = ordinary_rebuild_v1(root, abi, locals, blocks);
+            }
+            let mut inputs = vec![ranked_root_input_1d(
+                if mode { "other_identity_entry" } else { A_NAME },
+                if mode { 246 } else { 247 },
+                64,
+            )];
+            let mut callables = semantic.callables().to_vec();
+            let mut roots = semantic.roots().to_vec();
+            if multiple {
+                let first = &functions[0];
+                let second = SemanticFunctionDeclV1::new(
+                    SemanticFunctionIdentityV1::from_sha256(bytes(251)),
+                    first.role(),
+                    SemanticItemDefinitionIdentityV1::from_sha256(bytes(252)),
+                    SemanticMonomorphizationIdentityV1::from_sha256(bytes(253)),
+                    first.generic_type_arguments_identity(),
+                    first.const_generic_arguments_identity(),
+                    first.source(),
+                    first.abi().clone(),
+                    first.locals().to_vec(),
+                    first.entry(),
+                    first.blocks().to_vec(),
+                )
+                .unwrap()
+                .with_kernel_entry(SemanticKernelEntryV1::new(
+                    SemanticLinkSymbolV1::new(b"source_preservation_second".to_vec()).unwrap(),
+                    SemanticKernelBindingIdentityV1::from_sha256(bytes(248)),
+                    first.kernel_entry().unwrap().source_contract(),
+                ));
+                let second_id = SemanticFunctionIdV1::from_index(functions.len() as u32);
+                functions.push(second);
+                let inserted = second_id.index() as usize;
+                assert_eq!(inserted, 1);
+                assert_eq!(semantic.callables().len(), 3);
+                callables.insert(inserted, SemanticCallableDeclV1::defined(second_id));
+                // Defined functions form the callable prefix. Preserve each
+                // original intrinsic declaration when shifting both roots.
+                for function in &mut functions {
+                    let mut blocks = function.blocks().to_vec();
+                    let mut shifted = [false; 2];
+                    for block in &mut blocks {
+                        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                            continue;
+                        };
+                        let old = call.callee().index() as usize;
+                        assert!((inserted..semantic.callables().len()).contains(&old));
+                        assert!(!shifted[old - inserted]);
+                        shifted[old - inserted] = true;
+                        let callee = SemanticCallableIdV1::from_index((old + 1) as u32);
+                        assert_eq!(
+                            &callables[callee.index() as usize],
+                            &semantic.callables()[old],
+                        );
+                        let replacement =
+                            SemanticDirectCallV1::new_callable_with_variadic_argument_abis(
+                                callee,
+                                call.arguments().to_vec(),
+                                call.variadic_argument_abis().to_vec(),
+                                call.destination().cloned(),
+                                call.unwind(),
+                            )
+                            .unwrap();
+                        *block = SemanticBasicBlockV1::new(
+                            block.identity(),
+                            block.source(),
+                            block.statements().to_vec(),
+                            SemanticTerminatorV1::new(
+                                block.terminator().source(),
+                                SemanticTerminatorKindV1::Call(replacement),
+                            ),
+                        )
+                        .unwrap();
+                    }
+                    assert_eq!(shifted, [true, true]);
+                    *function = ordinary_rebuild_v1(
+                        function,
+                        function.abi().clone(),
+                        function.locals().to_vec(),
+                        blocks,
+                    );
+                }
+                for (ordinal, callable) in callables[..functions.len()].iter().enumerate() {
+                    assert_eq!(
+                        callable,
+                        &SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(
+                            ordinal as u32
+                        )),
+                    );
+                }
+                roots.push(second_id);
+                inputs.push(ranked_root_input_1d("source_preservation_second", 248, 64));
+            }
+            let admitted = InertSemanticMirRequestV1::new_with_callables(
+                semantic.target(),
+                semantic.types().to_vec(),
+                semantic.allocations().to_vec(),
+                semantic.statics().to_vec(),
+                semantic.vtables().to_vec(),
+                functions,
+                callables,
+                roots,
+            )
+            .unwrap()
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .unwrap();
+            let mir = ProductionSemanticMirOwnerV1::try_new(
+                admitted,
+                fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+            )
+            .unwrap();
+            let ssa = ProductionSemanticSsaOwnerV1::try_new(
+                mir,
+                fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+            )
+            .unwrap();
+            (ssa, inputs)
+        }
+
+        fn with_case(
+            profile: Profile,
+            value: u32,
+            mode: bool,
+            stores: usize,
+            formal: bool,
+            multiple: bool,
+            body: impl FnOnce(
+                &ProductionPreRankedKirOwnerV1,
+                &ProductionSourceOutputOccurrencesV1<'_, '_>,
+                &[ProductionRankedRootInputV1],
+                &mut Budget<'_>,
+            ),
+        ) {
+            let (ssa, inputs) = source_case(value, mode, stores, formal, multiple);
+            with_admitted_source_inputs_fixture(
+                ssa,
+                profile,
+                || inputs,
+                |source, view, inputs, budget| {
+                    body(source, view, inputs, budget);
+                    Ok(())
+                },
+            )
+            .expect("genuine getter source/N/B/O fixture");
+        }
+
+        fn with_original(
+            source: &ProductionPreRankedKirOwnerV1,
+            inputs: &[ProductionRankedRootInputV1],
+            references: &References,
+            budget: &mut Budget<'_>,
+            body: impl FnOnce(&Original<'_>, &mut Budget<'_>),
+        ) {
+            let floor = budget.storage();
+            let mut entered = false;
+            with_source_ranked_prefix_v1(source, inputs, references, budget,
+                |_, original, verification, _, partition, recorders, budget| {
+                    entered = true;
+                    assert!(std::ptr::eq(original.materialized(), source));
+                    assert_eq!(original.root_count(), inputs.len());
+                    assert_eq!(verification.root_count(), inputs.len());
+                    assert_eq!(partition.len(), inputs.len());
+                    assert_eq!(recorders.len(), inputs.len());
+                    assert!(references.as_slice().is_empty());
+                    for root in verification.roots() {
+                        assert!(!root.verification().has_authenticated_functional_verification());
+                        assert!(root.verification().aggregate_verus_execution().is_none());
+                    }
+                    assert!(matches!(require_source_functional_roster_v1(verification, inputs.len(), budget),
+                        Err(SourceJoinPipelineErrorV1::RankedVerification(
+                            ProductionRankedVerificationErrorV1::RosterMetadata(
+                                "every source-first root requires retained functional and aggregate custody"
+                            )
+                        ))));
+                    body(original, budget);
+                    Ok(())
+                },
+            ).expect("genuine full Expression and same-N R1 with honest None");
+            assert!(entered);
+            assert_eq!(budget.storage(), floor);
+        }
+
+        #[test]
+        fn source_preservation_consumer_closes_all_roots_values_and_stores_without_some() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for mode in [false, true] {
+                    for (value, stores, formal, multiple) in [
+                        (0, 1, false, false),
+                        (u32::MAX, 2, false, true),
+                        (17, 1, true, true),
+                        (29, 2, true, false),
+                    ] {
+                        with_case(
+                            profile,
+                            value,
+                            mode,
+                            stores,
+                            formal,
+                            multiple,
+                            |source, view, inputs, budget| {
+                                let references = References::default();
+                                with_original(source, inputs, &references, budget, |_, _| {});
+                                let floor = budget.storage();
+                                let before = budget.work();
+                                let mut completed = false;
+                                with_source_preservation_output_v1(view, profile, inputs, &references, budget,
+                                |preservation, same_references, formals, budget| {
+                                    completed = true;
+                                    assert!(std::ptr::eq(same_references, &references));
+                                    assert!(same_references.as_slice().is_empty());
+                                    assert_eq!(preservation.roots().len(), inputs.len());
+                                    assert_eq!(formals.len(), inputs.len());
+                                    for (ordinal, (root, complete)) in preservation.roots().iter().zip(formals).enumerate() {
+                                        assert_eq!(root.selected_root(), source.semantic_ssa().source_semantic().roots()[ordinal]);
+                                        assert_eq!(complete.selected_root(), root.selected_root());
+                                        assert_eq!(complete.selected_function(), root.selected_body());
+                                        assert!(std::ptr::eq(complete.output(), view.output()));
+                                        let premises = root.preconditions();
+                                        assert_eq!(premises.source_argument(), 0);
+                                        assert_eq!(premises.neutral_argument(), 0);
+                                        assert!(premises.requires_valid_exclusive_global_u32_slice());
+                                        assert!(premises.requires_representable_invocation_address());
+                                        let function = &source.executable().module().functions[root.neutral_function().0 as usize];
+                                        let body = function.body.as_ref().unwrap();
+                                        assert_eq!(premises.neutral_subject().0, body.parameters[0]);
+                                        assert_eq!(body.parameters.len(), if formal { 2 } else { 1 });
+                                        assert_eq!(root.checked_rule_count(), 9 + stores);
+                                        let mut actual_stores = 0;
+                                        for rule in 0..root.checked_rule_count() {
+                                            let row = root.checked_rule_v1(rule, budget).unwrap().unwrap();
+                                            assert!(row.0 < 6);
+                                            assert!(row.3.end <= body.blocks[row.2 as usize].operations.len());
+                                            actual_stores += usize::from(row.4 == "store");
+                                        }
+                                        assert_eq!(actual_stores, stores);
+                                        assert!(root.checked_rule_v1(root.checked_rule_count(), budget).unwrap().is_none());
+                                    }
+                                    Ok(())
+                                },
+                            ).expect("conditional source/N + existing N/B/O + D/P/R2 + actual Complete");
+                                assert!(completed);
+                                assert!(references.as_slice().is_empty());
+                                assert!(budget.work() > before);
+                                assert_eq!(budget.storage(), floor);
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn source_preservation_consumer_rejects_incomplete_rosters_before_callback() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_case(
+                    profile,
+                    29,
+                    false,
+                    1,
+                    false,
+                    true,
+                    |_, view, inputs, budget| {
+                        let references = References::default();
+                        let floor = budget.storage();
+                        for length in [0, 1] {
+                            let mut entered = false;
+                            let result = with_source_preservation_output_v1(
+                                view,
+                                profile,
+                                &inputs[..length],
+                                &references,
+                                budget,
+                                |_, _, _, _| {
+                                    entered = true;
+                                    Ok(())
+                                },
+                            );
+                            assert!(matches!(
+                                result,
+                                Err(SourceJoinPipelineErrorV1::RankedProjection(
+                                    ProductionRankedProjectionErrorV1::Unsupported(
+                                        "an incomplete typed/semantic ranked root roster"
+                                    )
+                                ))
+                            ));
+                            assert!(!entered);
+                            assert_eq!(budget.storage(), floor);
+                        }
+                        let mut reentered = false;
+                        with_source_preservation_output_v1(
+                            view,
+                            profile,
+                            inputs,
+                            &references,
+                            budget,
+                            |_, same, formals, _| {
+                                assert!(std::ptr::eq(same, &references));
+                                assert_eq!(formals.len(), 2);
+                                reentered = true;
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                        assert!(reentered);
+                        assert_eq!(budget.storage(), floor);
+                    },
+                );
+            }
+        }
+
+        #[test]
+        fn source_preservation_consumer_callback_error_panic_and_reentry_keep_floor() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_case(
+                    profile,
+                    29,
+                    true,
+                    2,
+                    false,
+                    true,
+                    |_, view, inputs, budget| {
+                        let references = References::default();
+                        let floor = budget.storage();
+                        let mut entered = false;
+                        let error = with_source_preservation_output_v1(
+                            view,
+                            profile,
+                            inputs,
+                            &references,
+                            budget,
+                            |preservation, same, formals, _| {
+                                assert_eq!(preservation.roots().len(), 2);
+                                assert_eq!(formals.len(), 2);
+                                assert!(std::ptr::eq(same, &references));
+                                entered = true;
+                                Err(SourceJoinPipelineErrorV1::RankedProjection(
+                                    ProductionRankedProjectionErrorV1::Incomplete(
+                                        "source preservation consumer callback marker",
+                                    ),
+                                ))
+                            },
+                        );
+                        assert!(entered);
+                        assert!(matches!(
+                            error,
+                            Err(SourceJoinPipelineErrorV1::RankedProjection(
+                                ProductionRankedProjectionErrorV1::Incomplete(
+                                    "source preservation consumer callback marker"
+                                )
+                            ))
+                        ));
+                        assert_eq!(budget.storage(), floor);
+                        let mut panic_entered = false;
+                        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            with_source_preservation_output_v1(
+                                view,
+                                profile,
+                                inputs,
+                                &references,
+                                budget,
+                                |preservation, same, formals, _| {
+                                    assert_eq!(preservation.roots().len(), formals.len());
+                                    assert!(std::ptr::eq(same, &references));
+                                    panic_entered = true;
+                                    std::panic::panic_any(0x3450_77u64)
+                                },
+                            )
+                        }))
+                        .expect_err("callback must unwind after actual complete conjunction");
+                        assert!(panic_entered);
+                        assert_eq!(panic.downcast_ref::<u64>(), Some(&0x3450_77));
+                        assert_eq!(budget.storage(), floor);
+                        let mut reentered = false;
+                        with_source_preservation_output_v1(
+                            view,
+                            profile,
+                            inputs,
+                            &references,
+                            budget,
+                            |_, _, formals, _| {
+                                assert_eq!(formals.len(), 2);
+                                reentered = true;
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                        assert!(reentered);
+                        assert_eq!(budget.storage(), floor);
+                    },
+                );
+            }
+        }
+
+        #[test]
+        fn source_preservation_genuine_r1_rejects_foreign_original_and_query_ledger() {
+            with_case(
+                Profile::Gfx942,
+                17,
+                false,
+                1,
+                false,
+                false,
+                |foreign_source, _, foreign_inputs, foreign_budget| {
+                    let foreign_references = References::default();
+                    with_original(
+                        foreign_source,
+                        foreign_inputs,
+                        &foreign_references,
+                        foreign_budget,
+                        |foreign, _| {
+                            with_case(
+                                Profile::Gfx942,
+                                17,
+                                false,
+                                1,
+                                false,
+                                false,
+                                |source, _, inputs, budget| {
+                                    let references = References::default();
+                                    with_original(
+                                        source,
+                                        inputs,
+                                        &references,
+                                        budget,
+                                        |original, budget| {
+                                            assert!(!std::ptr::eq(
+                                                original.materialized(),
+                                                foreign.materialized()
+                                            ));
+                                            assert_eq!(
+                                                original
+                                                    .materialized()
+                                                    .semantic_ssa()
+                                                    .source_semantic()
+                                                    .semantic_sha256(),
+                                                foreign
+                                                    .materialized()
+                                                    .semantic_ssa()
+                                                    .source_semantic()
+                                                    .semantic_sha256()
+                                            );
+                                            let floor = budget.storage();
+                                            original.with_source_preservation_v1(budget, |proof, budget| {
+                                assert!(matches!(proof.require_original_v1(foreign, budget),
+                                    Err(OutputError::Invalid("source preservation original roster differs"))));
+                                let held = budget.storage();
+                                let before = budget.work();
+                                let mut work = Work::new(LIMIT);
+                                let mut other = Budget::new(&mut work, held);
+                                other.reserve_storage(held).unwrap();
+                                assert!(matches!(proof.require_original_v1(original, &mut other),
+                                    Err(OutputError::Resource(Resource::Accounting))));
+                                assert!(matches!(proof.roots()[0].checked_rule_v1(0, &mut other),
+                                    Err(OutputError::Resource(Resource::Accounting))));
+                                assert_eq!(other.work(), 4 + 8);
+                                assert_eq!(budget.work(), before);
+                                assert_eq!(other.storage(), held);
+                                assert_eq!(budget.storage(), held);
+                                let before = budget.work();
+                                proof.require_original_v1(original, budget)?;
+                                assert_eq!(budget.work(), before + 4);
+                                assert!(proof.roots()[0].checked_rule_v1(0, budget)?.is_some());
+                                assert_eq!(budget.work(), before + 4 + 8);
+                                Ok(())
+                            }).unwrap();
+                                            assert_eq!(budget.storage(), floor);
+                                        },
+                                    );
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+        }
+
+        #[test]
+        fn source_preservation_genuine_r1_queries_refuse_lost_live_floor_then_reenter() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_case(
+                    profile,
+                    17,
+                    false,
+                    1,
+                    false,
+                    false,
+                    |source, _, inputs, budget| {
+                        let references = References::default();
+                        with_original(source, inputs, &references, budget, |original, budget| {
+                            let floor = budget.storage();
+                            original
+                                .with_source_preservation_v1(budget, |proof, budget| {
+                                    let held = budget.storage();
+                                    budget.release_storage(1).unwrap();
+                                    assert!(matches!(
+                                        proof.require_original_v1(original, budget),
+                                        Err(OutputError::Resource(Resource::Accounting))
+                                    ));
+                                    assert!(matches!(
+                                        proof.roots()[0].checked_rule_v1(0, budget),
+                                        Err(OutputError::Resource(Resource::Accounting))
+                                    ));
+                                    budget.reserve_storage(1).unwrap();
+                                    proof.require_original_v1(original, budget)?;
+                                    assert!(proof.roots()[0].checked_rule_v1(0, budget)?.is_some());
+                                    assert_eq!(budget.storage(), held);
+                                    Ok(())
+                                })
+                                .unwrap();
+                            assert_eq!(budget.storage(), floor);
+                        });
+                    },
+                );
+            }
+        }
+
+        #[test]
+        fn source_preservation_genuine_r1_postflight_accounting_precedes_all_callback_outcomes() {
+            for outcome in 0..3 {
+                with_case(
+                    Profile::Gfx942,
+                    29,
+                    true,
+                    2,
+                    false,
+                    false,
+                    |source, _, inputs, budget| {
+                        let references = References::default();
+                        with_original(source, inputs, &references, budget, |original, budget| {
+                            let floor = budget.storage();
+                            let mut entered = false;
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    original.with_source_preservation_v1::<()>(
+                                        budget,
+                                        |proof, budget| {
+                                            proof.require_original_v1(original, budget)?;
+                                            entered = true;
+                                            budget.release_storage(1).unwrap();
+                                            match outcome {
+                                                0 => Ok(()),
+                                                1 => Err(OutputError::Invalid(
+                                                    "lost-floor error marker",
+                                                )),
+                                                _ => std::panic::panic_any(0x3450_99u64),
+                                            }
+                                        },
+                                    )
+                                }))
+                                .expect(
+                                    "Accounting must replace a callback panic after floor loss",
+                                );
+                            assert!(entered);
+                            assert!(matches!(
+                                result,
+                                Err(OutputError::Resource(Resource::Accounting))
+                            ));
+                            assert_eq!(budget.storage(), floor);
+                            let mut reentered = false;
+                            original
+                                .with_source_preservation_v1(budget, |proof, budget| {
+                                    proof.require_original_v1(original, budget)?;
+                                    reentered = true;
+                                    Ok(())
+                                })
+                                .unwrap();
+                            assert!(reentered);
+                            assert_eq!(budget.storage(), floor);
+                        });
+                    },
+                );
+            }
+        }
+
+        #[test]
+        fn source_preservation_genuine_r1_header_denial_preserves_incoming_floor() {
+            with_case(
+                Profile::Gfx942,
+                17,
+                false,
+                1,
+                false,
+                false,
+                |source, _, inputs, budget| {
+                    let references = References::default();
+                    with_original(source, inputs, &references, budget, |original, budget| {
+                        let floor = budget.storage();
+                        let header = std::mem::size_of::<
+                            Vec<fe2o3_lower_mir_kernel::ProductionSourcePreservationRootV1>,
+                        >() + std::mem::size_of::<
+                            fe2o3_lower_mir_kernel::ProductionScopedSourcePreservationV1<'_, '_>,
+                        >();
+                        let padding = STORAGE_LIMIT - floor - (header - 1);
+                        budget.reserve_storage(padding).unwrap();
+                        let padded = budget.storage();
+                        let mut entered = false;
+                        let result = original.with_source_preservation_v1(budget, |_, _| {
+                            entered = true;
+                            Ok(())
+                        });
+                        assert!(
+                            matches!(result, Err(OutputError::Resource(Resource::Storage(error)))
+                        if error.actual() == STORAGE_LIMIT + 1 && error.limit() == STORAGE_LIMIT)
+                        );
+                        assert!(!entered);
+                        assert_eq!(budget.storage(), padded);
+                        budget.release_storage(padding).unwrap();
+                        assert_eq!(budget.storage(), floor);
+                        original
+                            .with_source_preservation_v1(budget, |proof, budget| {
+                                proof.require_original_v1(original, budget)
+                            })
+                            .unwrap();
+                        assert_eq!(budget.storage(), floor);
+                    });
+                },
+            );
+        }
     }
 
     mod full_expression_recorder_tests {

@@ -3078,21 +3078,36 @@ fn source_output_invocation_source_index_v1(
     canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<SourceOutputInvocationSourceIndexV1, ProductionSourceOutputErrorV1> {
+    source_output_invocation_source_index_from_source_v1(
+        view.source,
+        candidate.selected_root,
+        candidate.selected_function,
+        canonical,
+        budget,
+    )
+}
+
+fn source_output_invocation_source_index_from_source_v1(
+    materialized: &ProductionPreRankedKirOwnerV1,
+    selected_root: SemanticFunctionIdV1,
+    selected_function: SemanticFunctionIdV1,
+    canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputInvocationSourceIndexV1, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     let captured =
-        source_output_invocation_capture_v1(view.source, candidate.selected_function, budget)?;
+        source_output_invocation_capture_v1(materialized, selected_function, budget)?;
     budget
         .reserve_storage(std::mem::size_of::<SourceOutputInvocationSourceIndexV1>())
         .map_err(Error::Resource)?;
-    let plan = view
-        .source
+    let plan = materialized
         .semantic_ssa()
-        .plan_for_function(candidate.selected_function)
+        .plan_for_function(selected_function)
         .ok_or(Error::Invalid("invocation source SSA plan absent"))?
         .plan();
     let mut index = SourceOutputInvocationSourceIndexV1 {
-        source: std::ptr::from_ref(view.source).cast(),
-        function: candidate.selected_function,
+        source: std::ptr::from_ref(materialized).cast(),
+        function: selected_function,
         canonical,
         events: Vec::new(),
         definitions: Vec::new(),
@@ -3162,16 +3177,15 @@ fn source_output_invocation_source_index_v1(
             .map_err(Error::SourceOrigin)?;
         }
     }
-    for (ordinal, span) in view
-        .source
+    for (ordinal, span) in materialized
         .correspondence
         .statement_operation_spans()
         .iter()
         .enumerate()
     {
         budget.charge_work(5).map_err(Error::Resource)?;
-        if span.correspondence_owner() == candidate.selected_root
-            && span.semantic_function() == candidate.selected_function
+        if span.correspondence_owner() == selected_root
+            && span.semantic_function() == selected_function
         {
             assert_origin_push_v1(
                 &mut index.statements,
@@ -3184,16 +3198,15 @@ fn source_output_invocation_source_index_v1(
             .map_err(Error::SourceOrigin)?;
         }
     }
-    for (ordinal, span) in view
-        .source
+    for (ordinal, span) in materialized
         .correspondence
         .terminator_operation_spans()
         .iter()
         .enumerate()
     {
         budget.charge_work(5).map_err(Error::Resource)?;
-        if span.correspondence_owner() == candidate.selected_root
-            && span.semantic_function() == candidate.selected_function
+        if span.correspondence_owner() == selected_root
+            && span.semantic_function() == selected_function
         {
             assert_origin_push_v1(
                 &mut index.terminators,
@@ -3203,8 +3216,7 @@ fn source_output_invocation_source_index_v1(
             .map_err(Error::SourceOrigin)?;
         }
     }
-    let body = view
-        .source
+    let body = materialized
         .executable()
         .module()
         .functions
@@ -3367,6 +3379,18 @@ fn source_output_invocation_statement_span_v1(
     statement: u32,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<(), ProductionSourceOutputErrorV1> {
+    source_output_invocation_statement_span_from_source_v1(
+        view.source, index, block, statement, budget,
+    )
+}
+
+fn source_output_invocation_statement_span_from_source_v1(
+    materialized: &ProductionPreRankedKirOwnerV1,
+    index: &SourceOutputInvocationSourceIndexV1,
+    block: u32,
+    statement: u32,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     let key = (block, statement);
     let row = assert_origin_find_v1(&index.statements, budget, |row, budget| {
@@ -3376,7 +3400,7 @@ fn source_output_invocation_statement_span_v1(
     .map_err(Error::SourceOrigin)?
     .ok_or(Error::Invalid("invocation source alias span absent"))?;
     budget.charge_work(4).map_err(Error::Resource)?;
-    let span = view.source.correspondence.statement_operation_spans()[index.statements[row].1];
+    let span = materialized.correspondence.statement_operation_spans()[index.statements[row].1];
     if span.operation_count() != 0 {
         return Err(Error::Invalid("invocation source alias emits operations"));
     }
@@ -4655,6 +4679,15 @@ fn source_output_identity_source_v1(
     claim: ProductionProjectionArgumentCandidateV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<SourceOutputIdentitySourceV1, ProductionSourceOutputErrorV1> {
+    source_output_identity_source_from_source_v1(view.source, index, claim.source_local, budget)
+}
+
+fn source_output_identity_source_from_source_v1(
+    materialized: &ProductionPreRankedKirOwnerV1,
+    index: &SourceOutputInvocationSourceIndexV1,
+    witness_local: SemanticLocalIdV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputIdentitySourceV1, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
@@ -4666,15 +4699,15 @@ fn source_output_identity_source_v1(
         ProductionSemanticSsaOperandRoleV1 as Operand,
     };
     budget.charge_work(4).map_err(Error::Resource)?;
-    if index.source != std::ptr::from_ref(view.source).cast() {
+    if index.source != std::ptr::from_ref(materialized).cast() {
         return Err(Error::Invalid("identity captured owner differs"));
     }
-    let semantic = view.source.semantic_ssa().source_semantic();
+    let semantic = materialized.semantic_ssa().source_semantic();
     let function = semantic
         .functions()
         .get(index.function.index() as usize)
         .ok_or(Error::Invalid("identity source function absent"))?;
-    let captured = source_output_invocation_capture_v1(view.source, index.function, budget)?;
+    let captured = source_output_invocation_capture_v1(materialized, index.function, budget)?;
     let mut getter = None;
     for (block, source) in function.blocks().iter().enumerate() {
         budget.charge_work(4).map_err(Error::Resource)?;
@@ -4724,7 +4757,7 @@ fn source_output_identity_source_v1(
         .ok_or(Error::Invalid("identity receiver is not plain reference"))?;
     let witness = source_output_identity_plain_place_v1(witness_operand)
         .ok_or(Error::Invalid("identity witness is not plain typed value"))?;
-    if witness.local() != claim.source_local
+    if witness.local() != witness_local
         || witness.ty() != witness_type
         || !matches!(
             semantic
@@ -4855,8 +4888,8 @@ fn source_output_identity_source_v1(
     {
         return Err(Error::Invalid("identity receiver Borrow formal differs"));
     }
-    source_output_invocation_statement_span_v1(
-        view,
+    source_output_invocation_statement_span_from_source_v1(
+        materialized,
         index,
         receiver_block.get(),
         receiver_statement,
@@ -4869,8 +4902,7 @@ fn source_output_identity_source_v1(
         slice.local(),
         budget,
     )?;
-    let plan = view
-        .source
+    let plan = materialized
         .semantic_ssa()
         .plan_for_function(index.function)
         .ok_or(Error::Invalid("identity source plan absent"))?
@@ -4999,8 +5031,8 @@ fn source_output_identity_source_v1(
     {
         return Err(Error::Invalid("identity Option own source uses differ"));
     }
-    source_output_invocation_statement_span_v1(
-        view,
+    source_output_invocation_statement_span_from_source_v1(
+        materialized,
         index,
         payload_site.0,
         payload_site.1,
@@ -5458,6 +5490,22 @@ fn source_output_identity_span_v1(
     ),
     ProductionSourceOutputErrorV1,
 > {
+    source_output_identity_span_from_source_v1(view.source, index, block, statement, budget)
+}
+
+fn source_output_identity_span_from_source_v1(
+    materialized: &ProductionPreRankedKirOwnerV1,
+    index: &SourceOutputInvocationSourceIndexV1,
+    block: u32,
+    statement: Option<u32>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (
+        fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,
+        std::ops::Range<usize>,
+    ),
+    ProductionSourceOutputErrorV1,
+> {
     use ProductionSourceOutputErrorV1 as Error;
     let (physical, first, count) = if let Some(statement) = statement {
         let key = (block, statement);
@@ -5468,7 +5516,7 @@ fn source_output_identity_span_v1(
         .map_err(Error::SourceOrigin)?
         .ok_or(Error::Invalid("identity original statement span absent"))?;
         let span =
-            view.source.correspondence.statement_operation_spans()[index.statements[found].1];
+            materialized.correspondence.statement_operation_spans()[index.statements[found].1];
         (
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
@@ -5482,7 +5530,7 @@ fn source_output_identity_span_v1(
         .map_err(Error::SourceOrigin)?
         .ok_or(Error::Invalid("identity original terminator span absent"))?;
         let span =
-            view.source.correspondence.terminator_operation_spans()[index.terminators[found].1];
+            materialized.correspondence.terminator_operation_spans()[index.terminators[found].1];
         (
             span.kernel_ir_block(),
             span.first_operation_ordinal(),

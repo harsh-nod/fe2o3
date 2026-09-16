@@ -74,6 +74,7 @@ use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
 include!("production_supplied_native_materialization_v1.rs");
+include!("production_source_preservation_v1.rs");
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
 include!("production_optimized_assert_origins_v1.rs");

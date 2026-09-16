@@ -225,12 +225,12 @@ mod checked_output_source_join_tests {
                 < production.find("&SourceRankedCustodyV1 {").unwrap()
         );
         let prefix = text
-            .split("fn with_source_ranked_prefix_v1<T>(")
-            .nth(1)
-            .unwrap()
-            .split("pub(crate) fn observe_collected_ranked_addresses_v1")
-            .next()
-            .unwrap();
+            .split_once("fn with_source_ranked_prefix_v1<T>(")
+            .expect("source-only prefix declaration")
+            .1
+            .split_once("fn with_source_preservation_output_v1<'owners>(")
+            .expect("separate source/output consumer declaration")
+            .0;
         assert!(prefix.contains("with_canonical_assertions_source_budget_v1("));
         assert!(!prefix.contains("with_checked_output_assertions_view_budget_v1("));
         let diagnostic = text
