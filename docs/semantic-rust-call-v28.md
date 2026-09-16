@@ -231,6 +231,14 @@ call analysis and slice analysis retain one owner, inventory and work/storage
 ledger. A regression places a load and Call in the same terminator span and
 checks their distinct physical occurrences and cumulative budget exhaustion.
 
+Within each read query, whole-value origins are solved once for the selected
+function. Slice data, length, index, assertion and retained-private-storage
+queries reuse that table through the inventory's metered dense-definition
+lookup. Propagation scratch is released before those lookups; only the bounded
+origin table remains live. This does not yet cache facts across distinct reads
+or substitute values across calls. Conflicting and ungrounded incoming edges
+retain the same conservative treatment.
+
 This profile requires the unique emitted assertion-success predecessor. Elided
 assertions and reconstructed slice views remain unsupported. The view is not an
 allocation ownership proof, helper-effect summary, or launch capability. Helper

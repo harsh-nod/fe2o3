@@ -1,10 +1,12 @@
 use super::*;
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1,
-    Function as KirFunction, Module, ScalarType, Signature, Terminator, Type, ValueDef,
+    AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1, Constant,
+    Function as KirFunction, Module, Operation, OperationKind, ScalarType, Signature, Terminator,
+    Type, ValueDef,
 };
 
 const LIMIT: usize = 10_000_000;
+const SUBJECT: Function = Function(2);
 
 fn slice() -> Type {
     Type::slice(
@@ -42,8 +44,25 @@ fn conditional(a: u32, a_argument: u32, b: u32, b_argument: u32) -> Option<Termi
     })
 }
 
-fn inspect(blocks: Vec<BasicBlock>, expected: &[(u32, Option<u32>)]) {
+fn with_inventory(
+    blocks: Vec<BasicBlock>,
+    inspect: impl FnOnce(
+        &CanonicalKirInventoryV1<'_>,
+        &VerifiedCanonicalKernelIrModuleV12,
+        &mut Budget<'_>,
+    ),
+) {
     let mut module = Module::new("whole-value-origin");
+    module.functions.push(KirFunction::external_import(
+        "declaration",
+        Signature::new(vec![slice()], vec![]),
+    ));
+    module.functions.push(KirFunction::internal_helper(
+        "preceding",
+        Signature::new(vec![slice(), slice()], vec![]),
+        vec![ValueId(4_000_000_000), ValueId(98)],
+        vec![block(77, None)],
+    ));
     module.functions.push(KirFunction::internal_helper(
         "origin",
         Signature::new(vec![Type::BOOL, slice(), slice()], vec![]),
@@ -68,23 +87,8 @@ fn inspect(blocks: Vec<BasicBlock>, expected: &[(u32, Option<u32>)]) {
         .reserve_storage(inventory_storage.retained_storage())
         .unwrap();
     let floor = budget.storage();
-    let function = inventory.functions()[0].coordinate;
-    for &(value, argument) in expected {
-        let actual = resolve_whole_value_origin_v1(
-            &inventory,
-            &owner,
-            function,
-            ValueId(value),
-            &mut budget,
-        )
-        .unwrap();
-        assert_eq!(
-            actual,
-            argument.map(|argument| Definition::FunctionArgument { function, argument }),
-            "value %{value}"
-        );
-        assert_eq!(budget.storage(), floor);
-    }
+    inspect(&inventory, &owner, &mut budget);
+    assert_eq!(budget.storage(), floor);
     drop(inventory);
     budget
         .release_storage(inventory_storage.retained_storage())
@@ -94,6 +98,219 @@ fn inspect(blocks: Vec<BasicBlock>, expected: &[(u32, Option<u32>)]) {
         .release_storage(owner_storage.retained_storage())
         .unwrap();
     assert_eq!(budget.storage(), 17);
+}
+
+fn inspect(blocks: Vec<BasicBlock>, expected: &[(u32, Option<u32>)]) {
+    with_inventory(blocks, |inventory, owner, budget| {
+        let floor = budget.storage();
+        let function = SUBJECT;
+        with_whole_value_origins_v1(inventory, owner, function, budget, |origins, budget| {
+            let live = budget.storage();
+            assert_eq!(
+                live - floor,
+                origins.origins.len() * std::mem::size_of::<Origin>()
+            );
+            for _ in 0..2 {
+                for &(value, argument) in expected {
+                    let actual = origins.resolve(ValueId(value), budget).unwrap();
+                    assert_eq!(
+                        actual,
+                        argument
+                            .map(|argument| Definition::FunctionArgument { function, argument }),
+                        "value %{value}"
+                    );
+                    assert_eq!(budget.storage(), live);
+                }
+            }
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), floor);
+    });
+}
+
+#[test]
+fn prepared_origins_query_sparse_values_without_rebuilding_the_worklist() {
+    let mut entry = block(77, None);
+    entry.terminator = branch(1000, 98);
+    let mut blocks = vec![entry];
+    for i in 0..128 {
+        let mut next = block(1000 + i, Some(4_000_000_000 + i));
+        if i != 127 {
+            next.terminator = branch(1001 + i, 4_000_000_000 + i);
+        }
+        blocks.push(next);
+    }
+    with_inventory(blocks, |inventory, owner, budget| {
+        let floor = budget.storage();
+        with_whole_value_origins_v1(inventory, owner, SUBJECT, budget, |origins, budget| {
+            let retained = budget.storage();
+            assert_eq!(retained - floor, 131 * std::mem::size_of::<Origin>());
+            let peak = budget.peak_storage();
+            let start = budget.work();
+            for i in 0..128 {
+                inventory
+                    .definition_index_for_value(SUBJECT, ValueId(4_000_000_000 + i), budget)
+                    .unwrap()
+                    .unwrap();
+            }
+            let expected_query_work = budget.work() - start + 128;
+            let mut previous = None;
+            for _ in 0..3 {
+                let start = budget.work();
+                for i in 0..128 {
+                    assert_eq!(
+                        origins.resolve(ValueId(4_000_000_000 + i), budget).unwrap(),
+                        Some(Definition::FunctionArgument {
+                            function: SUBJECT,
+                            argument: 1
+                        })
+                    );
+                    assert_eq!(budget.storage(), retained);
+                    assert_eq!(budget.peak_storage(), peak);
+                }
+                let query_work = budget.work() - start;
+                assert_eq!(
+                    query_work, expected_query_work,
+                    "only indexed lookup and table read"
+                );
+                if let Some(previous) = previous {
+                    assert_eq!(query_work, previous);
+                }
+                previous = Some(query_work);
+            }
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), floor);
+    });
+}
+
+#[test]
+fn prepared_origins_restore_storage_on_exact_resource_and_query_failures() {
+    let mut entry = block(77, None);
+    entry.terminator = branch(18, 98);
+    with_inventory(
+        vec![entry, block(18, Some(400))],
+        |inventory, owner, outer| {
+            let floor = outer.storage();
+            let run = |work_limit, storage_limit, missing| {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+                let mut budget = Budget::new(&mut work, storage_limit);
+                budget.reserve_storage(floor).unwrap();
+                let result = with_whole_value_origins_v1(
+                    inventory,
+                    owner,
+                    SUBJECT,
+                    &mut budget,
+                    |origins, budget| {
+                        let live = budget.storage();
+                        let result =
+                            origins.resolve(ValueId(if missing { 401 } else { 400 }), budget);
+                        assert_eq!(budget.storage(), live);
+                        result
+                    },
+                )
+                .and_then(|result| result);
+                assert_eq!(budget.storage(), floor);
+                (result, budget.work(), budget.peak_storage())
+            };
+            let (result, work, peak) = run(LIMIT, LIMIT, false);
+            assert!(result.unwrap().is_some());
+            assert!(run(work, peak, false).0.unwrap().is_some());
+            assert!(matches!(
+                run(work - 1, peak, false).0,
+                Err(Error::Resource(Resource::Work(_)))
+            ));
+            assert!(matches!(
+                run(work, peak - 1, false).0,
+                Err(Error::Resource(Resource::Storage(_)))
+            ));
+            assert!(matches!(
+                run(LIMIT, LIMIT, true).0,
+                Err(Error::InconsistentOwner)
+            ));
+            assert!(matches!(
+                with_whole_value_origins_v1(inventory, owner, Function(3), outer, |_, _| panic!(
+                    "invalid function reached consumer"
+                )),
+                Err(Error::InconsistentOwner)
+            ));
+            assert_eq!(outer.storage(), floor);
+        },
+    );
+}
+
+#[test]
+fn prepared_origins_are_owner_bound_and_keep_global_definition_indices_local() {
+    let mut entry = block(77, None);
+    entry.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(4_000_000_000), Type::Scalar(ScalarType::U32)),
+        OperationKind::Constant(Constant::U32(7)),
+    ));
+    entry.terminator = branch(18, 98);
+    with_inventory(
+        vec![entry, block(18, Some(400))],
+        |inventory, owner, budget| {
+            with_whole_value_origins_v1(inventory, owner, SUBJECT, budget, |origins, budget| {
+                assert!(origins.definitions.start > 0);
+                assert_eq!(
+                    origins.resolve(ValueId(98), budget).unwrap(),
+                    Some(Definition::FunctionArgument {
+                        function: SUBJECT,
+                        argument: 1
+                    })
+                );
+                assert_eq!(
+                    origins.resolve(ValueId(400), budget).unwrap(),
+                    origins.resolve(ValueId(98), budget).unwrap()
+                );
+                let result = inventory
+                    .definition_for_value(SUBJECT, ValueId(4_000_000_000), budget)
+                    .unwrap()
+                    .unwrap()
+                    .coordinate;
+                assert!(matches!(result, Definition::Result { .. }));
+                assert_eq!(
+                    origins.resolve(ValueId(4_000_000_000), budget).unwrap(),
+                    Some(result)
+                );
+            })
+            .unwrap();
+            with_whole_value_origins_v1(
+                inventory,
+                owner,
+                Function(1),
+                budget,
+                |origins, budget| {
+                    assert_eq!(
+                        origins.resolve(ValueId(4_000_000_000), budget).unwrap(),
+                        Some(Definition::FunctionArgument {
+                            function: Function(1),
+                            argument: 0
+                        })
+                    );
+                },
+            )
+            .unwrap();
+            let (foreign, storage) =
+                VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
+                    owner.module(),
+                    budget,
+                )
+                .unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            let floor = budget.storage();
+            assert_eq!(foreign.canonical(), owner.canonical());
+            assert!(matches!(
+                with_whole_value_origins_v1(inventory, &foreign, SUBJECT, budget, |_, _| panic!(
+                    "foreign owner reached consumer"
+                )),
+                Err(Error::InconsistentOwner)
+            ));
+            assert_eq!(budget.storage(), floor);
+            drop(foreign);
+            budget.release_storage(storage.retained_storage()).unwrap();
+        },
+    );
 }
 
 #[test]

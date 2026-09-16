@@ -137,19 +137,62 @@ impl Work {
     }
 }
 
-/// Resolves whole-value block transport, never casts, aliasing or bounds.
+/// Solved whole-value transport for exactly one inventory/function.
+/// Only the origin table survives preparation; propagation scratch is released.
+pub(super) struct WholeValueOriginsV1<'a> {
+    inventory: &'a CanonicalKirInventoryV1<'a>,
+    function: Function,
+    definitions: std::ops::Range<usize>,
+    origins: Vec<Origin>,
+}
+
+impl WholeValueOriginsV1<'_> {
+    pub(super) fn resolve(
+        &self,
+        value: ValueId,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<Definition>> {
+        let index = self
+            .inventory
+            .definition_index_for_value(self.function, value, budget)?
+            .filter(|index| self.definitions.contains(index))
+            .ok_or(Error::InconsistentOwner)?;
+        budget.charge_work(1)?;
+        match self.origins.get(index - self.definitions.start) {
+            Some(Origin::Exact(definition)) => Ok(Some(*definition)),
+            Some(Origin::Unknown) => Ok(None),
+            Some(Origin::Pending) | None => Err(Error::InconsistentOwner),
+        }
+    }
+}
+
+/// Prepares whole-value block transport, never casts, aliasing or bounds.
 /// Every syntactic incoming edge contributes, including unreachable edges.
 /// Requested scratch payload is O(function definitions + edge arguments).
 /// Ordinary Result returns restore the ledger floor; no unwind/RSS bound is claimed.
-pub(super) fn resolve_whole_value_origin_v1(
-    inventory: &CanonicalKirInventoryV1<'_>,
+pub(super) fn with_whole_value_origins_v1<'a, R>(
+    inventory: &'a CanonicalKirInventoryV1<'a>,
     expected_owner: &VerifiedCanonicalKernelIrModuleV12,
     function: Function,
-    value: ValueId,
     budget: &mut Budget<'_>,
-) -> Result<Option<Definition>> {
+    consume: impl FnOnce(&WholeValueOriginsV1<'a>, &mut Budget<'_>) -> R,
+) -> Result<R> {
     let floor = budget.storage();
-    let result = resolve_inner(inventory, expected_owner, function, value, budget);
+    let result = (|| {
+        let origins = prepare_inner(inventory, expected_owner, function, budget)?;
+        let retained = origins
+            .origins
+            .len()
+            .checked_mul(std::mem::size_of::<Origin>())
+            .ok_or(Resource::Arithmetic)?;
+        let scratch = budget
+            .storage()
+            .checked_sub(floor)
+            .and_then(|bytes| bytes.checked_sub(retained))
+            .ok_or(Resource::Accounting)?;
+        budget.release_storage(scratch)?;
+        Ok(consume(&origins, budget))
+    })();
     let release = budget
         .storage()
         .checked_sub(floor)
@@ -158,13 +201,12 @@ pub(super) fn resolve_whole_value_origin_v1(
     result
 }
 
-fn resolve_inner(
-    inventory: &CanonicalKirInventoryV1<'_>,
+fn prepare_inner<'a>(
+    inventory: &'a CanonicalKirInventoryV1<'a>,
     expected_owner: &VerifiedCanonicalKernelIrModuleV12,
     function: Function,
-    value: ValueId,
     budget: &mut Budget<'_>,
-) -> Result<Option<Definition>> {
+) -> Result<WholeValueOriginsV1<'a>> {
     budget.charge_work(3)?;
     if !inventory.belongs_to(expected_owner) {
         return Err(Error::InconsistentOwner);
@@ -173,9 +215,6 @@ fn resolve_inner(
         .functions()
         .get(function.0 as usize)
         .filter(|row| row.coordinate == function && row.function.body.is_some())
-        .ok_or(Error::InconsistentOwner)?;
-    let requested = inventory
-        .definition_for_value(function, value, budget)?
         .ok_or(Error::InconsistentOwner)?;
     let range = function_row.definitions.clone();
     let definitions = inventory
@@ -187,7 +226,6 @@ fn resolve_inner(
         .get(function_row.edge_arguments.clone())
         .ok_or(Error::InconsistentOwner)?;
     let mut work = Work::new(definitions.len(), edges.len(), budget)?;
-    let mut selected = None;
     for (index, definition) in definitions.iter().enumerate() {
         budget.charge_work(1)?;
         let (actual_function, origin) = match definition.coordinate {
@@ -209,9 +247,6 @@ fn resolve_inner(
         };
         if actual_function != function {
             return Err(Error::InconsistentOwner);
-        }
-        if definition.coordinate == requested.coordinate {
-            selected = Some(index);
         }
         work.origins[index] = origin;
     }
@@ -252,11 +287,10 @@ fn resolve_inner(
         }
     }
     work.propagate(budget)?;
-    let selected = selected.ok_or(Error::InconsistentOwner)?;
-    budget.charge_work(1)?;
-    Ok(match work.origins[selected] {
-        Origin::Exact(definition) => Some(definition),
-        Origin::Unknown => None,
-        Origin::Pending => return Err(Error::InconsistentOwner),
+    Ok(WholeValueOriginsV1 {
+        inventory,
+        function,
+        definitions: range,
+        origins: work.origins,
     })
 }

@@ -199,26 +199,25 @@ fn read_binds_exact_entry_slice_extent_index_and_source_argument() {
         let Definition::FunctionArgument { function, .. } = input else {
             unreachable!()
         };
-        for carrier in [data, length] {
-            let value = inventory
-                .definitions()
-                .iter()
-                .find(|row| row.coordinate == carrier)
-                .unwrap()
-                .value
-                .unwrap();
-            assert_eq!(
-                value_origin_v1::resolve_whole_value_origin_v1(
-                    inventory,
-                    owner.executable(),
-                    function,
-                    value,
-                    budget,
-                )
-                .unwrap(),
-                Some(input)
-            );
-        }
+        value_origin_v1::with_whole_value_origins_v1(
+            inventory,
+            owner.executable(),
+            function,
+            budget,
+            |origins, budget| {
+                for carrier in [data, length] {
+                    let value = inventory
+                        .definitions()
+                        .iter()
+                        .find(|row| row.coordinate == carrier)
+                        .unwrap()
+                        .value
+                        .unwrap();
+                    assert_eq!(origins.resolve(value, budget).unwrap(), Some(input));
+                }
+            },
+        )
+        .unwrap();
     });
 }
 

@@ -157,8 +157,24 @@ impl ProductionPreRankedKirOwnerV1 {
         budget: &mut SliceBudget<'_>,
         use_view: impl for<'s> FnOnce(&ProductionSliceAccessViewV1<'s>) -> SliceResult<R>,
     ) -> SliceResult<R> {
-        let query = SliceQuery::new(self, inventory, site, budget)?;
-        let facts = query.facts(budget)?;
+        let function = slice_function(self, inventory, site, budget)?;
+        let facts = super::value_origin_v1::with_whole_value_origins_v1(
+            inventory,
+            self.executable(),
+            function.coordinate,
+            budget,
+            |origins, budget| {
+                SliceQuery {
+                    owner: self,
+                    inventory,
+                    function,
+                    site,
+                    origins,
+                }
+                .facts(budget)
+            },
+        )
+        .map_err(slice_inventory_error)??;
         let SliceDefinition::FunctionArgument { argument, .. } = facts.input else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         };
@@ -196,11 +212,12 @@ impl ProductionPreRankedKirOwnerV1 {
     }
 }
 
-struct SliceQuery<'a> {
+struct SliceQuery<'a, 's> {
     owner: &'a ProductionPreRankedKirOwnerV1,
     inventory: &'a CanonicalKirInventoryV1<'a>,
     function: &'a CanonicalKirFunctionRefV1<'a>,
     site: ProductionSliceAccessSiteV1,
+    origins: &'s super::value_origin_v1::WholeValueOriginsV1<'a>,
 }
 
 fn slice_inventory_error(error: CanonicalKirInventoryErrorV1) -> ProductionSemanticKirErrorV1 {
@@ -212,44 +229,37 @@ fn slice_inventory_error(error: CanonicalKirInventoryErrorV1) -> ProductionSeman
     }
 }
 
-impl<'a> SliceQuery<'a> {
-    fn new(
-        owner: &'a ProductionPreRankedKirOwnerV1,
-        inventory: &'a CanonicalKirInventoryV1<'a>,
-        site: ProductionSliceAccessSiteV1,
-        budget: &mut SliceBudget<'_>,
-    ) -> SliceResult<Self> {
-        budget.charge_work(owner.correspondence.lowered_functions().len())?;
-        if !inventory.belongs_to(owner.executable()) {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
-        let mut rows = owner
-            .correspondence
-            .lowered_functions()
-            .iter()
-            .filter(|row| {
-                row.correspondence_owner() == site.root && row.semantic_function() == site.function
-            });
-        let row = rows
-            .next()
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        if rows.next().is_some() || row.role() != SemanticKirFunctionRoleV1::KernelEntry {
-            return Err(
-                site.unsupported("slice access requires one exact kernel-entry association")
-            );
-        }
-        let function = inventory
-            .function_for_name(row.kernel_ir_function().as_str(), budget)
-            .map_err(slice_inventory_error)?
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        Ok(Self {
-            owner,
-            inventory,
-            function,
-            site,
-        })
+fn slice_function<'a>(
+    owner: &'a ProductionPreRankedKirOwnerV1,
+    inventory: &'a CanonicalKirInventoryV1<'a>,
+    site: ProductionSliceAccessSiteV1,
+    budget: &mut SliceBudget<'_>,
+) -> SliceResult<&'a CanonicalKirFunctionRefV1<'a>> {
+    budget.charge_work(owner.correspondence.lowered_functions().len())?;
+    if !inventory.belongs_to(owner.executable()) {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
+    let mut rows = owner
+        .correspondence
+        .lowered_functions()
+        .iter()
+        .filter(|row| {
+            row.correspondence_owner() == site.root && row.semantic_function() == site.function
+        });
+    let row = rows
+        .next()
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    if rows.next().is_some() || row.role() != SemanticKirFunctionRoleV1::KernelEntry {
+        return Err(site.unsupported("slice access requires one exact kernel-entry association"));
+    }
+    let function = inventory
+        .function_for_name(row.kernel_ir_function().as_str(), budget)
+        .map_err(slice_inventory_error)?
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    Ok(function)
+}
 
+impl<'a> SliceQuery<'a, '_> {
     fn operation(
         &self,
         coordinate: SliceOperation,
@@ -277,18 +287,13 @@ impl<'a> SliceQuery<'a> {
     }
 
     fn origin(&self, value: ValueId, budget: &mut SliceBudget<'_>) -> SliceResult<SliceDefinition> {
-        super::value_origin_v1::resolve_whole_value_origin_v1(
-            self.inventory,
-            self.owner.executable(),
-            self.function.coordinate,
-            value,
-            budget,
-        )
-        .map_err(slice_inventory_error)?
-        .ok_or_else(|| {
-            self.site
-                .unsupported("slice access has conflicting or ungrounded SSA origins")
-        })
+        self.origins
+            .resolve(value, budget)
+            .map_err(slice_inventory_error)?
+            .ok_or_else(|| {
+                self.site
+                    .unsupported("slice access has conflicting or ungrounded SSA origins")
+            })
     }
 
     fn defining_operation(
@@ -314,14 +319,10 @@ impl<'a> SliceQuery<'a> {
     ) -> SliceResult<bool> {
         for _ in 0..self.function.definitions.len() {
             budget.charge_work(1)?;
-            let origin = super::value_origin_v1::resolve_whole_value_origin_v1(
-                self.inventory,
-                self.owner.executable(),
-                self.function.coordinate,
-                pointer,
-                budget,
-            )
-            .map_err(slice_inventory_error)?;
+            let origin = self
+                .origins
+                .resolve(pointer, budget)
+                .map_err(slice_inventory_error)?;
             let origin = origin.ok_or_else(|| {
                 self.site.unsupported(
                     "retained private storage has conflicting or ungrounded SSA origins",
