@@ -95,10 +95,17 @@ without string classification. Warm rejection refunds configured Context credit;
 cold rejection is quiescent and still quarantines that credit. Fourteen new
 tests cover lower settlement, pooled compatibility, runtime ownership and
 Context behavior; see the [allocation-disposition receipt](evidence/dev-r126-sdma-allocation-disposition-2026-09-16/README.md).
-Native qualification and allocation during pending compute remain open.
-Allocation during pending compute is still disabled. These are
-development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
-CPU/test checkpoint.
+Allocation during pending compute now reuses an established primary/directional
+SDMA route. Cold queue creation still rejects active compute without entering
+the allocation driver. Seven new CPU matrices cover ordinary primary/auxiliary,
+queued work and persistent prepared/published runtime custody, including exact
+capacity refunds and terminal initialization retention. Two opt-in native probes
+compare real retained ordinary receipt identities across HostVisible/DeviceLocal
+allocation; they remain unexecuted while the shared MI300X is occupied. See the
+[pending-allocation receipt](evidence/dev-r126-pending-compute-allocation-2026-09-16/README.md).
+Native/profile/pipeline qualification, formal correspondence and performance
+remain open. These are development packets, not R126 or A1/A2 acceptance; R125
+remains the accepted CPU/test checkpoint.
 
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
@@ -912,7 +919,7 @@ open.
 | Locally accepted Native packets | Primary + Native review | Replacement inputs, ordinary and pristine rebind | R103/R104/R105 retain their named CPU/shared-sequence acceptance; no original-engine or hardware qualification |
 | Locally accepted initializers | Primary + Native/Resources review | R106/N3-C coherent and R107/N3-D device initialization custody | Named CPU/shared-sequence acceptance only; reuse the accepted lower helpers, not a duplicate initializer |
 | Locally accepted live insertion | Primary + Native/Resources review | R109/N3-L1 initialized-device, R110/N3-L2 initialized coherent, R111/N3-L3-C uninitialized coherent and R112/N3-L3-D uninitialized device insertion | Named CPU/shared-sequencer and concrete public missing-engine boundaries: R109/R110 facades versus R111/R112 direct APIs. No native success or formal refinement claim |
-| Next Native packets | Native | Qualify R126 synchronous-copy custody and typed capacity disposition, pending-compute allocation and remaining queue lifecycle, then N5 DATA-ADOPT | R124 ordinary recycled detach and R125 live prepared cancellation are accepted at their CPU/test boundaries. R126 ownership/teardown extensions and typed capacity disposition are implemented development work; pending-compute allocation is disabled. Cold capacity rejection still quarantines configured Context credit. Confirmed disposal alone does not permit slot reuse |
+| Next Native packets | Native | Qualify R126 synchronous-copy custody, typed capacity disposition, warm pending-compute allocation and remaining queue lifecycle, then N5 DATA-ADOPT | R124 ordinary recycled detach and R125 live prepared cancellation are accepted at their CPU/test boundaries. R126 ownership/teardown extensions, typed capacity disposition and warm pending allocation are implemented development work; native/profile/pipeline qualification remains open. Cold capacity rejection after queue creation still quarantines configured Context credit. Confirmed disposal alone does not permit slot reuse |
 | Locally accepted Admission packets | Admission | R118B C1 Context identity, C2 descriptor identity and C3 reply/custody tests | Eighteen added tests, full GNU/musl and 78 compiled negatives; existing validators and lifecycle machinery, with no native/formal/performance acceptance |
 | Next Admission packets | Admission | Joint I2 ISSUE, C4 COMPLETE, then C5 typed output and C6 GRAPH/DRAIN | N5 adoption, exact publication/completion custody and retained R118B regressions; no invented completion adapter |
 | First Resources packets | Resources | V4-J1 issuance proofs, then membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models. External V13-V15 development solver results are recorded in the current dispatch; integration, authenticated proof qualification and production Rust/model correspondence remain pending |

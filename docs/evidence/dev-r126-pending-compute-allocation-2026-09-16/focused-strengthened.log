@@ -1,0 +1,15 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.93s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 7 tests
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_context_initialization_failure_retains_hidden_owners_and_quarantines ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_context_refunds_capacity_and_cold_busy_without_settling_compute ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_host_initialization_failure_retains_new_and_existing_owners ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_readiness_requires_owner_and_native_availability ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 832 filtered out; finished in 0.45s
+

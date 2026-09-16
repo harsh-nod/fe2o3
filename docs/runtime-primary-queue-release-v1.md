@@ -535,7 +535,7 @@ Full KFD GNU/musl regressions each pass 1,326 tests; runtime GNU/musl each pass
 no-default-feature compilation and unsafe-source checks pass. These crate-level
 checks do not replace the remaining full R126 qualification campaign.
 
-Pending-compute allocation remains disabled. Runtime HostVisible initialization
+At that packet, pending-compute allocation remained disabled. Runtime HostVisible initialization
 and upload staging now retain across borrowed-write failure as described below;
 directional promotion now roots its input through validation and unwind. Device
 initialization additionally needs retained synchronous submit/wait/retire
@@ -718,8 +718,8 @@ core success path counts zero heap allocations in its scripted fixture; public
 readback still allocates its intermediate byte slice. See the
 [development receipt](evidence/dev-r126-runtime-synchronous-2026-09-16/README.md).
 Fresh native validation is pending while the shared MI300X is busy. Typed
-capacity disposition is implemented below; pending-compute allocation remains
-disabled. R125 is still the accepted CPU/test checkpoint.
+capacity disposition and warm pending-compute allocation are implemented below.
+R125 is still the accepted CPU/test checkpoint.
 
 ## Typed SDMA Allocation Disposition
 
@@ -755,6 +755,45 @@ creation; engine-less pool coverage is not a native fresh-allocation test.
 R126 acceptance, native pending-compute allocation, formal correspondence and
 matched HIP/HSA performance remain open.
 
+## Allocation During Pending Compute
+
+The allocation path now distinguishes reusing established primary/directional
+SDMA ownership from creating queues or enabling engines. The warm route no longer
+rejects solely because compute is active. Readiness requires the actual owner
+and enabled engines; a flag alone is insufficient. Cold active-compute requests
+still return `Rejected(Busy)` before changing native ownership. Existing request
+validation precedes that guard, and valid rejected attempts may consume an ID.
+
+Fresh/pool allocation, full-foundation loan/retake, promotion and synchronous
+zeroing retain their existing algorithms. No dispatch is polled, drained,
+replaced or implicitly completed. Persistent device-zero publication still
+requires the lower exact-currentness/disjointness predicate; the runtime shortcut
+does not grant coexistence authority. Terminal requests remain sealed.
+
+Seven new CPU tests run matrices over ordinary primary-only, auxiliary-only,
+two active lanes, a third queued stream, and genuine Scripted persistent
+prepared/published workflows. They compare original owner IDs/bytes/boxes,
+allocation metadata/shadows, active/pending identities, recipes, retained
+resources and lane leases. Warm capacity and cold-active Busy refund configured
+Context credits; initialization errors/panics retain the partial Host owner and,
+for DeviceLocal staging failure, its hidden indexed Device and charge. Context
+quarantines that failed attempt's credits. Fixture disposal is not native cleanup.
+
+Two ignored native probes extend the existing public vecadd workflow. They
+require native allocations, unchanged real published-receipt commitments,
+full original readback, zeroed new bytes and eventual backing-account refunds.
+The new borrowed observer authenticates the exact lane/epoch using the existing
+lower checker, adds an ordinary/lane digest domain, and neither reads completion
+signals nor grants authority. The probes are not yet executed. Logical pending
+custody would not establish physical GPU overlap even on a successful run.
+
+See the [development receipt](evidence/dev-r126-pending-compute-allocation-2026-09-16/README.md).
+Scripted persistent execution does not instantiate the lower native attachment
+predicate. Ordinary prepared/completed states, three-binding and pipeline phases
+still need dedicated integrated qualification; Scripted has no real pipeline
+publication path. Formal correspondence, full R126 acceptance and matched
+HIP/HSA benchmarks remain open.
+
 ## Remaining Qualification
 
 Cold no-handle credit recovery remains a separate behavioral gap. It needs an
@@ -767,7 +806,8 @@ neither a capacity error string nor generic `Quiescent` grants that authority.
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
    ownership changes with pending compute after qualifying synchronous-copy
    custody and typed capacity disposition. Lower fresh-allocation outputs now
-   remain rooted through model retake; that alone does not admit pending work.
+   remain rooted through model retake; the new warm runtime route does not by
+   itself qualify native pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.
 2. Qualify the new directional route through genuine public runtime workflows,

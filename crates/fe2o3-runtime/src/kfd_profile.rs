@@ -105,6 +105,11 @@ impl KfdRuntimeProfileRecorderV1 {
         &self.events
     }
 
+    #[cfg(test)]
+    pub(crate) fn dropped_events_for_test_v1(&self) -> u64 {
+        self.dropped_events
+    }
+
     pub(crate) fn new(
         config: KfdRuntimeProfilerConfigV1,
         device_unique_id: u64,

@@ -7,7 +7,7 @@ use fe2o3_kfd::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaErrorV1, MemorySess
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-fn capacity(kind: RuntimeMemoryKindV1, terminal: bool) -> SdmaAllocationFailureV1 {
+pub(super) fn capacity(kind: RuntimeMemoryKindV1, terminal: bool) -> SdmaAllocationFailureV1 {
     let credit = fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity;
     let memory = match kind {
         RuntimeMemoryKindV1::HostVisible => MemorySessionError::HostVisibleBackingCredits(credit),
@@ -32,7 +32,11 @@ fn scripted_kind(kind: RuntimeMemoryKindV1) -> ScriptedBufferKindV1 {
     }
 }
 
-fn reject(kind: RuntimeMemoryKindV1, byte_len: usize, terminal: bool) -> ScriptedSdmaStepV1 {
+pub(super) fn reject(
+    kind: RuntimeMemoryKindV1,
+    byte_len: usize,
+    terminal: bool,
+) -> ScriptedSdmaStepV1 {
     ScriptedSdmaStepV1::AllocateFailure {
         kind: scripted_kind(kind),
         byte_len,
@@ -40,7 +44,7 @@ fn reject(kind: RuntimeMemoryKindV1, byte_len: usize, terminal: bool) -> Scripte
     }
 }
 
-fn success(kind: RuntimeMemoryKindV1) -> Vec<ScriptedSdmaStepV1> {
+pub(super) fn success(kind: RuntimeMemoryKindV1) -> Vec<ScriptedSdmaStepV1> {
     let mut steps = vec![ScriptedSdmaStepV1::Allocate {
         kind: scripted_kind(kind),
         byte_len: 8,

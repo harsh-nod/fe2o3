@@ -142,6 +142,44 @@ impl ComputeAqlQueueSessionV1 {
         Ok((compute, copies))
     }
 
+    /// Borrows the metadata identity of an ordinary published receipt on its exact lane.
+    ///
+    /// This neither polls completion nor grants admission, reuse, or release authority.
+    pub fn observe_retained_fixed_dispatch_v1<const N: usize>(
+        &self,
+        lane: ComputeAqlQueueLaneV1,
+        batch: &Gfx942DispatchBatchV1<N>,
+    ) -> Option<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        if self.terminal_poisoned
+            || self.key != self.compute_lane_session
+            || self.has_any_persistent_compute_attachment_v1()
+        {
+            return None;
+        }
+        let dispatch = match admit_compute_lane_v1(
+            self.compute_lane_session,
+            &self.auxiliary_compute_lanes,
+            lane,
+        )
+        .ok()?
+        {
+            AdmittedComputeLaneV1::Primary => self.dispatch.as_ref()?,
+            AdmittedComputeLaneV1::Auxiliary(index) => self.auxiliary_compute_lanes[index]
+                .state
+                .as_ref()?
+                .dispatch
+                .as_ref()?,
+        };
+        let retained = dispatch.retained_published_batch_observation_v1(batch)?;
+        let mut hash = Sha256::new();
+        hash.update(b"fe2o3.ordinary-retained-dispatch-observation.v1\0");
+        hash.update(u64::try_from(lane.ordinal).ok()?.to_le_bytes());
+        hash.update(lane.generation.to_le_bytes());
+        hash.update(retained);
+        Some(hash.finalize().into())
+    }
+
     /// Address-free identity of the exact retained native dispatch receipt.
     pub fn observe_r66_retained_compute_v1(
         &self,

@@ -3024,6 +3024,9 @@ impl KfdRuntimeBackendV1 {
                 "native KFD SDMA is unavailable on a synthetic backend",
             ));
         }
+        if self.sdma_allocation_ready_v1() {
+            return Ok(());
+        }
         if self.any_compute_active_v1() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -12589,6 +12592,7 @@ mod tests {
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;
     mod sdma_host_write_tests;
+    mod sdma_pending_allocation_tests;
     mod sdma_promotion_tests;
     mod sdma_recycle_tests;
     mod sdma_synchronous_tests;

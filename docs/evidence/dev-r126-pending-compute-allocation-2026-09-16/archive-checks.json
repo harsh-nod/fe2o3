@@ -1,0 +1,13 @@
+{
+  "source_and_documentation": {
+    "check": "git diff --cached --check scoped to changed Rust, roadmap documents, README and runner",
+    "exit_code": 0,
+    "log": "source-doc-whitespace.log"
+  },
+  "raw_archive": {
+    "check": "git diff --cached --check scoped to the initially staged evidence archive",
+    "exit_code": 2,
+    "log": "archive-whitespace.log",
+    "interpretation": "Preserved raw log endings, command spacing and unified-diff context; not a source-formatting failure."
+  }
+}

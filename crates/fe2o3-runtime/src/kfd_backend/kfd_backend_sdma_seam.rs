@@ -301,6 +301,14 @@ impl PersistentComputeReadyOwnerV1 {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn scripted_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Scripted { device, .. } => Some(&device.bytes),
+            Self::Native(_) => None,
+        }
+    }
+
     pub(super) fn normalize(self) -> DirectionalSdmaDeviceOwnerV1 {
         match self {
             Self::Native(ready) => DirectionalSdmaDeviceOwnerV1::Native(

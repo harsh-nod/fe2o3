@@ -497,14 +497,28 @@ fn native_device_roundtrip_retained_shutdown(zero_cache: bool) {
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary() {
-    native_typed_dispatch_retained_release(1);
+    native_typed_dispatch_retained_release(1, false);
 }
 
 #[cfg(feature = "hardware-qualification")]
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn native_runtime_two_stream_dispatch_uses_primary_and_auxiliary_then_refunds() {
-    native_typed_dispatch_retained_release(2);
+    native_typed_dispatch_retained_release(2, false);
+}
+
+#[cfg(feature = "hardware-qualification")]
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_runtime_allocates_while_primary_compute_is_pending() {
+    native_typed_dispatch_retained_release(1, true);
+}
+
+#[cfg(feature = "hardware-qualification")]
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_runtime_allocates_while_primary_and_auxiliary_compute_are_pending() {
+    native_typed_dispatch_retained_release(2, true);
 }
 
 #[cfg(feature = "hardware-qualification")]
@@ -790,7 +804,125 @@ fn native_runtime_auxiliary_budget_failure_retains_initialized_prefix() {
 }
 
 #[cfg(feature = "hardware-qualification")]
-fn native_typed_dispatch_retained_release(stream_count: usize) {
+#[derive(Debug, PartialEq)]
+struct NativePendingReceipt {
+    id: u64,
+    lane: usize,
+    stream: u64,
+    kernel: u64,
+    allocations: HashSet<u64>,
+    receipt: [u8; 32],
+    recipe: usize,
+    published_at: Instant,
+}
+
+#[cfg(feature = "hardware-qualification")]
+#[derive(Debug, PartialEq)]
+struct NativePendingSnapshot {
+    receipts: Vec<NativePendingReceipt>,
+    leases: HashMap<u64, usize>,
+    module_retains: HashMap<u64, usize>,
+    dependency_retains: HashMap<u64, usize>,
+    event_retains: HashMap<u64, usize>,
+    tails: HashMap<u64, u64>,
+    reservations: usize,
+    compute_events: Vec<fe2o3_profiler_protocol::KfdRuntimeProfileEventV1>,
+}
+
+#[cfg(feature = "hardware-qualification")]
+fn native_pending_snapshot(backend: &KfdRuntimeBackendV1, count: usize) -> NativePendingSnapshot {
+    assert!(backend.sdma_allocation_ready_v1() && !backend.terminal);
+    assert!(backend.pending_compute.is_empty() && backend.submissions.is_empty());
+    assert!(backend.compute_pipeline.is_empty());
+    assert!(
+        backend
+            .auxiliary_compute_lanes
+            .iter()
+            .all(|lane| lane.pipeline.is_empty())
+    );
+    let queue = backend.queue.as_ref().unwrap();
+    let receipts = backend
+        .active
+        .iter()
+        .chain(
+            backend
+                .auxiliary_compute_lanes
+                .iter()
+                .filter_map(|lane| lane.active.as_ref()),
+        )
+        .map(|active| {
+            let Some(ActiveComputeExecutionV1::Materialized(batch)) = &active.execution else {
+                panic!("native probe requires an original published ordinary receipt");
+            };
+            let lane = backend.active_compute_lane_v1(active.id).unwrap();
+            let native_lane = backend.native_compute_lanes[lane].unwrap();
+            let receipt = queue
+                .observe_retained_fixed_dispatch_v1(native_lane, batch)
+                .unwrap();
+            for other in backend
+                .native_compute_lanes
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|other| *other != native_lane)
+            {
+                assert!(
+                    queue
+                        .observe_retained_fixed_dispatch_v1(other, batch)
+                        .is_none()
+                );
+            }
+            NativePendingReceipt {
+                id: active.id,
+                lane,
+                stream: active.stream,
+                kernel: active.kernel,
+                allocations: active.allocations.clone(),
+                receipt,
+                recipe: Arc::as_ptr(active.ordinary_recipe.as_ref().unwrap()) as usize,
+                published_at: active.published_at,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(receipts.len(), count);
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| receipt.lane)
+            .collect::<Vec<_>>(),
+        (0..count).collect::<Vec<_>>()
+    );
+    NativePendingSnapshot {
+        receipts,
+        leases: backend.stream_compute_lanes.clone(),
+        module_retains: backend.compute_module_retain_counts.clone(),
+        dependency_retains: backend.compute_dependency_retain_counts.clone(),
+        event_retains: backend.event_submission_retain_counts.clone(),
+        tails: backend.stream_submission_tails.clone(),
+        reservations: backend.compute_completion_reservations,
+        compute_events: backend
+            .profiler
+            .as_ref()
+            .unwrap()
+            .recorded_events_for_test_v1()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event,
+                    KfdRuntimeProfileEventKindV1::NativeQueueCreated { .. }
+                        | KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }
+                        | KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
+                        | KfdRuntimeProfileEventKindV1::DispatchCompleted { .. }
+                        | KfdRuntimeProfileEventKindV1::SubmissionReleased { .. }
+                )
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
+#[cfg(feature = "hardware-qualification")]
+fn native_typed_dispatch_retained_release(stream_count: usize, pending_allocations: bool) {
     use crate::qualification_gfx942_vecadd_v1::{
         GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
         GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES, Gfx942VecaddQualificationArgumentsV1,
@@ -807,6 +939,13 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
             Gfx942HostVisibleBackingBudgetV1::new(64 * 1024 * 1024, 128).unwrap(),
         )
         .unwrap();
+    if pending_allocations {
+        backend
+            .configure_device_backing_budget_v1(
+                fe2o3_kfd::Gfx942DeviceBackingBudgetV1::new(1024 * 1024, 8).unwrap(),
+            )
+            .unwrap();
+    }
     backend
         .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x77; 32], 128).unwrap())
         .unwrap();
@@ -849,6 +988,53 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
         context.flush_stream(stream).unwrap();
         launches.push((stream, allocations, submission));
     }
+    let mut added = Vec::new();
+    if pending_allocations {
+        // Logical native custody is pending; this kernel has no minimum physical duration.
+        let before = native_pending_snapshot(context.backend(), stream_count);
+        for kind in [
+            RuntimeMemoryKindV1::HostVisible,
+            RuntimeMemoryKindV1::DeviceLocal,
+        ] {
+            let candidate = context.backend().next_handle;
+            added.push(context.allocate(device_id, kind, 4096, 4096).unwrap());
+            let record = &context.backend().allocations[&candidate];
+            assert!(record.sdma_backed && record.sdma_initialized);
+            assert_eq!(
+                (record.kind, record.bytes.len(), record.alignment),
+                (kind, 4096, 4096)
+            );
+            match (&record.sdma_storage, kind) {
+                (
+                    KfdRuntimeSdmaStorageV1::Host(SdmaBufferOwnerV1::Native(_)),
+                    RuntimeMemoryKindV1::HostVisible,
+                ) => {}
+                (KfdRuntimeSdmaStorageV1::Device(owner), RuntimeMemoryKindV1::DeviceLocal) => {
+                    let DirectionalSdmaDeviceOwnerV1::Native(native) = &**owner else {
+                        panic!("expected native device owner")
+                    };
+                    assert_eq!(
+                        (native.byte_len(), native.physical_byte_len()),
+                        (4096, 4096)
+                    );
+                    let usage = context.backend().device_backing_usage_v1().unwrap();
+                    assert_eq!(
+                        (usage.used_backing_bytes, usage.used_allocation_records),
+                        (4096, 1)
+                    );
+                    assert!(!usage.poisoned);
+                }
+                _ => panic!("pending allocation must retain the requested native owner"),
+            }
+            assert_eq!(
+                native_pending_snapshot(context.backend(), stream_count),
+                before
+            );
+        }
+        println!(
+            "native_pending_receipts={before:?} new_allocations=2 physical_overlap=not_measured"
+        );
+    }
     let mut observed = vec![0; BYTES];
     for (_, allocations, submission) in &mut launches {
         assert_eq!(
@@ -874,10 +1060,18 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
         output_sha256,
         "79fd0768604fe9de0ced87297f7d653343e998926b59e2cce7df5e38194c52b3"
     );
+    for &allocation in &added {
+        let mut zeros = [0xa5; 4096];
+        context.read_allocation(allocation, 0, &mut zeros).unwrap();
+        assert_eq!(zeros, [0; 4096]);
+    }
     let live = context.backend().host_visible_backing_usage_v1().unwrap();
     assert!(live.used_backing_bytes >= 3 * stream_count as u64 * BYTES as u64);
     assert!(live.used_allocation_records >= 3 * stream_count as u64);
     assert!(!live.poisoned);
+    for allocation in added.into_iter().rev() {
+        context.release_allocation(allocation).unwrap();
+    }
     for (stream, allocations, submission) in launches.into_iter().rev() {
         context.release_submission(submission).unwrap();
         for allocation in allocations.into_iter().rev() {
@@ -887,6 +1081,28 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
     }
     context.unload_module(module).unwrap();
     let mut backend = context.shutdown().unwrap();
+    if pending_allocations {
+        backend
+            .queue
+            .as_mut()
+            .unwrap()
+            .trim_sdma_memory_pool()
+            .unwrap();
+        let usage = backend.device_backing_usage_v1().unwrap();
+        assert_eq!(
+            (usage.used_backing_bytes, usage.used_allocation_records),
+            (0, 0)
+        );
+        assert_eq!(
+            (
+                usage.reserved_records,
+                usage.retained_records,
+                usage.quarantined_records
+            ),
+            (0, 0, 0)
+        );
+        assert!(!usage.poisoned);
+    }
     assert!(backend.sdma_enabled && backend.queue.is_some());
     let compute_lanes = backend
         .native_compute_lanes
@@ -929,7 +1145,10 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(allocation_identities.len(), 3 * stream_count);
+    assert_eq!(
+        allocation_identities.len(),
+        3 * stream_count + 2 * usize::from(pending_allocations)
+    );
     let reads = profile
         .events
         .iter()
@@ -946,11 +1165,16 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
         reads,
         allocation_identities
             .into_iter()
-            .map(|allocation| (
+            .enumerate()
+            .map(|(index, allocation)| (
                 allocation,
                 0,
                 KfdProfileHostContentV1::RangeOnly {
-                    byte_len: BYTES as u64,
+                    byte_len: if index < 3 * stream_count {
+                        BYTES as u64
+                    } else {
+                        4096
+                    },
                 }
             ))
             .collect::<Vec<_>>()
@@ -1048,7 +1272,7 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
     println!("profile_json={}", serde_json::to_string(&profile).unwrap());
     println!("primary_host_usage={usage:?} live_host_usage={live:?}");
     println!(
-        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinals={compute_ordinals:?} primary_execution=confirmed packets={stream_count} readbacks={} output_sha256={output_sha256} host_account_refund=complete queue_profile=matched completed_primary_root_drop=confirmed backend_drop=completed",
-        3 * stream_count,
+        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinals={compute_ordinals:?} primary_execution=confirmed pending_allocations={pending_allocations} packets={stream_count} readbacks={} output_sha256={output_sha256} host_account_refund=complete queue_profile=matched completed_primary_root_drop=confirmed backend_drop=completed",
+        3 * stream_count + 2 * usize::from(pending_allocations),
     );
 }

@@ -1,0 +1,37 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.60s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 6 tests
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert ... FAILED
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_context_refunds_capacity_and_cold_busy_without_settling_compute ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_host_initialization_failure_retains_new_and_existing_owners ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry ... FAILED
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_readiness_requires_owner_and_native_availability ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute ... ok
+
+failures:
+
+---- kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert stdout ----
+
+thread 'kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert' (357468) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs:105:13:
+assertion `left == right` failed
+  left: Pending
+ right: Succeeded
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry stdout ----
+
+thread 'kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry' (357475) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs:105:13:
+assertion `left == right` failed
+  left: Pending
+ right: Succeeded
+
+
+failures:
+    kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert
+    kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 830 filtered out; finished in 0.25s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

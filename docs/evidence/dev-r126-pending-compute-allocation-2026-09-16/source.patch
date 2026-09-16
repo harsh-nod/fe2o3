@@ -1,0 +1,1617 @@
+diff --git a/crates/fe2o3-kfd/src/queue_live/compute_sdma_coexistence.rs b/crates/fe2o3-kfd/src/queue_live/compute_sdma_coexistence.rs
+index 4ad82e329..64c0fcb60 100644
+--- a/crates/fe2o3-kfd/src/queue_live/compute_sdma_coexistence.rs
++++ b/crates/fe2o3-kfd/src/queue_live/compute_sdma_coexistence.rs
+@@ -142,6 +142,44 @@ impl ComputeAqlQueueSessionV1 {
+         Ok((compute, copies))
+     }
+ 
++    /// Borrows the metadata identity of an ordinary published receipt on its exact lane.
++    ///
++    /// This neither polls completion nor grants admission, reuse, or release authority.
++    pub fn observe_retained_fixed_dispatch_v1<const N: usize>(
++        &self,
++        lane: ComputeAqlQueueLaneV1,
++        batch: &Gfx942DispatchBatchV1<N>,
++    ) -> Option<[u8; 32]> {
++        use sha2::{Digest, Sha256};
++        if self.terminal_poisoned
++            || self.key != self.compute_lane_session
++            || self.has_any_persistent_compute_attachment_v1()
++        {
++            return None;
++        }
++        let dispatch = match admit_compute_lane_v1(
++            self.compute_lane_session,
++            &self.auxiliary_compute_lanes,
++            lane,
++        )
++        .ok()?
++        {
++            AdmittedComputeLaneV1::Primary => self.dispatch.as_ref()?,
++            AdmittedComputeLaneV1::Auxiliary(index) => self.auxiliary_compute_lanes[index]
++                .state
++                .as_ref()?
++                .dispatch
++                .as_ref()?,
++        };
++        let retained = dispatch.retained_published_batch_observation_v1(batch)?;
++        let mut hash = Sha256::new();
++        hash.update(b"fe2o3.ordinary-retained-dispatch-observation.v1\0");
++        hash.update(u64::try_from(lane.ordinal).ok()?.to_le_bytes());
++        hash.update(lane.generation.to_le_bytes());
++        hash.update(retained);
++        Some(hash.finalize().into())
++    }
++
+     /// Address-free identity of the exact retained native dispatch receipt.
+     pub fn observe_r66_retained_compute_v1(
+         &self,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 68660cb37..90d0a8217 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -3024,6 +3024,9 @@ impl KfdRuntimeBackendV1 {
+                 "native KFD SDMA is unavailable on a synthetic backend",
+             ));
+         }
++        if self.sdma_allocation_ready_v1() {
++            return Ok(());
++        }
+         if self.any_compute_active_v1() {
+             return Err(Self::rejected(
+                 KfdRuntimeBackendErrorKindV1::Busy,
+@@ -12589,6 +12592,7 @@ mod tests {
+     mod sdma_demotion_tests;
+     mod sdma_host_read_tests;
+     mod sdma_host_write_tests;
++    mod sdma_pending_allocation_tests;
+     mod sdma_promotion_tests;
+     mod sdma_recycle_tests;
+     mod sdma_synchronous_tests;
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+index a7453c936..dd412edca 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+@@ -301,6 +301,14 @@ impl PersistentComputeReadyOwnerV1 {
+         }
+     }
+ 
++    #[cfg(test)]
++    pub(crate) fn scripted_bytes(&self) -> Option<&[u8]> {
++        match self {
++            Self::Scripted { device, .. } => Some(&device.bytes),
++            Self::Native(_) => None,
++        }
++    }
++
+     pub(super) fn normalize(self) -> DirectionalSdmaDeviceOwnerV1 {
+         match self {
+             Self::Native(ready) => DirectionalSdmaDeviceOwnerV1::Native(
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+index e6e8606d9..eb3d19b1e 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -497,14 +497,28 @@ fn native_device_roundtrip_retained_shutdown(zero_cache: bool) {
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary() {
+-    native_typed_dispatch_retained_release(1);
++    native_typed_dispatch_retained_release(1, false);
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn native_runtime_two_stream_dispatch_uses_primary_and_auxiliary_then_refunds() {
+-    native_typed_dispatch_retained_release(2);
++    native_typed_dispatch_retained_release(2, false);
++}
++
++#[cfg(feature = "hardware-qualification")]
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn native_runtime_allocates_while_primary_compute_is_pending() {
++    native_typed_dispatch_retained_release(1, true);
++}
++
++#[cfg(feature = "hardware-qualification")]
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn native_runtime_allocates_while_primary_and_auxiliary_compute_are_pending() {
++    native_typed_dispatch_retained_release(2, true);
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+@@ -790,7 +804,125 @@ fn native_runtime_auxiliary_budget_failure_retains_initialized_prefix() {
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+-fn native_typed_dispatch_retained_release(stream_count: usize) {
++#[derive(Debug, PartialEq)]
++struct NativePendingReceipt {
++    id: u64,
++    lane: usize,
++    stream: u64,
++    kernel: u64,
++    allocations: HashSet<u64>,
++    receipt: [u8; 32],
++    recipe: usize,
++    published_at: Instant,
++}
++
++#[cfg(feature = "hardware-qualification")]
++#[derive(Debug, PartialEq)]
++struct NativePendingSnapshot {
++    receipts: Vec<NativePendingReceipt>,
++    leases: HashMap<u64, usize>,
++    module_retains: HashMap<u64, usize>,
++    dependency_retains: HashMap<u64, usize>,
++    event_retains: HashMap<u64, usize>,
++    tails: HashMap<u64, u64>,
++    reservations: usize,
++    compute_events: Vec<fe2o3_profiler_protocol::KfdRuntimeProfileEventV1>,
++}
++
++#[cfg(feature = "hardware-qualification")]
++fn native_pending_snapshot(backend: &KfdRuntimeBackendV1, count: usize) -> NativePendingSnapshot {
++    assert!(backend.sdma_allocation_ready_v1() && !backend.terminal);
++    assert!(backend.pending_compute.is_empty() && backend.submissions.is_empty());
++    assert!(backend.compute_pipeline.is_empty());
++    assert!(
++        backend
++            .auxiliary_compute_lanes
++            .iter()
++            .all(|lane| lane.pipeline.is_empty())
++    );
++    let queue = backend.queue.as_ref().unwrap();
++    let receipts = backend
++        .active
++        .iter()
++        .chain(
++            backend
++                .auxiliary_compute_lanes
++                .iter()
++                .filter_map(|lane| lane.active.as_ref()),
++        )
++        .map(|active| {
++            let Some(ActiveComputeExecutionV1::Materialized(batch)) = &active.execution else {
++                panic!("native probe requires an original published ordinary receipt");
++            };
++            let lane = backend.active_compute_lane_v1(active.id).unwrap();
++            let native_lane = backend.native_compute_lanes[lane].unwrap();
++            let receipt = queue
++                .observe_retained_fixed_dispatch_v1(native_lane, batch)
++                .unwrap();
++            for other in backend
++                .native_compute_lanes
++                .iter()
++                .flatten()
++                .copied()
++                .filter(|other| *other != native_lane)
++            {
++                assert!(
++                    queue
++                        .observe_retained_fixed_dispatch_v1(other, batch)
++                        .is_none()
++                );
++            }
++            NativePendingReceipt {
++                id: active.id,
++                lane,
++                stream: active.stream,
++                kernel: active.kernel,
++                allocations: active.allocations.clone(),
++                receipt,
++                recipe: Arc::as_ptr(active.ordinary_recipe.as_ref().unwrap()) as usize,
++                published_at: active.published_at,
++            }
++        })
++        .collect::<Vec<_>>();
++    assert_eq!(receipts.len(), count);
++    assert_eq!(
++        receipts
++            .iter()
++            .map(|receipt| receipt.lane)
++            .collect::<Vec<_>>(),
++        (0..count).collect::<Vec<_>>()
++    );
++    NativePendingSnapshot {
++        receipts,
++        leases: backend.stream_compute_lanes.clone(),
++        module_retains: backend.compute_module_retain_counts.clone(),
++        dependency_retains: backend.compute_dependency_retain_counts.clone(),
++        event_retains: backend.event_submission_retain_counts.clone(),
++        tails: backend.stream_submission_tails.clone(),
++        reservations: backend.compute_completion_reservations,
++        compute_events: backend
++            .profiler
++            .as_ref()
++            .unwrap()
++            .recorded_events_for_test_v1()
++            .iter()
++            .filter(|event| {
++                matches!(
++                    event.event,
++                    KfdRuntimeProfileEventKindV1::NativeQueueCreated { .. }
++                        | KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }
++                        | KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
++                        | KfdRuntimeProfileEventKindV1::DispatchCompleted { .. }
++                        | KfdRuntimeProfileEventKindV1::SubmissionReleased { .. }
++                )
++            })
++            .cloned()
++            .collect(),
++    }
++}
++
++#[cfg(feature = "hardware-qualification")]
++fn native_typed_dispatch_retained_release(stream_count: usize, pending_allocations: bool) {
+     use crate::qualification_gfx942_vecadd_v1::{
+         GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
+         GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES, Gfx942VecaddQualificationArgumentsV1,
+@@ -807,6 +939,13 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+             Gfx942HostVisibleBackingBudgetV1::new(64 * 1024 * 1024, 128).unwrap(),
+         )
+         .unwrap();
++    if pending_allocations {
++        backend
++            .configure_device_backing_budget_v1(
++                fe2o3_kfd::Gfx942DeviceBackingBudgetV1::new(1024 * 1024, 8).unwrap(),
++            )
++            .unwrap();
++    }
+     backend
+         .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x77; 32], 128).unwrap())
+         .unwrap();
+@@ -849,6 +988,53 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+         context.flush_stream(stream).unwrap();
+         launches.push((stream, allocations, submission));
+     }
++    let mut added = Vec::new();
++    if pending_allocations {
++        // Logical native custody is pending; this kernel has no minimum physical duration.
++        let before = native_pending_snapshot(context.backend(), stream_count);
++        for kind in [
++            RuntimeMemoryKindV1::HostVisible,
++            RuntimeMemoryKindV1::DeviceLocal,
++        ] {
++            let candidate = context.backend().next_handle;
++            added.push(context.allocate(device_id, kind, 4096, 4096).unwrap());
++            let record = &context.backend().allocations[&candidate];
++            assert!(record.sdma_backed && record.sdma_initialized);
++            assert_eq!(
++                (record.kind, record.bytes.len(), record.alignment),
++                (kind, 4096, 4096)
++            );
++            match (&record.sdma_storage, kind) {
++                (
++                    KfdRuntimeSdmaStorageV1::Host(SdmaBufferOwnerV1::Native(_)),
++                    RuntimeMemoryKindV1::HostVisible,
++                ) => {}
++                (KfdRuntimeSdmaStorageV1::Device(owner), RuntimeMemoryKindV1::DeviceLocal) => {
++                    let DirectionalSdmaDeviceOwnerV1::Native(native) = &**owner else {
++                        panic!("expected native device owner")
++                    };
++                    assert_eq!(
++                        (native.byte_len(), native.physical_byte_len()),
++                        (4096, 4096)
++                    );
++                    let usage = context.backend().device_backing_usage_v1().unwrap();
++                    assert_eq!(
++                        (usage.used_backing_bytes, usage.used_allocation_records),
++                        (4096, 1)
++                    );
++                    assert!(!usage.poisoned);
++                }
++                _ => panic!("pending allocation must retain the requested native owner"),
++            }
++            assert_eq!(
++                native_pending_snapshot(context.backend(), stream_count),
++                before
++            );
++        }
++        println!(
++            "native_pending_receipts={before:?} new_allocations=2 physical_overlap=not_measured"
++        );
++    }
+     let mut observed = vec![0; BYTES];
+     for (_, allocations, submission) in &mut launches {
+         assert_eq!(
+@@ -874,10 +1060,18 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+         output_sha256,
+         "79fd0768604fe9de0ced87297f7d653343e998926b59e2cce7df5e38194c52b3"
+     );
++    for &allocation in &added {
++        let mut zeros = [0xa5; 4096];
++        context.read_allocation(allocation, 0, &mut zeros).unwrap();
++        assert_eq!(zeros, [0; 4096]);
++    }
+     let live = context.backend().host_visible_backing_usage_v1().unwrap();
+     assert!(live.used_backing_bytes >= 3 * stream_count as u64 * BYTES as u64);
+     assert!(live.used_allocation_records >= 3 * stream_count as u64);
+     assert!(!live.poisoned);
++    for allocation in added.into_iter().rev() {
++        context.release_allocation(allocation).unwrap();
++    }
+     for (stream, allocations, submission) in launches.into_iter().rev() {
+         context.release_submission(submission).unwrap();
+         for allocation in allocations.into_iter().rev() {
+@@ -887,6 +1081,28 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+     }
+     context.unload_module(module).unwrap();
+     let mut backend = context.shutdown().unwrap();
++    if pending_allocations {
++        backend
++            .queue
++            .as_mut()
++            .unwrap()
++            .trim_sdma_memory_pool()
++            .unwrap();
++        let usage = backend.device_backing_usage_v1().unwrap();
++        assert_eq!(
++            (usage.used_backing_bytes, usage.used_allocation_records),
++            (0, 0)
++        );
++        assert_eq!(
++            (
++                usage.reserved_records,
++                usage.retained_records,
++                usage.quarantined_records
++            ),
++            (0, 0, 0)
++        );
++        assert!(!usage.poisoned);
++    }
+     assert!(backend.sdma_enabled && backend.queue.is_some());
+     let compute_lanes = backend
+         .native_compute_lanes
+@@ -929,7 +1145,10 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+             _ => None,
+         })
+         .collect::<Vec<_>>();
+-    assert_eq!(allocation_identities.len(), 3 * stream_count);
++    assert_eq!(
++        allocation_identities.len(),
++        3 * stream_count + 2 * usize::from(pending_allocations)
++    );
+     let reads = profile
+         .events
+         .iter()
+@@ -946,11 +1165,16 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+         reads,
+         allocation_identities
+             .into_iter()
+-            .map(|allocation| (
++            .enumerate()
++            .map(|(index, allocation)| (
+                 allocation,
+                 0,
+                 KfdProfileHostContentV1::RangeOnly {
+-                    byte_len: BYTES as u64,
++                    byte_len: if index < 3 * stream_count {
++                        BYTES as u64
++                    } else {
++                        4096
++                    },
+                 }
+             ))
+             .collect::<Vec<_>>()
+@@ -1048,7 +1272,7 @@ fn native_typed_dispatch_retained_release(stream_count: usize) {
+     println!("profile_json={}", serde_json::to_string(&profile).unwrap());
+     println!("primary_host_usage={usage:?} live_host_usage={live:?}");
+     println!(
+-        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinals={compute_ordinals:?} primary_execution=confirmed packets={stream_count} readbacks={} output_sha256={output_sha256} host_account_refund=complete queue_profile=matched completed_primary_root_drop=confirmed backend_drop=completed",
+-        3 * stream_count,
++        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinals={compute_ordinals:?} primary_execution=confirmed pending_allocations={pending_allocations} packets={stream_count} readbacks={} output_sha256={output_sha256} host_account_refund=complete queue_profile=matched completed_primary_root_drop=confirmed backend_drop=completed",
++        3 * stream_count + 2 * usize::from(pending_allocations),
+     );
+ }
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+index f843eb6ab..48e7c5121 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+@@ -7,7 +7,7 @@ use fe2o3_kfd::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaErrorV1, MemorySess
+ use std::mem::ManuallyDrop;
+ use std::panic::{AssertUnwindSafe, catch_unwind};
+ 
+-fn capacity(kind: RuntimeMemoryKindV1, terminal: bool) -> SdmaAllocationFailureV1 {
++pub(super) fn capacity(kind: RuntimeMemoryKindV1, terminal: bool) -> SdmaAllocationFailureV1 {
+     let credit = fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity;
+     let memory = match kind {
+         RuntimeMemoryKindV1::HostVisible => MemorySessionError::HostVisibleBackingCredits(credit),
+@@ -32,7 +32,11 @@ fn scripted_kind(kind: RuntimeMemoryKindV1) -> ScriptedBufferKindV1 {
+     }
+ }
+ 
+-fn reject(kind: RuntimeMemoryKindV1, byte_len: usize, terminal: bool) -> ScriptedSdmaStepV1 {
++pub(super) fn reject(
++    kind: RuntimeMemoryKindV1,
++    byte_len: usize,
++    terminal: bool,
++) -> ScriptedSdmaStepV1 {
+     ScriptedSdmaStepV1::AllocateFailure {
+         kind: scripted_kind(kind),
+         byte_len,
+@@ -40,7 +44,7 @@ fn reject(kind: RuntimeMemoryKindV1, byte_len: usize, terminal: bool) -> Scripte
+     }
+ }
+ 
+-fn success(kind: RuntimeMemoryKindV1) -> Vec<ScriptedSdmaStepV1> {
++pub(super) fn success(kind: RuntimeMemoryKindV1) -> Vec<ScriptedSdmaStepV1> {
+     let mut steps = vec![ScriptedSdmaStepV1::Allocate {
+         kind: scripted_kind(kind),
+         byte_len: 8,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs
+new file mode 100644
+index 000000000..8ec1f7361
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs
+@@ -0,0 +1,1151 @@
++use super::sdma_allocation_tests::{capacity, reject, success};
++use super::sdma_host_write_tests::{discard_scripted_fixture, host_observation, retained_host};
++use super::*;
++use std::mem::ManuallyDrop;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++#[derive(Clone, Copy, Debug)]
++enum Lanes {
++    Primary,
++    Auxiliary,
++    Both,
++    BothWithQueued,
++    PersistentPrepared,
++    PersistentPublished,
++}
++
++const LANES: [Lanes; 6] = [
++    Lanes::Primary,
++    Lanes::Auxiliary,
++    Lanes::Both,
++    Lanes::BothWithQueued,
++    Lanes::PersistentPrepared,
++    Lanes::PersistentPublished,
++];
++const KINDS: [RuntimeMemoryKindV1; 2] = [
++    RuntimeMemoryKindV1::HostVisible,
++    RuntimeMemoryKindV1::DeviceLocal,
++];
++
++struct Fixture {
++    backend: ManuallyDrop<KfdRuntimeBackendV1>,
++    module: u64,
++    streams: Vec<u64>,
++    pairs: Vec<(u64, u64)>,
++    submissions: Vec<u64>,
++}
++
++impl Fixture {
++    fn new(lanes: Lanes, steps: Vec<ScriptedSdmaStepV1>) -> Self {
++        let persistent = matches!(
++            lanes,
++            Lanes::PersistentPrepared | Lanes::PersistentPublished
++        );
++        let steps = if persistent {
++            let mut prefix = vec![
++                ScriptedSdmaStepV1::Write {
++                    offset: 0,
++                    byte_len: 4096,
++                },
++                scripted_submit_step_v1(
++                    Gfx942PersistentSdmaDirectionV1::HostToDevice,
++                    0,
++                    0,
++                    4096,
++                    ScriptedFailureModeV1::Success,
++                ),
++                ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
++                    direction: None,
++                    copy_bytes: None,
++                }),
++            ];
++            prefix.extend(steps);
++            prefix
++        } else {
++            steps
++        };
++        let (backend, stream, host, device) =
++            scripted_direct_backend_configured_v1(4096, steps, |backend| {
++                backend
++                    .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x91; 32], 128).unwrap())
++                    .unwrap();
++            });
++        let mut backend = ManuallyDrop::new(backend);
++        if persistent {
++            backend.write_allocation_v1(host, 0, &[0x6d; 4096]).unwrap();
++            let (source, destination) = scripted_copy_regions_v1(host, device, 4096);
++            let copy = backend
++                .copy_async_v1(stream, source, destination, &[])
++                .unwrap();
++            assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
++            backend.release_submission_v1(copy).unwrap();
++            backend.scripted_persistent_publication_retries =
++                usize::from(matches!(lanes, Lanes::PersistentPrepared));
++        }
++        let module = backend
++            .load_module_v1(7, &synthetic_cov6::module())
++            .unwrap();
++        let kernel = backend
++            .resolve_kernel_v1(module, "vecadd", [7; 32])
++            .unwrap();
++        let count = match lanes {
++            Lanes::Primary | Lanes::PersistentPrepared | Lanes::PersistentPublished => 1,
++            Lanes::Auxiliary | Lanes::Both => 2,
++            Lanes::BothWithQueued => 3,
++        };
++        let mut streams = vec![stream];
++        let mut pairs = vec![(host, device)];
++        for _ in 1..count {
++            streams.push(backend.create_stream_v1(7).unwrap());
++            pairs.push(add_scripted_direct_pair_v1(&mut backend, 4096));
++        }
++        let mut submissions = Vec::new();
++        for (&stream, &(host, device)) in streams.iter().zip(&pairs) {
++            let id = submit_scripted_read_v1(
++                &mut backend,
++                stream,
++                kernel,
++                if persistent { device } else { host },
++                4096,
++                &[],
++            );
++            if submissions.len() < 2 {
++                backend.flush_stream_v1(stream).unwrap();
++            }
++            submissions.push(id);
++        }
++        for (lane, &id) in submissions.iter().take(2).enumerate() {
++            assert_eq!(backend.active_compute_lane_v1(id), Some(lane));
++            let execution = &backend.active_compute_submission_v1(id).unwrap().execution;
++            match lanes {
++                Lanes::PersistentPrepared => assert!(matches!(
++                    execution,
++                    Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. })
++                )),
++                Lanes::PersistentPublished => assert!(matches!(
++                    execution,
++                    Some(ActiveComputeExecutionV1::ScriptedPersistent { .. })
++                )),
++                _ => assert!(matches!(
++                    execution,
++                    Some(ActiveComputeExecutionV1::ScriptedMaterialized)
++                )),
++            }
++        }
++        if matches!(lanes, Lanes::Auxiliary) {
++            assert_eq!(
++                backend.poll_v1(submissions[0]).unwrap(),
++                BackendPollV1::Succeeded
++            );
++            assert!(backend.active.is_none());
++            assert_eq!(backend.active_compute_lane_v1(submissions[1]), Some(1));
++        }
++        assert_eq!(backend.pending_compute.len(), usize::from(count == 3));
++        if count == 3 {
++            assert!(backend.pending_compute.contains_key(&submissions[2]));
++        }
++        Self {
++            backend,
++            module,
++            streams,
++            pairs,
++            submissions,
++        }
++    }
++
++    fn finish(mut self, allocated: Option<u64>, kind: RuntimeMemoryKindV1) {
++        for &id in &self.submissions {
++            if let Some(pending) = self.backend.pending_compute.get(&id) {
++                let stream = pending.launch.stream;
++                self.backend.flush_stream_v1(stream).unwrap();
++            }
++            let mut result = BackendPollV1::Pending;
++            for _ in 0..4 {
++                result = self.backend.poll_v1(id).unwrap();
++                if result != BackendPollV1::Pending {
++                    break;
++                }
++            }
++            assert_eq!(result, BackendPollV1::Succeeded);
++            self.backend.release_submission_v1(id).unwrap();
++        }
++        assert!(!self.backend.any_compute_active_v1());
++        assert!(self.backend.pending_compute.is_empty());
++        assert!(self.backend.allocation_custody.is_empty());
++        assert!(self.backend.compute_module_retain_counts.is_empty());
++        assert!(self.backend.stream_compute_lanes.is_empty());
++        assert_eq!(self.backend.compute_completion_reservations, 0);
++        if let Some(id) = allocated {
++            if kind == RuntimeMemoryKindV1::DeviceLocal {
++                // Fixture disposal skips the device scrub, not native cleanup evidence.
++                self.backend.allocations.get_mut(&id).unwrap().sdma_backed = false;
++            }
++            self.backend.release_allocation_v1(id).unwrap();
++        }
++        self.backend.unload_module_v1(self.module).unwrap();
++        for (host, device) in self.pairs {
++            release_scripted_direct_pair_v1(&mut self.backend, host, device);
++        }
++        for stream in self.streams {
++            self.backend.destroy_stream_v1(stream).unwrap();
++        }
++        let driver = self.backend.scripted_sdma.as_ref().unwrap();
++        assert!(driver.is_exhausted());
++        assert_eq!(driver.live_owner_count(), 0);
++        assert_eq!(driver.unexpected_drops(), 0);
++        self.backend.shutdown_native_v1().unwrap();
++        drop(ManuallyDrop::into_inner(self.backend));
++    }
++}
++
++fn releases(lanes: Lanes, allocated: Option<RuntimeMemoryKindV1>) -> Vec<ScriptedSdmaStepV1> {
++    let mut steps = Vec::new();
++    if let Some(kind) = allocated {
++        if kind == RuntimeMemoryKindV1::DeviceLocal {
++            steps.push(ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success));
++        }
++        steps.push(ScriptedSdmaStepV1::Recycle(
++            ScriptedRecycleOutcomeV1::Success,
++        ));
++    }
++    let count = match lanes {
++        Lanes::Primary | Lanes::PersistentPrepared | Lanes::PersistentPublished => 1,
++        Lanes::BothWithQueued => 3,
++        _ => 2,
++    };
++    for _ in 0..count {
++        steps.extend(scripted_release_steps_v1());
++    }
++    steps
++}
++
++fn assert_new_allocation(backend: &KfdRuntimeBackendV1, id: u64, kind: RuntimeMemoryKindV1) {
++    let record = &backend.allocations[&id];
++    assert_eq!((record.device, record.kind, record.alignment), (7, kind, 8));
++    assert_eq!(&*record.bytes, &[0; 8]);
++    assert!(record.sdma_initialized && record.sdma_backed && !record.sdma_shadow_dirty);
++    match (&record.sdma_storage, kind) {
++        (KfdRuntimeSdmaStorageV1::Host(owner), RuntimeMemoryKindV1::HostVisible) => {
++            assert_eq!(host_observation(owner).1, [0; 8]);
++        }
++        (KfdRuntimeSdmaStorageV1::Device(owner), RuntimeMemoryKindV1::DeviceLocal) => {
++            assert_eq!(owner.scripted_bytes().unwrap(), &[0; 8]);
++        }
++        _ => panic!("new allocation must own the requested initialized memory kind"),
++    }
++}
++
++fn dropped_events(backend: &KfdRuntimeBackendV1) -> u64 {
++    backend
++        .profiler
++        .as_ref()
++        .unwrap()
++        .dropped_events_for_test_v1()
++}
++
++#[derive(Debug, PartialEq)]
++struct ActiveSnapshot {
++    id: u64,
++    lane: usize,
++    stream: u64,
++    predecessor: Option<u64>,
++    deferred_retain: bool,
++    kernel: u64,
++    depth: usize,
++    allocations: HashSet<u64>,
++    descriptors: Vec<ResidentDataDescriptorV1>,
++    recipe: Option<usize>,
++    execution: (u8, Option<(u64, RuntimeAccessV1, usize)>),
++    shape: [u8; 32],
++    published_at: Instant,
++    performance: KfdRuntimeLaunchPerformanceV1,
++}
++
++#[derive(Debug, PartialEq)]
++struct PendingSnapshot {
++    id: u64,
++    module: u64,
++    recipe: usize,
++    allocations: Box<[u64]>,
++    predecessor: Option<u64>,
++    dependencies: Box<[u64]>,
++    cursor: usize,
++    depth: usize,
++}
++
++#[derive(Debug, PartialEq)]
++struct AllocationSnapshot {
++    device: u64,
++    kind: RuntimeMemoryKindV1,
++    alignment: u64,
++    digest: Option<[u8; 32]>,
++    last_host_write: Option<(Arc<[u8]>, [u8; 32], usize)>,
++    shadow: Arc<[u8]>,
++    shadow_address: usize,
++    device_box: Option<usize>,
++    owner: u64,
++    bytes: Vec<u8>,
++    certificate: Option<[u8; 32]>,
++    custody: Option<(
++        VecDeque<RuntimeAllocationCustodyOwnerV1>,
++        Option<u64>,
++        [usize; 2],
++    )>,
++}
++
++#[derive(Debug, PartialEq)]
++struct Snapshot {
++    active: Vec<ActiveSnapshot>,
++    pending: Vec<PendingSnapshot>,
++    pending_streams: HashMap<u64, VecDeque<u64>>,
++    allocations: Vec<AllocationSnapshot>,
++    leases: HashMap<u64, usize>,
++    selected_lane: usize,
++    module_retains: HashMap<u64, usize>,
++    dependency_retains: HashMap<u64, usize>,
++    event_retains: HashMap<u64, usize>,
++    tails: HashMap<u64, u64>,
++    completions: HashMap<u64, (u64, BackendPollV1, bool)>,
++    reservations: usize,
++}
++
++fn snapshot(fixture: &Fixture) -> Snapshot {
++    backend_snapshot(&fixture.backend, &fixture.pairs, &fixture.submissions)
++}
++
++fn backend_snapshot(
++    backend: &KfdRuntimeBackendV1,
++    pairs: &[(u64, u64)],
++    submissions: &[u64],
++) -> Snapshot {
++    assert!(backend.compute_pipeline.is_empty());
++    assert!(
++        backend
++            .auxiliary_compute_lanes
++            .iter()
++            .all(|lane| lane.pipeline.is_empty())
++    );
++    let mut active = Vec::new();
++    let mut pending = Vec::new();
++    for &id in submissions {
++        if let Some(value) = backend.active_compute_submission_v1(id) {
++            let execution = match value.execution.as_ref().unwrap() {
++                ActiveComputeExecutionV1::ScriptedMaterialized => (0, None),
++                ActiveComputeExecutionV1::ScriptedPersistent {
++                    allocation,
++                    access,
++                    device,
++                } => (
++                    1,
++                    Some((*allocation, *access, &**device as *const _ as usize)),
++                ),
++                ActiveComputeExecutionV1::ScriptedPersistentPrepared {
++                    allocation,
++                    access,
++                    input,
++                    ..
++                } => (
++                    2,
++                    Some((*allocation, *access, &**input as *const _ as usize)),
++                ),
++                _ => panic!("fixture must own its real Scripted execution"),
++            };
++            assert!(value.writebacks.is_empty());
++            active.push(ActiveSnapshot {
++                id,
++                lane: backend.active_compute_lane_v1(id).unwrap(),
++                stream: value.stream,
++                predecessor: value.ordered_predecessor,
++                deferred_retain: value.deferred_ordered_predecessor_retain,
++                kernel: value.kernel,
++                depth: value.dependency_depth,
++                allocations: value.allocations.clone(),
++                descriptors: value.resident_descriptors.clone(),
++                recipe: value
++                    .ordinary_recipe
++                    .as_ref()
++                    .map(|recipe| Arc::as_ptr(recipe) as usize),
++                execution,
++                shape: value.dispatch_shape_sha256,
++                published_at: value.published_at,
++                performance: value.performance,
++            });
++        }
++        if let Some(value) = backend.pending_compute.get(&id) {
++            pending.push(PendingSnapshot {
++                id: value.id,
++                module: value.module,
++                recipe: Arc::as_ptr(&value.launch) as usize,
++                allocations: value.retained_allocations.clone(),
++                predecessor: value.ordered_predecessor,
++                dependencies: value.explicit_success_dependencies.clone(),
++                cursor: value.explicit_dependency_cursor,
++                depth: value.dependency_depth,
++            });
++        }
++    }
++    let allocations = pairs
++        .iter()
++        .flat_map(|&(h, d)| [h, d])
++        .map(|id| {
++            let value = &backend.allocations[&id];
++            let (owner, bytes, certificate, device_box) = match &value.sdma_storage {
++                KfdRuntimeSdmaStorageV1::Host(owner) => {
++                    let (id, bytes, certificate) = host_observation(owner);
++                    (id, bytes, certificate, None)
++                }
++                KfdRuntimeSdmaStorageV1::Device(owner) => (
++                    owner.scripted_owner_id().unwrap(),
++                    owner.scripted_bytes().unwrap().to_vec(),
++                    None,
++                    Some(&**owner as *const DirectionalSdmaDeviceOwnerV1 as usize),
++                ),
++                KfdRuntimeSdmaStorageV1::ComputeInFlight(submission) => {
++                    match backend
++                        .active_compute_submission_v1(*submission)
++                        .unwrap()
++                        .execution
++                        .as_ref()
++                        .unwrap()
++                    {
++                        ActiveComputeExecutionV1::ScriptedPersistent {
++                            allocation, device, ..
++                        } => {
++                            assert_eq!(*allocation, id);
++                            (
++                                device.scripted_owner_id().unwrap(),
++                                device.scripted_bytes().unwrap().to_vec(),
++                                None,
++                                Some(&**device as *const _ as usize),
++                            )
++                        }
++                        ActiveComputeExecutionV1::ScriptedPersistentPrepared {
++                            allocation,
++                            input,
++                            ..
++                        } => {
++                            assert_eq!(*allocation, id);
++                            let KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) = &**input
++                            else {
++                                panic!(
++                                    "first preparation must retain the authenticated ready owner"
++                                )
++                            };
++                            (
++                                ready.owner.scripted_owner_id().unwrap(),
++                                ready.owner.scripted_bytes().unwrap().to_vec(),
++                                Some(ready.owner.authenticated_sha256()),
++                                Some(&**input as *const _ as usize),
++                            )
++                        }
++                        _ => {
++                            panic!("in-flight marker must resolve to the original persistent owner")
++                        }
++                    }
++                }
++                _ => panic!("materialized fixture must retain each indexed SDMA owner"),
++            };
++            assert!(value.sdma_initialized && value.sdma_backed && !value.sdma_shadow_dirty);
++            assert!(value.native_dirty.is_empty());
++            AllocationSnapshot {
++                device: value.device,
++                kind: value.kind,
++                alignment: value.alignment,
++                digest: value.content_sha256,
++                last_host_write: value
++                    .last_full_host_write
++                    .as_ref()
++                    .map(|(bytes, digest)| (Arc::clone(bytes), *digest, bytes.as_ptr() as usize)),
++                shadow: Arc::clone(&value.bytes),
++                shadow_address: value.bytes.as_ptr() as usize,
++                device_box,
++                owner,
++                bytes,
++                certificate,
++                custody: backend
++                    .allocation_custody
++                    .get(&id)
++                    .map(|c| (c.owners.clone(), c.sole_stream, c.owner_counts)),
++            }
++        })
++        .collect();
++    Snapshot {
++        active,
++        pending,
++        pending_streams: backend.pending_compute_streams.clone(),
++        allocations,
++        leases: backend.stream_compute_lanes.clone(),
++        selected_lane: backend.selected_compute_lane,
++        module_retains: backend.compute_module_retain_counts.clone(),
++        dependency_retains: backend.compute_dependency_retain_counts.clone(),
++        event_retains: backend.event_submission_retain_counts.clone(),
++        tails: backend.stream_submission_tails.clone(),
++        completions: backend
++            .submissions
++            .iter()
++            .map(|(&id, value)| {
++                (
++                    id,
++                    (value.stream, value.status, value.profile_dispatch_published),
++                )
++            })
++            .collect(),
++        reservations: backend.compute_completion_reservations,
++    }
++}
++
++#[test]
++fn sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry() {
++    for lanes in LANES {
++        for kind in KINDS {
++            let mut steps = vec![reject(kind, 8, false)];
++            steps.extend(success(kind));
++            steps.extend(releases(lanes, Some(kind)));
++            let mut fixture = Fixture::new(lanes, steps);
++            let before = snapshot(&fixture);
++            let prior_drops = dropped_events(&fixture.backend);
++            let bytes = fixture.backend.staged_context_bytes;
++            let count = fixture.backend.allocations.len();
++            let candidate = fixture.backend.next_handle;
++            let events = fixture
++                .backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1()
++                .to_vec();
++            let Err(RuntimeBackendFailureV1::Rejected(error)) =
++                fixture.backend.allocate_v1(7, kind, 8, 8)
++            else {
++                panic!("warm backing capacity must reject without effects")
++            };
++            assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++            assert_eq!(
++                error.detail(),
++                format!(
++                    "KFD persistent SDMA allocation: {}",
++                    capacity(kind, false).detail
++                )
++            );
++            assert_eq!(snapshot(&fixture), before);
++            assert_eq!(dropped_events(&fixture.backend), prior_drops);
++            assert_eq!(fixture.backend.staged_context_bytes, bytes);
++            assert_eq!(fixture.backend.allocations.len(), count);
++            assert_eq!(fixture.backend.next_handle, candidate + 1);
++            assert_eq!(
++                fixture
++                    .backend
++                    .profiler
++                    .as_ref()
++                    .unwrap()
++                    .recorded_events_for_test_v1(),
++                events
++            );
++            let allocated = fixture.backend.allocate_v1(7, kind, 8, 8).unwrap();
++            assert_eq!(allocated, candidate + 1);
++            assert_eq!(snapshot(&fixture), before);
++            assert_eq!(fixture.backend.staged_context_bytes, bytes + 8);
++            assert_eq!(fixture.backend.allocations.len(), count + 1);
++            assert!(!fixture.backend.terminal);
++            assert!(fixture.backend.terminal_sdma_custody.is_none());
++            assert_new_allocation(&fixture.backend, allocated, kind);
++            let after = fixture
++                .backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1();
++            assert_eq!(&after[..events.len()], events);
++            if matches!(
++                lanes,
++                Lanes::PersistentPrepared | Lanes::PersistentPublished
++            ) {
++                // The Scripted H2D setup lacks native profile facts and closes the retained prefix.
++                assert!(prior_drops > 0);
++                assert_eq!(after.len(), events.len());
++                assert_eq!(dropped_events(&fixture.backend), prior_drops + 1);
++            } else {
++                assert_eq!(prior_drops, 0);
++                assert_eq!(dropped_events(&fixture.backend), 0);
++                assert_eq!(after.len(), events.len() + 1);
++                assert_eq!(
++                    after.last().unwrap().event,
++                    KfdRuntimeProfileEventKindV1::AllocationCreated {
++                        allocation: fixture
++                            .backend
++                            .profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocated)
++                            .unwrap(),
++                        memory_kind: match kind {
++                            RuntimeMemoryKindV1::HostVisible => KfdProfileMemoryKindV1::HostVisible,
++                            RuntimeMemoryKindV1::DeviceLocal =>
++                                KfdProfileMemoryKindV1::DeviceLocalHostStaged,
++                        },
++                        byte_len: 8,
++                        alignment: 8,
++                    }
++                );
++            }
++            fixture.finish(Some(allocated), kind);
++        }
++    }
++}
++
++#[test]
++fn sdma_pending_allocation_cold_guard_and_validation_are_inert() {
++    for lanes in LANES {
++        for kind in KINDS {
++            let mut fixture = Fixture::new(lanes, releases(lanes, None));
++            fixture.backend.sdma_enabled = false;
++            let before = snapshot(&fixture);
++            let candidate = fixture.backend.next_handle;
++            let bytes = fixture.backend.staged_context_bytes;
++            let count = fixture.backend.allocations.len();
++            let remaining = fixture
++                .backend
++                .scripted_sdma
++                .as_ref()
++                .unwrap()
++                .remaining_steps();
++            let events = fixture
++                .backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1()
++                .to_vec();
++            assert!(matches!(fixture.backend.allocate_v1(7, kind, 0, 8),
++                Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch));
++            assert_eq!(fixture.backend.next_handle, candidate);
++            assert!(matches!(fixture.backend.allocate_v1(7, kind, 8, 8),
++                Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy));
++            assert_eq!(fixture.backend.next_handle, candidate + 1);
++            assert_eq!(snapshot(&fixture), before);
++            assert_eq!(fixture.backend.staged_context_bytes, bytes);
++            assert_eq!(fixture.backend.allocations.len(), count);
++            assert_eq!(
++                fixture
++                    .backend
++                    .scripted_sdma
++                    .as_ref()
++                    .unwrap()
++                    .remaining_steps(),
++                remaining
++            );
++            assert_eq!(
++                fixture
++                    .backend
++                    .profiler
++                    .as_ref()
++                    .unwrap()
++                    .recorded_events_for_test_v1(),
++                events
++            );
++            assert!(!fixture.backend.sdma_enabled && !fixture.backend.terminal);
++            fixture.backend.sdma_enabled = true;
++            fixture.finish(None, kind);
++        }
++    }
++}
++
++#[test]
++fn sdma_pending_allocation_terminal_error_and_panic_retain_original_compute() {
++    for lanes in LANES {
++        for kind in KINDS {
++            for panic in [false, true] {
++                let step = if panic {
++                    ScriptedSdmaStepV1::AllocatePanic {
++                        kind: match kind {
++                            RuntimeMemoryKindV1::HostVisible => ScriptedBufferKindV1::Host,
++                            RuntimeMemoryKindV1::DeviceLocal => ScriptedBufferKindV1::Device,
++                        },
++                        byte_len: 8,
++                    }
++                } else {
++                    reject(kind, 8, true)
++                };
++                let mut fixture = Fixture::new(lanes, vec![step]);
++                let before = snapshot(&fixture);
++                let count = fixture.backend.allocations.len();
++                let bytes = fixture.backend.staged_context_bytes;
++                let candidate = fixture.backend.next_handle;
++                let events = fixture
++                    .backend
++                    .profiler
++                    .as_ref()
++                    .unwrap()
++                    .recorded_events_for_test_v1()
++                    .to_vec();
++                let result = catch_unwind(AssertUnwindSafe(|| {
++                    fixture.backend.allocate_v1(7, kind, 8, 8)
++                }));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<&str>(),
++                        Some(&"scripted SDMA allocation panic")
++                    );
++                } else {
++                    let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                        panic!("unclassified allocation failure must terminalize")
++                    };
++                    assert_eq!(
++                        error.detail(),
++                        format!(
++                            "KFD persistent SDMA allocation: {}",
++                            capacity(kind, true).detail
++                        )
++                    );
++                }
++                assert!(fixture.backend.terminal);
++                assert_eq!(snapshot(&fixture), before);
++                assert_eq!(fixture.backend.allocations.len(), count);
++                assert_eq!(fixture.backend.staged_context_bytes, bytes);
++                for &id in &fixture.submissions {
++                    assert!(matches!(
++                        fixture.backend.poll_v1(id),
++                        Err(RuntimeBackendFailureV1::Terminal(_))
++                    ));
++                }
++                assert!(matches!(
++                    fixture.backend.allocate_v1(7, kind, 8, 8),
++                    Err(RuntimeBackendFailureV1::Terminal(_))
++                ));
++                assert_eq!(snapshot(&fixture), before);
++                assert_eq!(fixture.backend.next_handle, candidate + 1);
++                assert_eq!(fixture.backend.allocations.len(), count);
++                assert_eq!(fixture.backend.staged_context_bytes, bytes);
++                assert_eq!(
++                    fixture
++                        .backend
++                        .profiler
++                        .as_ref()
++                        .unwrap()
++                        .recorded_events_for_test_v1(),
++                    events
++                );
++                let driver = fixture.backend.scripted_sdma.as_ref().unwrap();
++                assert!(driver.is_exhausted());
++                assert_eq!(driver.live_owner_count(), fixture.pairs.len() * 2);
++                assert_eq!(driver.unexpected_drops(), 0);
++                discard_scripted_fixture(fixture.backend);
++            }
++        }
++    }
++}
++
++#[test]
++fn sdma_pending_allocation_readiness_requires_owner_and_native_availability() {
++    let mut fixture = Fixture::new(Lanes::Both, releases(Lanes::Both, None));
++    let before = snapshot(&fixture);
++    let events = fixture
++        .backend
++        .profiler
++        .as_ref()
++        .unwrap()
++        .recorded_events_for_test_v1()
++        .to_vec();
++    // Model the inconsistent flag without inventing a native queue. Restore the real driver.
++    let driver = fixture.backend.scripted_sdma.take().unwrap();
++    assert!(!fixture.backend.sdma_allocation_ready_v1());
++    assert!(
++        matches!(fixture.backend.ensure_sdma_queue_v1(), Err(RuntimeBackendFailureV1::Rejected(error))
++        if error.kind() == KfdRuntimeBackendErrorKindV1::Busy && error.detail() == "cannot change native SDMA ownership while compute is pending")
++    );
++    fixture.backend.scripted_sdma = Some(driver);
++    fixture.backend.native_available = false;
++    assert!(
++        matches!(fixture.backend.ensure_sdma_queue_v1(), Err(RuntimeBackendFailureV1::Rejected(error))
++        if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported && error.detail() == "native KFD SDMA is unavailable on a synthetic backend")
++    );
++    fixture.backend.native_available = true;
++    assert_eq!(snapshot(&fixture), before);
++    assert_eq!(
++        fixture
++            .backend
++            .profiler
++            .as_ref()
++            .unwrap()
++            .recorded_events_for_test_v1(),
++        events
++    );
++    fixture.finish(None, RuntimeMemoryKindV1::HostVisible);
++}
++
++#[test]
++fn sdma_pending_allocation_host_initialization_failure_retains_new_and_existing_owners() {
++    for lanes in LANES {
++        for panic in [false, true] {
++            let mut fixture = Fixture::new(
++                lanes,
++                vec![
++                    ScriptedSdmaStepV1::AllocateHostFilled {
++                        byte_len: 8,
++                        fill: 0xa5,
++                    },
++                    ScriptedSdmaStepV1::WriteFault {
++                        offset: 0,
++                        byte_len: 8,
++                        written_prefix: 3,
++                        panic,
++                    },
++                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++                ],
++            );
++            let before = snapshot(&fixture);
++            let expected_owner = before
++                .allocations
++                .iter()
++                .map(|allocation| allocation.owner)
++                .max()
++                .unwrap()
++                + 1;
++            let prior_drops = dropped_events(&fixture.backend);
++            let candidate = fixture.backend.next_handle;
++            let bytes = fixture.backend.staged_context_bytes;
++            let count = fixture.backend.allocations.len();
++            let events = fixture
++                .backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1()
++                .to_vec();
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                fixture
++                    .backend
++                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
++            }));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<&str>(),
++                    Some(&"scripted SDMA host write panic")
++                );
++            } else {
++                let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                    panic!("initialization failure must retain owners")
++                };
++                assert_eq!(
++                    error.detail(),
++                    "KFD persistent host allocation initialization: scripted SDMA host write failure"
++                );
++            }
++            assert!(fixture.backend.terminal);
++            let retained = host_observation(retained_host(&fixture.backend));
++            assert_eq!(retained.0, expected_owner);
++            assert_eq!(retained.1, [0, 0, 0, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5]);
++            assert_eq!(retained.2, None);
++            assert!(!fixture.backend.allocations.contains_key(&candidate));
++            assert!(matches!(
++                fixture
++                    .backend
++                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8),
++                Err(RuntimeBackendFailureV1::Terminal(_))
++            ));
++            for &id in &fixture.submissions {
++                assert!(matches!(
++                    fixture.backend.poll_v1(id),
++                    Err(RuntimeBackendFailureV1::Terminal(_))
++                ));
++            }
++            assert_eq!(snapshot(&fixture), before);
++            assert_eq!(dropped_events(&fixture.backend), prior_drops);
++            assert_eq!(host_observation(retained_host(&fixture.backend)), retained);
++            assert_eq!(fixture.backend.next_handle, candidate + 1);
++            assert_eq!(fixture.backend.staged_context_bytes, bytes);
++            assert_eq!(fixture.backend.allocations.len(), count);
++            assert_eq!(
++                fixture
++                    .backend
++                    .profiler
++                    .as_ref()
++                    .unwrap()
++                    .recorded_events_for_test_v1(),
++                events
++            );
++            let driver = fixture.backend.scripted_sdma.as_ref().unwrap();
++            assert_eq!(driver.remaining_steps(), 1);
++            assert_eq!(driver.live_owner_count(), fixture.pairs.len() * 2 + 1);
++            assert_eq!(driver.unexpected_drops(), 0);
++            discard_scripted_fixture(fixture.backend);
++        }
++    }
++}
++
++#[test]
++fn sdma_pending_allocation_context_refunds_capacity_and_cold_busy_without_settling_compute() {
++    for lanes in LANES {
++        for kind in KINDS {
++            let mut steps = vec![reject(kind, 8, false)];
++            steps.extend(success(kind));
++            let Fixture {
++                backend,
++                pairs,
++                submissions,
++                ..
++            } = Fixture::new(lanes, steps);
++            let before = backend_snapshot(&backend, &pairs, &submissions);
++            // Context adopts a backend with genuine Scripted submissions; it only owns the new allocation.
++            let mut context = ManuallyDrop::new(
++                crate::RuntimeContextV1::open(ManuallyDrop::into_inner(backend)).unwrap(),
++            );
++            let device = context.devices()[0].id();
++            context
++                .configure_allocation_admission_v1(device, 8, 1)
++                .unwrap();
++            let initial = context.allocation_admission_usage_v1(device).unwrap();
++            let steps = context
++                .backend()
++                .scripted_sdma
++                .as_ref()
++                .unwrap()
++                .remaining_steps();
++            context.backend_mut_for_test_v1().sdma_enabled = false;
++            assert!(
++                matches!(context.allocate(device, kind, 8, 8), Err(crate::RuntimeErrorV1::BackendRejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
++            );
++            assert_eq!(
++                context.allocation_admission_usage_v1(device).unwrap(),
++                initial
++            );
++            assert_eq!(
++                backend_snapshot(context.backend(), &pairs, &submissions),
++                before
++            );
++            assert_eq!(
++                context
++                    .backend()
++                    .scripted_sdma
++                    .as_ref()
++                    .unwrap()
++                    .remaining_steps(),
++                steps
++            );
++            context.backend_mut_for_test_v1().sdma_enabled = true;
++            assert!(
++                matches!(context.allocate(device, kind, 8, 8), Err(crate::RuntimeErrorV1::BackendRejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity)
++            );
++            let usage = context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap();
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                0
++            );
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                0
++            );
++            assert_eq!(usage.quarantined_records, 0);
++            assert_eq!(
++                backend_snapshot(context.backend(), &pairs, &submissions),
++                before
++            );
++            context.allocate(device, kind, 8, 8).unwrap();
++            let usage = context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap();
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                8
++            );
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                1
++            );
++            assert_eq!(usage.quarantined_records, 0);
++            assert!(!context.is_terminal());
++            assert_eq!(
++                backend_snapshot(context.backend(), &pairs, &submissions),
++                before
++            );
++            let driver = context.backend().scripted_sdma.as_ref().unwrap();
++            assert!(driver.is_exhausted());
++            assert_eq!(driver.unexpected_drops(), 0);
++            // Separate fixture disposal, not a public native cleanup or credit-refund claim.
++            disarm_scripted_drop_after_inspection_v1(context.backend_mut_for_test_v1());
++            drop(ManuallyDrop::into_inner(context));
++        }
++    }
++}
++
++#[test]
++fn sdma_pending_allocation_context_initialization_failure_retains_hidden_owners_and_quarantines() {
++    for lanes in LANES {
++        for kind in KINDS {
++            for panic in [false, true] {
++                let mut steps = Vec::new();
++                if kind == RuntimeMemoryKindV1::DeviceLocal {
++                    steps.extend([
++                        ScriptedSdmaStepV1::Allocate {
++                            kind: ScriptedBufferKindV1::Device,
++                            byte_len: 8,
++                        },
++                        ScriptedSdmaStepV1::Promote(ScriptedFailureModeV1::Success),
++                    ]);
++                }
++                steps.extend([
++                    ScriptedSdmaStepV1::AllocateHostFilled {
++                        byte_len: 8,
++                        fill: 0xa5,
++                    },
++                    ScriptedSdmaStepV1::WriteFault {
++                        offset: 0,
++                        byte_len: 8,
++                        written_prefix: 3,
++                        panic,
++                    },
++                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++                ]);
++                let Fixture {
++                    backend,
++                    pairs,
++                    submissions,
++                    ..
++                } = Fixture::new(lanes, steps);
++                let before = backend_snapshot(&backend, &pairs, &submissions);
++                let next_owner = before
++                    .allocations
++                    .iter()
++                    .map(|allocation| allocation.owner)
++                    .max()
++                    .unwrap()
++                    + 1;
++                let candidate = backend.next_handle;
++                let bytes = backend.staged_context_bytes;
++                let count = backend.allocations.len();
++                let events = backend
++                    .profiler
++                    .as_ref()
++                    .unwrap()
++                    .recorded_events_for_test_v1()
++                    .to_vec();
++                let prior_drops = dropped_events(&backend);
++                let mut context = ManuallyDrop::new(
++                    crate::RuntimeContextV1::open(ManuallyDrop::into_inner(backend)).unwrap(),
++                );
++                let device = context.devices()[0].id();
++                context
++                    .configure_allocation_admission_v1(device, 8, 1)
++                    .unwrap();
++                let result =
++                    catch_unwind(AssertUnwindSafe(|| context.allocate(device, kind, 8, 8)));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<&str>(),
++                        Some(&"scripted SDMA host write panic")
++                    );
++                } else {
++                    let Err(crate::RuntimeErrorV1::BackendTerminal(error)) = result.unwrap() else {
++                        panic!("failed initialization must terminalize Context")
++                    };
++                    let operation = if kind == RuntimeMemoryKindV1::DeviceLocal {
++                        "KFD upload staging write"
++                    } else {
++                        "KFD persistent host allocation initialization"
++                    };
++                    assert_eq!(
++                        error.detail(),
++                        format!("{operation}: scripted SDMA host write failure")
++                    );
++                }
++                assert!(context.is_terminal() && context.backend().terminal);
++                let usage = context
++                    .allocation_admission_usage_v1(device)
++                    .unwrap()
++                    .unwrap();
++                assert_eq!(
++                    usage
++                        .used
++                        .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                    8
++                );
++                assert_eq!(
++                    usage
++                        .used
++                        .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                    1
++                );
++                assert_eq!(usage.quarantined_records, 1);
++                assert!(matches!(
++                    context.allocate(device, kind, 8, 8),
++                    Err(crate::RuntimeErrorV1::Validation(
++                        crate::RuntimeValidationErrorV1::ContextTerminal
++                    ))
++                ));
++                assert_eq!(
++                    context
++                        .allocation_admission_usage_v1(device)
++                        .unwrap()
++                        .unwrap(),
++                    usage
++                );
++                for &id in &submissions {
++                    assert!(matches!(
++                        context.backend_mut_for_test_v1().poll_v1(id),
++                        Err(RuntimeBackendFailureV1::Terminal(_))
++                    ));
++                }
++                let backend = context.backend();
++                assert_eq!(backend_snapshot(backend, &pairs, &submissions), before);
++                assert_eq!(backend.next_handle, candidate + 1);
++                let hidden_device = kind == RuntimeMemoryKindV1::DeviceLocal;
++                assert_eq!(
++                    backend.allocations.len(),
++                    count + usize::from(hidden_device)
++                );
++                assert_eq!(
++                    backend.staged_context_bytes,
++                    bytes + 8 * u64::from(hidden_device)
++                );
++                if hidden_device {
++                    let record = &backend.allocations[&candidate];
++                    assert_eq!((record.device, record.kind, record.alignment), (7, kind, 8));
++                    assert!(record.sdma_backed && !record.sdma_initialized);
++                    assert_eq!(&*record.bytes, &[0; 8]);
++                    let KfdRuntimeSdmaStorageV1::Device(owner) = &record.sdma_storage else {
++                        panic!("hidden device must remain indexed")
++                    };
++                    assert_eq!(owner.scripted_owner_id(), Some(next_owner));
++                    assert_eq!(owner.scripted_bytes().unwrap(), &[0; 8]);
++                } else {
++                    assert!(!backend.allocations.contains_key(&candidate));
++                }
++                assert_eq!(
++                    host_observation(retained_host(backend)),
++                    (
++                        next_owner + u64::from(hidden_device),
++                        vec![0, 0, 0, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5],
++                        None,
++                    )
++                );
++                assert_eq!(
++                    backend
++                        .profiler
++                        .as_ref()
++                        .unwrap()
++                        .recorded_events_for_test_v1(),
++                    events
++                );
++                assert_eq!(dropped_events(backend), prior_drops);
++                let driver = backend.scripted_sdma.as_ref().unwrap();
++                assert_eq!(driver.remaining_steps(), 1);
++                assert_eq!(
++                    driver.live_owner_count(),
++                    pairs.len() * 2 + 1 + usize::from(hidden_device)
++                );
++                assert_eq!(driver.unexpected_drops(), 0);
++                disarm_scripted_drop_after_inspection_v1(context.backend_mut_for_test_v1());
++                drop(ManuallyDrop::into_inner(context));
++            }
++        }
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_profile.rs b/crates/fe2o3-runtime/src/kfd_profile.rs
+index ea1cfc294..8549b81a2 100644
+--- a/crates/fe2o3-runtime/src/kfd_profile.rs
++++ b/crates/fe2o3-runtime/src/kfd_profile.rs
+@@ -105,6 +105,11 @@ impl KfdRuntimeProfileRecorderV1 {
+         &self.events
+     }
+ 
++    #[cfg(test)]
++    pub(crate) fn dropped_events_for_test_v1(&self) -> u64 {
++        self.dropped_events
++    }
++
+     pub(crate) fn new(
+         config: KfdRuntimeProfilerConfigV1,
+         device_unique_id: u64,

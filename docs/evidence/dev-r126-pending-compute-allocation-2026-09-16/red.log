@@ -1,0 +1,38 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.20s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 3 tests
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert ... FAILED
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry ... FAILED
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute ... FAILED
+
+failures:
+
+---- kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert stdout ----
+
+thread 'kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert' (344905) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs:63:45:
+called `Result::unwrap()` on an `Err` value: Rejected(KfdRuntimeBackendErrorV1 { kind: Busy, detail: "KFD compute stream head has no mutation-free publication slot" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry stdout ----
+
+thread 'kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry' (344906) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs:342:13:
+assertion failed: matches!(fixture.backend.allocate_v1(7, kind, 8, 8),
+    Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() ==
+    KfdRuntimeBackendErrorKindV1::Capacity)
+
+---- kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute stdout ----
+
+thread 'kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute' (344907) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/sdma_pending_allocation_tests.rs:467:21:
+assertion failed: matches!(result.unwrap(), Err(RuntimeBackendFailureV1::Terminal(_)))
+
+
+failures:
+    kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert
+    kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry
+    kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 830 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

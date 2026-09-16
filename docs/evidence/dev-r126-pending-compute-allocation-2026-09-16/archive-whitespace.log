@@ -1,0 +1,171 @@
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/cargo.command:1: trailing whitespace.
++cargo -V 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/clippy.command:1: trailing whitespace.
++cargo clippy --locked --offline -p fe2o3-kfd -p fe2o3-runtime --all-features --all-targets -- -D warnings 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/focused-second.log:15: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/focused-strengthened.log:15: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/formatting.command:1: trailing whitespace.
++cargo fmt --all -- --check 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-build.command:1: trailing whitespace.
++cargo test --locked --offline -p fe2o3-kfd -p fe2o3-runtime --all-features --lib --no-run --message-format=json 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-0.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_kfd-6457f2b90c780e5d queue::dispatch_binding::tests::exact_epoch_authentication_rejects_every_identity_and_completion_substitution --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-0.log:6: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-1.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_kfd-6457f2b90c780e5d queue::dispatch_binding::tests::r66_published_occurrence_observation_preserves_digest_and_owner_state --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-1.log:6: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-2.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_kfd-6457f2b90c780e5d queue::live::tests::auxiliary_lane_reuse_advances_generation_and_rejects_substitution --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-2.log:6: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-3.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_kfd-6457f2b90c780e5d queue::live::compute_sdma_coexistence::tests:: --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-kfd-focused-3.log:10: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-runtime-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-6da97149b4b59494 --test-threads=4 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/gnu-runtime-full.log:858: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-build.command:1: trailing whitespace.
++cargo test --locked --offline -p fe2o3-kfd -p fe2o3-runtime --all-features --lib --target x86_64-unknown-linux-musl --no-run --message-format=json 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-0.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-b1291e310e7b0abc queue::dispatch_binding::tests::exact_epoch_authentication_rejects_every_identity_and_completion_substitution --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-0.log:6: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-1.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-b1291e310e7b0abc queue::dispatch_binding::tests::r66_published_occurrence_observation_preserves_digest_and_owner_state --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-1.log:6: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-2.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-b1291e310e7b0abc queue::live::tests::auxiliary_lane_reuse_advances_generation_and_rejects_substitution --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-2.log:6: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-3.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-b1291e310e7b0abc queue::live::compute_sdma_coexistence::tests:: --test-threads=1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-kfd-focused-3.log:10: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-runtime-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-fc1dc596f3761ce3 --test-threads=4 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/musl-runtime-full.log:858: new blank line at EOF.
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:60: trailing whitespace.
++PID    	PROCESS NAME	GPU(s)	VRAM USED  	SDMA USED	CU OCCUPANCY	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:61: trailing whitespace.
++3161407	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:62: trailing whitespace.
++2816277	python      	1     	11405590528	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:63: trailing whitespace.
++3161415	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:64: trailing whitespace.
++3161403	python      	1     	83189223424	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:65: trailing whitespace.
++2816283	python      	1     	11501031424	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:66: trailing whitespace.
++3161411	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:67: trailing whitespace.
++2816281	python      	1     	11522039808	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:68: trailing whitespace.
++3161428	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:69: trailing whitespace.
++2815925	pt_elastic  	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:70: trailing whitespace.
++2816278	python      	1     	11557691392	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:71: trailing whitespace.
++3161424	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:72: trailing whitespace.
++3161432	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:73: trailing whitespace.
++2816282	python      	1     	11519942656	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:74: trailing whitespace.
++2816280	python      	1     	11522002944	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:75: trailing whitespace.
++3161419	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:76: trailing whitespace.
++2816279	python      	1     	11507322880	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:81: trailing whitespace.
++1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:84: trailing whitespace.
++0 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:86: trailing whitespace.
++7 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:89: trailing whitespace.
++5 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:93: trailing whitespace.
++2 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:97: trailing whitespace.
++6 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:99: trailing whitespace.
++4 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-availability-final.log:102: trailing whitespace.
++3 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:50: trailing whitespace.
++PID    	PROCESS NAME	GPU(s)	VRAM USED  	SDMA USED	CU OCCUPANCY	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:51: trailing whitespace.
++3161407	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:52: trailing whitespace.
++3161415	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:53: trailing whitespace.
++2725628	python      	1     	11652063232	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:54: trailing whitespace.
++3161403	python      	1     	83189223424	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:55: trailing whitespace.
++3161411	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:56: trailing whitespace.
++2725626	python      	1     	11614314496	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:57: trailing whitespace.
++2725624	python      	1     	11468505088	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:58: trailing whitespace.
++3161428	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:59: trailing whitespace.
++2725630	python      	1     	11652063232	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:60: trailing whitespace.
++3161424	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:61: trailing whitespace.
++2725629	python      	1     	11574468608	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:62: trailing whitespace.
++3161432	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:63: trailing whitespace.
++2725627	python      	1     	11735949312	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:64: trailing whitespace.
++2725625	python      	1     	11489476608	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:65: trailing whitespace.
++3161419	python      	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:66: trailing whitespace.
++2725426	pt_elastic  	0     	0          	0        	0           	
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:72: trailing whitespace.
++5 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:74: trailing whitespace.
++0 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:77: trailing whitespace.
++3 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:79: trailing whitespace.
++1 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:82: trailing whitespace.
++7 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:85: trailing whitespace.
++6 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:88: trailing whitespace.
++4 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/native-process-availability.log:90: trailing whitespace.
++2 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/no-default.command:1: trailing whitespace.
++cargo check --locked --offline -p fe2o3-runtime --no-default-features 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/rustc.command:1: trailing whitespace.
++rustc -vV 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source-after.command:1: trailing whitespace.
++sha256sum --check /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source-files.sha256 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source-before.command:1: trailing whitespace.
++sha256sum --check /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source-files.sha256 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:8: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:79: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:102: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:124: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:128: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:417: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:426: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:439: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/source.patch:1609: trailing whitespace.
++ 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/unsafe-policy.command:1: trailing whitespace.
++cargo test --locked --offline -p cargo-fe2o3 --test unsafe_source_policy 
+docs/evidence/dev-r126-pending-compute-allocation-2026-09-16/unsafe-policy.log:17: new blank line at EOF.
