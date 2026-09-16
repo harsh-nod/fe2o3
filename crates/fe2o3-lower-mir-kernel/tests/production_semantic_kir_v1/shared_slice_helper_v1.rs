@@ -397,6 +397,7 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
         local(191, helper_argument_type, SemanticLocalRoleV1::Argument(0)),
     ];
     let mut statements = if metadata_argument {
+        helper_locals.push(local(192, ty(4), SemanticLocalRoleV1::Temporary));
         let argument = if pair_argument {
             SemanticPlaceV1::new(
                 SemanticLocalIdV1::from_index(1),
@@ -407,14 +408,24 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
         } else {
             local_place(1, ty(4))
         };
-        vec![assign(
-            local_place(0, ty(4)),
-            SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::Add,
-                left: SemanticOperandV1::Copy(argument),
-                right: scalar_constant(ty(4), 1, 8),
-            },
-        )]
+        vec![
+            assign(
+                local_place(2, ty(4)),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(argument),
+                    right: scalar_constant(ty(4), 1, 8),
+                },
+            ),
+            assign(
+                local_place(0, ty(4)),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(local_place(2, ty(4))),
+                    right: scalar_constant(ty(4), 2, 8),
+                },
+            ),
+        ]
     } else {
         vec![assign(
             local_place(if pair_result { 2 } else { 0 }, ty(4)),
@@ -654,7 +665,8 @@ fn slice_metadata_call_arguments_preserve_component_order_and_operation_limits()
                 .flat_map(|function| &function.body.as_ref().unwrap().blocks)
                 .map(|block| block.operations.len())
                 .sum::<usize>();
-            assert_eq!(operation_count, conversions + 4);
+            // Keep helper analysis below the emitted-operation boundary under test.
+            assert_eq!(operation_count, conversions + 6);
             let limits =
                 |cap| ProductionSemanticKirLimitsV1::new_with_max_operations(16, 64, 64, cap);
             let exact = ProductionSemanticKirOwnerV1::try_lower(
