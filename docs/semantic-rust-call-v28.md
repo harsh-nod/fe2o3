@@ -283,6 +283,37 @@ to graph and anchors must pass that replay, not merely agree with each other.
 The existing V4/V5 refusal gates remain in place: this adds no serialized proof
 relation, new capability version, protected proof result or launch authority.
 
+### Canonical Call Occurrences
+
+`with_checked_canonical_calls_v1(inventory, budget, callback)` binds the complete
+ordinary-call roster of the pre-ranked owner to one exact borrowed inventory.
+It partitions source correspondence once, prepares one target index, and reuses
+the existing call validator once per root-qualified function association. A
+shared physical helper retains a separate source association for each root;
+the index does not duplicate invocation paths or construct another graph.
+Registered builtins keep their existing closed effect classification.
+
+Within the scope, `with_call(root, inventory_call_index, budget, callback)`
+resolves the exact source terminator, emitted operation ordinal, caller block
+and callee association. It reuses the single-call view's physical argument,
+RustCall, ignored-component and result-transport implementation. The query
+does not rescan module or correspondence rosters. Selected ABI/result shape
+construction and visitor work are still charged; this is not a constant-cost
+query or a claim of linear total analysis time.
+
+The batch and nested queries share the caller's cumulative ledger. Shared
+indices stay charged while callbacks run; scratch is dropped before restoring
+the incoming floor on success, error or unwind. Ordinary batch callbacks must
+return at their entry storage floor, including on errors. Persistent output
+must be separately pre-reserved. The logical ledger is neither an RSS bound
+nor a security capability. Borrowed views cannot escape their scopes; copying
+an inert root or call index does not transfer evidence between owners.
+
+The production empty-helper analysis consumes these bound function associations
+and their exact canonical coordinates. Call identity does not prove an operand's
+value, address provenance, memory bounds or CPU/GPU equivalence. All existing
+source replay, empty-effect, ranked-memory and formal-proof gates still apply.
+
 Frozen V4/V5 parameter rows cannot encode ignored or projected arguments,
 including a singleton aggregate whose only represented field is a slice.
 Producers, lineage preparation and independent verifiers reject that source

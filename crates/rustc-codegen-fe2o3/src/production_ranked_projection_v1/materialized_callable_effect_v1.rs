@@ -38,50 +38,17 @@ pub(super) fn derive_materialized_callable_effect_summaries_v1(
             semantic.functions(),
             semantic.callables(),
         )?;
-        let helpers = source.empty_effect_helpers();
-        budget
-            .charge_work(helpers.scanned_function_count())
-            .map_err(ranked_projection_source_v1::resource)?;
-        for helper in helpers.iter() {
-            let physical = inventory
-                .function_for_name(helper.kernel_ir_function().as_str(), budget)
-                .map_err(|error| {
-                    ProductionRankedProjectionErrorV1::CanonicalAssertions(
-                        CanonicalAssertionErrorV1::Inventory(error),
-                    )
-                })?
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "materialized helper is absent from its executable owner",
-                ))?;
-            if effects
-                .decision(physical.coordinate, budget)
-                .map_err(effect_error)?
-                != Decision::CompleteEmpty
-            {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "materialized helper effects are not independently complete and empty",
-                ));
-            }
-            let decision = summaries
-                .decisions
-                .get_mut(helper.semantic_function().index() as usize)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "materialized helper effect fact is outside its source owner",
-                ))?;
-            match decision {
-                // Empty effects establish neither scalar values nor determinism.
-                DefinedCallableEmptyEffectDecisionV1::Rejected => {
-                    *decision = DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
-                }
-                DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
-                | DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar => {}
-                DefinedCallableEmptyEffectDecisionV1::Unknown => {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "materialized helper effect fact has an unfinished source summary",
-                    ));
-                }
-            }
-        }
+        source
+            .owner()
+            .with_checked_canonical_calls_v1(inventory, budget, |calls, budget| {
+                Ok(join_empty_helpers_v1(
+                    calls,
+                    &effects,
+                    &mut summaries,
+                    budget,
+                ))
+            })
+            .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)??;
         Ok(summaries)
     })();
     drop(effects);
@@ -89,4 +56,54 @@ pub(super) fn derive_materialized_callable_effect_summaries_v1(
         .release_storage(storage.retained_storage())
         .map_err(ranked_projection_source_v1::resource)?;
     result
+}
+
+fn join_empty_helpers_v1(
+    calls: &fe2o3_lower_mir_kernel::ProductionCanonicalCallsV1<'_>,
+    effects: &CanonicalKirCallEffectsV1<'_, '_>,
+    summaries: &mut DefinedCallableEmptyEffectSummariesV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    budget
+        .charge_work(calls.function_count())
+        .map_err(ranked_projection_source_v1::resource)?;
+    for function in calls.functions() {
+        let helper = function.source();
+        if helper.role() != fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper {
+            continue;
+        }
+        if effects
+            .decision(function.canonical().coordinate, budget)
+            .map_err(|error| {
+                ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    CanonicalAssertionErrorV1::CallEffects(error),
+                )
+            })?
+            != Decision::CompleteEmpty
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "materialized helper effects are not independently complete and empty",
+            ));
+        }
+        let decision = summaries
+            .decisions
+            .get_mut(helper.semantic_function().index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "materialized helper effect fact is outside its source owner",
+            ))?;
+        match decision {
+            // Empty effects establish neither scalar values nor determinism.
+            DefinedCallableEmptyEffectDecisionV1::Rejected => {
+                *decision = DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+            }
+            DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+            | DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar => {}
+            DefinedCallableEmptyEffectDecisionV1::Unknown => {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "materialized helper effect fact has an unfinished source summary",
+                ));
+            }
+        }
+    }
+    Ok(())
 }

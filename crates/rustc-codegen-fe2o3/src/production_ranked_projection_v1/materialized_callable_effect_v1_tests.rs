@@ -7,6 +7,13 @@ fn materialized_aggregate_helper_v1() -> fe2o3_lower_mir_kernel::ProductionPreRa
 fn materialized_helper_v1(
     aggregate: bool,
 ) -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+    materialized_helper_with_gap_v1(aggregate, false)
+}
+
+fn materialized_helper_with_gap_v1(
+    aggregate: bool,
+    gap: bool,
+) -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
     let root = assertion_root_with_access(
         vec![
             (A_UNIT, SemanticLocalRoleV1::Return),
@@ -17,7 +24,13 @@ fn materialized_helper_v1(
             block(
                 120,
                 vec![],
-                neutral_test_call_v1(1, vec![typed_constant(A_U32, 3, 4)], 1, A_U32, 1),
+                neutral_test_call_v1(
+                    if gap { 2 } else { 1 },
+                    vec![typed_constant(A_U32, 3, 4)],
+                    1,
+                    A_U32,
+                    1,
+                ),
             ),
             block(121, vec![], SemanticTerminatorKindV1::Return),
         ],
@@ -82,7 +95,50 @@ fn materialized_helper_v1(
         )],
     )
     .unwrap();
-    assertion_materialized_functions(assertion_types(), vec![root, helper])
+    let mut functions = vec![root];
+    if gap {
+        functions.push(
+            SemanticFunctionDeclV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(247)),
+                helper.role(),
+                helper.item_definition_identity(),
+                helper.monomorphization_identity(),
+                helper.generic_type_arguments_identity(),
+                helper.const_generic_arguments_identity(),
+                helper.source(),
+                helper.abi().clone(),
+                helper.locals().to_vec(),
+                helper.entry(),
+                helper.blocks().to_vec(),
+            )
+            .unwrap(),
+        );
+    }
+    functions.push(helper);
+    assertion_materialized_functions(assertion_types(), functions)
+}
+
+#[test]
+fn materialized_helper_effects_use_canonical_not_semantic_function_ordinals() {
+    let owner = materialized_helper_with_gap_v1(true, true);
+    let helper = owner.empty_effect_helpers().iter().next().unwrap();
+    assert_eq!(helper.semantic_function().index(), 2);
+    let actual_ordinal = owner
+        .executable()
+        .module()
+        .functions
+        .iter()
+        .position(|function| &function.id == helper.kernel_ir_function())
+        .unwrap();
+    assert_ne!(actual_ordinal, helper.semantic_function().index() as usize);
+    let source = RankedProjectionSourceV1::from_legacy(&owner).unwrap();
+    canonical_assertion_facts_v1::with_canonical_assertions_v1(&owner, |session| {
+        let effects = session.callable_effect_summaries(&source)?;
+        assert!(effects.is_exact_empty(helper.semantic_function()));
+        assert!(!effects.is_exact_empty_deterministic_scalar(helper.semantic_function()));
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -152,7 +208,7 @@ fn materialized_aggregate_helper_effects_do_not_grant_scalar_value_equivalence()
     )
     .unwrap();
     assert!(!old.is_exact_empty(helper));
-    assert_eq!(source.empty_effect_helpers().iter().count(), 1);
+    assert_eq!(source.owner().empty_effect_helpers().iter().count(), 1);
 
     canonical_assertion_facts_v1::with_canonical_assertions_v1(&owner, |session| {
         let floor = session.retained_floor_for_test_v1();
