@@ -1,0 +1,2 @@
+retained_primary_release=complete public_root_drop=completed packets=0 mmio_stores=0
+profile_sha256=421064a18734a53bfc41e627a2abeb1d402e2b3fcf4a98b1a456f9dc3c1b7be0 unique_id=6ced1647a296545c queue_id=0 event_id=1 cwsr_shadow_pages=24 runtime=enabled-before-create-then-disabled ring=4096 roles=ring,control,eop,cwsr,completion-signals gtt_policy=accepted doorbell_slice=8192 doorbell_byte_offset=0 dontfork=confirmed mmio_stores=0 packets=0 destroy=queue-then-event-then-runtime-confirmed resources_returned=5

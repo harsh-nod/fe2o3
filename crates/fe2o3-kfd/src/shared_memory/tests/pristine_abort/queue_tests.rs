@@ -156,14 +156,23 @@ fn expected_model(
     unmapped: usize,
     released: usize,
 ) -> MemoryLifecycleStateV1 {
+    expected_model_in_vm(f.memory.fixture.vm, before, unmapped, released)
+}
+
+fn expected_model_in_vm(
+    vm: VmKeyV1,
+    before: &Snapshot,
+    unmapped: usize,
+    released: usize,
+) -> MemoryLifecycleStateV1 {
     let mut model = before.model.clone();
     for c in before.controls.iter().take(unmapped) {
-        let (_, _, mapping) = model_keys(f.memory.fixture.vm, c.identity.id, c.identity.generation);
+        let (_, _, mapping) = model_keys(vm, c.identity.id, c.identity.generation);
         model = project_unmap(&model, mapping).unwrap();
     }
     for c in before.controls.iter().take(released) {
         let (reservation, allocation, mapping) =
-            model_keys(f.memory.fixture.vm, c.identity.id, c.identity.generation);
+            model_keys(vm, c.identity.id, c.identity.generation);
         model = project_release(&model, reservation, allocation, mapping).unwrap();
     }
     model
@@ -213,6 +222,92 @@ fn expected_queue_record(
 }
 
 impl Snapshot {
+    pub(crate) fn assert_constructed_queue_projection_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        custody: &QueueResourceCleanupCustodyV1,
+        index: usize,
+        stage: Stage,
+    ) {
+        let after = memory.primary_queue_cleanup_snapshot_v1(custody);
+        let state = custody.observation();
+        let release = matches!(stage, Stage::ReleaseProjection | Stage::ReleaseCommit);
+        let disposed = stage == Stage::ReleaseCommit;
+        let native_unmaps = if release { 4 } else { index + 1 };
+        let (unmapped, released) = if release { (4, index) } else { (index, 0) };
+        assert_eq!(
+            (state.started, state.failed, state.unmapped, state.released),
+            (true, true, unmapped, released)
+        );
+        assert_eq!(state.controls[index].stage, stage);
+        assert!(state.controls[index].failed && !custody.is_complete());
+        let mut calls = self.calls.clone();
+        for i in 0..native_unmaps {
+            calls.push(CleanupCallV1::UnmapGpu(record(self, i).handle.unwrap(), 0));
+        }
+        for i in 0..released + usize::from(disposed) {
+            calls.extend(release_calls(self, i));
+        }
+        assert_eq!(after.calls, calls);
+        assert_eq!(
+            after.model,
+            expected_model_in_vm(memory.fixture.vm, self, unmapped, released)
+        );
+        assert_eq!(
+            after.retained_va,
+            retained_va_after(self, released + usize::from(disposed))
+        );
+        assert_eq!(after.identity, self.identity);
+        assert_eq!(after.certificate, self.certificate);
+        assert_eq!(after.devices, self.devices);
+        assert_eq!(after.usage, self.usage);
+        assert_eq!(after.storage, self.storage);
+        for i in 0..4 {
+            let settled = i < released || (i == index && disposed);
+            let native_calls = if settled {
+                release_calls(self, i).len()
+            } else {
+                0
+            };
+            assert_eq!(
+                record(&after, i),
+                &expected_queue_record(self, i, i < native_unmaps, native_calls, settled, settled)
+            );
+            assert_eq!(after.controls[i].identity, self.controls[i].identity);
+            assert_eq!(
+                after.controls[i].profile_type,
+                self.controls[i].profile_type
+            );
+            assert_eq!(after.controls[i].layout, self.controls[i].layout);
+            assert_eq!(after.controls[i].native_disposed, settled);
+            assert_eq!(
+                after.controls[i].owner,
+                if settled {
+                    "NativeDisposed"
+                } else if i < native_unmaps {
+                    "Unmapped"
+                } else {
+                    "Mapped"
+                }
+            );
+            assert_eq!(
+                after.controls[i].disposal,
+                disposal_progress(i, native_calls, None)
+            );
+            if !after.controls[i].started {
+                assert_eq!(after.controls[i], self.controls[i]);
+            }
+        }
+        for record in &self.records {
+            if !self.controls.iter().any(|c| c.identity.id == record.id) {
+                assert_eq!(
+                    after.records.iter().find(|r| r.id == record.id).unwrap(),
+                    record
+                );
+            }
+        }
+    }
+
     pub(crate) fn assert_constructed_queue_failure_v1(
         &self,
         memory: &crate::shared_memory::PreparationMemoryFixtureV1,

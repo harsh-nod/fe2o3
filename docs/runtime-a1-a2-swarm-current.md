@@ -24,8 +24,11 @@ qualification remain open. A1/A2 and issue #182 remain incomplete.
 [R126 development](runtime-primary-queue-release-v1.md) now includes borrowed
 foundation restoration, four-resource cleanup, retained Linux teardown and the
 ordinary-primary runtime owner. The shared production ordering driver now also
-uses original completed-constructor fixture owners. Remaining parent/runtime
-fault coverage and fresh qualification stay open; R125 is still accepted.
+uses original completed-constructor fixture owners. Sixteen constructed-parent
+tests cover additional dispatch-data, model-commit and post-abort cleanup paths;
+a one-device packetless native probe confirms successful concrete public-root
+Drop. Remaining parent/runtime fault coverage and fresh qualification stay open;
+R125 is still accepted.
 
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)

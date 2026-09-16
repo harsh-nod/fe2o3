@@ -4,10 +4,20 @@ use std::path::Path;
 use std::process::Command;
 
 use fe2o3_kfd::topology::discover_default_topology;
-use fe2o3_kfd::{DeviceSelector, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, OpenedKfd};
+use fe2o3_kfd::{
+    DeviceSelector, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, OpenedKfd,
+    PrimaryQueueReleaseCustodyV1,
+};
 
 const CHILD_ENV: &str = "FE2O3_KFD_COMPUTE_AQL_QUEUE_CHILD";
-const USAGE: &str = "usage: kfd-compute-aql-queue (--all|<selected-unique-id>)";
+const USAGE: &str =
+    "usage: kfd-compute-aql-queue [--retained-release] (--all|<selected-unique-id>)";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Options {
+    selection: GpuSelection,
+    retained_release: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GpuSelection {
@@ -26,9 +36,15 @@ fn parse_u64(value: &str) -> Result<u64, String> {
     }
 }
 
-fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelection, String> {
+fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut args = args.into_iter();
     let selected = args.next().ok_or_else(|| USAGE.to_owned())?;
+    let retained_release = selected == "--retained-release";
+    let selected = if retained_release {
+        args.next().ok_or_else(|| USAGE.to_owned())?
+    } else {
+        selected
+    };
     let selection = if selected == "--all" {
         GpuSelection::All
     } else {
@@ -37,10 +53,13 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelectio
     if let Some(extra) = args.next() {
         return Err(format!("unexpected argument `{extra}`; {USAGE}"));
     }
-    Ok(selection)
+    Ok(Options {
+        selection,
+        retained_release,
+    })
 }
 
-fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+fn run_child(unique_id: u64, retained_release: bool) -> Result<(), Box<dyn std::error::Error>> {
     let device = OpenedKfd::open_default()?
         .admit_uapi()?
         .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))?;
@@ -59,7 +78,21 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(observation.cwsr_shadow_pages(), 24);
     queue.verify_doorbell_dontfork()?;
     queue.verify_exception_shadows_dontfork()?;
-    let destroyed = queue.destroy()?;
+    let destroyed = if retained_release {
+        assert!(queue.supports_retained_primary_release_v1()?);
+        queue.preflight_primary_release_v1()?;
+        let mut custody = PrimaryQueueReleaseCustodyV1::new(queue);
+        let destroyed = custody.release_in_place()?;
+        assert_eq!(destroyed.queue_id(), observation.queue_id());
+        assert_eq!(destroyed.released_resources(), 5);
+        drop(custody);
+        println!(
+            "retained_primary_release=complete public_root_drop=completed packets=0 mmio_stores=0"
+        );
+        destroyed
+    } else {
+        queue.destroy()?
+    };
     assert_eq!(destroyed.queue_id(), 0);
     assert_eq!(destroyed.released_resources(), 5);
     println!(
@@ -75,8 +108,16 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_isolated_child(executable: &Path, unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
-    let status = Command::new(executable)
+fn run_isolated_child(
+    executable: &Path,
+    unique_id: u64,
+    retained_release: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = Command::new(executable);
+    if retained_release {
+        command.arg("--retained-release");
+    }
+    let status = command
         .arg(unique_id.to_string())
         .env(CHILD_ENV, "1")
         .status()?;
@@ -90,15 +131,15 @@ fn run_isolated_child(executable: &Path, unique_id: u64) -> Result<(), Box<dyn s
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let selection = parse_selection(std::env::args().skip(1))?;
+    let options = parse_selection(std::env::args().skip(1))?;
     if std::env::var_os(CHILD_ENV).is_some() {
-        let GpuSelection::UniqueId(unique_id) = selection else {
+        let GpuSelection::UniqueId(unique_id) = options.selection else {
             return Err("isolated compute-AQL queue child requires one explicit unique ID".into());
         };
-        return run_child(unique_id);
+        return run_child(unique_id, options.retained_release);
     }
 
-    let unique_ids = match selection {
+    let unique_ids = match options.selection {
         GpuSelection::All => {
             let unique_ids = discover_default_topology()?
                 .topology()
@@ -115,14 +156,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let executable = std::env::current_exe()?;
     for unique_id in unique_ids {
-        run_isolated_child(&executable, unique_id)?;
+        run_isolated_child(&executable, unique_id, options.retained_release)?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GpuSelection, parse_selection};
+    use super::{GpuSelection, Options, parse_selection};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -132,11 +173,17 @@ mod tests {
     fn explicit_unique_ids_accept_decimal_and_hex() {
         assert_eq!(
             parse_selection(args(&["42"])).unwrap(),
-            GpuSelection::UniqueId(42)
+            Options {
+                selection: GpuSelection::UniqueId(42),
+                retained_release: false
+            }
         );
         assert_eq!(
             parse_selection(args(&["0x2a"])).unwrap(),
-            GpuSelection::UniqueId(42)
+            Options {
+                selection: GpuSelection::UniqueId(42),
+                retained_release: false
+            }
         );
     }
 
@@ -144,7 +191,10 @@ mod tests {
     fn all_is_an_explicit_selection() {
         assert_eq!(
             parse_selection(args(&["--all"])).unwrap(),
-            GpuSelection::All
+            Options {
+                selection: GpuSelection::All,
+                retained_release: false
+            }
         );
     }
 
@@ -154,5 +204,28 @@ mod tests {
         assert!(parse_selection(args(&["not-an-id"])).is_err());
         assert!(parse_selection(args(&["42", "extra"])).is_err());
         assert!(parse_selection(args(&["--all", "extra"])).is_err());
+        assert!(parse_selection(args(&["--retained-release"])).is_err());
+        assert!(parse_selection(args(&["42", "--retained-release"])).is_err());
+        assert!(
+            parse_selection(args(&["--retained-release", "--retained-release", "42"])).is_err()
+        );
+    }
+
+    #[test]
+    fn retained_release_requires_explicit_mode_and_device_selection() {
+        assert_eq!(
+            parse_selection(args(&["--retained-release", "0x2a"])).unwrap(),
+            Options {
+                selection: GpuSelection::UniqueId(42),
+                retained_release: true
+            }
+        );
+        assert_eq!(
+            parse_selection(args(&["--retained-release", "--all"])).unwrap(),
+            Options {
+                selection: GpuSelection::All,
+                retained_release: true
+            }
+        );
     }
 }

@@ -90,6 +90,16 @@ The selected route is ordinary primary AqlSpecial Release without SDMA,
 auxiliary, debug-runtime or persistent attachments. Other profiles retain their
 existing paths; they remain requirements, not qualified by this implementation.
 
+The runtime facade branch is not yet reached by a successful ordinary public
+native workload. Native `allocate_v1` calls `ensure_sdma_queue_v1`, which creates
+the primary and immediately attaches directional SDMA. Shutdown trims free
+buffers but does not detach that SDMA owner, so profile selection takes the
+legacy path. Nonempty fixed-dispatch data requires those allocations; empty data
+is rejected, and opening/stream/module-only workflows leave the queue absent.
+Retained SDMA teardown or a genuinely supported compute-only allocation path is
+therefore an integration prerequisite. The direct queue probe below does not
+close this runtime-facade reachability gap.
+
 Focused GNU development checks pass: six four-resource tests, six platform
 tests, three retained-DESTROY engine tests and three primary-owner negative/Drop
 tests. A separate `queue::tests` filter passes 53 tests, including the three
@@ -142,7 +152,10 @@ arguments/macros, completion/graph tests and adapters, copy-only examples,
 the test allocator and the local constructor fixture. Inventory acceptance is
 not formal refinement or native-execution evidence.
 
-## Current Development Checks
+## Published Integration Checks
+
+The following results describe `43746b71889cc03778dc1b945a7d86788e6b5ccb`,
+before the failure-path extension below.
 
 Fresh full GNU library regressions pass 1,279 KFD tests and 744 runtime tests,
 with zero failures, ignored tests or filtered tests in either suite. Both runs
@@ -175,16 +188,79 @@ full GNU regressions, focused musl run and strict Clippy include them. R125
 remains the accepted Native milestone. No SSH or native GPU execution was used
 here.
 
+## Failure-Path Extension
+
+Seven additional constructed-parent test functions extend the shared-driver
+coverage to sixteen functions:
+
+- All four original dispatch-data entries, covering initialized/uninitialized
+  device and coherent host inputs, every applicable native disposal call and
+  currentness boundary, with errors and original panic payloads.
+- Both coherent host-data entries at unmap/release projection and commit
+  boundaries. Native disposal, accounting refund and model commit are observed
+  separately; a disposed owner must be a terminal receipt, not a usable token.
+- All four queue resources at those same four model boundaries, with exact
+  native call order, committed model prefix and untouched dispatch/signal state.
+- Actual publication-return commit rejection after its successful projection:
+  a test-only hook exhausts the original certificate revision before replacement.
+  The original publication model and resource authority remain in the engine.
+- Actual post-DESTROY model rejection: a test-only hook deliberately corrupts
+  only the observation's queue key. The real projector rejects the absent key;
+  the original queue stays DestroyPending with its exact successful native receipt.
+  This is corrupted-input coverage, not a claim that valid inputs naturally fail.
+- Release after the original prepared dispatch has completed lower pristine
+  abort and disposal of its original returned data, through a genuine foundation
+  loan/reclaim. This fixture does not exercise the concrete live detached ledger.
+
+Late session-owned model hooks inject errors/panics at actual boundaries. They
+do not mint a replacement queue certificate or mislabel an injector panic as
+certificate exhaustion. Retry comparisons now include the ordinary active-data
+receipt, remaining-data cursor/storage, queue model and authority-poison state.
+Successful release additionally checks zero reserved, retained and quarantined
+account records and unpoisoned host/device accounts.
+
+The [packetless MI300X probe](evidence/dev-r126-primary-release-native-2026-09-16/README.md)
+passed on one explicit device. A genuine no-dispatch primary queue completed
+retained teardown and normal process exit after explicitly dropping the concrete
+public release root. It submitted zero packets and performed zero MMIO stores.
+The exact executable and private staging directory were removed after confirmed
+process closure. This closes the no-dispatch concrete successful-Drop example,
+not native failure retention, runtime-facade integration or R126 acceptance.
+
+Final focused extension checks pass: sixteen constructed-parent tests each on
+GNU and musl (1,270 filtered out in each run); GNU shared-memory 269/269,
+dispatch-control cleanup 60/60, queue engine 53/53 and example CLI 4/4. Strict
+Clippy for both runtime crates, all features/targets, and formatting/whitespace
+checks pass. The unchanged unsafe-source inventory passes five policy tests;
+the explicit inventory-refresh maintenance test remains ignored. These focused
+suites are not a fresh full workspace GNU/musl
+qualification run. Earlier compile/oracle/lint failures remain development
+history, not passing evidence; the final runs include the receipt-variant and
+full retry assertions.
+
+```sh
+cargo test --locked --offline -p fe2o3-kfd --all-features --lib integration_tests::release_cases::
+cargo test --locked --offline -p fe2o3-kfd --all-features --target x86_64-unknown-linux-musl --lib integration_tests::release_cases::
+cargo test --locked --offline -p fe2o3-kfd --all-features --lib shared_memory::tests
+cargo test --locked --offline -p fe2o3-kfd --all-features --lib queue::dispatch_binding::control_release::
+cargo test --locked --offline -p fe2o3-kfd --all-features --lib queue::tests::
+cargo test --locked --offline -p fe2o3-kfd --features live-validation --example kfd-compute-aql-queue
+```
+
 ## Remaining Qualification
 
-1. Extend constructed-parent coverage to publication-return commit failure,
-   dispatch-data failures, late memory/model prefixes and the post-pristine-abort
-   entry state. The exhaustive lower matrices do not substitute for these joins.
-2. Add direct post-DESTROY model-observation rejection and successful public-root
-   Drop coverage with a genuinely completed parent. The negative unfinished-root
-   subprocess checks and completed generic fixture Drop have distinct scopes.
-3. Verify runtime retention, account observations, slot reuse rejection and
-   destruction-profile events through the actual retained parent path.
+1. Extend constructed-parent coverage to the remaining late queue-resource and
+   signal currentness/model joins and the concrete post-pristine-abort detached
+   ledger admission. Lower exhaustive matrices and the generic post-abort fixture
+   do not substitute for these joins.
+2. Extend the no-dispatch native successful-Drop probe to applicable dispatch and
+   failure-retention paths. Corrupted-observation model rejection, scripted native
+   errors and actual hardware outcomes retain distinct evidence scopes.
+3. Make the retained path reachable from a genuine public runtime workflow
+   without dropping or bypassing SDMA custody. Then verify runtime retention,
+   account observations, slot reuse rejection and destruction-profile events
+   through that path. A manually installed queue or scripted early shutdown
+   return is not public-workflow evidence.
 4. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
    calibrations and independent evidence review before R126 acceptance.
 5. Qualify applicable additional queue profiles, native GPU execution, formal
@@ -194,3 +270,35 @@ The initial ordinary-primary profile does not remove other queue profiles from
 the final objective. Generated DATA-ADOPT, ISSUE, completion/readback/typed
 replies, Stop/drain/graphs, resource proofs and production Context integration
 remain subsequent requirements.
+
+## Directional SDMA Handoff
+
+The next production packet is ordinary primary plus Directional SDMA, which
+addresses the public runtime allocation-path gap. Existing
+`Gfx942SdmaQueueOwnerV1::destroy_queue` consumes its doorbell without retaining
+the exact unmap outcome; `release_resources` consumes its three tokens, and
+queue-set cleanup pops owners. Wrapping those consuming methods is insufficient.
+
+Add borrowed one-shot cleanup state under the public root before effects:
+original owners, exact destroy request/outcome, doorbell progress, fixed
+completion/control/ring cleanup tokens, terminal latch and completed prefixes.
+Reuse existing vectors and indexed borrowed owners rather than popping after
+effects. Preserve actual ordering:
+
+1. Destroy directional H2D slot 1, then D2H slot 0, before primary destruction.
+2. Complete primary platform teardown, foundation restoration, primary resource
+   release and shadow completion.
+3. Release directional H2D, then D2H resources. Within each owner, unmap all
+   completion/control/ring tokens before releasing them in that same order;
+   preserve USERPTR free-before-CPU-unmap behavior.
+4. Release dispatch and primary signals; only then confirm the gate. The combined
+   primary/two-directional-queue result accounts for eleven resources.
+
+Required tests cover genuine mapped owners/doorbells, pending-record and malformed
+roster rejection, raw destroy/doorbell outcomes, every cleanup/commit/currentness
+prefix, certified lower-path six-revision headroom (without inventing a certificate
+after permanent restoration), inert retries, native completed Drop, and actual
+public runtime allocate/release/shutdown selection with accounting
+and profiler events. ID-only fixtures cannot establish successful cleanup.
+Striped, Generic, LogicalMux and terminal-creation profiles remain explicit later
+requirements; this handoff implements none of them and adds no acceptance claim.

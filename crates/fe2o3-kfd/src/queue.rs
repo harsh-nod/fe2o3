@@ -626,6 +626,13 @@ struct RetainedQueueResourcesV1<A> {
     create_outputs: Option<KfdGfx942CreateQueueOutputs>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrimaryReleaseFaultV1 {
+    DestroyObservation(QueueKeyV1),
+    PublicationReturn,
+}
+
 struct NativeQueueEngineV1<B: NativeQueueBackendV1> {
     backend: B,
     opener_pid: u32,
@@ -633,6 +640,8 @@ struct NativeQueueEngineV1<B: NativeQueueBackendV1> {
     model: QueueLifecycleStateV1,
     resources: Vec<RetainedQueueResourcesV1<B::ResourceAuthority>>,
     authority_poisoned: bool,
+    #[cfg(test)]
+    release_fault: Option<PrimaryReleaseFaultV1>,
 }
 
 struct NativeQueueEngineInitializationV1<B: NativeQueueBackendV1> {
@@ -675,6 +684,8 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineInitializationV1<B> {
             model,
             resources: Vec::new(),
             authority_poisoned: false,
+            #[cfg(test)]
+            release_fault: None,
         })
     }
 }
@@ -963,7 +974,18 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         if malformed {
             status = QueueSyscallStatusV1::Indeterminate;
         }
-        self.observe(QueueTransitionV1::ObserveDestroy { queue: key, status })?;
+        let observation = QueueTransitionV1::ObserveDestroy { queue: key, status };
+        #[cfg(test)]
+        let observation = match self
+            .release_fault
+            .take_if(|fault| matches!(fault, PrimaryReleaseFaultV1::DestroyObservation(_)))
+        {
+            Some(PrimaryReleaseFaultV1::DestroyObservation(queue)) => {
+                QueueTransitionV1::ObserveDestroy { queue, status }
+            }
+            _ => observation,
+        };
+        self.observe(observation)?;
         let phase = self.phase(key);
         self.finish_operation()?;
         if malformed {
@@ -991,6 +1013,13 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             .model
             .release_resource_publications(self.foundation.memory(), key)
             .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;
+        #[cfg(test)]
+        if self.release_fault == Some(PrimaryReleaseFaultV1::PublicationReturn) {
+            self.release_fault = None;
+            self.foundation
+                .set_certificate_revision_for_test(u64::MAX)
+                .expect("original certified queue foundation");
+        }
         self.foundation
             .replace_memory_after_sealed_transition(memory)
             .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;

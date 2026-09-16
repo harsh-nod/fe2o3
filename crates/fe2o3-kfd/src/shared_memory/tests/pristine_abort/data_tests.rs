@@ -147,10 +147,26 @@ impl DispatchDataReleaseV1 for crate::shared_memory::PreparationMemoryFixtureV1 
         &mut self,
         custody: &mut DataCleanupCustodyV1,
     ) -> Result<(), MemorySessionError> {
+        self.data_release_calls += 1;
+        if let Some((ordinal, operation, panic)) = self.data_release_native_fault
+            && ordinal == self.data_release_calls
+        {
+            self.fail_cleanup(operation, panic);
+        }
+        if let Some((ordinal, offset, panic)) = self.data_release_currentness_fault
+            && ordinal == self.data_release_calls
+        {
+            self.primary_fail_currentness_v1(offset, panic);
+        }
         let started = custody.observation().started;
         let f = &mut self.fixture;
         let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
-        projection.fault = self.data_release_projection_fault;
+        if self
+            .data_release_projection_ordinal
+            .is_none_or(|ordinal| ordinal == self.data_release_calls)
+        {
+            projection.fault = self.data_release_projection_fault;
+        }
         let poisoned = &mut self.data_release_process_poisoned;
         let result = catch_unwind(AssertUnwindSafe(|| {
             data_cleanup::release_v1(&mut f.engine, &mut projection, custody, || *poisoned += 1)
@@ -176,11 +192,44 @@ impl DispatchDataReleaseV1 for crate::shared_memory::PreparationMemoryFixtureV1 
 }
 
 impl crate::shared_memory::PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_arm_data_native_v1(
+        &mut self,
+        index: usize,
+        operation: &'static str,
+        panic: bool,
+    ) {
+        self.data_release_native_fault =
+            Some((self.data_release_calls + index + 1, operation, panic));
+    }
+
+    pub(crate) fn primary_arm_data_currentness_v1(
+        &mut self,
+        index: usize,
+        offset: usize,
+        panic: bool,
+    ) {
+        self.data_release_currentness_fault =
+            Some((self.data_release_calls + index + 1, offset, panic));
+    }
+
+    pub(crate) fn primary_arm_data_projection_v1(
+        &mut self,
+        index: usize,
+        stage: Stage,
+        panic: bool,
+    ) {
+        self.data_release_projection_ordinal = Some(self.data_release_calls + index + 1);
+        self.arm_data_release_projection_v1(stage, panic);
+    }
+
     pub(crate) fn clear_data_release_faults_v1(&mut self) {
         self.insertion_clear_faults_v1();
         self.fixture.engine.backend.unmap_progress = 1;
         self.fixture.engine.backend.unmap_errno = false;
         self.data_release_projection_fault = None;
+        self.data_release_projection_ordinal = None;
+        self.data_release_native_fault = None;
+        self.data_release_currentness_fault = None;
     }
 
     pub(crate) fn arm_data_release_unmap_v1(&mut self, prefix: u32, errno: bool) {
@@ -218,6 +267,24 @@ fn shared_calls(r: &RecordSnapshot) -> [CleanupCallV1; 4] {
 }
 
 impl Snapshot {
+    pub(crate) fn assert_primary_data_prefix_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        controls: &[SharedGttAllocationIdentityV1],
+        order: &[Identity],
+        completed: usize,
+        active: Option<&DataCleanupObservationV1>,
+    ) {
+        self.assert_data_prefix_between_v1(
+            &memory.primary_restored_memory_snapshot_v1(),
+            memory.fixture.vm,
+            controls,
+            order,
+            completed,
+            active,
+        );
+    }
+
     fn assert_data_identity(&self, id: Identity, active: &DataCleanupObservationV1) {
         if active.owner == "Original" {
             return;

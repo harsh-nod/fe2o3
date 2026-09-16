@@ -9,6 +9,9 @@ use crate::queue::live::primary_release::{
 use crate::queue_linux::primary_fixture::LocalRuntimeObservationV1;
 use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV1};
 
+#[path = "integration_release_fault_tests.rs"]
+mod fault_cases;
+
 struct Parent {
     engine: NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,
     key: QueueKeyV1,
@@ -84,7 +87,10 @@ impl PrimaryReleaseMemoryV1 for Memory {
         memory_step("release-resources")?;
         trace().borrow_mut().release_snapshot =
             Some(self.primary_queue_cleanup_snapshot_v1(resources));
-        let result = self.primary_release_queue_resources_v1(resources);
+        let result = self.primary_release_queue_resources_v1(
+            resources,
+            trace().borrow().queue_release_projection_fault,
+        );
         if result.is_ok() {
             trace().borrow_mut().post_resources_snapshot =
                 Some(self.primary_restored_memory_snapshot_v1());
@@ -215,7 +221,7 @@ fn assert_no_retry(
     let dispatch = state
         .dispatch
         .as_ref()
-        .map(RetainedControlSnapshotV1::root_v1);
+        .map(RetainedControlSnapshotV1::ordinary_root_v1);
     let original_dispatch = parent
         .dispatch
         .as_ref()
@@ -226,6 +232,9 @@ fn assert_no_retry(
         .map(|p| (p.identities(), p.observation(), p.progress()));
     let destroy = state.destroy;
     let phase = parent.engine.phase(parent.key);
+    let model = parent.engine.model.clone();
+    let authority_poisoned = parent.engine.authority_poisoned;
+    let release_fault = parent.engine.release_fault;
     assert!(matches!(
         state.release_in_place(parent),
         Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -247,7 +256,7 @@ fn assert_no_retry(
         state
             .dispatch
             .as_ref()
-            .map(RetainedControlSnapshotV1::root_v1),
+            .map(RetainedControlSnapshotV1::ordinary_root_v1),
         dispatch
     );
     assert_eq!(
@@ -266,6 +275,9 @@ fn assert_no_retry(
     );
     assert_eq!(state.destroy, destroy);
     assert_eq!(parent.engine.phase(parent.key), phase);
+    assert_eq!(parent.engine.model, model);
+    assert_eq!(parent.engine.authority_poisoned, authority_poisoned);
+    assert_eq!(parent.engine.release_fault, release_fault);
     assert_eq!(remaining(parent, state), original_remaining);
 }
 

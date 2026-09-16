@@ -12,9 +12,16 @@ CPU/test only; A1/A2, issue #182 and HIP/HSA parity remain incomplete.
 
 [R126 development](runtime-primary-queue-release-v1.md) implements borrowed
 foundation restoration, four-resource cleanup, retained Linux teardown and the
-ordinary-primary runtime owner. Nine constructed-parent tests exercise the shared
-driver with original owners and representative native/platform failures. Remaining
-parent/runtime coverage, other queue profiles and qualification remain open.
+ordinary-primary runtime owner. Sixteen constructed-parent tests exercise the
+shared driver with original owners, dispatch-data failures and native/model
+prefixes. A one-device packetless native probe confirms completed public-root
+Drop. Remaining parent/runtime coverage, other queue profiles and qualification
+remain open.
+
+Runtime integration must address reachability: ordinary public native allocation
+eagerly attaches SDMA, and shutdown trims buffers without removing that owner.
+Those workflows still select legacy teardown. The new direct queue probe does
+not qualify the runtime facade's retained branch.
 
 Preceding Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each

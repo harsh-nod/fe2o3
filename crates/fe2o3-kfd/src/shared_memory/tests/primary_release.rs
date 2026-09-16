@@ -69,6 +69,7 @@ impl PreparationMemoryFixtureV1 {
     pub(crate) fn primary_release_queue_resources_v1(
         &mut self,
         resources: &mut QueueResourceCleanupCustodyV1,
+        fault: Option<(usize, control_cleanup::CleanupStageV1, bool)>,
     ) -> Result<(), MemorySessionError> {
         assert!(matches!(
             self.fixture.ownership.phase,
@@ -77,6 +78,17 @@ impl PreparationMemoryFixtureV1 {
         let before = resources.observation();
         let f = &mut self.fixture;
         let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
+        if let Some((index, stage, panic)) = fault {
+            projection.fault = Some((
+                stage,
+                if panic {
+                    adapter::ProjectionFaultV1::Panic
+                } else {
+                    adapter::ProjectionFaultV1::Error
+                },
+            ));
+            projection.skip_fault_matches = index;
+        }
         let result = catch_unwind(AssertUnwindSafe(|| {
             queue_cleanup::release_v1(&mut f.engine, &mut projection, resources, || {
                 self.control_release_process_poisoned += 1
@@ -186,6 +198,24 @@ impl PreparationMemoryFixtureV1 {
         assert_eq!(
             (device.used_backing_bytes, device.used_allocation_records),
             (0, 0)
+        );
+        assert_eq!(
+            (
+                host.reserved_records,
+                host.retained_records,
+                host.quarantined_records,
+                host.poisoned
+            ),
+            (0, 0, 0, false)
+        );
+        assert_eq!(
+            (
+                device.reserved_records,
+                device.retained_records,
+                device.quarantined_records,
+                device.poisoned
+            ),
+            (0, 0, 0, false)
         );
     }
 }

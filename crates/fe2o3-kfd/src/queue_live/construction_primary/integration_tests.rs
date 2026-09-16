@@ -43,6 +43,7 @@ struct Trace {
     create: u8,
     destroy: Option<u8>,
     restore_foreign_vm: bool,
+    queue_release_projection_fault: Option<(usize, crate::shared_memory::CleanupStageV1, bool)>,
     release_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
     post_resources_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
     signal_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,

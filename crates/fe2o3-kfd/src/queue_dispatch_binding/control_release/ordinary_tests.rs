@@ -4,7 +4,7 @@ use crate::shared_memory::{
 };
 
 #[derive(Debug, Eq, PartialEq)]
-struct OrdinarySnapshot {
+pub(in crate::queue) struct OrdinarySnapshot {
     base: Snapshot,
     remaining: Vec<Data>,
     pointer: usize,
@@ -20,6 +20,27 @@ fn ordinary_snapshot(root: &Root) -> OrdinarySnapshot {
             .active_data
             .as_ref()
             .map(DataCleanupCustodyV1::observation),
+    }
+}
+
+impl Snapshot {
+    pub(in crate::queue) fn ordinary_root_v1(root: &Root) -> OrdinarySnapshot {
+        ordinary_snapshot(root)
+    }
+
+    pub(in crate::queue) fn data_order_v1(
+        &self,
+    ) -> Vec<crate::sdma::Gfx942SdmaBufferStorageIdentityV1> {
+        self.data.iter().map(|data| data.identity).collect()
+    }
+
+    pub(in crate::queue) fn assert_ordinary_data_prefix_v1(
+        &self,
+        root: &Root,
+        index: usize,
+    ) -> DataCleanupObservationV1 {
+        assert_eq!(self.mode, Mode::Ordinary);
+        active_data(root, self, index)
     }
 }
 

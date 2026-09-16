@@ -17,9 +17,11 @@ Preserve all-four-unmap, then all-four-release, then shadow completion; keep
 process-gate custody until dispatch and signals are also conclusively released.
 The [R126 development](runtime-primary-queue-release-v1.md) now includes borrowed
 foundation restoration, four-resource cleanup, retained Linux teardown and the
-ordinary-primary runtime owner. Nine constructed-parent tests now exercise the
-shared driver; remaining parent/runtime coverage and fresh qualification stay
-open. R125 is still accepted. Then connect N5
+ordinary-primary runtime owner. Sixteen constructed-parent tests exercise the
+shared driver, including dispatch-data and model-boundary failures. A packetless
+native probe confirms completed public-root Drop on one MI300X. Remaining
+parent/runtime coverage and fresh qualification stay open. R125 is still
+accepted. Then connect N5
 DATA-ADOPT, actual I2 ISSUE, C4/C5 completion/readback/typed replies and C6
 Stop/drain/graphs. Other queue modes and cold-output profiles remain required.
 

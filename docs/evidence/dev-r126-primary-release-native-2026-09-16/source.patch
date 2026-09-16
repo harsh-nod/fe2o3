@@ -1,0 +1,932 @@
+diff --git a/crates/fe2o3-kfd/examples/kfd-compute-aql-queue.rs b/crates/fe2o3-kfd/examples/kfd-compute-aql-queue.rs
+index bf9d788a5..aa76a1ab2 100644
+--- a/crates/fe2o3-kfd/examples/kfd-compute-aql-queue.rs
++++ b/crates/fe2o3-kfd/examples/kfd-compute-aql-queue.rs
+@@ -7 +7,4 @@ use fe2o3_kfd::topology::discover_default_topology;
+-use fe2o3_kfd::{DeviceSelector, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, OpenedKfd};
++use fe2o3_kfd::{
++    DeviceSelector, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, OpenedKfd,
++    PrimaryQueueReleaseCustodyV1,
++};
+@@ -10 +13,8 @@ const CHILD_ENV: &str = "FE2O3_KFD_COMPUTE_AQL_QUEUE_CHILD";
+-const USAGE: &str = "usage: kfd-compute-aql-queue (--all|<selected-unique-id>)";
++const USAGE: &str =
++    "usage: kfd-compute-aql-queue [--retained-release] (--all|<selected-unique-id>)";
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++struct Options {
++    selection: GpuSelection,
++    retained_release: bool,
++}
+@@ -29 +39 @@ fn parse_u64(value: &str) -> Result<u64, String> {
+-fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelection, String> {
++fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
+@@ -31,0 +42,6 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelectio
++    let retained_release = selected == "--retained-release";
++    let selected = if retained_release {
++        args.next().ok_or_else(|| USAGE.to_owned())?
++    } else {
++        selected
++    };
+@@ -40 +56,4 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelectio
+-    Ok(selection)
++    Ok(Options {
++        selection,
++        retained_release,
++    })
+@@ -43 +62 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelectio
+-fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
++fn run_child(unique_id: u64, retained_release: bool) -> Result<(), Box<dyn std::error::Error>> {
+@@ -62 +81,15 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+-    let destroyed = queue.destroy()?;
++    let destroyed = if retained_release {
++        assert!(queue.supports_retained_primary_release_v1()?);
++        queue.preflight_primary_release_v1()?;
++        let mut custody = PrimaryQueueReleaseCustodyV1::new(queue);
++        let destroyed = custody.release_in_place()?;
++        assert_eq!(destroyed.queue_id(), observation.queue_id());
++        assert_eq!(destroyed.released_resources(), 5);
++        drop(custody);
++        println!(
++            "retained_primary_release=complete public_root_drop=completed packets=0 mmio_stores=0"
++        );
++        destroyed
++    } else {
++        queue.destroy()?
++    };
+@@ -78,2 +111,10 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+-fn run_isolated_child(executable: &Path, unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+-    let status = Command::new(executable)
++fn run_isolated_child(
++    executable: &Path,
++    unique_id: u64,
++    retained_release: bool,
++) -> Result<(), Box<dyn std::error::Error>> {
++    let mut command = Command::new(executable);
++    if retained_release {
++        command.arg("--retained-release");
++    }
++    let status = command
+@@ -93 +134 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+-    let selection = parse_selection(std::env::args().skip(1))?;
++    let options = parse_selection(std::env::args().skip(1))?;
+@@ -95 +136 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+-        let GpuSelection::UniqueId(unique_id) = selection else {
++        let GpuSelection::UniqueId(unique_id) = options.selection else {
+@@ -98 +139 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+-        return run_child(unique_id);
++        return run_child(unique_id, options.retained_release);
+@@ -101 +142 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+-    let unique_ids = match selection {
++    let unique_ids = match options.selection {
+@@ -118 +159 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+-        run_isolated_child(&executable, unique_id)?;
++        run_isolated_child(&executable, unique_id, options.retained_release)?;
+@@ -125 +166 @@ mod tests {
+-    use super::{GpuSelection, parse_selection};
++    use super::{GpuSelection, Options, parse_selection};
+@@ -135 +176,4 @@ mod tests {
+-            GpuSelection::UniqueId(42)
++            Options {
++                selection: GpuSelection::UniqueId(42),
++                retained_release: false
++            }
+@@ -139 +183,4 @@ mod tests {
+-            GpuSelection::UniqueId(42)
++            Options {
++                selection: GpuSelection::UniqueId(42),
++                retained_release: false
++            }
+@@ -147 +194,4 @@ mod tests {
+-            GpuSelection::All
++            Options {
++                selection: GpuSelection::All,
++                retained_release: false
++            }
+@@ -156,0 +207,23 @@ mod tests {
++        assert!(parse_selection(args(&["--retained-release"])).is_err());
++        assert!(parse_selection(args(&["42", "--retained-release"])).is_err());
++        assert!(
++            parse_selection(args(&["--retained-release", "--retained-release", "42"])).is_err()
++        );
++    }
++
++    #[test]
++    fn retained_release_requires_explicit_mode_and_device_selection() {
++        assert_eq!(
++            parse_selection(args(&["--retained-release", "0x2a"])).unwrap(),
++            Options {
++                selection: GpuSelection::UniqueId(42),
++                retained_release: true
++            }
++        );
++        assert_eq!(
++            parse_selection(args(&["--retained-release", "--all"])).unwrap(),
++            Options {
++                selection: GpuSelection::All,
++                retained_release: true
++            }
++        );
+diff --git a/crates/fe2o3-kfd/src/queue.rs b/crates/fe2o3-kfd/src/queue.rs
+index e3e7fa887..7153c4d90 100644
+--- a/crates/fe2o3-kfd/src/queue.rs
++++ b/crates/fe2o3-kfd/src/queue.rs
+@@ -628,0 +629,7 @@ struct RetainedQueueResourcesV1<A> {
++#[cfg(test)]
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum PrimaryReleaseFaultV1 {
++    DestroyObservation(QueueKeyV1),
++    PublicationReturn,
++}
++
+@@ -635,0 +643,2 @@ struct NativeQueueEngineV1<B: NativeQueueBackendV1> {
++    #[cfg(test)]
++    release_fault: Option<PrimaryReleaseFaultV1>,
+@@ -677,0 +687,2 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineInitializationV1<B> {
++            #[cfg(test)]
++            release_fault: None,
+@@ -966 +977,12 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
+-        self.observe(QueueTransitionV1::ObserveDestroy { queue: key, status })?;
++        let observation = QueueTransitionV1::ObserveDestroy { queue: key, status };
++        #[cfg(test)]
++        let observation = match self
++            .release_fault
++            .take_if(|fault| matches!(fault, PrimaryReleaseFaultV1::DestroyObservation(_)))
++        {
++            Some(PrimaryReleaseFaultV1::DestroyObservation(queue)) => {
++                QueueTransitionV1::ObserveDestroy { queue, status }
++            }
++            _ => observation,
++        };
++        self.observe(observation)?;
+@@ -993,0 +1016,7 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
++        #[cfg(test)]
++        if self.release_fault == Some(PrimaryReleaseFaultV1::PublicationReturn) {
++            self.release_fault = None;
++            self.foundation
++                .set_certificate_revision_for_test(u64::MAX)
++                .expect("original certified queue foundation");
++        }
+diff --git a/crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/ordinary_tests.rs b/crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/ordinary_tests.rs
+index 4675cdafe..f25e9e2be 100644
+--- a/crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/ordinary_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/ordinary_tests.rs
+@@ -7 +7 @@ use crate::shared_memory::{
+-struct OrdinarySnapshot {
++pub(in crate::queue) struct OrdinarySnapshot {
+@@ -25,0 +26,21 @@ fn ordinary_snapshot(root: &Root) -> OrdinarySnapshot {
++impl Snapshot {
++    pub(in crate::queue) fn ordinary_root_v1(root: &Root) -> OrdinarySnapshot {
++        ordinary_snapshot(root)
++    }
++
++    pub(in crate::queue) fn data_order_v1(
++        &self,
++    ) -> Vec<crate::sdma::Gfx942SdmaBufferStorageIdentityV1> {
++        self.data.iter().map(|data| data.identity).collect()
++    }
++
++    pub(in crate::queue) fn assert_ordinary_data_prefix_v1(
++        &self,
++        root: &Root,
++        index: usize,
++    ) -> DataCleanupObservationV1 {
++        assert_eq!(self.mode, Mode::Ordinary);
++        active_data(root, self, index)
++    }
++}
++
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs
+new file mode 100644
+index 000000000..ce39d49fc
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs
+@@ -0,0 +1,458 @@
++use super::*;
++use crate::shared_memory::CleanupStageV1 as Stage;
++use fe2o3_runtime_model::{QueueHistoryEventKindV1, QueueSyscallStatusV1};
++
++#[test]
++fn constructed_primary_release_after_pristine_abort_preserves_original_queue_and_refunds() {
++    use crate::shared_memory::{DataCleanupCustodyV1, DispatchDataReleaseV1};
++
++    let (mut parent, t, gate) = constructed(true);
++    let ids = original_resource_ids(&parent);
++    let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++    let before = RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
++    let buffers = parent
++        .dispatch
++        .as_ref()
++        .unwrap()
++        .prepare_pristine_abort_v1()
++        .unwrap();
++    let engine = &mut parent.engine;
++    let loan = engine
++        .backend
++        .session
++        .primary_loan(&mut engine.foundation)
++        .unwrap();
++    let mut abort = parent
++        .dispatch
++        .take()
++        .unwrap()
++        .begin_pristine_abort_v1(buffers);
++    abort.release_controls(&mut engine.backend.session).unwrap();
++    let (continuation, data, identities) = abort.into_detached();
++    assert_eq!(
++        data.iter()
++            .map(Gfx942FixedDispatchDataV1::sdma_storage_identity)
++            .collect::<Vec<_>>(),
++        before.data_order_v1()
++    );
++    assert_eq!(
++        data.iter()
++            .map(Gfx942FixedDispatchDataV1::storage_identity)
++            .collect::<Vec<_>>(),
++        identities
++    );
++    let mut returned: Vec<_> = data.into_iter().map(DataCleanupCustodyV1::new).collect();
++    for owner in &mut returned {
++        engine.backend.session.release_data(owner).unwrap();
++        assert!(owner.is_complete());
++    }
++    engine
++        .backend
++        .session
++        .primary_reclaim(&mut engine.foundation, loan)
++        .unwrap();
++    let returned_before: Vec<_> = returned
++        .iter()
++        .map(DataCleanupCustodyV1::observation)
++        .collect();
++    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++    state.release_in_place(&mut parent).unwrap();
++    assert_eq!(
++        state
++            .resources
++            .as_ref()
++            .unwrap()
++            .observation()
++            .controls
++            .map(|c| c.identity),
++        ids
++    );
++    assert_eq!(
++        state.signals.as_ref().unwrap().observation().identity,
++        signal_id
++    );
++    assert!(state.dispatch.is_none() && state.complete && !parent.poisoned);
++    assert_eq!(
++        returned
++            .iter()
++            .map(DataCleanupCustodyV1::observation)
++            .collect::<Vec<_>>(),
++        returned_before
++    );
++    parent
++        .engine
++        .backend
++        .session
++        .primary_assert_all_released_v1();
++    assert_no_retry(&mut parent, &mut state, &t);
++    drop(state);
++    drop(parent);
++    drop((continuation, returned));
++    assert_eq!(gate.teardown_count(), 0);
++    assert_eq!(gate.observation(), (false, false));
++    assert_eq!(t.borrow().local_resources.live(), (0, 0, 0));
++}
++
++#[derive(Clone, Copy, Debug)]
++enum DataFault {
++    Native(&'static str),
++    Currentness(usize),
++    Projection(Stage),
++}
++
++fn data_failure(index: usize, fault: DataFault, panic: bool) {
++    let (mut parent, t, gate) = constructed(true);
++    let dispatch = RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
++    let order = dispatch.data_order_v1();
++    assert_eq!(order.len(), 4);
++    let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++    let memory = &mut parent.engine.backend.session;
++    match fault {
++        DataFault::Native(operation) => memory.primary_arm_data_native_v1(index, operation, panic),
++        DataFault::Currentness(offset) => {
++            memory.primary_arm_data_currentness_v1(index, offset, panic)
++        }
++        DataFault::Projection(stage) => memory.primary_arm_data_projection_v1(index, stage, panic),
++    }
++    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++    let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++    if panic {
++        let payload = result.unwrap_err();
++        match fault {
++            DataFault::Native(operation) => assert_eq!(
++                payload.downcast_ref::<(&str, &str)>(),
++                Some(&("N2 native panic", operation))
++            ),
++            DataFault::Currentness(_) => assert_eq!(
++                payload.downcast_ref::<(&str, &str)>(),
++                Some(&("N2 native panic", "currentness"))
++            ),
++            DataFault::Projection(stage) => assert_eq!(
++                payload.downcast_ref::<(&str, Stage)>(),
++                Some(&("control cleanup projection", stage))
++            ),
++        }
++    } else {
++        let expected = match fault {
++            DataFault::Native(operation) => operation,
++            DataFault::Currentness(_) => "currentness",
++            DataFault::Projection(_) => "control cleanup projection",
++        };
++        assert!(
++            matches!(result.unwrap(), Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::Memory(MemorySessionError::Injected(actual)))) if actual == expected)
++        );
++    }
++    assert!(state.resources.as_ref().unwrap().is_complete());
++    let active = dispatch.assert_ordinary_data_prefix_v1(state.dispatch.as_ref().unwrap(), index);
++    assert!(active.started && active.failed && !active.complete);
++    match fault {
++        DataFault::Native(operation) => {
++            assert_eq!(
++                active.owner,
++                if operation == "unmap_gpu" {
++                    "Mapped"
++                } else {
++                    "Unmapped"
++                }
++            );
++            assert!(!active.native_disposed);
++        }
++        DataFault::Currentness(offset) => {
++            let terminal = offset == if index.is_multiple_of(2) { 5 } else { 6 };
++            assert_eq!(
++                active.owner,
++                if offset <= 2 {
++                    "Mapped"
++                } else if terminal {
++                    "NativeDisposed"
++                } else {
++                    "Unmapped"
++                }
++            );
++            assert_eq!(active.native_disposed, terminal);
++        }
++        DataFault::Projection(stage) => {
++            assert_eq!(active.stage, stage);
++            assert_eq!(active.native_disposed, stage == Stage::ReleaseCommit);
++            assert_eq!(
++                active.owner,
++                if stage == Stage::ReleaseCommit {
++                    "NativeDisposed"
++                } else {
++                    "Unmapped"
++                }
++            );
++        }
++    }
++    t.borrow_mut()
++        .post_resources_snapshot
++        .take()
++        .unwrap()
++        .assert_primary_data_prefix_v1(
++            &parent.engine.backend.session,
++            &dispatch.order_v1(),
++            &order,
++            index,
++            Some(&active),
++        );
++    assert_eq!(
++        Memory::primary_token_identity(parent.signals.as_ref().unwrap()),
++        signal_id
++    );
++    assert!(
++        parent.dispatch.is_none() && parent.poisoned && state.signals.is_none() && !state.complete
++    );
++    assert_eq!(
++        state.platform.as_ref().unwrap().progress(),
++        (("disabled", false), 3)
++    );
++    assert_eq!(gate.teardown_count(), 1);
++    assert!(gate.observation().1);
++    assert!(!t.borrow().calls.contains(&"release-signals"));
++    assert_no_retry(&mut parent, &mut state, &t);
++}
++
++#[test]
++fn constructed_primary_release_dispatch_data_native_failures_keep_original_suffix() {
++    for index in 0usize..4 {
++        let operations: &[&str] = if index.is_multiple_of(2) {
++            &["unmap_gpu", "free", "release_va_reservation"]
++        } else {
++            &["unmap_gpu", "unmap_cpu", "free", "release_va_reservation"]
++        };
++        for &operation in operations {
++            for panic in [false, true] {
++                data_failure(index, DataFault::Native(operation), panic);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_primary_release_dispatch_data_currentness_keeps_disposal_receipts() {
++    for index in 0usize..4 {
++        for offset in 1..=if index.is_multiple_of(2) { 5 } else { 6 } {
++            for panic in [false, true] {
++                data_failure(index, DataFault::Currentness(offset), panic);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_primary_release_dispatch_host_data_model_boundaries_retain_charge_truth() {
++    for index in [1, 3] {
++        for stage in [
++            Stage::UnmapProjection,
++            Stage::UnmapCommit,
++            Stage::ReleaseProjection,
++            Stage::ReleaseCommit,
++        ] {
++            for panic in [false, true] {
++                data_failure(index, DataFault::Projection(stage), panic);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_primary_release_resource_model_boundaries_keep_native_and_model_prefixes() {
++    for index in 0..4 {
++        for stage in [
++            Stage::UnmapProjection,
++            Stage::UnmapCommit,
++            Stage::ReleaseProjection,
++            Stage::ReleaseCommit,
++        ] {
++            for panic in [false, true] {
++                let (mut parent, t, gate) = constructed(true);
++                let dispatch =
++                    RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
++                let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++                t.borrow_mut().queue_release_projection_fault = Some((index, stage, panic));
++                let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++                let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, Stage)>(),
++                        Some(&("control cleanup projection", stage))
++                    );
++                } else {
++                    assert!(matches!(
++                        result.unwrap(),
++                        Err(ComputeAqlQueueSessionErrorV1::Memory(
++                            MemorySessionError::Injected("control cleanup projection")
++                        ))
++                    ));
++                }
++                t.borrow_mut()
++                    .release_snapshot
++                    .take()
++                    .unwrap()
++                    .assert_constructed_queue_projection_v1(
++                        &parent.engine.backend.session,
++                        state.resources.as_ref().unwrap(),
++                        index,
++                        stage,
++                    );
++                dispatch.assert_restored_v1(
++                    RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap()),
++                    true,
++                );
++                assert_eq!(
++                    Memory::primary_token_identity(parent.signals.as_ref().unwrap()),
++                    signal_id
++                );
++                assert!(
++                    state.dispatch.is_none()
++                        && state.signals.is_none()
++                        && !state.complete
++                        && parent.poisoned
++                );
++                assert_eq!(gate.teardown_count(), 1);
++                assert!(!t.borrow().calls.contains(&"complete-shadows"));
++                assert_no_retry(&mut parent, &mut state, &t);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_primary_release_publication_commit_rejection_retains_engine_authority() {
++    let (mut parent, t, gate) = constructed(true);
++    let ids = original_resource_ids(&parent);
++    let memory = parent.engine.foundation.memory().clone();
++    let dispatch = RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
++    let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++    parent.engine.release_fault = Some(PrimaryReleaseFaultV1::PublicationReturn);
++    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++    assert!(matches!(
++        state.release_in_place(&mut parent),
++        Err(ComputeAqlQueueSessionErrorV1::Native(
++            "queue model projection"
++        ))
++    ));
++    assert_eq!(parent.engine.foundation.memory(), &memory);
++    assert_eq!(
++        parent
++            .engine
++            .foundation
++            .certificate_snapshot_for_test()
++            .unwrap()
++            .6,
++        u64::MAX
++    );
++    assert_eq!(
++        parent.engine.phase(parent.key),
++        Some(ComputeAqlQueuePhaseV1::Destroyed)
++    );
++    assert_eq!(original_resource_ids(&parent), ids);
++    assert!(parent.engine.release_fault.is_none() && parent.engine.backend.foundation_in_engine);
++    assert_eq!(
++        state.destroy.returned,
++        Some((
++            fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs::new(parent.queue_id),
++            QueueSyscallStatusV1::Succeeded
++        ))
++    );
++    assert!(
++        state.authority.is_none()
++            && state.resources.is_none()
++            && state.dispatch.is_none()
++            && state.signals.is_none()
++    );
++    dispatch.assert_restored_v1(
++        RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap()),
++        true,
++    );
++    assert_eq!(
++        Memory::primary_token_identity(parent.signals.as_ref().unwrap()),
++        signal_id
++    );
++    assert!(!t.borrow().calls.contains(&"restore-foundation"));
++    assert_eq!(
++        state.platform.as_ref().unwrap().progress(),
++        (("disabled", true), 3)
++    );
++    assert_eq!(gate.teardown_count(), 1);
++    assert_no_retry(&mut parent, &mut state, &t);
++}
++
++#[test]
++fn constructed_primary_release_corrupt_destroy_observation_retains_exact_native_receipt() {
++    let (mut parent, t, gate) = constructed(true);
++    let ids = original_resource_ids(&parent);
++    let before = parent
++        .engine
++        .backend
++        .session
++        .primary_release_memory_snapshot_v1(&parent.engine.foundation);
++    let history = parent.engine.model.history().to_vec();
++    let mut absent = parent.key;
++    absent.id.0 += 1;
++    assert!(
++        !parent
++            .engine
++            .model
++            .queues()
++            .iter()
++            .any(|q| q.plan.queue == absent)
++    );
++    parent.engine.release_fault = Some(PrimaryReleaseFaultV1::DestroyObservation(absent));
++    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++    assert!(matches!(
++        state.release_in_place(&mut parent),
++        Err(ComputeAqlQueueSessionErrorV1::Native(
++            "queue model projection"
++        ))
++    ));
++    assert_eq!(
++        parent.engine.phase(parent.key),
++        Some(ComputeAqlQueuePhaseV1::DestroyPending)
++    );
++    assert!(parent.engine.authority_poisoned && parent.engine.release_fault.is_none());
++    assert_eq!(&parent.engine.model.history()[..history.len()], history);
++    assert_eq!(parent.engine.model.history().len(), history.len() + 1);
++    assert_eq!(
++        parent.engine.model.history().last().unwrap().event,
++        QueueHistoryEventKindV1::DestroyBegan
++    );
++    assert_eq!(
++        state.destroy.request,
++        Some(fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs::new(
++            parent.queue_id
++        ))
++    );
++    assert_eq!(
++        state.destroy.returned,
++        Some((
++            state.destroy.request.unwrap(),
++            QueueSyscallStatusV1::Succeeded
++        ))
++    );
++    assert!(
++        state.destroy.attempted && parent.engine.backend.foundation_in_engine && parent.poisoned
++    );
++    assert_eq!(original_resource_ids(&parent), ids);
++    before.assert_currentness_only_v1(
++        parent
++            .engine
++            .backend
++            .session
++            .primary_release_memory_snapshot_v1(&parent.engine.foundation),
++        1,
++    );
++    assert_eq!(
++        state.platform.as_ref().unwrap().observation(),
++        (true, (true, true), false, false)
++    );
++    assert!(
++        parent.dispatch.is_some()
++            && parent.signals.is_some()
++            && state.authority.is_none()
++            && state.resources.is_none()
++    );
++    assert!(!t.borrow().calls.contains(&"destroy-event"));
++    assert_eq!(gate.teardown_count(), 1);
++    assert_no_retry(&mut parent, &mut state, &t);
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index d8bc67be2..2c5ca7d2f 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -11,0 +12,3 @@ use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV
++#[path = "integration_release_fault_tests.rs"]
++mod fault_cases;
++
+@@ -87 +90,4 @@ impl PrimaryReleaseMemoryV1 for Memory {
+-        let result = self.primary_release_queue_resources_v1(resources);
++        let result = self.primary_release_queue_resources_v1(
++            resources,
++            trace().borrow().queue_release_projection_fault,
++        );
+@@ -218 +224 @@ fn assert_no_retry(
+-        .map(RetainedControlSnapshotV1::root_v1);
++        .map(RetainedControlSnapshotV1::ordinary_root_v1);
+@@ -228,0 +235,3 @@ fn assert_no_retry(
++    let model = parent.engine.model.clone();
++    let authority_poisoned = parent.engine.authority_poisoned;
++    let release_fault = parent.engine.release_fault;
+@@ -250 +259 @@ fn assert_no_retry(
+-            .map(RetainedControlSnapshotV1::root_v1),
++            .map(RetainedControlSnapshotV1::ordinary_root_v1),
+@@ -268,0 +278,3 @@ fn assert_no_retry(
++    assert_eq!(parent.engine.model, model);
++    assert_eq!(parent.engine.authority_poisoned, authority_poisoned);
++    assert_eq!(parent.engine.release_fault, release_fault);
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+index 7ffd7697f..c4a6bdb75 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+@@ -45,0 +46 @@ struct Trace {
++    queue_release_projection_fault: Option<(usize, crate::shared_memory::CleanupStageV1, bool)>,
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs b/crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs
+index 3795c6ca4..0a844778d 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs
+@@ -62,0 +63,4 @@ pub(crate) struct PreparationMemoryFixtureV1 {
++    pub(super) data_release_calls: usize,
++    pub(super) data_release_native_fault: Option<(usize, &'static str, bool)>,
++    pub(super) data_release_currentness_fault: Option<(usize, usize, bool)>,
++    pub(super) data_release_projection_ordinal: Option<usize>,
+@@ -161,0 +166,4 @@ impl PreparationMemoryFixtureV1 {
++            data_release_calls: 0,
++            data_release_native_fault: None,
++            data_release_currentness_fault: None,
++            data_release_projection_ordinal: None,
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+index b3d400bd7..f4a5fa55f 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+@@ -71,0 +72 @@ impl PreparationMemoryFixtureV1 {
++        fault: Option<(usize, control_cleanup::CleanupStageV1, bool)>,
+@@ -79,0 +81,11 @@ impl PreparationMemoryFixtureV1 {
++        if let Some((index, stage, panic)) = fault {
++            projection.fault = Some((
++                stage,
++                if panic {
++                    adapter::ProjectionFaultV1::Panic
++                } else {
++                    adapter::ProjectionFaultV1::Error
++                },
++            ));
++            projection.skip_fault_matches = index;
++        }
+@@ -189,0 +202,18 @@ impl PreparationMemoryFixtureV1 {
++        assert_eq!(
++            (
++                host.reserved_records,
++                host.retained_records,
++                host.quarantined_records,
++                host.poisoned
++            ),
++            (0, 0, 0, false)
++        );
++        assert_eq!(
++            (
++                device.reserved_records,
++                device.retained_records,
++                device.quarantined_records,
++                device.poisoned
++            ),
++            (0, 0, 0, false)
++        );
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs
+index c8919c858..aff0ef4d9 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs
+@@ -149,0 +150,11 @@ impl DispatchDataReleaseV1 for crate::shared_memory::PreparationMemoryFixtureV1
++        self.data_release_calls += 1;
++        if let Some((ordinal, operation, panic)) = self.data_release_native_fault
++            && ordinal == self.data_release_calls
++        {
++            self.fail_cleanup(operation, panic);
++        }
++        if let Some((ordinal, offset, panic)) = self.data_release_currentness_fault
++            && ordinal == self.data_release_calls
++        {
++            self.primary_fail_currentness_v1(offset, panic);
++        }
+@@ -153 +164,6 @@ impl DispatchDataReleaseV1 for crate::shared_memory::PreparationMemoryFixtureV1
+-        projection.fault = self.data_release_projection_fault;
++        if self
++            .data_release_projection_ordinal
++            .is_none_or(|ordinal| ordinal == self.data_release_calls)
++        {
++            projection.fault = self.data_release_projection_fault;
++        }
+@@ -178,0 +195,30 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
++    pub(crate) fn primary_arm_data_native_v1(
++        &mut self,
++        index: usize,
++        operation: &'static str,
++        panic: bool,
++    ) {
++        self.data_release_native_fault =
++            Some((self.data_release_calls + index + 1, operation, panic));
++    }
++
++    pub(crate) fn primary_arm_data_currentness_v1(
++        &mut self,
++        index: usize,
++        offset: usize,
++        panic: bool,
++    ) {
++        self.data_release_currentness_fault =
++            Some((self.data_release_calls + index + 1, offset, panic));
++    }
++
++    pub(crate) fn primary_arm_data_projection_v1(
++        &mut self,
++        index: usize,
++        stage: Stage,
++        panic: bool,
++    ) {
++        self.data_release_projection_ordinal = Some(self.data_release_calls + index + 1);
++        self.arm_data_release_projection_v1(stage, panic);
++    }
++
+@@ -183,0 +230,3 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
++        self.data_release_projection_ordinal = None;
++        self.data_release_native_fault = None;
++        self.data_release_currentness_fault = None;
+@@ -220,0 +270,18 @@ impl Snapshot {
++    pub(crate) fn assert_primary_data_prefix_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        controls: &[SharedGttAllocationIdentityV1],
++        order: &[Identity],
++        completed: usize,
++        active: Option<&DataCleanupObservationV1>,
++    ) {
++        self.assert_data_prefix_between_v1(
++            &memory.primary_restored_memory_snapshot_v1(),
++            memory.fixture.vm,
++            controls,
++            order,
++            completed,
++            active,
++        );
++    }
++
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
+index 9167bcf6d..f78dba813 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
+@@ -157,0 +158,9 @@ fn expected_model(
++) -> MemoryLifecycleStateV1 {
++    expected_model_in_vm(f.memory.fixture.vm, before, unmapped, released)
++}
++
++fn expected_model_in_vm(
++    vm: VmKeyV1,
++    before: &Snapshot,
++    unmapped: usize,
++    released: usize,
+@@ -161 +170 @@ fn expected_model(
+-        let (_, _, mapping) = model_keys(f.memory.fixture.vm, c.identity.id, c.identity.generation);
++        let (_, _, mapping) = model_keys(vm, c.identity.id, c.identity.generation);
+@@ -166 +175 @@ fn expected_model(
+-            model_keys(f.memory.fixture.vm, c.identity.id, c.identity.generation);
++            model_keys(vm, c.identity.id, c.identity.generation);
+@@ -215,0 +225,86 @@ impl Snapshot {
++    pub(crate) fn assert_constructed_queue_projection_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        index: usize,
++        stage: Stage,
++    ) {
++        let after = memory.primary_queue_cleanup_snapshot_v1(custody);
++        let state = custody.observation();
++        let release = matches!(stage, Stage::ReleaseProjection | Stage::ReleaseCommit);
++        let disposed = stage == Stage::ReleaseCommit;
++        let native_unmaps = if release { 4 } else { index + 1 };
++        let (unmapped, released) = if release { (4, index) } else { (index, 0) };
++        assert_eq!(
++            (state.started, state.failed, state.unmapped, state.released),
++            (true, true, unmapped, released)
++        );
++        assert_eq!(state.controls[index].stage, stage);
++        assert!(state.controls[index].failed && !custody.is_complete());
++        let mut calls = self.calls.clone();
++        for i in 0..native_unmaps {
++            calls.push(CleanupCallV1::UnmapGpu(record(self, i).handle.unwrap(), 0));
++        }
++        for i in 0..released + usize::from(disposed) {
++            calls.extend(release_calls(self, i));
++        }
++        assert_eq!(after.calls, calls);
++        assert_eq!(
++            after.model,
++            expected_model_in_vm(memory.fixture.vm, self, unmapped, released)
++        );
++        assert_eq!(
++            after.retained_va,
++            retained_va_after(self, released + usize::from(disposed))
++        );
++        assert_eq!(after.identity, self.identity);
++        assert_eq!(after.certificate, self.certificate);
++        assert_eq!(after.devices, self.devices);
++        assert_eq!(after.usage, self.usage);
++        assert_eq!(after.storage, self.storage);
++        for i in 0..4 {
++            let settled = i < released || (i == index && disposed);
++            let native_calls = if settled {
++                release_calls(self, i).len()
++            } else {
++                0
++            };
++            assert_eq!(
++                record(&after, i),
++                &expected_queue_record(self, i, i < native_unmaps, native_calls, settled, settled)
++            );
++            assert_eq!(after.controls[i].identity, self.controls[i].identity);
++            assert_eq!(
++                after.controls[i].profile_type,
++                self.controls[i].profile_type
++            );
++            assert_eq!(after.controls[i].layout, self.controls[i].layout);
++            assert_eq!(after.controls[i].native_disposed, settled);
++            assert_eq!(
++                after.controls[i].owner,
++                if settled {
++                    "NativeDisposed"
++                } else if i < native_unmaps {
++                    "Unmapped"
++                } else {
++                    "Mapped"
++                }
++            );
++            assert_eq!(
++                after.controls[i].disposal,
++                disposal_progress(i, native_calls, None)
++            );
++            if !after.controls[i].started {
++                assert_eq!(after.controls[i], self.controls[i]);
++            }
++        }
++        for record in &self.records {
++            if !self.controls.iter().any(|c| c.identity.id == record.id) {
++                assert_eq!(
++                    after.records.iter().find(|r| r.id == record.id).unwrap(),
++                    record
++                );
++            }
++        }
++    }
++
