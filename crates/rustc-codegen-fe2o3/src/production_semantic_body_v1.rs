@@ -39,6 +39,9 @@ use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
 
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 use crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1;
+use crate::production_rustc_slice_metadata_v1::{
+    SliceMetadataErrorV1, SliceMetadataPlanV1, SliceMetadataRewriteV1,
+};
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
@@ -585,6 +588,7 @@ struct BodyProducerV1<'a, 'owner, 'tcx> {
     consumed_direct_calls: Vec<bool>,
     consumed_terminal_expansions: Vec<bool>,
     consumed_normalized_intrinsics: Vec<bool>,
+    slice_metadata: SliceMetadataPlanV1<'a, 'tcx>,
     owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 }
 
@@ -710,6 +714,21 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             false,
             SemanticMirResourceV1::Blocks,
         )?;
+        let slice_metadata =
+            SliceMetadataPlanV1::derive(input.tcx, input.instance, input.body, |amount| {
+                owner.charge(SemanticMirResourceV1::ValidationWork, amount)
+            })
+            .map_err(|error| match error {
+                SliceMetadataErrorV1::Resource(error) => error,
+                SliceMetadataErrorV1::Allocation => ProductionSemanticBodyErrorV1::Allocation {
+                    resource: SemanticMirResourceV1::Locals,
+                },
+                SliceMetadataErrorV1::Unsupported(location) => unsupported(
+                    "fake raw pointer outside the exact shared-slice metadata pair",
+                    Some(location.block.index() as u32),
+                    Some(location.statement_index as u32),
+                ),
+            })?;
         let mut producer = Self {
             tcx: input.tcx,
             instance: input.instance,
@@ -727,6 +746,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             consumed_direct_calls,
             consumed_terminal_expansions,
             consumed_normalized_intrinsics,
+            slice_metadata,
             owner,
         };
         producer.validate_argument_locals(&input.abi)?;
@@ -922,11 +942,36 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         kind: &StatementKind<'tcx>,
     ) -> Result<SemanticStatementKindV1, ProductionSemanticBodyErrorV1> {
         let site = (Some(block), Some(statement));
+        self.owner.charge(
+            SemanticMirResourceV1::ValidationWork,
+            self.slice_metadata.lookup_work(),
+        )?;
+        let rewrite = self.slice_metadata.at(rustc_middle::mir::Location {
+            block: rustc_middle::mir::BasicBlock::from_u32(block),
+            statement_index: statement as usize,
+        });
+        if rewrite == Some(SliceMetadataRewriteV1::ElideTemporary) {
+            return Ok(SemanticStatementKindV1::Nop);
+        }
         match kind {
             StatementKind::Assign(assignment) => {
                 let (destination, value) = &**assignment;
                 let destination = self.construct_place(*destination, site.0, site.1)?;
-                let value = self.construct_rvalue(value, site.0, site.1)?;
+                let value = if let Some(SliceMetadataRewriteV1::ReadLength(slice)) = rewrite {
+                    SemanticRvalueV1::new(
+                        self.type_id(self.tcx.types.usize, site.0, site.1)?,
+                        SemanticRvalueKindV1::Unary {
+                            operation: SemanticUnaryOpV1::PointerMetadata,
+                            operand: self.construct_operand(
+                                &Operand::Copy(Place::from(slice)),
+                                site.0,
+                                site.1,
+                            )?,
+                        },
+                    )
+                } else {
+                    self.construct_rvalue(value, site.0, site.1)?
+                };
                 Ok(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                     destination,
                     value,

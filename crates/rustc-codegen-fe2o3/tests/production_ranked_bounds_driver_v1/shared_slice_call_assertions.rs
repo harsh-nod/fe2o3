@@ -133,23 +133,51 @@ fn assert_shared_slice_source_v1(architecture: &str, target: &ScratchTarget) -> 
             None,
             "rust_call_slice_read",
         ),
-        "refuse unsupported source slice indexing",
+        "refuse incomplete helper memory effects after metadata normalization",
     );
     assert!(
         !exported.status.success(),
         "slice-reading helper must remain refused"
     );
     assert!(
-        exported
-            .stderr
-            .contains("raw rustc MIR preflight rejected fake raw pointer for metadata rvalue"),
+        exported.stderr.contains(
+            "reachable deterministic scalar helper is not interprocedurally complete and pure"
+        ),
         "{}",
         exported.stderr
     );
     assert!(
-        exported.stderr.contains("src/rust_call.rs:")
-            && exported.stderr.contains("reachable call chain:")
-            && exported.stderr.contains("rust_call::captured_len"),
+        exported
+            .stderr
+            .contains("production compilation pre-ranked materialization failed")
+            && exported
+                .stderr
+                .contains("helper declaration at Rust source ")
+            && exported
+                .stderr
+                .contains("lowering stopped before target IR or artifact emission"),
+        "{}",
+        exported.stderr
+    );
+    assert!(!rejected.exists());
+    let rejected = target
+        .path()
+        .join(format!("slice-field-index-{architecture}.fe2sim"));
+    let exported = output(
+        simulation_export_command_for_feature(
+            architecture,
+            &rejected,
+            &target.path().join(architecture),
+            Some(5),
+            "rust_call_slice_index",
+        ),
+        "refuse incomplete aggregate slice allocation/view binding",
+    );
+    assert!(!exported.status.success());
+    assert!(
+        exported
+            .stderr
+            .contains("a Rust bounds assertion does not authorize one matching projected access"),
         "{}",
         exported.stderr
     );
