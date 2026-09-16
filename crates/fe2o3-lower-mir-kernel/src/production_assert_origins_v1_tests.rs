@@ -15,6 +15,9 @@ mod checked_output_formal_v1_tests;
 #[path = "production_optimized_assert_origins_v1_tests.rs"]
 mod optimized_assert_origins_v1_tests;
 
+#[path = "production_slice_view_v1_tests.rs"]
+mod slice_view_v1_tests;
+
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 const FLOOR: usize = 17;
@@ -235,9 +238,23 @@ fn fixture_with_blocks(
 fn fixture_with_blocks_and_symbol(
     kind: Fixture,
     shared: bool,
+    transform: impl FnMut(u32, Vec<SemanticBasicBlockV1>) -> Vec<SemanticBasicBlockV1>,
+    symbol: impl FnMut(u32) -> String,
+    extra_temporaries: &[SemanticTypeIdV1],
+) -> (
+    ProductionSemanticSsaOwnerV1,
+    crate::ProductionSourceLaunchRosterV1,
+) {
+    fixture_with_blocks_symbol_and_slices(kind, shared, transform, symbol, extra_temporaries, 1)
+}
+
+fn fixture_with_blocks_symbol_and_slices(
+    kind: Fixture,
+    shared: bool,
     mut transform: impl FnMut(u32, Vec<SemanticBasicBlockV1>) -> Vec<SemanticBasicBlockV1>,
     mut symbol: impl FnMut(u32) -> String,
     extra_temporaries: &[SemanticTypeIdV1],
+    slice_arguments: u32,
 ) -> (
     ProductionSemanticSsaOwnerV1,
     crate::ProductionSourceLaunchRosterV1,
@@ -251,8 +268,11 @@ fn fixture_with_blocks_and_symbol(
         let mut local_types = vec![(UNIT, SemanticLocalRoleV1::Return)];
         let (arguments, ownership) = if matches!(kind, Fixture::ElidedBounds) {
             assert!(!shared);
+            local_types.extend(
+                (0..slice_arguments)
+                    .map(|argument| (SLICE_REF, SemanticLocalRoleV1::Argument(argument))),
+            );
             local_types.extend([
-                (SLICE_REF, SemanticLocalRoleV1::Argument(0)),
                 (U64, SemanticLocalRoleV1::Temporary),
                 (U64, SemanticLocalRoleV1::Temporary),
                 (BOOL, SemanticLocalRoleV1::Temporary),
@@ -279,11 +299,14 @@ fn fixture_with_blocks_and_symbol(
             )
             .unwrap();
             (
-                vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
-                    SLICE_REF,
-                    SemanticAbiPassModeV1::Pair { first, second },
-                ))],
-                vec![SemanticSourceArgumentOwnershipV1::SharedBorrow],
+                vec![
+                    SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                        SLICE_REF,
+                        SemanticAbiPassModeV1::Pair { first, second },
+                    ));
+                    slice_arguments as usize
+                ],
+                vec![SemanticSourceArgumentOwnershipV1::SharedBorrow; slice_arguments as usize],
             )
         } else {
             (vec![], vec![])
