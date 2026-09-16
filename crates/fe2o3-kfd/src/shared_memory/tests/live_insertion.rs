@@ -98,6 +98,64 @@ fn device_allocator_partition_does_not_invent_pending_custody_after_extraction()
 }
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_sdma_recycle_disposition_v1(
+        &self,
+        owner: fe2o3_runtime_model::QueueKeyV1,
+        device_limits: Option<crate::Gfx942DevicePoolLimitsV1>,
+        host_limits: Option<crate::Gfx942HostPoolLimitsV1>,
+        free: &[crate::Gfx942SdmaBufferV1],
+        buffer: &crate::Gfx942SdmaBufferV1,
+    ) -> Result<bool, MemorySessionError> {
+        use crate::sdma::{Gfx942SdmaBufferKindV1, host_pool_policy, pool_policy};
+        let device = self.fixture.device.model_key();
+        let vm = self.fixture.vm;
+        match buffer.kind() {
+            Gfx942SdmaBufferKindV1::DeviceLocal => {
+                let Some(limits) = device_limits else {
+                    return Ok(false);
+                };
+                self.fixture.engine.require_active()?;
+                if owner.vm != vm || vm.device != device {
+                    return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+                }
+                pool_policy::device_pool_recycle_decision_with_v1(
+                    owner,
+                    limits,
+                    free,
+                    buffer,
+                    &mut |lease| {
+                        self.fixture
+                            .engine
+                            .device_pool_backing_bytes_v1(lease, device, vm)
+                    },
+                )
+                .map(|decision| decision == pool_policy::DevicePoolDispositionV1::Dispose)
+                .map_err(|_| MemorySessionError::Injected("device recycle policy"))
+            }
+            Gfx942SdmaBufferKindV1::HostVisibleCoherent => {
+                let Some(limits) = host_limits else {
+                    return Ok(false);
+                };
+                self.fixture
+                    .engine
+                    .validate_host_pool_domain_v1(device, vm)?;
+                host_pool_policy::host_pool_recycle_decision_with_v1(
+                    owner,
+                    limits,
+                    free,
+                    buffer,
+                    &mut |token| {
+                        self.fixture
+                            .engine
+                            .host_pool_backing_bytes_v1(token, device, vm)
+                    },
+                )
+                .map(|decision| decision == host_pool_policy::HostPoolDispositionV1::Dispose)
+                .map_err(|_| MemorySessionError::Injected("host recycle policy"))
+            }
+        }
+    }
+
     pub(crate) fn primary_validate_sdma_device_mapping_v1(
         &self,
         buffer: &crate::Gfx942SdmaBufferV1,

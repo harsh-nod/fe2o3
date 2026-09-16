@@ -491,13 +491,13 @@ pub(super) enum SdmaTransitionFailureV1<R, D = String> {
     },
 }
 
-pub(super) enum SdmaPromotionDiagnosticV1 {
+pub(super) enum SdmaOwnerDiagnosticV1 {
     Native(ComputeAqlQueueSessionErrorV1),
     #[cfg(test)]
     Scripted(String),
 }
 
-impl core::fmt::Display for SdmaPromotionDiagnosticV1 {
+impl core::fmt::Display for SdmaOwnerDiagnosticV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Native(error) => core::fmt::Display::fmt(error, f),
@@ -546,15 +546,15 @@ pub(super) enum SameDeviceSdmaExecutionFailureV1 {
 
 pub(super) enum SdmaRecycleFailureV1 {
     Recovered {
-        detail: String,
+        detail: SdmaOwnerDiagnosticV1,
         buffer: SdmaBufferOwnerV1,
     },
     Ambiguous {
-        detail: String,
+        detail: SdmaOwnerDiagnosticV1,
     },
     #[cfg(test)]
     ProcessTeardown {
-        detail: String,
+        detail: SdmaOwnerDiagnosticV1,
         custody: SdmaTerminalCustodyV1,
     },
 }
@@ -787,7 +787,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         buffer: SdmaBufferOwnerV1,
     ) -> Result<
         DirectionalSdmaDeviceOwnerV1,
-        SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaPromotionDiagnosticV1>,
+        SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaOwnerDiagnosticV1>,
     > {
         match (self, buffer) {
             (Self::Native(queue), SdmaBufferOwnerV1::Native(buffer)) => queue
@@ -798,14 +798,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     match custody {
                         Gfx942DirectionalPersistentSdmaPromotionCustodyV1::Retryable(buffer) => {
                             SdmaTransitionFailureV1::Retryable {
-                                detail: SdmaPromotionDiagnosticV1::Native(error),
+                                detail: SdmaOwnerDiagnosticV1::Native(error),
                                 custody: SdmaBufferOwnerV1::Native(buffer),
                             }
                         }
                         Gfx942DirectionalPersistentSdmaPromotionCustodyV1::ProcessTeardown(
                             custody,
                         ) => SdmaTransitionFailureV1::ProcessTeardown {
-                            detail: SdmaPromotionDiagnosticV1::Native(error),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                             custody: SdmaTerminalCustodyV1::Native(
                                 NativeDirectionalSdmaTerminalCustodyV1::Promotion(custody),
                             ),
@@ -817,13 +817,13 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                 driver.promote(buffer).map_err(|failure| match failure {
                     SdmaTransitionFailureV1::Retryable { detail, custody } => {
                         SdmaTransitionFailureV1::Retryable {
-                            detail: SdmaPromotionDiagnosticV1::Scripted(detail),
+                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
                             custody,
                         }
                     }
                     SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
                         SdmaTransitionFailureV1::ProcessTeardown {
-                            detail: SdmaPromotionDiagnosticV1::Scripted(detail),
+                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
                             custody,
                         }
                     }
@@ -831,7 +831,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
             }
             #[cfg(test)]
             (_, buffer) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-                detail: SdmaPromotionDiagnosticV1::Scripted(
+                detail: SdmaOwnerDiagnosticV1::Scripted(
                     "directional SDMA owner/driver mismatch during promotion".to_owned(),
                 ),
                 custody: scripted_mismatch_buffer(buffer, "promotion"),
@@ -1972,11 +1972,11 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     let (error, recovered) = failure.into_parts();
                     match recovered {
                         Some(buffer) => SdmaRecycleFailureV1::Recovered {
-                            detail: error.to_string(),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                             buffer: SdmaBufferOwnerV1::Native(buffer),
                         },
                         None => SdmaRecycleFailureV1::Ambiguous {
-                            detail: error.to_string(),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                         },
                     }
                 })
@@ -1985,7 +1985,9 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
             (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => driver.recycle(buffer),
             #[cfg(test)]
             (_, buffer) => Err(SdmaRecycleFailureV1::ProcessTeardown {
-                detail: "directional SDMA owner/driver mismatch during recycle".to_owned(),
+                detail: SdmaOwnerDiagnosticV1::Scripted(
+                    "directional SDMA owner/driver mismatch during recycle".to_owned(),
+                ),
                 custody: scripted_mismatch_buffer(buffer, "recycle"),
             }),
         }
@@ -2039,6 +2041,7 @@ mod scripted {
         Success,
         Recovered,
         Ambiguous,
+        Panic,
     }
 
     #[derive(Debug)]
@@ -2263,6 +2266,7 @@ mod scripted {
         steps: VecDeque<ScriptedSdmaStepV1>,
         ledger: Rc<RefCell<ScriptedCustodyLedgerV1>>,
         promotion_custody: Option<ScriptedBufferOwnerV1>,
+        recycle_custody: Option<ScriptedBufferOwnerV1>,
     }
 
     impl core::fmt::Debug for ScriptedSdmaDriverV1 {
@@ -2282,6 +2286,7 @@ mod scripted {
                 steps: steps.into_iter().collect(),
                 ledger: Rc::new(RefCell::new(ScriptedCustodyLedgerV1::default())),
                 promotion_custody: None,
+                recycle_custody: None,
             }
         }
 
@@ -2301,6 +2306,10 @@ mod scripted {
 
         pub(crate) fn promotion_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
             self.promotion_custody.as_ref()
+        }
+
+        pub(crate) fn recycle_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
+            self.recycle_custody.as_ref()
         }
 
         pub(crate) fn live_owner_count(&self) -> usize {
@@ -3083,46 +3092,48 @@ mod scripted {
         ) -> Result<(), SdmaRecycleFailureV1> {
             if !self.owns_buffer(&buffer) {
                 return Err(SdmaRecycleFailureV1::ProcessTeardown {
-                    detail: "recycle owner belongs to another driver".to_owned(),
+                    detail: SdmaOwnerDiagnosticV1::Scripted(
+                        "recycle owner belongs to another driver".to_owned(),
+                    ),
                     custody: SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Buffer(
                         SdmaBufferOwnerV1::Scripted(buffer),
                     )),
                 });
             }
+            if self.recycle_custody.is_some() {
+                std::process::abort();
+            }
+            self.recycle_custody = Some(buffer);
             let outcome = match self.pop() {
-                Ok(ScriptedSdmaStepV1::Recycle(outcome)) => outcome,
-                Ok(step) => {
-                    return Err(SdmaRecycleFailureV1::ProcessTeardown {
-                        detail: format!("recycle mismatch: {step:?}"),
-                        custody: SdmaTerminalCustodyV1::Scripted(
-                            ScriptedTerminalCustodyV1::Buffer(SdmaBufferOwnerV1::Scripted(buffer)),
-                        ),
-                    });
-                }
-                Err(detail) => {
-                    return Err(SdmaRecycleFailureV1::ProcessTeardown {
-                        detail,
-                        custody: SdmaTerminalCustodyV1::Scripted(
-                            ScriptedTerminalCustodyV1::Buffer(SdmaBufferOwnerV1::Scripted(buffer)),
-                        ),
-                    });
-                }
+                Ok(ScriptedSdmaStepV1::Recycle(outcome)) => Ok(outcome),
+                Ok(step) => Err(format!("recycle mismatch: {step:?}")),
+                Err(detail) => Err(detail),
             };
             match outcome {
-                ScriptedRecycleOutcomeV1::Success => {
-                    buffer.token.release();
+                Ok(ScriptedRecycleOutcomeV1::Success) => {
+                    self.recycle_custody.take().unwrap().token.release();
                     Ok(())
                 }
-                ScriptedRecycleOutcomeV1::Recovered => Err(SdmaRecycleFailureV1::Recovered {
-                    detail: "scripted recycle recovered".to_owned(),
-                    buffer: SdmaBufferOwnerV1::Scripted(buffer),
+                Ok(ScriptedRecycleOutcomeV1::Recovered) => Err(SdmaRecycleFailureV1::Recovered {
+                    detail: SdmaOwnerDiagnosticV1::Scripted(
+                        "scripted recycle recovered".to_owned(),
+                    ),
+                    buffer: SdmaBufferOwnerV1::Scripted(self.recycle_custody.take().unwrap()),
                 }),
-                ScriptedRecycleOutcomeV1::Ambiguous => {
-                    buffer.token.release();
-                    Err(SdmaRecycleFailureV1::Ambiguous {
-                        detail: "scripted recycle ambiguous".to_owned(),
-                    })
+                Ok(ScriptedRecycleOutcomeV1::Ambiguous) => Err(SdmaRecycleFailureV1::Ambiguous {
+                    detail: SdmaOwnerDiagnosticV1::Scripted(
+                        "scripted recycle ambiguous".to_owned(),
+                    ),
+                }),
+                Ok(ScriptedRecycleOutcomeV1::Panic) => {
+                    std::panic::panic_any("scripted recycle panic")
                 }
+                Err(detail) => Err(SdmaRecycleFailureV1::ProcessTeardown {
+                    detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                    custody: SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Buffer(
+                        SdmaBufferOwnerV1::Scripted(self.recycle_custody.take().unwrap()),
+                    )),
+                }),
             }
         }
     }

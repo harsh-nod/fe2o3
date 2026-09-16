@@ -65,7 +65,12 @@ regressions and six MI300X regression probes. See the
 Directional promotion now retains input through model validation/retake and
 runtime diagnostic unwind, with constructed and scripted failure matrices. See
 the [promotion receipt](evidence/dev-r126-sdma-promotion-2026-09-16/README.md).
-Next are synchronous-copy/recycle custody plus typed capacity rejection.
+Retained recycle/release now roots its input or disposal receipt through cleanup,
+model retake and runtime diagnostics. GNU/musl each pass 1,344 KFD and 789 runtime
+tests, and eight isolated MI300X probes pass, including zero-cache disposal
+before trim. The [recycler receipt](evidence/dev-r126-sdma-recycle-2026-09-16/README.md)
+separates injected CPU failures from native success and AUX budget rejection.
+Next are demotion/synchronous-copy custody plus typed capacity rejection.
 Allocation during pending compute is still disabled. These are
 development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
 CPU/test checkpoint.

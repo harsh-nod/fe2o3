@@ -251,7 +251,7 @@ fn sdma_promotion_public_context_handles_configured_and_unconfigured_panic() {
 
 #[test]
 fn sdma_promotion_native_diagnostic_stays_typed_until_rooted_formatting() {
-    use crate::kfd_backend::kfd_backend_sdma_seam::SdmaPromotionDiagnosticV1;
+    use crate::kfd_backend::kfd_backend_sdma_seam::SdmaOwnerDiagnosticV1;
     let (backend, _, host, device) = fixture(16, [allocate_step()]);
     let mut backend = ManuallyDrop::new(backend);
     let before = snapshot(&backend, host, device);
@@ -260,7 +260,7 @@ fn sdma_promotion_native_diagnostic_stays_typed_until_rooted_formatting() {
         .allocate_device_buffer(8, 8)
         .unwrap();
     let failure = SdmaTransitionFailureV1::Retryable {
-        detail: SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract(
+        detail: SdmaOwnerDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract(
             "typed promotion cause",
         )),
         custody: buffer,
@@ -269,7 +269,7 @@ fn sdma_promotion_native_diagnostic_stays_typed_until_rooted_formatting() {
         backend.settle_sdma_promotion_failure_v1(failure, |detail| {
             assert!(matches!(
                 detail,
-                SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract(
+                SdmaOwnerDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract(
                     "typed promotion cause"
                 ))
             ));

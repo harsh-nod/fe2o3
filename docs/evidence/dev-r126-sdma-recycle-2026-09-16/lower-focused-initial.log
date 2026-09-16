@@ -1,0 +1,49 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: unused import: `release_buffer`
+   --> crates/fe2o3-kfd/src/queue_live.rs:207:64
+    |
+207 |     planned_ticket_matches_queue_occurrence, read_host_buffer, release_buffer,
+    |                                                                ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `validate_device_pool_domain_v1` found for struct `shared_memory::SharedMemoryEngine<B>` in the current scope
+    --> crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs:115:37
+     |
+ 115 |                 self.fixture.engine.validate_device_pool_domain_v1(device, vm)?;
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/shared_memory.rs:1210:1
+     |
+1210 | struct SharedMemoryEngine<B: MemoryBackend> {
+     | ------------------------------------------- method `validate_device_pool_domain_v1` not found for this struct
+     |
+help: there is a method `validate_host_pool_domain_v1` with a similar name
+     |
+ 115 -                 self.fixture.engine.validate_device_pool_domain_v1(device, vm)?;
+ 115 +                 self.fixture.engine.validate_host_pool_domain_v1(device, vm)?;
+     |
+
+error[E0599]: no method named `primary_poison_memory_v1` found for struct `shared_memory::tests::preparation::PreparationMemoryFixtureV1` in the current scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_recycle_tests.rs:218:80
+    |
+218 |                 6 => { f.limits(4096, 1); f.base.parent.engine.backend.session.primary_poison_memory_v1(); }
+    |                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:48:1
+    |
+ 48 | pub(crate) struct PreparationMemoryFixtureV1 {
+    | -------------------------------------------- method `primary_poison_memory_v1` not found for this struct
+    |
+help: there is a method `primary_loan` with a similar name, but with different arguments
+   --> crates/fe2o3-kfd/src/shared_memory/tests/primary_construction.rs:373:5
+    |
+373 | /     pub(crate) fn primary_loan(
+374 | |         &mut self,
+375 | |         queue: &mut QueueModelFoundationV1,
+376 | |     ) -> Result<LiveQueueModelFoundationLoanV1, MemorySessionError> {
+    | |___________________________________________________________________^
+
+For more information about this error, try `rustc --explain E0599`.
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors; 1 warning emitted

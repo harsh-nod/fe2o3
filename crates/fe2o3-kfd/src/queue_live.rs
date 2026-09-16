@@ -204,7 +204,7 @@ use crate::sdma::{
     device_pool_recycle_decision_v1, device_pool_usage_v1,
     exact_full_host_write_is_authenticatable, gfx942_sdma_logical_mux_lane_count_is_admitted_v2,
     host_pool_recycle_decision_v1, host_pool_usage_v1, persistent_sdma_window_packet_count,
-    planned_ticket_matches_queue_occurrence, read_host_buffer, release_buffer,
+    planned_ticket_matches_queue_occurrence, read_host_buffer,
     striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated, write_host_buffer,
 };
 use crate::shared_memory::{
@@ -264,6 +264,8 @@ mod pool_trim;
 mod sdma_allocation;
 #[path = "queue_live/sdma_promotion.rs"]
 mod sdma_promotion;
+#[path = "queue_live/sdma_recycle.rs"]
+mod sdma_recycle;
 use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent_bind_inputs_v1};
 #[path = "queue_live/persistent_cancel.rs"]
 pub(in crate::queue) mod persistent_cancel;
@@ -3756,6 +3758,7 @@ pub struct ComputeAqlQueueSessionV1 {
     sdma_pool_trim: Option<pool_trim::SdmaPoolTrimCustodyV1>,
     sdma_allocation: Option<sdma_allocation::SdmaAllocationCustodyV1>,
     sdma_promotion: Option<crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1>,
+    sdma_recycle: Option<sdma_recycle::SdmaRecycleCustodyV1>,
     sdma_pool_reuse_count: u64,
     sdma_device_pool: SdmaDevicePoolConfigurationV1,
     // Both policies share sdma_device_pool's irreversible activity latch.
@@ -6428,6 +6431,7 @@ impl ComputeAqlQueueSessionV1 {
     pub fn enable_sdma_copy_engine(
         &mut self,
     ) -> Result<Gfx942SdmaQueueObservationV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.sdma_device_pool.begin_activity();
         if self.sdma.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -6458,6 +6462,7 @@ impl ComputeAqlQueueSessionV1 {
     pub fn enable_gfx942_directional_sdma_copy_engines(
         &mut self,
     ) -> Result<Gfx942DirectionalSdmaQueueObservationV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.sdma_device_pool.begin_activity();
         if self.sdma.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -6489,6 +6494,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         engine_index: u32,
     ) -> Result<Gfx942SdmaQueueObservationV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.sdma_device_pool.begin_activity();
         if self.sdma.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -6520,6 +6526,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         queue_count: u32,
     ) -> Result<Vec<Gfx942SdmaQueueObservationV1>, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.sdma_device_pool.begin_activity();
         if self.sdma.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -6553,6 +6560,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         logical_lane_count: u32,
     ) -> Result<Gfx942SdmaLogicalMuxObservationV2, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.sdma_device_pool.begin_activity();
         if self.sdma.is_some() || self.striped_sdma.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -6592,6 +6600,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         striped_queue_count: u32,
     ) -> Result<Gfx942CombinedSdmaCapacityV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.sdma_device_pool.begin_activity();
         if self.sdma.is_some() || self.striped_sdma.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -6649,6 +6658,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         bytes: usize,
     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.require_no_sdma_promotion_v1()?;
         self.sdma_device_pool.begin_activity();
         let requested = u64::try_from(bytes).map_err(|_| {
@@ -6668,6 +6678,7 @@ impl ComputeAqlQueueSessionV1 {
         bytes: u64,
         alignment: u64,
     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.require_no_sdma_promotion_v1()?;
         self.sdma_device_pool.begin_activity();
         if alignment == 0 || !alignment.is_power_of_two() {
@@ -9906,114 +9917,13 @@ impl ComputeAqlQueueSessionV1 {
     #[allow(clippy::result_large_err)]
     pub fn recycle_sdma_buffer(
         &mut self,
-        mut buffer: Gfx942SdmaBufferV1,
+        buffer: Gfx942SdmaBufferV1,
     ) -> Result<(), Gfx942SdmaBufferTransitionFailureV1> {
-        self.sdma_device_pool.begin_activity();
-        if !buffer.belongs_to(self.key) {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
-                recovered: Some(buffer),
-            });
-        }
-        if let Err(error) = self.require_sdma_enabled() {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error,
-                recovered: None,
-            });
-        }
-        if self.sdma_outstanding_buffers == 0 {
-            self.poison_terminal();
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger underflow"),
-                recovered: None,
-            });
-        }
-        if let Some(limits) = self.sdma_device_pool.limits
-            && buffer.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
-        {
-            let decision = self
-                .engine
-                .as_ref()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))
-                .and_then(|engine| {
-                    device_pool_recycle_decision_v1(
-                        &engine.backend.session,
-                        self.key,
-                        limits,
-                        &self.sdma_pool_free,
-                        &buffer,
-                    )
-                    .map_err(|_| {
-                        ComputeAqlQueueSessionErrorV1::Contract("invalid SDMA device pool recycle")
-                    })
-                });
-            match decision {
-                Ok(DevicePoolDispositionV1::Cache) => {}
-                // Cache pressure is successful disposal, not a recovered rejection.
-                Ok(DevicePoolDispositionV1::Dispose) => return self.release_sdma_buffer(buffer),
-                Err(error) => {
-                    self.poison_terminal();
-                    return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                        error,
-                        recovered: None,
-                    });
-                }
-            }
-        }
-        if let Some(limits) = self.sdma_host_pool_limits
-            && buffer.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
-        {
-            let decision = self
-                .engine
-                .as_ref()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))
-                .and_then(|engine| {
-                    host_pool_recycle_decision_v1(
-                        &engine.backend.session,
-                        self.key,
-                        limits,
-                        &self.sdma_pool_free,
-                        &buffer,
-                    )
-                    .map_err(|_| {
-                        ComputeAqlQueueSessionErrorV1::Contract("invalid SDMA host pool recycle")
-                    })
-                });
-            match decision {
-                Ok(HostPoolDispositionV1::Cache) => {}
-                Ok(HostPoolDispositionV1::Dispose) => return self.release_sdma_buffer(buffer),
-                Err(error) => {
-                    self.poison_terminal();
-                    return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                        error,
-                        recovered: None,
-                    });
-                }
-            }
-        }
-        if self.sdma_pool_free.try_reserve(1).is_err() {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA pool allocation failed"),
-                recovered: Some(buffer),
-            });
-        }
-        if let Err(error) = buffer.advance_pool_generation() {
-            self.poison_terminal();
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: error.into(),
-                recovered: None,
-            });
-        }
-        self.sdma_outstanding_buffers -= 1;
-        self.sdma_pool_free.push(buffer);
-        Ok(())
+        sdma_recycle::recycle_in_place(self, buffer, false)
     }
 
     pub fn trim_sdma_memory_pool(&mut self) -> Result<usize, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.require_no_sdma_promotion_v1()?;
         if self.sdma_allocation.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -10441,42 +10351,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         buffer: Gfx942SdmaBufferV1,
     ) -> Result<(), Gfx942SdmaBufferTransitionFailureV1> {
-        self.sdma_device_pool.begin_activity();
-        if !buffer.belongs_to(self.key) {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
-                recovered: Some(buffer),
-            });
-        }
-        if let Err(error) = self.require_sdma_enabled() {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error,
-                recovered: None,
-            });
-        }
-        if self.sdma_outstanding_buffers == 0 {
-            self.poison_terminal();
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger underflow"),
-                recovered: None,
-            });
-        }
-        let result = self.with_live_queue_memory_model(|memory| {
-            release_buffer(memory, buffer).map_err(Into::into)
-        });
-        match result {
-            Ok(()) => {
-                self.sdma_outstanding_buffers -= 1;
-                Ok(())
-            }
-            Err(error) => {
-                self.poison_terminal();
-                Err(Gfx942SdmaBufferTransitionFailureV1 {
-                    error,
-                    recovered: None,
-                })
-            }
-        }
+        sdma_recycle::recycle_in_place(self, buffer, true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -12178,6 +12053,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         mode: QueueDestroyModeV1,
     ) -> Result<QueueAfterEventDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.require_no_sdma_promotion_v1()?;
         if self.sdma_allocation.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -12492,6 +12368,20 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn require_sdma_enabled(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
+        self.require_sdma_enabled_state_v1()
+    }
+
+    fn require_no_sdma_recycle_v1(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.sdma_recycle.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished SDMA recycle",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_sdma_enabled_state_v1(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.require_no_sdma_promotion_v1()?;
         if self.sdma_allocation.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -13366,6 +13256,7 @@ impl ComputeAqlQueueSessionV1 {
         requested_bytes: u64,
         required_alignment: u64,
     ) -> Result<Option<Gfx942SdmaBufferV1>, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_recycle_v1()?;
         self.require_no_sdma_promotion_v1()?;
         self.sdma_device_pool.begin_activity();
         self.require_sdma_enabled()?;
@@ -13721,6 +13612,7 @@ impl Drop for ComputeAqlQueueSessionV1 {
         if self.sdma_pool_trim.is_some()
             || self.sdma_allocation.is_some()
             || self.sdma_promotion.is_some()
+            || self.sdma_recycle.is_some()
         {
             // Failed mutation retains native owners or disposed-but-unsettled receipts.
             std::process::abort();
@@ -14245,6 +14137,12 @@ mod tests {
                     .is_err()
             );
             assert!(session.sdma_host_pool_limits.is_none());
+            if matches!(attempt, 11 | 13) {
+                assert!(session.terminal_poisoned && session.sdma_recycle.is_some());
+                // These engine-less synthetic fixtures deliberately retain their roots.
+                // Separate constructed-owner subprocess tests require terminal Drop abort.
+                std::mem::forget(session);
+            }
         }
     }
 
@@ -14342,13 +14240,15 @@ mod tests {
             .split_once("pub fn trim_sdma_memory_pool(")
             .unwrap()
             .0;
-        assert!(recycle.contains(
-            "Ok(HostPoolDispositionV1::Dispose) => return self.release_sdma_buffer(buffer)"
-        ));
+        assert!(recycle.contains("sdma_recycle::recycle_in_place(self, buffer, false)"));
+        let recycle = include_str!("queue_live/sdma_recycle.rs");
+        assert!(recycle.contains("host_pool_recycle_decision_v1("));
+        assert!(recycle.contains("HostPoolDispositionV1::Dispose"));
         assert!(
-            recycle.find("host_pool_recycle_decision_v1(").unwrap()
-                < recycle.find("try_reserve(1)").unwrap()
+            recycle.find("context.should_dispose()?").unwrap()
+                < recycle.find("context.reserve_cache()").unwrap()
         );
+        assert!(recycle.contains("release_data(root)"));
         for (function, mutation) in [
             ("fn checkout_sdma_pool(", "swap_remove("),
             (
@@ -14394,14 +14294,15 @@ mod tests {
             .split("pub fn trim_sdma_memory_pool(")
             .next()
             .unwrap();
+        assert!(recycle.contains("sdma_recycle::recycle_in_place(self, buffer, false)"));
+        let recycle = include_str!("queue_live/sdma_recycle.rs");
         assert!(recycle.contains("device_pool_recycle_decision_v1("));
-        assert!(recycle.contains(
-            "Ok(DevicePoolDispositionV1::Dispose) => return self.release_sdma_buffer(buffer)"
-        ));
+        assert!(recycle.contains("DevicePoolDispositionV1::Dispose"));
         assert!(
-            recycle.find("device_pool_recycle_decision_v1(").unwrap()
-                < recycle.find("try_reserve(1)").unwrap()
+            recycle.find("context.should_dispose()?").unwrap()
+                < recycle.find("context.reserve_cache()").unwrap()
         );
+        assert!(recycle.contains("release_data(root)"));
         for operation in ["fn checkout_sdma_pool(", "pub fn trim_sdma_memory_pool("] {
             let body = production.split(operation).nth(1).unwrap();
             let first_mutation = body
@@ -16314,6 +16215,7 @@ mod tests {
             sdma_pool_trim: None,
             sdma_allocation: None,
             sdma_promotion: None,
+            sdma_recycle: None,
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
             sdma_host_pool_limits: None,

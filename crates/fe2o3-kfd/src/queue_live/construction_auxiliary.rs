@@ -96,6 +96,7 @@ impl ComputeAqlQueueSessionV1 {
             sdma_pool_trim: None,
             sdma_allocation: None,
             sdma_promotion: None,
+            sdma_recycle: None,
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1 {
                 limits: self.sdma_device_pool.limits,

@@ -426,8 +426,9 @@ impl Gfx942SdmaBufferV1 {
     }
 
     pub(crate) fn advance_pool_generation(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
+        let generation = next_pool_generation(self.pool_generation)?;
         self.host_content_certificate = None;
-        self.pool_generation = next_pool_generation(self.pool_generation)?;
+        self.pool_generation = generation;
         Ok(())
     }
 
@@ -6395,23 +6396,6 @@ pub(crate) fn persistent_sdma_ticket_coordinates_for_test(
     }
 }
 
-pub(crate) fn release_buffer(
-    memory: &mut SharedGttMemorySessionV1,
-    buffer: Gfx942SdmaBufferV1,
-) -> Result<(), Gfx942SdmaErrorV1> {
-    match buffer.storage {
-        Gfx942SdmaBufferStorageV1::Host(token) => {
-            let token = memory.unmap_from_gpu(token)?;
-            memory.release(token)?;
-        }
-        Gfx942SdmaBufferStorageV1::Device(lease) => {
-            let lease = memory.unmap_gfx942_device_memory(lease)?;
-            memory.release_gfx942_device_memory(lease)?;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn write_host_buffer(
     memory: &mut SharedGttMemorySessionV1,
     buffer: &mut Gfx942SdmaBufferV1,
@@ -7015,6 +6999,25 @@ mod tests {
         let (storage, owner, generation, logical_bytes) = host.into_bridge_parts();
         let host = Gfx942SdmaBufferV1::from_bridge_parts(storage, owner, generation, logical_bytes);
         assert_eq!(host.certified_full_host_content_sha256(4096), None);
+    }
+
+    #[test]
+    fn sdma_recycle_generation_overflow_preserves_original_certificate() {
+        let (_device, mut host) = persistent_sdma_buffers_for_test(queue_key(7, 11, 13), 500);
+        host.pool_generation = u64::MAX;
+        host.certify_full_host_content([0x5a; 32]);
+        let metadata = host.cleanup_metadata();
+        let address = core::ptr::from_ref(host.host_content_certificate.as_deref().unwrap());
+        assert!(host.advance_pool_generation().is_err());
+        assert_eq!(host.cleanup_metadata(), metadata);
+        assert_eq!(
+            core::ptr::from_ref(host.host_content_certificate.as_deref().unwrap()),
+            address
+        );
+        assert_eq!(
+            host.certified_full_host_content_sha256(4096),
+            Some([0x5a; 32])
+        );
     }
 
     #[test]

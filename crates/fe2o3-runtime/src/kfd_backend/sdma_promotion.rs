@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use super::kfd_backend_sdma_seam::{DirectionalSdmaOpsV1, SdmaPromotionDiagnosticV1};
+use super::kfd_backend_sdma_seam::{DirectionalSdmaOpsV1, SdmaOwnerDiagnosticV1};
 use super::sdma_host_write::resume_sdma_owner_panic_v1;
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -45,8 +45,8 @@ impl KfdRuntimeBackendV1 {
 
     pub(super) fn settle_sdma_promotion_failure_v1(
         &mut self,
-        failure: SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaPromotionDiagnosticV1>,
-        format: impl FnOnce(&SdmaPromotionDiagnosticV1) -> String,
+        failure: SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaOwnerDiagnosticV1>,
+        format: impl FnOnce(&SdmaOwnerDiagnosticV1) -> String,
     ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
         let (detail, terminal) = match failure {
             SdmaTransitionFailureV1::Retryable { detail, custody } => {

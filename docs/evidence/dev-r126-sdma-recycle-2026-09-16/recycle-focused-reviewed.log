@@ -1,0 +1,49 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0599]: no method named `iter` found for struct `kfd_backend::allocation_table::AllocationTableV1` in the current scope
+  --> crates/fe2o3-runtime/src/kfd_backend/tests/sdma_recycle_tests.rs:33:10
+   |
+31 | /     backend
+32 | |         .allocations
+33 | |         .iter()
+   | |         -^^^^ method not found in `kfd_backend::allocation_table::AllocationTableV1`
+   | |_________|
+   |
+   |
+  ::: crates/fe2o3-runtime/src/kfd_backend/allocation_table.rs:27:1
+   |
+27 |   pub(super) struct AllocationTableV1 {
+   |   ----------------------------------- method `iter` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following trait defines an item `iter`, perhaps you need to implement it:
+           candidate #1: `bitflags::traits::Flags`
+
+error[E0308]: mismatched types
+  --> crates/fe2o3-runtime/src/kfd_backend/tests/sdma_recycle_tests.rs:37:69
+   |
+37 |                     let (id, bytes, certificate) = host_observation(buffer);
+   |                                                    ---------------- ^^^^^^ expected `&SdmaBufferOwnerV1`, found `SdmaBufferOwnerV1`
+   |                                                    |
+   |                                                    arguments to this function are incorrect
+   |
+note: function defined here
+  --> crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs:6:15
+   |
+ 6 | pub(super) fn host_observation(buffer: &SdmaBufferOwnerV1) -> (u64, Vec<u8>, Option<[u8; 32]>) {
+   |               ^^^^^^^^^^^^^^^^ --------------------------
+help: consider borrowing here
+   |
+37 |                     let (id, bytes, certificate) = host_observation(&buffer);
+   |                                                                     +
+
+error[E0614]: type `kfd_backend::KfdRuntimeSdmaInFlightV1` cannot be dereferenced
+  --> crates/fe2o3-runtime/src/kfd_backend/tests/sdma_recycle_tests.rs:44:90
+   |
+44 |                 KfdRuntimeSdmaStorageV1::InFlight(state) => StorageObservation::InFlight(*state),
+   |                                                                                          ^^^^^^ can't be dereferenced
+
+Some errors have detailed explanations: E0308, E0599, E0614.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `fe2o3-runtime` (lib test) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

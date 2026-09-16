@@ -329,6 +329,16 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn native_runtime_device_promotion_roundtrip_and_retained_shutdown() {
+    native_device_roundtrip_retained_shutdown(false);
+}
+
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_runtime_zero_capacity_recycle_disposes_before_trim() {
+    native_device_roundtrip_retained_shutdown(true);
+}
+
+fn native_device_roundtrip_retained_shutdown(zero_cache: bool) {
     let device = native_device();
     let mut backend = KfdRuntimeBackendV1::open_default(device, TestPanickingAuthorityV1).unwrap();
     backend
@@ -341,6 +351,14 @@ fn native_runtime_device_promotion_roundtrip_and_retained_shutdown() {
             Gfx942DeviceBackingBudgetV1::new(1024 * 1024, 8).unwrap(),
         )
         .unwrap();
+    if zero_cache {
+        backend
+            .configure_host_pool_limits_v1(fe2o3_kfd::Gfx942HostPoolLimitsV1::new(0, 0).unwrap())
+            .unwrap();
+        backend
+            .configure_device_pool_limits_v1(Gfx942DevicePoolLimitsV1::new(0, 0).unwrap())
+            .unwrap();
+    }
     backend
         .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x84; 32], 128).unwrap())
         .unwrap();
@@ -401,15 +419,50 @@ fn native_runtime_device_promotion_roundtrip_and_retained_shutdown() {
     for allocation in allocations {
         backend.release_allocation_v1(allocation).unwrap();
     }
-    let queue = backend.queue.as_mut().unwrap();
-    assert_eq!(
-        queue
-            .sdma_memory_pool_observation()
-            .unwrap()
-            .checked_out_buffers,
-        0
-    );
-    queue.trim_sdma_memory_pool().unwrap();
+    let pool = backend
+        .queue
+        .as_ref()
+        .unwrap()
+        .sdma_memory_pool_observation()
+        .unwrap();
+    assert_eq!(pool.checked_out_buffers, 0);
+    let before_trim = backend.device_backing_usage_v1().unwrap();
+    if zero_cache {
+        assert_eq!(
+            (pool.retained_free_buffers, pool.retained_free_bytes),
+            (0, 0)
+        );
+        assert_eq!(
+            (
+                before_trim.used_backing_bytes,
+                before_trim.used_allocation_records
+            ),
+            (0, 0)
+        );
+        let host = backend.host_visible_backing_usage_v1().unwrap();
+        assert_eq!(
+            (host.used_backing_bytes, host.used_allocation_records),
+            (532480, 3)
+        );
+    } else {
+        assert!(pool.retained_free_buffers > 0);
+        assert_eq!(
+            (
+                before_trim.used_backing_bytes,
+                before_trim.used_allocation_records
+            ),
+            (12288, 2)
+        );
+    }
+    let trimmed = backend
+        .queue
+        .as_mut()
+        .unwrap()
+        .trim_sdma_memory_pool()
+        .unwrap();
+    if zero_cache {
+        assert_eq!(trimmed, 0);
+    }
     let refunded = backend.device_backing_usage_v1().unwrap();
     assert_eq!(
         (
@@ -435,7 +488,7 @@ fn native_runtime_device_promotion_roundtrip_and_retained_shutdown() {
     assert!(profile.coverage.complete_runtime_operation_history);
     drop(backend);
     println!(
-        "native_device_promotion=complete device_before={allocated:?} device_after={refunded:?} host_usage={host_usage:?} profile_events={}",
+        "native_device_promotion=complete zero_cache={zero_cache} pool_before_trim={pool:?} device_before_trim={before_trim:?} device_before={allocated:?} device_after={refunded:?} host_usage={host_usage:?} profile_events={}",
         profile.events.len()
     );
 }

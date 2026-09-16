@@ -51,7 +51,11 @@ background eviction, or allocation retry policy.
 
 ## Disposal
 
-Cache pressure passes the incoming idle buffer to `release_sdma_buffer`.
+Cache pressure and explicit `release_sdma_buffer` now share the retained
+recycle/release driver described in the
+[R126 development notes](runtime-primary-queue-release-v1.md#sdma-recycle-and-release-custody).
+It roots the incoming buffer before admission/policy and borrows its disposal
+receipt through cleanup and model retake.
 Successful disposal is successful recycle, not a recovered rejection. The
 existing unmap/free/release and queue-loan/retake envelope owns native effects.
 The charge is released only after confirmed backing disposal. Errors and panics

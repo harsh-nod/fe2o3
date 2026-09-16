@@ -1,0 +1,62 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: large size difference between variants
+  --> crates/fe2o3-kfd/src/queue_live/sdma_recycle.rs:9:1
+   |
+ 9 | / pub(super) enum SdmaRecycleCustodyV1 {
+10 | |     Buffer(Gfx942SdmaBufferV1),
+   | |     -------------------------- the second-largest variant contains at least 160 bytes
+11 | |     Disposal(DataCleanupCustodyV1),
+   | |     ------------------------------ the largest variant contains at least 448 bytes
+12 | | }
+   | |_^ the entire enum is at least 448 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+   = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+11 -     Disposal(DataCleanupCustodyV1),
+11 +     Disposal(Box<DataCleanupCustodyV1>),
+   |
+
+error: could not compile `fe2o3-kfd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_recycle_tests.rs:307:56
+    |
+307 |             let result = catch_unwind(AssertUnwindSafe(|| recycle_in_place(&mut f, buffer, false)));
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 248 bytes
+    |
+    = help: try reducing the size of `queue::live::Gfx942SdmaBufferTransitionFailureV1`, for example by boxing large elements or replacing it with `Box<queue::live::Gfx942SdmaBufferTransitionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_recycle_tests.rs:364:55
+    |
+364 |                         catch_unwind(AssertUnwindSafe(|| recycle_in_place(&mut f, buffer, true)));
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 248 bytes
+    |
+    = help: try reducing the size of `queue::live::Gfx942SdmaBufferTransitionFailureV1`, for example by boxing large elements or replacing it with `Box<queue::live::Gfx942SdmaBufferTransitionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_recycle_tests.rs:444:56
+    |
+444 |             let result = catch_unwind(AssertUnwindSafe(|| recycle_in_place(&mut f, buffer, true)));
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 248 bytes
+    |
+    = help: try reducing the size of `queue::live::Gfx942SdmaBufferTransitionFailureV1`, for example by boxing large elements or replacing it with `Box<queue::live::Gfx942SdmaBufferTransitionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_recycle_tests.rs:526:51
+    |
+526 |                     catch_unwind(AssertUnwindSafe(|| recycle_in_place(&mut f, buffer, false)));
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 248 bytes
+    |
+    = help: try reducing the size of `queue::live::Gfx942SdmaBufferTransitionFailureV1`, for example by boxing large elements or replacing it with `Box<queue::live::Gfx942SdmaBufferTransitionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-kfd` (lib test) due to 5 previous errors

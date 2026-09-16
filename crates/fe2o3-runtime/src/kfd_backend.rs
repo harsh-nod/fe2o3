@@ -112,6 +112,7 @@ pub use qualification_drain_capture::{
 mod kfd_backend_sdma_seam;
 mod sdma_host_write;
 mod sdma_promotion;
+mod sdma_recycle;
 use compute_dispatch::*;
 use compute_state::*;
 #[cfg(test)]
@@ -3969,29 +3970,10 @@ impl KfdRuntimeBackendV1 {
         buffer: SdmaBufferOwnerV1,
         operation: &'static str,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        match self.directional_sdma_ops_v1().recycle(buffer) {
-            Ok(()) => Ok(()),
-            Err(SdmaRecycleFailureV1::Recovered { detail, buffer }) => {
-                // No logical handle can own a transient after this point.
-                // Retain its explicit custody until fail-closed teardown.
-                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(
-                    buffer,
-                ));
-                Err(self.terminal_error(format!(
-                    "KFD {operation} transient release became ambiguous: {detail}"
-                )))
-            }
-            Err(SdmaRecycleFailureV1::Ambiguous { detail }) => Err(self.terminal_error(format!(
-                "KFD {operation} transient release became ambiguous: {detail}"
-            ))),
-            #[cfg(test)]
-            Err(SdmaRecycleFailureV1::ProcessTeardown { detail, custody }) => {
-                self.retain_sdma_seam_terminal_v1(custody);
-                Err(self.terminal_error(format!(
-                    "KFD {operation} transient release became ambiguous: {detail}"
-                )))
-            }
-        }
+        self.recycle_sdma_owner_v1(
+            buffer,
+            sdma_recycle::SdmaRecycleTargetV1::Transient(operation),
+        )
     }
 
     fn normalize_h2d_ready_v1(
@@ -4672,34 +4654,10 @@ impl KfdRuntimeBackendV1 {
             .get(&allocation)
             .expect("released native allocation remains indexed")
             .kind;
-        match self.directional_sdma_ops_v1().recycle(buffer) {
-            Ok(()) => Ok(()),
-            Err(SdmaRecycleFailureV1::Recovered { detail, buffer }) => {
-                self.allocations
-                    .get_mut(&allocation)
-                    .expect("recoverable recycle allocation remains indexed")
-                    .sdma_storage = match kind {
-                    RuntimeMemoryKindV1::HostVisible => KfdRuntimeSdmaStorageV1::Host(buffer),
-                    RuntimeMemoryKindV1::DeviceLocal => {
-                        KfdRuntimeSdmaStorageV1::DemotedDevice(buffer)
-                    }
-                };
-                Err(Self::quiescent_error(
-                    KfdRuntimeBackendErrorKindV1::Native,
-                    format!("KFD persistent allocation recycle rejected: {detail}"),
-                ))
-            }
-            Err(SdmaRecycleFailureV1::Ambiguous { detail }) => Err(self.terminal_error(format!(
-                "KFD persistent allocation recycle became ambiguous: {detail}"
-            ))),
-            #[cfg(test)]
-            Err(SdmaRecycleFailureV1::ProcessTeardown { detail, custody }) => {
-                self.retain_sdma_seam_terminal_v1(custody);
-                Err(self.terminal_error(format!(
-                    "KFD persistent allocation recycle became ambiguous: {detail}"
-                )))
-            }
-        }
+        self.recycle_sdma_owner_v1(
+            buffer,
+            sdma_recycle::SdmaRecycleTargetV1::Indexed { allocation, kind },
+        )
     }
 
     fn discard_hidden_sdma_allocation_v1(
@@ -12807,6 +12765,7 @@ mod retained_release_tests;
 mod tests {
     mod sdma_host_write_tests;
     mod sdma_promotion_tests;
+    mod sdma_recycle_tests;
 
     use super::kfd_backend_sdma_seam::{
         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,
@@ -20191,7 +20150,15 @@ mod tests {
         assert!(ambiguous.terminal);
         assert_eq!(
             ambiguous.scripted_sdma.as_ref().unwrap().live_owner_count(),
-            1
+            2
+        );
+        assert!(
+            ambiguous
+                .scripted_sdma
+                .as_ref()
+                .unwrap()
+                .recycle_custody()
+                .is_some()
         );
         disarm_scripted_drop_after_inspection_v1(&mut ambiguous);
     }

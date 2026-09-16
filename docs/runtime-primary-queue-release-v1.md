@@ -538,9 +538,10 @@ checks do not replace the remaining full R126 qualification campaign.
 Pending-compute allocation remains disabled. Runtime HostVisible initialization
 and upload staging now retain across borrowed-write failure as described below;
 directional promotion now roots its input through validation and unwind. Device
-initialization additionally needs retained synchronous submit/wait/retire/recycle
-boundaries. Runtime allocation error conversion also still terminalizes healthy
-backing-credit rejection; a typed disposition must preserve the lower contract.
+initialization additionally needs retained synchronous submit/wait/retire
+boundaries. Recycle/release retention is described below. Runtime allocation
+error conversion also still terminalizes healthy backing-credit rejection;
+a typed disposition must preserve the lower contract.
 Only after those prerequisites should borrowed owner-roster preflight
 separate reuse of existing directional SDMA from idle-only queue creation. R125
 remains accepted; R126/A1/A2/#182 and HIP/HSA parity remain incomplete.
@@ -571,9 +572,9 @@ after a caller catches a backend panic; the backend is already terminal and the
 next valid backend call seals the Context without native work. This packet does
 not change that facade policy, admit pending-compute allocation, qualify native
 partial writes, add executable/formal correspondence or establish performance.
-Directional promotion is now covered below. Synchronous copy/recycle and typed
-capacity disposition remain open, followed by owner-roster preflight and
-pending-compute qualification.
+Directional promotion and recycle/release are now covered below. Demotion,
+synchronous copy and typed capacity disposition remain open, followed by
+owner-roster preflight and pending-compute qualification.
 
 ## Directional Promotion Custody
 
@@ -592,8 +593,8 @@ promotion unwind. Native failures cross the adapter as typed errors without
 formatting. Returned custody is installed before the complete diagnostic is
 formatted; diagnostic panic retains it and seals the backend. A healthy retryable
 failure still follows existing recycling and rejection semantics after formatting.
-The consuming recycler itself, demotion and other copy transitions remain separate
-unfixed unwind boundaries.
+Recycle/release retention is now covered below; demotion and other copy
+transitions remain separate unfixed unwind boundaries.
 
 Constructed tests use actual fresh mapped leases, the original directional pair,
 shared production mapping checks and real foundation loan/reclaim. Coverage
@@ -605,13 +606,57 @@ credit quarantine and public-context terminal behavior. These are not native
 failure injection or formal implementation correspondence. Validation is recorded
 in the [promotion receipt](evidence/dev-r126-sdma-promotion-2026-09-16/README.md).
 
+## SDMA Recycle And Release Custody
+
+The shared recycle/release driver installs a matching-owner buffer before
+admission, policy validation or native work. Cache reservation failure returns
+the exact unchanged healthy buffer; successful caching advances its generation
+and removes the outstanding debit once, after reserved insertion. Generation
+overflow preserves the original host certificate. Configured pressure and
+explicit release convert the retained input into borrowed data-cleanup custody,
+which remains rooted through model retake. A completed backing refund is not
+undone by a later retake failure, but the logical outstanding debit and completed
+receipt remain retained until settlement succeeds. Retake errors outrank ordinary
+cleanup errors; the original panic survives secondary retake/poison failures.
+
+Foreign input returns unchanged. On a healthy root-free session the rejected
+attempt still closes immutable pool configuration, including when SDMA is
+disabled. Terminal or retained-root foreign calls are inert. A second
+matching-owner input while the recycle root is occupied aborts: the existing
+return type cannot represent terminal returned custody, and neither overwriting
+the retained input nor falsely returning a healthy retry is valid. Allocation,
+pool checkout/trim, queue release and Drop guard unfinished recycling.
+
+Runtime input is retained before driver selection. Native failures cross the
+adapter as typed errors; returned buffers are rooted before diagnostic formatting.
+Indexed healthy recovery restores only the original-kind synchronous placeholder
+and remains Quiescent. Transient recovery and ambiguous failure remain terminal.
+Logical allocation removal and accounting/profile commits still occur only after
+successful settlement. The scripted driver retains ambiguous/panicking input so
+runtime tests inspect exact lower custody rather than a fake release.
+
+Nine constructed tests plus a certificate-overflow unit test exercise cache and
+disposal success, reservation retry, policy/admission rejection, cleanup/retake
+and currentness failure matrices, foreign-attempt history, public guards and
+process-isolated fail-closed behavior. Nine runtime tests cover exact owner and
+neighbor identity, independent slot/kind validation, diagnostic unwind, public
+Context error classes and credit quarantine, and inert terminal retries. The
+public guard cases use engine-less shells carrying genuine fixture buffers.
+GNU/musl each pass 1,344 KFD and 789 runtime tests, with six opt-in hardware tests
+ignored locally. Eight isolated MI300X probes pass; the new zero-cache case
+observes complete device backing disposal before trim and control-only host
+backing before shutdown. See the
+[development receipt](evidence/dev-r126-sdma-recycle-2026-09-16/README.md).
+This is not formal correspondence, native recycler fault qualification or
+R126 acceptance.
+
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
-   ownership changes with pending compute after completing synchronous-copy and
-   recycling custody. Lower fresh-allocation outputs now
+   ownership changes with pending compute after completing demotion and
+   synchronous-copy custody. Lower fresh-allocation outputs now
    remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.
@@ -623,8 +668,9 @@ in the [promotion receipt](evidence/dev-r126-sdma-promotion-2026-09-16/README.md
    owner matrices and remaining integrated resource/model joins need completion.
 3. Qualify pool-trim failure retention and account observations through public
    native runtime workflows. Constructed-parent CPU matrices and the packetless
-   native success probe do not substitute for these fault paths. Other consuming
-   SDMA eviction/disposal routes remain outside the new trim root.
+   native success probe do not substitute for these fault paths. The shared
+   ordinary recycle/release driver now has its own retained root, but its native
+   failure paths and other SDMA ownership transitions still require qualification.
 4. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
    calibrations and independent evidence review before R126 acceptance.
 5. Qualify applicable additional queue profiles, native GPU execution, formal

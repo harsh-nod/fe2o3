@@ -1,0 +1,18 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.63s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-112524bc719a0748)
+
+running 9 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_admission_policy_and_generation_failure_retain_original_input ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_cache_disposal_and_explicit_release_refund_exact_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_loan_failure_and_incomplete_success_never_remove_debit ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_native_failures_retain_exact_disposal_and_account_prefixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_pressure_preserves_cached_neighbors_and_disposes_only_candidate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_public_guards_and_second_input_abort_without_overwrite ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_reservation_rejection_returns_exact_buffer_for_successful_retry ... ok
+test sdma::tests::sdma_recycle_generation_overflow_preserves_original_certificate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_cleanup_retake_matrix_keeps_receipts_and_first_panic has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::recycle::constructed_sdma_recycle_cleanup_retake_matrix_keeps_receipts_and_first_panic ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1334 filtered out; finished in 83.12s
+
