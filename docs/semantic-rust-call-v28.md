@@ -190,12 +190,10 @@ The producer becomes a semantic `Nop`, and the consumer uses the existing
 `PointerMetadata` operation on the original shared reference. Statement/source
 positions and local/debug types are retained; no raw pointer value is created.
 Production-constructor tests check the exact normalized operations, source slots
-and local types. Wrapped indexing in the kernel body still rejects at the
-ranked bounds/access join: metadata normalization does not provide an aggregate
-slice allocation/view relation. Reading in a retained helper stops at the
-unchanged complete helper-effect gate, with a declaration location and no bundle.
-Both source refusals remain tested. This normalization supplies neither the
-missing read relations nor functional proof.
+and local types. Metadata normalization alone supplies neither the live slice
+relation nor functional proof. Root indexing now obtains the separate checked
+relation described below. Reading in a retained helper still stops at the
+complete helper-effect gate, with a declaration location and no bundle.
 
 The same scoped constructor is used by production correspondence validation.
 Complete representation checking precedes consumer callbacks. Temporary indices
@@ -215,6 +213,30 @@ not current SSA provenance or ownership authority. Debug consumers and
 serialized/FULL/finalizer integration still need to consume
 the shared relation. No new executable graph, proof authority, or correspondence
 wire version is introduced by this view.
+
+## Live Root Slice Reads
+
+`with_checked_slice_access_v1` joins an exact source access to its physical load,
+slice data carrier, length carrier, index, and emitted successful bounds assertion.
+Both carriers must resolve to the same whole entry input. Whole-value block
+transport is followed conservatively across every incoming edge; conflicting or
+ungrounded origins cannot manufacture an input identity. A changed index, another
+same-typed slice, bypass predecessor, foreign inventory, or missing assertion
+rejects the query.
+
+The ranked consumer uses that borrowed relation for direct and nested-wrapper
+root reads. Its source cursor follows operand-before-destination order and the
+final access census rejects missing, duplicate, changed, or extra queries. The
+call analysis and slice analysis retain one owner, inventory and work/storage
+ledger. A regression places a load and Call in the same terminator span and
+checks their distinct physical occurrences and cumulative budget exhaustion.
+
+This profile requires the unique emitted assertion-success predecessor. Elided
+assertions and reconstructed slice views remain unsupported. The view is not an
+allocation ownership proof, helper-effect summary, or launch capability. Helper
+reads still need checked argument substitution along the full call path and
+function-qualified ranked/formal replay; a helper argument ordinal is not a root
+allocation identity. No wire version or second executable graph is introduced.
 
 ## Live helper calls and results
 

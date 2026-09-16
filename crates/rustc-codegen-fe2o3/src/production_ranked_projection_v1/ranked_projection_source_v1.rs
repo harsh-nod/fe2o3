@@ -58,10 +58,6 @@ impl<'s> RankedProjectionSourceV1<'s> {
         self.origins
     }
 
-    pub(super) const fn owner(&self) -> &'s ProductionPreRankedKirOwnerV1 {
-        self.owner
-    }
-
     pub(super) fn require_floor(&self, budget: &Budget<'_>) -> Result<(), Error> {
         if budget.storage() < self.minimum_storage {
             return Err(resource(Resource::Accounting));

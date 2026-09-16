@@ -5,6 +5,9 @@ use fe2o3_kernel_ir::{
     CanonicalKirDefinitionCoordinateV1 as Definition,
 };
 
+#[path = "production_slice_call_composition_v1_tests.rs"]
+mod call_composition;
+
 fn site(block: u32, statement: u32, access: u32, assertion: u32) -> ProductionSliceAccessSiteV1 {
     let root = SemanticFunctionIdV1::from_index(0);
     ProductionSliceAccessSiteV1::new(
@@ -71,7 +74,24 @@ fn slice_owner(
     elided: bool,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> ProductionPreRankedKirOwnerV1 {
-    let (ssa, launch) = fixture_with_blocks_and_symbol(
+    let (ssa, launch) = slice_source(changed_index, elided);
+    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+        ssa,
+        launch,
+        ProductionSemanticKirLimitsV1::default(),
+        budget,
+    )
+    .unwrap()
+}
+
+fn slice_source(
+    changed_index: bool,
+    elided: bool,
+) -> (
+    ProductionSemanticSsaOwnerV1,
+    crate::ProductionSourceLaunchRosterV1,
+) {
+    fixture_with_blocks_and_symbol(
         Fixture::ElidedBounds,
         false,
         |_, _| {
@@ -124,14 +144,7 @@ fn slice_owner(
         },
         |_| "slice_view_root".into(),
         &[U32],
-    );
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-        ssa,
-        launch,
-        ProductionSemanticKirLimitsV1::default(),
-        budget,
     )
-    .unwrap()
 }
 
 fn with_slice_owner(
