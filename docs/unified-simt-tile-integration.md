@@ -7,8 +7,10 @@ a schema allocation, executable tile support, or proof/publication/launch author
 ## Scope and ownership
 
 Ordinary Rust kernels must combine SIMT work and structured tiles through the
-existing production pipeline. The initial family is masked u32 load, fragment
-extraction, ordinary scalar transformation, and then workgroup reduction.
+existing production pipeline. The first execution tranche is authenticated context
+entry, scoped workgroup derivation, masked u32 load, fragment extraction, and
+ordinary parts returned to the logical root for scalar computation and checked
+stores. Reduction follows separately; load/parts alone do not complete M1.
 The staged source contract remains [generative tile source provider](generative-tile-source-provider.md).
 The existing tile distribution and schedule dialects are not executable integration.
 
@@ -35,12 +37,43 @@ An authenticated entry plan may select the proven logical helper as the kernel
 body, seed only its leading logical context, and identity-forward every physical
 argument. The host supplies no context kernarg; ordinary wrapper inference is unchanged.
 
+Retain original issuer and helper-call occurrences in a private move-only compiler
+receipt through `AuthenticatedCollectedKernelClosureV1`, then consume it before
+semantic identity inventory/preflight. Independently authenticate optimized flow;
+original and optimized block/local ordinals need not agree. A logical `ContextIssue`
+represents the one physical issuance, not a second issuer. Preserve physical export
+and launch identities. Source spans are diagnostics, not authority keys.
+
 Preserve invariant lifetimes, brand and epoch through borrowing, callbacks, SSA
 edges and calls. `&mut KernelContext` is a real reference, and `WorkgroupCapability`
 is not an ignored ZST. Workgroup derivation binds exact producer and call/SSA
 occurrences; equal nominal types do not make separate issuances interchangeable.
 `load_masked`, `into_fragment` and `into_parts` remain distinct operations.
-Parts are ordinary arrays and confer no reconstructible collective authority.
+Proposed `WorkgroupDerive` exclusively acquires the actual mutable context borrow.
+Proposed `ScopeEnd` in that same canonical CFG closes the exact scope/epoch on every
+admitted callback exit before another derive. It invalidates branded descendants
+and releases the borrow, but is not a memory barrier. Ordinary returned values
+survive. Reject overlapping scopes, escaping authority, stale epochs, capability
+joins and active-scope backedges. Ordinary joins require matching lifecycle states.
+Known terminal traps need scope end before the trap; unsupported unwind/drop/tail
+call and other exceptional exits reject. Shared tile receiver borrows remain short.
+
+Choose checked generic callback materialization into the sole graph, retaining
+caller/callee, argument/result and original call-path/access lineage. Account for
+every moved operation and preserve each load's original effect position. The
+current earlier effectful-helper refusal needs owner-approved staging before this
+transformation can run; disabling that refusal is not the staging solution.
+
+`into_parts` consumes one exact fragment and yields E u32 values, then E bool
+masks. Component j maps to `Field(0)/ArrayElement(j)` or
+`Field(1)/ArrayElement(j)` respectively. Reuse the bounded aggregate SSA binder to
+reconstruct `([u32; E], [bool; E])`; this alone needs no canonical tuple type.
+Check producer/component/consumption lineage beyond matching types and counts.
+Same-typed swaps, partial/double consumption and substituted producers reject.
+Parts confer no authority. New context/workgroup/tile/fragment roles must be
+explicitly non-storable; casts, constants and ordinary memory cannot reconstruct
+them. Compiler-order effects must prohibit invalid duplication/CSE even when the
+operation has no physical memory effect.
 
 ## Algorithm, schedule and arithmetic
 
@@ -56,6 +89,17 @@ Initial carrier bounds remain `1 <= L <= 256`, `1 <= E <= 125`. Selection is
 immutable and bound to owner correspondence and replay; substitution rejects.
 Per-lane results may differ. Arbitrary lane-observing code is not automatically
 equivalent across schedules, even when both mappings are legal.
+
+Selection is an external immutable compilation input, not a source carrier
+parameter or mutable environment lookup. Seal it against semantic/SSA identity,
+complete root/launch roster, authenticated target, exact structured canonical input
+and covered tile occurrences before scalarization. Retain selection and transform
+policy in owner correspondence/replay. Structured operations enter the graph
+before applying the checked schedule. Missing, duplicate, foreign or stale bindings
+reject, even if substituted schedules happen to produce equal outputs. Existing
+coordinate queries and fixed scalar/CFG policies do not authorize this new tile
+transition. Its policy and replay contract require #271/#134 approval. Test each
+distribution against its own independent lane oracle.
 
 Use the declared machine-integer width for addresses. Checked base-plus-offset
 overflow or an out-of-bounds index produces zero with an inactive mask and no read.
@@ -90,8 +134,9 @@ existing `with_checked_call_v1` and checked `physical(slot)` views. Reuse
 `RankedProjectionSourceV1::owner()`, the exact inventory, root/function-qualified
 coordinates and one cumulative work/storage ledger. Retain complete call rosters,
 repeated occurrences, argument substitution, source paths and result correspondence.
-Checkpoint 219 owns that adapter separately; this document does not assume its
-release or invent its API. Its callback-budget extension is deferred until needed.
+Released checkpoint 219 supplies that adapter at
+`6a7b6dcecce4d9fa68801d82ccb87bbca67142c2`; it is integration evidence, not launch
+authority. Its callback-budget extension is deferred until needed.
 
 The adapter alone admits neither shared-slice reads nor LDS writes/barriers.
 Read admission still requires exact allocation/view/extent/index/guard transport
@@ -100,6 +145,10 @@ same-graph scoped materialization or complete call-qualified LDS-write/barrier
 coverage. Removing helper-purity or proof checks is not an implementation strategy.
 
 ## Decisions required before implementation
+
+The scope, callback and schedule choices above are proposed integration contracts,
+not allocated operations or implemented execution. Private entry-receipt custody
+does not authorize logical-root selection, a new role, or a new accepted program.
 
 - #271/#272: coordinated semantic-MIR and canonical-KIR operation/type,
   verification and encoding contracts. Their version spaces are independent;

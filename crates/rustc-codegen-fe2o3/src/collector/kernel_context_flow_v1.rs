@@ -1,13 +1,37 @@
 //! Validate only the generated entry protocol, never recognize user kernel bodies.
 
 use super::*;
-use rustc_middle::mir::{Const, ConstValue, START_BLOCK, StatementKind};
+use rustc_middle::mir::{
+    BasicBlock, Const, ConstValue, Local, Location, START_BLOCK, StatementKind,
+};
+
+#[derive(Debug, Eq, PartialEq)]
+struct CallOccurrenceV1 {
+    location: Location,
+    destination: Local,
+    target: BasicBlock,
+    unwind: UnwindAction,
+}
+
+/// Occurrences are qualified by the exact root instance in the retained source flow.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct AuthenticatedFlowV1<'tcx> {
+    issuer: Instance<'tcx>,
+    issuance: CallOccurrenceV1,
+    helper_call: CallOccurrenceV1,
+}
+
+impl<'tcx> AuthenticatedFlowV1<'tcx> {
+    pub(super) fn issuer(&self) -> Instance<'tcx> {
+        self.issuer
+    }
+}
 
 /// Session-owned proof of the unoptimized wrapper's actual value flow.
 pub(super) struct SourceFlowV1<'tcx> {
     root: Instance<'tcx>,
     helper: Instance<'tcx>,
-    issuer: Instance<'tcx>,
+    original: AuthenticatedFlowV1<'tcx>,
     context: Ty<'tcx>,
     physical_types: Vec<Ty<'tcx>>,
 }
@@ -22,11 +46,11 @@ pub(super) fn authenticate_source<'tcx>(
     let signature = source_signature_v1(tcx, root).map_err(error)?;
     check_parameter_count(signature.inputs().len(), body.arg_count)?;
     let physical_types = signature.inputs().to_vec();
-    let issuer = authenticate(tcx, root, helper, context, body, None)?;
+    let original = authenticate(tcx, root, helper, context, body, None)?;
     Ok(SourceFlowV1 {
         root,
         helper,
-        issuer,
+        original,
         context,
         physical_types,
     })
@@ -35,10 +59,10 @@ pub(super) fn authenticate_source<'tcx>(
 pub(super) fn authenticate_optimized<'tcx>(
     tcx: TyCtxt<'tcx>,
     source: &SourceFlowV1<'tcx>,
-) -> Result<Instance<'tcx>, CollectError> {
+) -> Result<AuthenticatedFlowV1<'tcx>, CollectError> {
     let body = tcx.instance_mir(source.root.def);
     check_parameter_count(source.physical_types.len(), body.arg_count)?;
-    let issuer = authenticate(
+    let optimized = authenticate(
         tcx,
         source.root,
         source.helper,
@@ -46,12 +70,14 @@ pub(super) fn authenticate_optimized<'tcx>(
         body,
         Some(source),
     )?;
-    if issuer != source.issuer {
+    if optimized.issuer != source.original.issuer {
         return Err(error(
             "optimized entry substituted the authenticated issuer",
         ));
     }
-    Ok(issuer)
+    // Both closed protocols establish the unique issuer-to-helper correspondence.
+    // MIR optimization may renumber blocks/locals and erase ZST transport.
+    Ok(optimized)
 }
 
 fn check_parameter_count(
@@ -191,7 +217,7 @@ fn authenticate<'tcx>(
     context: Ty<'tcx>,
     body: &Body<'tcx>,
     source: Option<&SourceFlowV1<'tcx>>,
-) -> Result<Instance<'tcx>, CollectError> {
+) -> Result<AuthenticatedFlowV1<'tcx>, CollectError> {
     let step_limit = fe2o3_rustc_front::MAX_PARAMETERS_PER_FUNCTION_V1.saturating_mul(16) + 64;
     let steps = body.basic_blocks.iter().try_fold(0usize, |sum, block| {
         let next = sum.checked_add(block.statements.len())?.checked_add(1)?;
@@ -206,6 +232,8 @@ fn authenticate<'tcx>(
     let mut visited = BTreeSet::new();
     let mut cursor = START_BLOCK;
     let mut issuer = None;
+    let mut issuance = None;
+    let mut helper_call = None;
     let mut issued_local = None;
     let mut helper_result = None;
     loop {
@@ -277,6 +305,17 @@ fn authenticate<'tcx>(
                 }
                 let next = target.ok_or_else(|| error("entry protocol call has no return edge"))?;
                 let callee = resolve_call(tcx, root, body, func)?;
+                let occurrence = CallOccurrenceV1 {
+                    location: Location {
+                        block: cursor,
+                        statement_index: block.statements.len(),
+                    },
+                    destination: destination
+                        .as_local()
+                        .ok_or_else(|| error("entry call result requires a whole local"))?,
+                    target: next,
+                    unwind: *unwind,
+                };
                 if trusted_device_items::classify(tcx, callee.def_id())
                     == Some(TrustedDeviceItem::KernelContextIssue)
                 {
@@ -296,6 +335,7 @@ fn authenticate<'tcx>(
                     values.issue(local(*destination)?)?;
                     issued_local = Some(local(*destination)?);
                     issuer = Some(callee);
+                    issuance = Some(occurrence);
                 } else if callee == helper {
                     let operands = args
                         .iter()
@@ -326,6 +366,7 @@ fn authenticate<'tcx>(
                     let destination = local(*destination)?;
                     values.call(&operands, destination)?;
                     helper_result = Some(destination);
+                    helper_call = Some(occurrence);
                 } else {
                     return Err(error(
                         "entry protocol calls a function other than its issuer or logical helper",
@@ -367,7 +408,13 @@ fn authenticate<'tcx>(
                         "physical return does not originate from the logical helper",
                     ));
                 }
-                return issuer.ok_or_else(|| error("entry protocol has no issuer"));
+                return Ok(AuthenticatedFlowV1 {
+                    issuer: issuer.ok_or_else(|| error("entry protocol has no issuer"))?,
+                    issuance: issuance
+                        .ok_or_else(|| error("entry protocol has no issuance occurrence"))?,
+                    helper_call: helper_call
+                        .ok_or_else(|| error("entry protocol has no helper occurrence"))?,
+                });
             }
             _ => {
                 return Err(error(
@@ -381,6 +428,32 @@ fn authenticate<'tcx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_call_occurrence_equality_checks_every_coordinate() {
+        let occurrence = || CallOccurrenceV1 {
+            location: Location {
+                block: BasicBlock::from_u32(2),
+                statement_index: 3,
+            },
+            destination: Local::from_u32(4),
+            target: BasicBlock::from_u32(5),
+            unwind: UnwindAction::Unreachable,
+        };
+        assert_eq!(occurrence(), occurrence());
+        for axis in 0..5 {
+            let mut changed = occurrence();
+            match axis {
+                0 => changed.location.block = BasicBlock::from_u32(6),
+                1 => changed.location.statement_index += 1,
+                2 => changed.destination = Local::from_u32(7),
+                3 => changed.target = BasicBlock::from_u32(8),
+                4 => changed.unwind = UnwindAction::Continue,
+                _ => unreachable!(),
+            }
+            assert_ne!(occurrence(), changed, "stale occurrence axis {axis}");
+        }
+    }
 
     #[test]
     fn issued_value_moves_through_temporaries_and_arguments_remain_ordered() {

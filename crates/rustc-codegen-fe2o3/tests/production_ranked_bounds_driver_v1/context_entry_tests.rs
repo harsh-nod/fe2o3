@@ -12,6 +12,8 @@ fn check_kernel_context_source_protocol() {
     let mut failures = Vec::new();
     for case in [
         "valid_zst",
+        "valid_transport",
+        "transport_reordered",
         "reordered",
         "substituted_zst",
         "discarded",
@@ -48,6 +50,14 @@ fn check_kernel_context_source_protocol() {
         let mut root = "fe2o3_kernel_context_probe";
         let expected = match case {
             "valid_zst" => "without production expansion: KernelContextIssue",
+            "valid_transport" => {
+                body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let marker = tag; context_probe_body(forwarded, first, second, marker);";
+                "without production expansion: KernelContextIssue"
+            }
+            "transport_reordered" => {
+                body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let marker = tag; context_probe_body(forwarded, second, first, marker);";
+                "helper must consume the issued context and identity-forward every physical argument"
+            }
             "reordered" => {
                 body = "context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), b, a, tag);";
                 "helper must consume the issued context and identity-forward every physical argument"
@@ -243,6 +253,10 @@ const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES")
         let bundle = target.path().join(format!("{case}.fe2sim"));
         std::fs::write(&source_path, source).unwrap();
         std::fs::write(&bytes_path, bytes).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&bundle)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        );
         let mut command = simulation_export_command_for_feature(
             "gfx942",
             &bundle,
@@ -271,9 +285,24 @@ const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES")
                 result.stderr
             ));
         }
-        assert!(!bundle.exists(), "{case} emitted a simulation bundle");
-        if matches!(case, "valid_zst" | "substituted_zst" | "foreign_root") {
+        assert!(
+            std::fs::symlink_metadata(&bundle)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+            "{case} emitted a simulation bundle"
+        );
+        if matches!(
+            case,
+            "valid_zst"
+                | "valid_transport"
+                | "transport_reordered"
+                | "substituted_zst"
+                | "foreign_root"
+        ) {
             let llvm = target.path().join(format!("{case}.ll"));
+            assert!(
+                std::fs::symlink_metadata(&llvm)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            );
             let mut command = base_command("check", &build_dir);
             command
                 .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
@@ -296,7 +325,11 @@ const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES")
                     result.stderr
                 ));
             }
-            assert!(!llvm.exists(), "{case} emitted LLVM");
+            assert!(
+                std::fs::symlink_metadata(&llvm)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+                "{case} emitted LLVM"
+            );
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
