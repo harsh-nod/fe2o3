@@ -1108,7 +1108,7 @@ mod rust_call_parameter_tests {
             )
             .unwrap();
         let body = module.functions[0].body.as_ref().unwrap();
-        let ordinary = &semantic.semantic().functions()[0];
+        let ordinary = &semantic.functions()[0];
         let rust_call = compiler_proof_inputs_v3::rust_call_empty_helper_v28(0x20);
         let correspondence =
             InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();

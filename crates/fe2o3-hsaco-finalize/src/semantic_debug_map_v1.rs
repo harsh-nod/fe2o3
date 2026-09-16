@@ -2234,7 +2234,7 @@ mod production_correspondence_tests {
             )
             .unwrap();
         let body = module.functions[0].body.as_ref().unwrap();
-        let ordinary = &semantic.semantic().functions()[0];
+        let ordinary = &semantic.functions()[0];
         let rust_call = compiler_proof_inputs_v3::rust_call_empty_helper_v28(0x20);
         assert!(
             expected_multi_root_parameter_bindings_v1(&BTreeMap::from([(0, (ordinary, 0, body))]))
