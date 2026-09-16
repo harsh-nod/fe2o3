@@ -75,6 +75,11 @@ use sha2::{Digest as _, Sha256};
 include!("production_pre_ranked_v1.rs");
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
+#[path = "production_slice_view_v1.rs"]
+mod slice_view_v1;
+#[path = "production_value_origin_v1.rs"]
+mod value_origin_v1;
+pub use slice_view_v1::*;
 include!("production_optimized_assert_origins_v1.rs");
 include!("production_source_output_catalog_v1.rs");
 include!("production_source_output_occurrences_v1.rs");
@@ -3386,18 +3391,34 @@ fn propagate_pointer_consumers(
     Some(consumers_by_root)
 }
 
-fn kir_memory_accesses_v1(
-    operation: &Operation,
-) -> Vec<(
+type RankedKirMemoryAccessV1 = (
     ValueId,
     dialect_kernel::AccessKindAttr,
     dialect_kernel::MemorySpaceAttr,
     Option<NormalizedAtomicContractV1>,
-)> {
-    let one = |pointer, access, address_space, atomic| {
-        ranked_memory_space(address_space)
-            .map(|space| vec![(pointer, access, space, atomic)])
-            .unwrap_or_default()
+);
+
+fn kir_memory_accesses_v1(operation: &Operation) -> Vec<RankedKirMemoryAccessV1> {
+    let mut accesses = Vec::new();
+    let result: Result<(), std::convert::Infallible> =
+        try_visit_kir_memory_accesses_v1(operation, |access| {
+            accesses.push(access);
+            Ok(())
+        });
+    match result {
+        Ok(()) => accesses,
+        Err(error) => match error {},
+    }
+}
+
+fn try_visit_kir_memory_accesses_v1<E>(
+    operation: &Operation,
+    mut visit: impl FnMut(RankedKirMemoryAccessV1) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut one = |pointer, access, address_space, atomic| match ranked_memory_space(address_space)
+    {
+        Some(space) => visit((pointer, access, space, atomic)),
+        None => Ok(()),
     };
     match &operation.kind {
         OperationKind::Load { pointer, access }
@@ -3435,7 +3456,7 @@ fn kir_memory_accesses_v1(
                 | AtomicKind::BitXor => dialect_kernel::AccessKindAttr::AtomicReadModifyWrite,
             };
             let Some(scope) = normalize_kir_atomic_scope_v1(atomic.scope) else {
-                return Vec::new();
+                return Ok(());
             };
             one(
                 atomic.pointer,
@@ -3453,7 +3474,7 @@ fn kir_memory_accesses_v1(
         OperationKind::MemoryIntrinsic(intrinsic) => match intrinsic {
             MemoryIntrinsicOperation::PointerDistance { .. }
             | MemoryIntrinsicOperation::VolatileLoad { .. }
-            | MemoryIntrinsicOperation::VolatileStore { .. } => Vec::new(),
+            | MemoryIntrinsicOperation::VolatileStore { .. } => Ok(()),
             MemoryIntrinsicOperation::CopyNonOverlapping {
                 source,
                 destination,
@@ -3461,19 +3482,18 @@ fn kir_memory_accesses_v1(
                 destination_address_space,
                 ..
             } => {
-                let mut effects = one(
+                one(
                     *source,
                     dialect_kernel::AccessKindAttr::Read,
                     *source_address_space,
                     None,
-                );
-                effects.extend(one(
+                )?;
+                one(
                     *destination,
                     dialect_kernel::AccessKindAttr::Write,
                     *destination_address_space,
                     None,
-                ));
-                effects
+                )
             }
         },
         OperationKind::Matrix(matrix) => match matrix.kind {
@@ -3490,27 +3510,27 @@ fn kir_memory_accesses_v1(
                 None,
             ),
             MatrixOperationKind::MultiplyAccumulate { .. }
-            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => Vec::new(),
+            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => Ok(()),
         },
         OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
             Gfx950LdsTransposeOperationKindV1::Stage {
                 storage,
                 source_slice,
                 ..
-            } => vec![
-                (
+            } => {
+                one(
                     source_slice,
                     dialect_kernel::AccessKindAttr::Read,
-                    dialect_kernel::MemorySpaceAttr::Global,
+                    AddressSpace::Global,
                     None,
-                ),
-                (
+                )?;
+                one(
                     storage,
                     dialect_kernel::AccessKindAttr::Write,
-                    dialect_kernel::MemorySpaceAttr::Workgroup,
+                    AddressSpace::Workgroup,
                     None,
-                ),
-            ],
+                )
+            }
             Gfx950LdsTransposeOperationKindV1::Read { storage, .. } => one(
                 storage,
                 dialect_kernel::AccessKindAttr::Read,
@@ -3518,9 +3538,9 @@ fn kir_memory_accesses_v1(
                 None,
             ),
             Gfx950LdsTransposeOperationKindV1::Current { .. }
-            | Gfx950LdsTransposeOperationKindV1::Publish { .. } => Vec::new(),
+            | Gfx950LdsTransposeOperationKindV1::Publish { .. } => Ok(()),
         },
-        _ => Vec::new(),
+        _ => Ok(()),
     }
 }
 
@@ -6772,27 +6792,13 @@ fn compiler_owned_retained_local_storage_pointer_v1(
         visiting.remove(&pointer);
         return Some(false);
     };
-    let synthetic_allocation = matches!(
-        definition.kind,
-        OperationKind::Alloca {
-            address_space: AddressSpace::Private,
-            count: None,
-            ..
-        }
-    ) && correspondence
-        .synthetic_operation_spans()
-        .iter()
-        .any(|span| {
-            span.correspondence_owner() == correspondence_owner
-                && span.semantic_function() == semantic_function
-                && span.rule() == SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
-                && operation_span_contains_v1(
-                    span.kernel_ir_block(),
-                    span.first_operation_ordinal(),
-                    span.operation_count(),
-                    location,
-                )
-        });
+    let synthetic_allocation = retained_local_storage_allocation_v1(
+        definition,
+        location,
+        correspondence,
+        correspondence_owner,
+        semantic_function,
+    );
     let result = if synthetic_allocation {
         true
     } else {
@@ -6815,6 +6821,36 @@ fn compiler_owned_retained_local_storage_pointer_v1(
     };
     visiting.remove(&pointer);
     Some(result)
+}
+
+fn retained_local_storage_allocation_v1(
+    definition: &Operation,
+    location: FunctionOperationLocation,
+    correspondence: &SemanticKirCorrespondenceV1,
+    owner: SemanticFunctionIdV1,
+    function: SemanticFunctionIdV1,
+) -> bool {
+    matches!(
+        definition.kind,
+        OperationKind::Alloca {
+            address_space: AddressSpace::Private,
+            count: None,
+            ..
+        }
+    ) && correspondence
+        .synthetic_operation_spans()
+        .iter()
+        .any(|span| {
+            span.correspondence_owner() == owner
+                && span.semantic_function() == function
+                && span.rule() == SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
+                && operation_span_contains_v1(
+                    span.kernel_ir_block(),
+                    span.first_operation_ordinal(),
+                    span.operation_count(),
+                    location,
+                )
+        })
 }
 
 fn kir_written_value_v1(operation: &Operation) -> Option<ValueId> {
