@@ -258,6 +258,8 @@ standard Cargo test harness and default host features, builds the repository's
 back to raw Cargo tests or directly runs a discovered executable. An installed
 pinned nightly and cached offline dependencies are required. Metadata,
 bootstrap, execution and postflight share the declared 1,200-second deadline.
+The private driver build uses at most two Cargo jobs; metadata and suite builds
+remain at one job. This is a build scheduling bound, not a total thread or memory cap.
 
 The JSON observation records the exact source/config/tool identities, commands,
 selected harness, process results and individual test outcomes. Failure,

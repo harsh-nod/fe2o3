@@ -432,13 +432,14 @@ class AdapterComponents(unittest.TestCase):
 
     def test_controlled_environment_does_not_accept_inherited_selection(self) -> None:
         for name in ("RUSTC", "RUSTC_BOOTSTRAP", "CARGO_PROFILE_TEST_OPT_LEVEL", "CARGO_TARGET_X_RUNNER",
-                     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "FE2O3_EXAMPLE_CARGO_ARGS", "LD_LIBRARY_PATH"):
+                     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_JOBS", "FE2O3_EXAMPLE_CARGO_ARGS", "LD_LIBRARY_PATH"):
             with patch.dict(os.environ, {name: "hostile"}, clear=True), self.assertRaises(adapter.ObservationError):
                 adapter.environment()
         with patch.dict(os.environ, {"PATH": "/usr/bin", "FE2O3_TUTORIAL_CPU_OUTPUT_ROOT": str(self.root)}, clear=True):
             env = adapter.environment()
             self.assertNotIn("FE2O3_TUTORIAL_CPU_OUTPUT_ROOT", env)
             self.assertEqual(env["CARGO_NET_OFFLINE"], "true")
+            self.assertEqual(env["CARGO_BUILD_JOBS"], "1")
 
     def test_component_child_status_cap_deadline_and_cleanup(self) -> None:
         env = {"PATH": os.environ.get("PATH", "")}
@@ -513,6 +514,7 @@ class AdapterComponents(unittest.TestCase):
         def child(argv, cwd, env, directory, label, deadline, phases):
             commands.append(argv)
             phases.append({"label": label, "argv": argv, "returncode": 0})
+            self.assertEqual(env["CARGO_BUILD_JOBS"], "2" if label == "driver-build" else "1")
             if label.startswith("locate-"):
                 return (str(toolpaths[label[7:]]) + "\n").encode()
             if label == "rustc-version":
@@ -536,7 +538,7 @@ class AdapterComponents(unittest.TestCase):
                 for name in ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER",
                              "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"):
                     self.assertEqual(env[name], "")
-                self.assertEqual(env["CARGO_BUILD_JOBS"], "1")
+                self.assertEqual(plan["driverBuildJobs"], 2)
                 self.assertEqual(env["CARGO_INCREMENTAL"], "0")
                 self.assertEqual(env["CARGO_TARGET_DIR"], str(output / "build"))
                 binary = output / "build" / host / "debug/cargo-fe2o3"
@@ -761,6 +763,7 @@ class BatchComponents(unittest.TestCase):
 
         def child(argv, cwd, env, directory, label, deadline, phases):
             self.calls.append((label, list(argv), dict(env), deadline, directory))
+            self.assertEqual(env["CARGO_BUILD_JOBS"], "2" if label == "driver-build" else "1")
             self.assertLess(self.clock, deadline)
             phase = {"label": label, "argv": argv, "returncode": 0, "completeLogs": True, "logs": []}
             phases.append(phase)
@@ -874,6 +877,8 @@ class BatchComponents(unittest.TestCase):
         self.assertEqual(len(self.calls), 29)
         self.assertEqual([call[0] for call in self.calls].count("driver-build"), 1)
         self.assertEqual([call[0] for call in self.calls].count("suite-metadata"), 12)
+        common = json.loads(Path(observation["common"]["path"]).read_bytes())
+        self.assertEqual(common["plan"]["driverBuildJobs"], 2)
         suites = [call for call in self.calls if call[0] == "suite"]
         self.assertEqual(len({call[2]["CARGO_TARGET_DIR"] for call in suites}), 12)
         self.assertTrue(all(call[2]["CARGO_TARGET_DIR"] != str(self.output / "common/build") for call in suites))

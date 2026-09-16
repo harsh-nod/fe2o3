@@ -595,7 +595,8 @@ def bootstrap_driver(root: Path, env: dict[str, str], output: Path, target_dir: 
     bootstrap_env.update({"RUSTC": str(tools["rustc"]), "CARGO_BUILD_RUSTC": str(tools["rustc"]),
                           "RUSTC_WRAPPER": "", "CARGO_BUILD_RUSTC_WRAPPER": "",
                           "RUSTC_WORKSPACE_WRAPPER": "", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER": "",
-                          "FE2O3_HIP_SYS_DISABLE": "1"})
+                          "FE2O3_HIP_SYS_DISABLE": "1", "CARGO_BUILD_JOBS": "2"})
+    plan["driverBuildJobs"] = 2
     data = child([str(tools["cargo"]), "build", "--locked", "--offline", "-p", "cargo-fe2o3",
                   "--bin", "cargo-fe2o3", "--target", plan["host"], "--message-format=json"], root, bootstrap_env,
                  output, "driver-build", deadline, phases)
