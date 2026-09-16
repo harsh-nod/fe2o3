@@ -275,9 +275,10 @@ impl SemanticFunctionLoweringV1<'_> {
                     ));
                 }
             };
+            let function = self.semantic_function.index();
             let failure = |detail| {
                 unsupported(
-                    self.semantic_function.index(),
+                    function,
                     Some(block.index()),
                     None,
                     detail,
