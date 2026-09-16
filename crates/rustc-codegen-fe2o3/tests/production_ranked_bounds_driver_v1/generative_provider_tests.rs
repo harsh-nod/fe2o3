@@ -1,7 +1,7 @@
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn staged_generative_providers_reject_without_export_authority() {
-    const REASON: &str = "reserved capability type has no authenticated production owner";
+    const REASON: &str = EXECUTION_ROLE_MATERIALIZATION_PENDING;
     const ENTRY_REASON: &str = "raw rustc MIR preflight rejected reviewed terminal without production expansion: KernelContextIssue";
     let target = ScratchTarget::new();
     let build_dir = target.path().join("provider-target");
@@ -106,4 +106,120 @@ fn staged_generative_providers_reject_without_export_authority() {
     // The protocol matrix builds its own fixture; release this completed cache first.
     drop(target);
     check_kernel_context_source_protocol();
+    check_execution_role_source_shapes();
 }
+
+fn check_execution_role_source_shapes() {
+    const GEOMETRY: &str = "execution tile role requires 1..=256 lanes and 1..=125 elements";
+    const ELEMENT: &str = "execution tile role requires the u32 element profile";
+    let target = ScratchTarget::new();
+    let build_dir = target.path().join("role-shapes-target");
+    let mut failures = Vec::new();
+    for profile in ["gfx942", "gfx950"] {
+        for (name, carrier, element, lanes, elements, expected) in [
+            (
+                "minimum",
+                "MaskedTile1D",
+                "u32",
+                1,
+                1,
+                EXECUTION_ROLE_MATERIALIZATION_PENDING,
+            ),
+            (
+                "non_power_of_two",
+                "MaskedTile1D",
+                "u32",
+                3,
+                2,
+                EXECUTION_ROLE_MATERIALIZATION_PENDING,
+            ),
+            (
+                "above_wave_width",
+                "LaneFragment",
+                "u32",
+                65,
+                2,
+                EXECUTION_ROLE_MATERIALIZATION_PENDING,
+            ),
+            (
+                "maximum_tile",
+                "MaskedTile1D",
+                "u32",
+                256,
+                125,
+                EXECUTION_ROLE_MATERIALIZATION_PENDING,
+            ),
+            (
+                "maximum_fragment",
+                "LaneFragment",
+                "u32",
+                256,
+                125,
+                EXECUTION_ROLE_MATERIALIZATION_PENDING,
+            ),
+            ("zero_lanes", "MaskedTile1D", "u32", 0, 2, GEOMETRY),
+            ("excess_lanes", "MaskedTile1D", "u32", 257, 2, GEOMETRY),
+            (
+                "truncated_lanes",
+                "LaneFragment",
+                "u32",
+                65_537,
+                2,
+                GEOMETRY,
+            ),
+            ("zero_elements", "LaneFragment", "u32", 3, 0, GEOMETRY),
+            ("excess_elements", "MaskedTile1D", "u32", 3, 126, GEOMETRY),
+            ("float_element", "MaskedTile1D", "f32", 3, 2, ELEMENT),
+            ("wide_element", "LaneFragment", "u64", 3, 2, ELEMENT),
+        ] {
+            let source_path = target.path().join(format!("{profile}-{name}.rs"));
+            let bundle = target.path().join(format!("{profile}-{name}.fe2sim"));
+            // A referenced carrier keeps all nominal type/layout facts without
+            // requiring an issuer or pretending its bytes are caller authority.
+            let source = format!(
+                r#"
+use fe2o3_device::{{DisjointSlice, kernel, thread}};
+type Role = fe2o3_device::{carrier}<'static, {element}, {lanes}, {elements}, ()>;
+#[inline(never)]
+fn carrier_type() -> Option<&'static Role> {{ None }}
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn role_probe(mut output: DisjointSlice<u32>) {{
+    let _ = carrier_type();
+    if let Some(slot) = output.get_mut(thread::index_1d()) {{ *slot = 7; }}
+}}
+"#
+            );
+            std::fs::write(&source_path, source).unwrap();
+            let mut command = simulation_export_command_for_feature(
+                profile,
+                &bundle,
+                &build_dir,
+                Some(5),
+                "provider_context_protocol",
+            );
+            command.env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path);
+            let result = output(command, "preserve exact source execution role shape");
+            if let Some(diagnostic) = result
+                .stderr
+                .lines()
+                .find(|line| line.contains("fe2o3 rustc extraction:"))
+            {
+                eprintln!("execution role {profile}/{name}: {diagnostic}");
+            }
+            if result.status.success() || !result.stderr.contains(expected) {
+                failures.push(format!(
+                    "{profile}/{name} did not reach {expected:?}:\n{}",
+                    result.stderr,
+                ));
+            }
+            assert!(
+                std::fs::symlink_metadata(&bundle)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+                "{profile}/{name} emitted a simulation bundle"
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+const EXECUTION_ROLE_MATERIALIZATION_PENDING: &str =
+    "execution capabilities require checked canonical KIR materialization";

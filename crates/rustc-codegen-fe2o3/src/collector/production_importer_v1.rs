@@ -645,6 +645,12 @@ fn construct_complete_request_v1<'tcx>(
         );
     }
 
+    let contains_execution_roles = types.iter().any(|ty| {
+        matches!(
+            ty.rust_type_kind(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_)
+        )
+    });
     InertSemanticMirRequestV1::new_with_callables(
         target,
         types,
@@ -655,7 +661,15 @@ fn construct_complete_request_v1<'tcx>(
         callables,
         plan.roots().to_vec(),
     )
-    .and_then(|request| request.admit_current_production(SemanticMirLimitsV1::default()))
+    .and_then(|request| {
+        if contains_execution_roles {
+            // This preserves source types, not execution authority. The shared
+            // materializer rejects V29 before ordinary aggregate/ZST erasure.
+            request.admit_exact_v29(SemanticMirLimitsV1::default())
+        } else {
+            request.admit_current_production(SemanticMirLimitsV1::default())
+        }
+    })
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
