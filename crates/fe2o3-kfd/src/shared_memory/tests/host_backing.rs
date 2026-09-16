@@ -999,7 +999,7 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             .restore_foundation(
                 &mut fixture.engine,
                 &mut fixture.foundation,
-                queue,
+                &mut queue,
                 fixture.device,
                 fixture.vm,
             )
@@ -1065,7 +1065,7 @@ fn n1_unconfigured_transfer_cannot_reopen_budget_after_restore_or_live_loan() {
         .restore_foundation(
             &mut fixture.engine,
             &mut fixture.foundation,
-            queue,
+            &mut queue,
             fixture.device,
             fixture.vm,
         )

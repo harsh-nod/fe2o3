@@ -5,6 +5,8 @@ use transitions::ProjectionFaultV1 as Fault;
 
 #[path = "data_tests.rs"]
 mod data;
+#[path = "split_tests.rs"]
+mod split;
 
 // Completed controls, unmap progress, partial calls, and the active native state.
 pub(crate) type ControlReleasePrefixV1 = (usize, bool, usize, Option<(bool, usize, bool, bool)>);

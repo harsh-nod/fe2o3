@@ -1,4 +1,4 @@
-//! One-shot borrowed cleanup of dispatch controls and coherent data.
+//! Borrowed, one-shot unmap and disposal of controls and coherent data.
 
 use super::*;
 use transitions::{NativeTransitionProgressV1, TerminalTokenV1};
@@ -24,6 +24,7 @@ pub(crate) enum CleanupStageV1 {
     NativeUnmap,
     UnmapProjection,
     UnmapCommit,
+    Unmapped,
     ReleasePreflight,
     ReleaseEvidence,
     ReleaseProjection,
@@ -303,6 +304,16 @@ pub(super) fn release_v1<B: MemoryBackend>(
     custody: &mut ControlCleanupCustodyV1,
     mut process_poison: impl FnMut(),
 ) -> Result<(), MemorySessionError> {
+    unmap_v1(engine, projection, custody, &mut process_poison)?;
+    finish_release_v1(engine, projection, custody, process_poison)
+}
+
+pub(super) fn unmap_v1<B: MemoryBackend>(
+    engine: &mut SharedMemoryEngine<B>,
+    projection: &mut ProjectionV1<'_>,
+    custody: &mut ControlCleanupCustodyV1,
+    mut process_poison: impl FnMut(),
+) -> Result<(), MemorySessionError> {
     if custody.started {
         return Err(MemorySessionError::InvalidAllocationAuthority);
     }
@@ -328,7 +339,22 @@ pub(super) fn release_v1<B: MemoryBackend>(
             .foundation
             .replace_memory_after_sealed_transition(unmapped)
             .map_err(MemorySessionError::Model)?;
+        custody.stage = CleanupStageV1::Unmapped;
+        Ok(())
+    }));
+    settle_result(engine, custody, result)
+}
 
+pub(super) fn finish_release_v1<B: MemoryBackend>(
+    engine: &mut SharedMemoryEngine<B>,
+    projection: &mut ProjectionV1<'_>,
+    custody: &mut ControlCleanupCustodyV1,
+    mut process_poison: impl FnMut(),
+) -> Result<(), MemorySessionError> {
+    if !custody.started || custody.failed || custody.stage != CleanupStageV1::Unmapped {
+        return Err(MemorySessionError::InvalidAllocationAuthority);
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         projection.stage(custody, CleanupStageV1::ReleasePreflight)?;
         preflight_queue_foundation_native_memory_transition_v1(
             projection.foundation,
@@ -358,6 +384,14 @@ pub(super) fn release_v1<B: MemoryBackend>(
         custody.stage = CleanupStageV1::Complete;
         Ok(())
     }));
+    settle_result(engine, custody, result)
+}
+
+fn settle_result<B: MemoryBackend>(
+    engine: &mut SharedMemoryEngine<B>,
+    custody: &mut ControlCleanupCustodyV1,
+    result: std::thread::Result<Result<(), MemorySessionError>>,
+) -> Result<(), MemorySessionError> {
     // Native disposal may have completed before a closing currentness/accounting
     // error or panic. Retain a receipt, never a newly usable release authority.
     custody.retain_disposed_receipt();

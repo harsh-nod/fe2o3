@@ -4398,7 +4398,7 @@ impl QueueModelOwnershipV1 {
         &mut self,
         engine: &mut SharedMemoryEngine<B>,
         session_foundation: &mut QueueModelFoundationV1,
-        foundation: QueueModelFoundationV1,
+        foundation: &mut QueueModelFoundationV1,
         device: ModelDeviceAdmissionV1,
         vm: VmKeyV1,
     ) -> Result<(), MemorySessionError> {
@@ -4408,17 +4408,18 @@ impl QueueModelOwnershipV1 {
         if foundation
             .validate_full(engine.session_id, device, vm, issuer)
             .is_err()
-            || self.restore_to_session(issuer).is_err()
+            || foundation
+                .revoke_invariant_certificate(engine.session_id, device, vm, issuer)
+                .is_err()
         {
             return engine.quarantine(MemorySessionError::Model(
                 "shared queue model ownership restoration",
             ));
         }
-        let mut foundation = foundation;
-        foundation
-            .revoke_invariant_certificate(engine.session_id, device, vm, issuer)
-            .expect("fully validated exact foundation certificate remains revocable");
-        *session_foundation = foundation;
+        // Keep both owners in place through validation. After revocation, commit
+        // without a fallible operation or dropping either foundation.
+        core::mem::swap(session_foundation, foundation);
+        self.phase = QueueModelOwnershipPhaseV1::SessionOwned;
         Ok(())
     }
 
@@ -4535,6 +4536,7 @@ impl QueueModelOwnershipV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn restore_to_session(&mut self, issuer: u64) -> Result<(), ()> {
         if self.phase != (QueueModelOwnershipPhaseV1::QueueOwned { issuer }) {
             return Err(());
@@ -5692,7 +5694,7 @@ impl SharedGttMemorySessionV1 {
 
     pub(crate) fn restore_queue_model_foundation(
         &mut self,
-        foundation: QueueModelFoundationV1,
+        foundation: &mut QueueModelFoundationV1,
     ) -> Result<(), MemorySessionError> {
         self.model_ownership.restore_foundation(
             &mut self.engine,
@@ -6807,6 +6809,7 @@ mod tests {
     pub(super) mod device_initialization;
     mod device_pool;
     mod dispatch_retention;
+    mod foundation_restore;
     mod host_backing;
     pub(super) mod live_coherent_insertion;
     pub(super) mod live_insertion;
@@ -7924,7 +7927,7 @@ mod tests {
                 .restore_foundation(
                     &mut fixture.engine,
                     &mut fixture.foundation,
-                    queue,
+                    &mut queue,
                     fixture.device,
                     fixture.vm,
                 )
@@ -7951,14 +7954,14 @@ mod tests {
     fn n2_constructor_unconfigured_transfer_cannot_reopen_configuration_after_restore() {
         let mut fixture = BackingConstructorFixture::new(None);
         let budget = Gfx942DeviceBackingBudgetV1::new(4096, 1).unwrap();
-        let queue = fixture.transfer(&[]).unwrap();
+        let mut queue = fixture.transfer(&[]).unwrap();
         assert!(fixture.configure(Some(budget)).is_err());
         fixture
             .ownership
             .restore_foundation(
                 &mut fixture.engine,
                 &mut fixture.foundation,
-                queue,
+                &mut queue,
                 fixture.device,
                 fixture.vm,
             )
@@ -8100,7 +8103,7 @@ mod tests {
         let budget = Gfx942DeviceBackingBudgetV1::new(8192, 2).unwrap();
         let mut fixture = BackingConstructorFixture::new(Some(budget));
         let authority = fixture.mapped_device();
-        let queue = fixture.transfer(&[&authority]).unwrap();
+        let mut queue = fixture.transfer(&[&authority]).unwrap();
         let retained = fixture.usage();
         let mut foreign_vm = fixture.vm;
         foreign_vm.id.0 += 1;
@@ -8110,7 +8113,7 @@ mod tests {
                 .restore_foundation(
                     &mut fixture.engine,
                     &mut fixture.foundation,
-                    queue,
+                    &mut queue,
                     fixture.device,
                     foreign_vm,
                 )

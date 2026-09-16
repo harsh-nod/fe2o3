@@ -13746,15 +13746,10 @@ impl ComputeAqlQueueSessionV1 {
         if !engine.backend.foundation_in_engine {
             return Ok(());
         }
-        let domain = engine.foundation.identity().domain_id();
-        let foundation = core::mem::replace(
-            &mut engine.foundation,
-            QueueModelFoundationV1::empty(domain),
-        );
         engine
             .backend
             .session
-            .restore_queue_model_foundation(foundation)?;
+            .restore_queue_model_foundation(&mut engine.foundation)?;
         engine.backend.foundation_in_engine = false;
         Ok(())
     }

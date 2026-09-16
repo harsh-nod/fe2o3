@@ -308,7 +308,7 @@ fn device_pool_both_startup_orders_keep_exact_n2_charge_across_model_loans_reuse
             .restore_foundation(
                 &mut fixture.engine,
                 &mut fixture.foundation,
-                queue,
+                &mut queue,
                 fixture.device,
                 fixture.vm,
             )
