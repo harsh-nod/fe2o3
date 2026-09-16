@@ -71,6 +71,12 @@ control passes type and FnAbi construction, then stops because its legacy V1
 registration has no typed kernel binding. Ordinary and phantom-only ZST controls
 separately require successful inert bundle export.
 
+The direct phantom controls cover both `PhantomData<KernelContext<'static>>`
+and capability-independent `PhantomData<&'static u32>`. Descriptor construction
+uses the importer's fallible monomorphic signature normalization before deriving
+exact argument identities, including erasure of nested lifetimes. Physical
+layout checks and exact semantic identity comparison remain unchanged.
+
 ## Required Integration
 
 The unified capability owner must supply the canonical schema and complete

@@ -12,6 +12,7 @@
     feature = "provider_fragment",
     feature = "provider_tile_chain",
     feature = "provider_phantom",
+    feature = "provider_phantom_reference",
 ))]
 mod capability_provider;
 
@@ -135,6 +136,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "provider_fragment",
     feature = "provider_tile_chain",
     feature = "provider_phantom",
+    feature = "provider_phantom_reference",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",

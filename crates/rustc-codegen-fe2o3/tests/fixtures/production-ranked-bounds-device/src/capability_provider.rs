@@ -8,6 +8,17 @@ type Workgroup = fe2o3_device::WorkgroupCapability<'static, ()>;
 type Tile = MaskedTile1D<'static, u32, 64, 2, ()>;
 type Fragment = fe2o3_device::LaneFragment<'static, u32, 64, 2, ()>;
 
+#[cfg(feature = "provider_phantom_reference")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn provider_phantom_reference(
+    _marker: core::marker::PhantomData<&'static u32>,
+    mut output: DisjointSlice<u32>,
+) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = 7;
+    }
+}
+
 #[cfg(feature = "provider_phantom")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn provider_phantom(

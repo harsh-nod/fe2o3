@@ -75,7 +75,11 @@ fn staged_generative_providers_reject_without_export_authority() {
     );
     assert!(!llvm.exists(), "rejected provider emitted LLVM");
 
-    for feature in ["aggregate_zst", "provider_phantom"] {
+    for feature in [
+        "aggregate_zst",
+        "provider_phantom",
+        "provider_phantom_reference",
+    ] {
         let control = target.path().join(format!("{feature}.fe2sim"));
         let result = output(
             simulation_export_command_for_feature("gfx942", &control, &build_dir, Some(5), feature),
