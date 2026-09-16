@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const COLLECTED_SHAPE_COMPLETE: &str = "fe2o3 collected-shape: complete; source-proof=not-run; artifact-authority=false; launch-authority=false";
+
 struct ScratchTarget(PathBuf);
 
 impl ScratchTarget {
@@ -30,6 +32,150 @@ fn workspace() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("canonical workspace")
+}
+
+fn run_collected_shape(feature: &str, profile: &str) -> (bool, String) {
+    // A fresh target directory is essential: a Cargo-fresh result did not run
+    // this invocation's selected rustc callback.
+    let target = ScratchTarget::new();
+    let mut command = Command::new(env!("CARGO"));
+    command.current_dir(workspace())
+        .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "55".repeat(32))
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", format!("-Zalways-encode-mir -Ctarget-cpu={profile} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"))
+        .env("FE2O3_EXTRACT_COLLECTED_SHAPE_V1", "1")
+        .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
+        .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_extraction_fixture");
+    for variable in [
+        "FE2O3_EXTRACT_RANKED_MEMORY_V1",
+        "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
+        "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
+        "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6",
+        "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1",
+    ] {
+        command.env_remove(variable);
+    }
+    let output = command
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(&target.0)
+        .args(["--no-default-features", "--features", feature])
+        .output()
+        .expect("run actual collected shape diagnostic");
+    (
+        output.status.success(),
+        String::from_utf8(output.stderr).expect("UTF-8 diagnostic"),
+    )
+}
+
+fn require_collected_shape_success(success: bool, stderr: &str) {
+    assert!(success, "actual collected shape failed:\n{stderr}");
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| *line == COLLECTED_SHAPE_COMPLETE)
+            .count(),
+        1,
+        "missing unique postflight completion:\n{stderr}"
+    );
+    assert!(stderr.contains("source-proof=not-run"));
+    assert!(stderr.contains("references=1"));
+    assert!(stderr.contains("ownership 0: ExclusiveOwner"));
+    assert!(stderr.contains("DisjointSliceGetMut"));
+    assert!(stderr.contains("ThreadIndex1d"));
+    assert!(stderr.contains("CallReturn"));
+    assert!(stderr.contains("source Store trace 0:"));
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("source Store trace ")
+                && line.contains("first-access ordinal=0 matches-traced-store=true: Retained {"))
+            .count(),
+        1,
+        "fixture lacks its exact retained own Store:\n{stderr}"
+    );
+    for graph in ["N", "B", "O"] {
+        assert!(
+            stderr
+                .lines()
+                .any(|line| line.starts_with(&format!("graph {graph} "))
+                    && line.contains("uses: Store")),
+            "no actual {graph} Store:\n{stderr}"
+        );
+        assert!(
+            stderr
+                .lines()
+                .any(|line| line.starts_with(&format!("graph {graph} "))
+                    && line.contains("terminator:")),
+            "no actual {graph} terminator:\n{stderr}"
+        );
+    }
+    assert!(!stderr.contains("functional-refinement proof runtime unavailable"));
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual gfx942/gfx950 extraction; no proof runtime"]
+fn collected_reference_shape_observes_actual_source_n_b_o_on_both_profiles() {
+    for profile in ["gfx942", "gfx950"] {
+        let (success, stderr) = run_collected_shape("reference-positive", profile);
+        require_collected_shape_success(success, &stderr);
+    }
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual AMD extraction; no proof runtime"]
+fn collected_reference_mutation_is_observed_not_authenticated_as_functional_success() {
+    let (success, positive) = run_collected_shape("reference-positive", "gfx942");
+    require_collected_shape_success(success, &positive);
+    let (success, mutated) = run_collected_shape("reference-mutated", "gfx942");
+    require_collected_shape_success(success, &mutated);
+    let digest = |text: &str| {
+        text.lines()
+            .find(|line| line.starts_with("source reference 0:"))
+            .unwrap()
+            .split("effect-sha256=")
+            .nth(1)
+            .unwrap()
+            .split(" writes=")
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_ne!(digest(&positive), digest(&mutated));
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual AMD extraction; no proof runtime"]
+fn collected_shape_preserves_unsafe_and_abi_source_admission_refusals() {
+    for (feature, expected) in [
+        ("reference-unsafe", "is declared unsafe"),
+        (
+            "reference-abi-mismatch",
+            "logical ABI mismatch at argument 1",
+        ),
+    ] {
+        let (success, stderr) = run_collected_shape(feature, "gfx942");
+        assert!(!success, "source admission unexpectedly passed:\n{stderr}");
+        assert!(stderr.contains(expected), "wrong source refusal:\n{stderr}");
+        assert!(!stderr.lines().any(|line| line == COLLECTED_SHAPE_COMPLETE));
+    }
 }
 
 fn run_feature(target: &Path, feature: &str) -> String {

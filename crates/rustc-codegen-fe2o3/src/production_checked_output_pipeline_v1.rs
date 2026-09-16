@@ -452,6 +452,48 @@ pub(crate) fn with_checked_output_descriptor_text_v1<T>(
 }
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    /// Extraction-only observation before any source-functional execution.
+    /// Original references stay borrowed from the consumed transaction. The
+    /// callback result is flattened only after both existing scope postflights.
+    pub(crate) fn with_collected_shape_observation_v1(
+        self,
+        next: impl FnOnce(
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+            &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+            &[crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1],
+            fe2o3_amd_target::ProductionAmdTargetProfileV1,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !self.stage.transaction.compiler_custody.is_extraction_only() {
+            return Err("collected shape observation requires extraction-only custody".to_owned());
+        }
+        self.import_semantic_mir()
+            .and_then(|stage| stage.construct_semantic_middle_end())
+            .and_then(|stage| stage.construct_semantic_ssa())
+            .map_err(|error| error.to_string())?
+            .with_captured_materialized_target_neutral_v1(|stage, budget| {
+                with_checked_output_target_endpoint_v1(
+                    &stage.materialized,
+                    stage.bindings.rustc_target.profile(),
+                    budget,
+                    |bound, checked, budget| {
+                        Ok(next(
+                            &stage.materialized,
+                            bound,
+                            checked,
+                            stage.bindings.reference_effect_bindings.as_slice(),
+                            stage.bindings.rustc_target.profile(),
+                            budget,
+                        ))
+                    },
+                )
+                .map_err(Box::new)
+            })
+            .map_err(|error| error.to_string())?
+    }
+
     fn with_source_checked_output_transaction_v1<T>(
         self,
         next: impl for<'scope> FnOnce(

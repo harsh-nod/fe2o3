@@ -21,6 +21,7 @@ use reserved_fe2o3_symbols::{
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
+const EXTRACT_COLLECTED_SHAPE_ENV_V1: &str = "FE2O3_EXTRACT_COLLECTED_SHAPE_V1";
 const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1";
 const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
 const EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1: &str =
@@ -78,7 +79,10 @@ fn main() {
         None,
     )
     .map(|prepared| select_simulation_mode(prepared, version))
-    .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff));
+    .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff))
+    .and_then(|prepared| {
+        select_collected_shape_mode(prepared, env::var_os(EXTRACT_COLLECTED_SHAPE_ENV_V1))
+    });
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -123,6 +127,7 @@ fn require_exact_primary_package_marker_v1(marker: Option<&std::ffi::OsStr>) -> 
 #[derive(Debug)]
 enum ExtractionModeV1 {
     KernelIr,
+    CollectedShape,
     RankedMemory,
     AmdgpuLlvm(OsString),
     Gfx942Llvm(OsString),
@@ -134,6 +139,26 @@ enum ExtractionModeV1 {
     SimulationBundleV4(OsString),
     SimulationBundleV5(OsString),
     SimulationBundleV6(OsString),
+}
+
+fn select_collected_shape_mode(
+    mut prepared: PreparedExtractionV1,
+    value: Option<OsString>,
+) -> Result<PreparedExtractionV1, String> {
+    if let (PreparedExtractionV1::Selected(selected), Some(value)) = (&mut prepared, value) {
+        if value != "1" {
+            return Err(format!(
+                "{EXTRACT_COLLECTED_SHAPE_ENV_V1} requires exactly 1"
+            ));
+        }
+        if !matches!(selected.mode, ExtractionModeV1::KernelIr)
+            || selected.crate_binding_output.is_some()
+        {
+            return Err("collected shape diagnostic is exclusive with ranked, LLVM, handoff, simulation and crate-binding outputs".to_owned());
+        }
+        selected.mode = ExtractionModeV1::CollectedShape;
+    }
+    Ok(prepared)
 }
 
 fn select_compiler_handoff_output(
@@ -520,6 +545,11 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
         ExtractionModeV1::KernelIr => {
             rustc_codegen_fe2o3::run_production_extraction_driver_v1(&selected.args)?;
         }
+        ExtractionModeV1::CollectedShape => {
+            rustc_codegen_fe2o3::run_production_collected_shape_extraction_driver_v1(
+                &selected.args,
+            )?;
+        }
         ExtractionModeV1::RankedMemory => {
             rustc_codegen_fe2o3::run_production_ranked_extraction_driver_v1(&selected.args)?;
         }
@@ -653,6 +683,112 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn collected_shape_non_utf8_refuses_selected_but_preserves_real_probe_and_dependency_argv() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let invalid = || OsString::from_vec(vec![0xff]);
+        let selected = PreparedExtractionV1::Selected(selected_compile("selected", &["metadata"]));
+        assert!(select_collected_shape_mode(selected, Some(invalid())).is_err());
+        for argv in [
+            vec![
+                "fe2o3-rustc-extract".into(),
+                "rustc".into(),
+                "--version".into(),
+            ],
+            vec![
+                "fe2o3-rustc-extract".into(),
+                "rustc".into(),
+                "-".into(),
+                "--print=file-names".into(),
+            ],
+            compile_argv("dependency", &["metadata"]),
+        ] {
+            let prepared = prepare(
+                argv.clone(),
+                Some("selected".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let PreparedExtractionV1::Passthrough {
+                executable,
+                forwarded_args,
+            } = select_collected_shape_mode(prepared, Some(invalid())).unwrap()
+            else {
+                panic!("probe/dependency unexpectedly selected");
+            };
+            assert_eq!(executable, argv[1]);
+            assert_eq!(forwarded_args, argv[2..]);
+        }
+    }
+
+    #[test]
+    fn collected_shape_is_explicit_selected_only_and_exclusive_with_every_output() {
+        let selected = || PreparedExtractionV1::Selected(selected_compile("unit", &["m"]));
+        assert!(matches!(
+            select_collected_shape_mode(selected(), None).unwrap(),
+            PreparedExtractionV1::Selected(SelectedExtractionV1 {
+                mode: ExtractionModeV1::KernelIr,
+                ..
+            })
+        ));
+        assert!(matches!(
+            select_collected_shape_mode(selected(), Some("1".into())).unwrap(),
+            PreparedExtractionV1::Selected(SelectedExtractionV1 {
+                mode: ExtractionModeV1::CollectedShape,
+                ..
+            })
+        ));
+        for value in ["", "0", "true", "2"] {
+            assert!(select_collected_shape_mode(selected(), Some(value.into())).is_err());
+        }
+        let output = || OsString::from("not-created");
+        for mode in [
+            ExtractionModeV1::RankedMemory,
+            ExtractionModeV1::AmdgpuLlvm(output()),
+            ExtractionModeV1::Gfx942Llvm(output()),
+            ExtractionModeV1::Gfx942CompilerHandoff(output()),
+            ExtractionModeV1::AmdgpuCompilerHandoff(output()),
+            ExtractionModeV1::SimulationBundle(output()),
+            ExtractionModeV1::SimulationBundleV2(output()),
+            ExtractionModeV1::SimulationBundleV3(output()),
+            ExtractionModeV1::SimulationBundleV4(output()),
+            ExtractionModeV1::SimulationBundleV5(output()),
+            ExtractionModeV1::SimulationBundleV6(output()),
+        ] {
+            let mut selected = selected_compile("unit", &["m"]);
+            selected.mode = mode;
+            assert!(
+                select_collected_shape_mode(
+                    PreparedExtractionV1::Selected(selected),
+                    Some("1".into())
+                )
+                .is_err()
+            );
+        }
+        let mut selected = selected_compile("unit", &["m"]);
+        selected.crate_binding_output = Some("not-created".into());
+        assert!(
+            select_collected_shape_mode(PreparedExtractionV1::Selected(selected), Some("1".into()))
+                .is_err()
+        );
+        let passthrough = PreparedExtractionV1::Passthrough {
+            executable: "rustc".into(),
+            forwarded_args: vec!["--version".into()],
+        };
+        assert!(matches!(
+            select_collected_shape_mode(passthrough, Some("invalid-but-not-selected".into()))
+                .unwrap(),
+            PreparedExtractionV1::Passthrough { .. }
+        ));
+    }
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {

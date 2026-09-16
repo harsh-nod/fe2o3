@@ -1635,3 +1635,1091 @@ fn invocation_fixture_records_distinct_exact_guard_and_store_index_occurrences()
         }
     });
 }
+
+// Source/N/O shape prerequisite only: no ranked/refinement proof is constructed.
+mod identity_getter_shape_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{OperationKind as Op, Terminator as Term, Type, ValueId};
+    use fe2o3_mir_model::semantic_mir_v1::*;
+
+    const MARKER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
+    const WITNESS: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
+    const RAW: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
+    const SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
+    const RECEIVER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
+    const ELEMENT_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(12);
+    const OPTION: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(13);
+
+    fn declaration(
+        tag: u8,
+        layout: SemanticTypeLayoutV1,
+        shape: SemanticTypeShapeV1,
+    ) -> SemanticTypeDeclV1 {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            layout,
+            shape,
+        )
+    }
+
+    fn pointer_scalar(reference: bool) -> SemanticBackendScalarV1 {
+        SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+            SemanticScalarValidityRangeV1::new(u128::from(reference), u64::MAX.into()),
+        )
+    }
+
+    fn pointer_type(
+        tag: u8,
+        pointee: SemanticTypeIdV1,
+        reference: bool,
+        size: u64,
+        alignment: u64,
+    ) -> SemanticTypeDeclV1 {
+        declaration(
+            tag,
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(pointer_scalar(reference)),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    pointee,
+                    if reference {
+                        SemanticPointerKindV1::Reference
+                    } else {
+                        SemanticPointerKindV1::Raw
+                    },
+                    SemanticMutabilityV1::Mutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(
+                    SemanticAbiPointeeInfoV1::new(
+                        if reference {
+                            SemanticAbiPointeeKindV1::MutableReference { unpin: true }
+                        } else {
+                            SemanticAbiPointeeKindV1::Raw
+                        },
+                        size,
+                        alignment,
+                    )
+                    .unwrap(),
+                ),
+                None,
+            ),
+        )
+    }
+
+    fn types() -> Vec<SemanticTypeDeclV1> {
+        let mut types = assertion_types();
+        let integer = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        types.push(declaration(
+            237,
+            SemanticTypeLayoutV1::aggregate(
+                Some(0),
+                1,
+                SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+        ));
+        types.push(declaration(
+            238,
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(integer),
+                false,
+                SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![A_U64, MARKER]).unwrap(),
+            ),
+        ));
+        types.push(pointer_type(239, A_U32, false, 0, 1));
+        types.push(
+            declaration(
+                240,
+                SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                    Some(16),
+                    8,
+                    SemanticBackendReprV1::ScalarPair {
+                        first: pointer_scalar(false),
+                        second: integer,
+                    },
+                    false,
+                    SemanticAggregateLayoutV1::new(vec![0, 8, 0], vec![]).unwrap(),
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Aggregate(
+                    SemanticAggregateTypeV1::new(vec![RAW, A_U64, MARKER]).unwrap(),
+                ),
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap(),
+                    ),
+                    None,
+                ),
+            ),
+        );
+        types.push(pointer_type(241, SLICE, true, 16, 8));
+        types.push(pointer_type(242, A_U32, true, 4, 4));
+        let niche = SemanticLayoutNicheV1::new(
+            0,
+            SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+            SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+        )
+        .unwrap();
+        let nullable = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+            SemanticScalarValidityRangeV1::new(1, 0),
+        );
+        let variant = |index, offsets: Vec<u64>, repr, niche| {
+            let order = (0..offsets.len() as u32).collect();
+            SemanticEnumVariantLayoutV1::from_rustc(
+                index,
+                8,
+                8,
+                SemanticFieldsShapeV1::arbitrary(offsets.clone(), order).unwrap(),
+                repr,
+                niche,
+                false,
+                None,
+                8,
+                u64::from(index),
+                SemanticAggregateLayoutV1::new(offsets, vec![]).unwrap(),
+            )
+            .unwrap()
+        };
+        types.push(
+            declaration(
+                243,
+                SemanticTypeLayoutV1::enum_layout_with_backend_repr(
+                    8,
+                    8,
+                    SemanticBackendReprV1::scalar(nullable),
+                    false,
+                    SemanticEnumLayoutV1::new(
+                        vec![
+                            variant(0, vec![], SemanticBackendReprV1::memory(true), None),
+                            variant(
+                                1,
+                                vec![0],
+                                SemanticBackendReprV1::scalar(pointer_scalar(true)),
+                                Some(niche),
+                            ),
+                        ],
+                        SemanticEnumEncodingV1::Niche(
+                            SemanticNicheEnumEncodingV1::new(
+                                0,
+                                SemanticNicheSourceV1::new(
+                                    vec![SemanticNichePathComponentV1::Field(0)],
+                                    0,
+                                )
+                                .unwrap(),
+                                niche,
+                                nullable,
+                                1,
+                                0,
+                                0,
+                                0,
+                            )
+                            .unwrap(),
+                        ),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::enum_type(
+                    A_U64,
+                    vec![
+                        SemanticEnumVariantV1::new(
+                            0,
+                            SemanticAggregateTypeV1::new(vec![]).unwrap(),
+                        ),
+                        SemanticEnumVariantV1::new(
+                            1,
+                            SemanticAggregateTypeV1::new(vec![ELEMENT_REF]).unwrap(),
+                        ),
+                    ],
+                )
+                .unwrap(),
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(
+                            SemanticAbiPointeeKindV1::MutableReference { unpin: false },
+                            0,
+                            4,
+                        )
+                        .unwrap(),
+                    ),
+                    None,
+                ),
+            ),
+        );
+        assert_eq!(types.len(), 14);
+        types
+    }
+
+    fn attributes(
+        reference: bool,
+        size: u64,
+        alignment: Option<u64>,
+    ) -> SemanticAbiValueAttributesV1 {
+        SemanticAbiValueAttributesV1::new(
+            SemanticAbiRegularAttributesV1::new(reference, None, reference, false, false, true),
+            SemanticAbiExtensionV1::None,
+            size,
+            alignment,
+        )
+        .unwrap()
+    }
+
+    fn source_ssa(value: u32) -> ProductionSemanticSsaOwnerV1 {
+        let call = |callee, arguments, destination, ty, target| {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(callee),
+                    arguments,
+                    Some(SemanticCallDestinationV1::new(
+                        whole(destination, ty),
+                        cfg_edge(SemanticEdgeRoleV1::CallReturn, target),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
+        };
+        let payload = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(4),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Downcast(1), OPTION).unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), ELEMENT_REF).unwrap(),
+            ],
+            ELEMENT_REF,
+        )
+        .unwrap();
+        let destination = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(6),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, A_U32).unwrap()],
+            A_U32,
+        )
+        .unwrap();
+        let blocks = vec![
+            block(191, vec![], call(1, vec![], 2, WITNESS, 1)),
+            block(
+                192,
+                vec![typed_assignment(
+                    3,
+                    RECEIVER,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Mutable,
+                        place: whole(1, SLICE),
+                    },
+                )],
+                call(
+                    2,
+                    vec![
+                        SemanticOperandV1::Move(whole(3, RECEIVER)),
+                        SemanticOperandV1::Move(whole(2, WITNESS)),
+                    ],
+                    4,
+                    OPTION,
+                    2,
+                ),
+            ),
+            block(
+                193,
+                vec![typed_assignment(
+                    5,
+                    A_U64,
+                    SemanticRvalueKindV1::Discriminant(whole(4, OPTION)),
+                )],
+                SemanticTerminatorKindV1::SwitchInt {
+                    discriminant: typed_operand(5, A_U64),
+                    targets: SemanticSwitchTargetsV1::new(
+                        vec![
+                            SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                            ),
+                            SemanticSwitchTargetV1::new(
+                                1,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
+                            ),
+                        ],
+                        cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 5),
+                    )
+                    .unwrap(),
+                },
+            ),
+            block(
+                194,
+                vec![
+                    typed_assignment(
+                        6,
+                        ELEMENT_REF,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(payload)),
+                    ),
+                    statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        destination,
+                        SemanticRvalueV1::new(
+                            A_U32,
+                            SemanticRvalueKindV1::Use(typed_constant(A_U32, value.into(), 4)),
+                        ),
+                    ))),
+                ],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+            ),
+            block(195, vec![], SemanticTerminatorKindV1::Return),
+            block(196, vec![], SemanticTerminatorKindV1::Unreachable),
+        ];
+        let root = assertion_root_with_access(
+            vec![
+                (A_UNIT, SemanticLocalRoleV1::Return),
+                (SLICE, SemanticLocalRoleV1::Argument(0)),
+                (WITNESS, SemanticLocalRoleV1::Temporary),
+                (RECEIVER, SemanticLocalRoleV1::Temporary),
+                (OPTION, SemanticLocalRoleV1::Temporary),
+                (A_U64, SemanticLocalRoleV1::Temporary),
+                (ELEMENT_REF, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![SLICE],
+            blocks,
+            false,
+        );
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(188)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(188)),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            1,
+            vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                SLICE,
+                SemanticAbiPassModeV1::Pair {
+                    first: attributes(false, 0, None),
+                    second: attributes(false, 0, None),
+                },
+            ))],
+            SemanticAbiValueV1::new(A_UNIT, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ExclusiveOwner])
+        .unwrap();
+        let root = ordinary_rebuild_v1(&root, abi, root.locals().to_vec(), root.blocks().to_vec());
+        let intrinsic =
+            |tag, inputs, output, operation| SemanticCallableDeclV1::CompilerIntrinsic {
+                binding: SemanticNonBodyCallableBindingV1::new(
+                    SemanticFunctionIdentityV1::from_sha256(bytes(tag)),
+                    SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag)),
+                    SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag)),
+                    SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag)),
+                    SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag)),
+                    SemanticSourceProvenanceV1::unavailable(),
+                    SemanticFunctionAbiV1::new(
+                        SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+                        SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+                        SemanticCanonAbiV1::Rust,
+                        false,
+                        false,
+                        inputs,
+                        output,
+                    )
+                    .unwrap(),
+                ),
+                operation,
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(tag)),
+            };
+        let admitted = InertSemanticMirRequestV1::new_with_callables(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+            types(),
+            vec![],
+            vec![],
+            vec![],
+            vec![root],
+            vec![
+                SemanticCallableDeclV1::defined(ROOT),
+                intrinsic(
+                    189,
+                    vec![],
+                    neutral_plain_direct_abi_value_v1(WITNESS),
+                    SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                        index_witness: WITNESS,
+                        raw_index: A_U64,
+                    },
+                ),
+                intrinsic(
+                    190,
+                    vec![
+                        SemanticAbiValueV1::new(
+                            RECEIVER,
+                            SemanticAbiPassModeV1::Direct(attributes(true, 16, Some(8))),
+                        ),
+                        neutral_plain_direct_abi_value_v1(WITNESS),
+                    ],
+                    SemanticAbiValueV1::new(
+                        OPTION,
+                        SemanticAbiPassModeV1::Direct(attributes(false, 0, Some(4))),
+                    ),
+                    SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                        disjoint_slice: SLICE,
+                        index_witness: WITNESS,
+                        element: A_U32,
+                        raw_index: A_U64,
+                    },
+                ),
+            ],
+            vec![ROOT],
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(
+            ProductionSemanticMirOwnerV1::try_new(
+                admitted,
+                fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap()
+    }
+    fn captured_source(source: &ProductionPreRankedKirOwnerV1) {
+        use fe2o3_pliron::{
+            ProductionSemanticSsaEventRoleV1 as Role,
+            ProductionSemanticSsaOccurrenceSiteV1 as Site,
+            ProductionSemanticSsaOperandRoleV1 as Operand,
+        };
+        let ssa = source.semantic_ssa();
+        let rows = ssa.occurrences_v1().unwrap().function(ROOT).unwrap();
+        assert!(std::ptr::eq(rows.owner(), ssa));
+        for (block, local) in [(0, 2), (1, 4)] {
+            let definitions = rows
+                .edge_definitions()
+                .iter()
+                .filter(|row| row.edge().source().get() == block && row.variable().get() == local)
+                .collect::<Vec<_>>();
+            assert_eq!(definitions.len(), 1);
+            let definition = definitions[0];
+            assert!(definition.is_reachable() && definition.is_promoted());
+            assert!(definition.value().is_some());
+            assert_eq!(definition.edge().ordinal(), 0);
+            let edge = rows
+                .successors()
+                .iter()
+                .find(|row| row.id() == definition.edge())
+                .unwrap();
+            assert_eq!(edge.edge().role(), SemanticEdgeRoleV1::CallReturn);
+            assert_eq!(edge.edge().target().index(), block + 1);
+        }
+        for (site, operand, local) in [
+            (
+                Site::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(1),
+                    statement: 0,
+                },
+                Operand::RvaluePlace,
+                1,
+            ),
+            (
+                Site::Terminator {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(1),
+                },
+                Operand::CallArgument(0),
+                3,
+            ),
+            (
+                Site::Terminator {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(1),
+                },
+                Operand::CallArgument(1),
+                2,
+            ),
+            (
+                Site::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(2),
+                    statement: 0,
+                },
+                Operand::RvaluePlace,
+                4,
+            ),
+            (
+                Site::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(3),
+                    statement: 0,
+                },
+                Operand::RvalueOperand(0),
+                4,
+            ),
+            (
+                Site::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(3),
+                    statement: 1,
+                },
+                Operand::Destination,
+                6,
+            ),
+        ] {
+            let events = rows
+                .events()
+                .iter()
+                .filter(|row| {
+                    row.site() == site && row.operand() == operand && row.role() == Role::BaseUse
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(events.len(), 1, "exact source use {site:?}/{operand:?}");
+            assert!(events[0].is_reachable() && events[0].is_promoted());
+            assert!(
+                matches!(events[0].resolved(), Some(fe2o3_mir_model::SsaResolvedEventV1::Use { variable, .. })
+                if variable.get() == local)
+            );
+        }
+        for argument in [0, 1] {
+            assert_eq!(
+                rows.events()
+                    .iter()
+                    .filter(|row| row.site()
+                        == Site::Terminator {
+                            block: fe2o3_mir_model::SsaBlockIdV1::new(1),
+                        }
+                        && row.operand() == Operand::CallArgument(argument)
+                        && row.role() == Role::MoveKill)
+                    .count(),
+                1
+            );
+        }
+        let function = &ssa.source_semantic().functions()[0];
+        let SemanticTerminatorKindV1::SwitchInt { targets, .. } =
+            function.blocks()[2].terminator().kind()
+        else {
+            panic!("source Option discriminant switch is absent");
+        };
+        assert_eq!(
+            targets
+                .values()
+                .iter()
+                .map(|row| (row.value(), row.edge().target().index()))
+                .collect::<Vec<_>>(),
+            vec![(0, 4), (1, 3)]
+        );
+        assert_eq!(targets.otherwise().target().index(), 5);
+        assert!(matches!(
+            function.blocks()[5].terminator().kind(),
+            SemanticTerminatorKindV1::Unreachable
+        ));
+        let SemanticStatementKindV1::Assign(payload) = function.blocks()[3].statements()[0].kind()
+        else {
+            panic!("payload assignment absent");
+        };
+        let SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place)) = payload.value().kind()
+        else {
+            panic!("payload Move absent");
+        };
+        assert_eq!(place.local().index(), 4);
+        assert_eq!(
+            place
+                .projections()
+                .iter()
+                .map(|projection| projection.kind())
+                .collect::<Vec<_>>(),
+            vec![
+                SemanticProjectionKindV1::Downcast(1),
+                SemanticProjectionKindV1::Field(0)
+            ]
+        );
+    }
+
+    fn defining(
+        body: &fe2o3_kernel_ir::FunctionBody,
+        value: ValueId,
+    ) -> &fe2o3_kernel_ir::Operation {
+        let mut found = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.results.iter().any(|result| result.id == value));
+        let operation = found.next().expect("actual result definition is absent");
+        assert!(found.next().is_none());
+        operation
+    }
+
+    // Test oracle for this acyclic fixture's identity edge transport only.
+    fn origin(body: &fe2o3_kernel_ir::FunctionBody, value: ValueId, depth: usize) -> ValueId {
+        assert!(depth <= body.blocks.len());
+        let parameter = body.blocks.iter().find_map(|block| {
+            block
+                .parameters
+                .iter()
+                .position(|parameter| parameter.id == value)
+                .map(|slot| (block.id, slot))
+        });
+        let Some((target, slot)) = parameter else {
+            return value;
+        };
+        let mut incoming = Vec::new();
+        for block in &body.blocks {
+            let mut edge = |to, arguments: &[ValueId]| {
+                if to == target {
+                    incoming.push(arguments[slot]);
+                }
+            };
+            match block.terminator.as_ref().unwrap() {
+                Term::Branch { target, arguments } => edge(*target, arguments),
+                Term::ConditionalBranch {
+                    then_target,
+                    then_arguments,
+                    else_target,
+                    else_arguments,
+                    ..
+                } => {
+                    edge(*then_target, then_arguments);
+                    edge(*else_target, else_arguments);
+                }
+                Term::Switch {
+                    cases,
+                    default_target,
+                    default_arguments,
+                    ..
+                } => {
+                    for case in cases {
+                        edge(case.target, &case.arguments);
+                    }
+                    edge(*default_target, default_arguments);
+                }
+                Term::Return { .. } | Term::Unreachable => {}
+                Term::IntegerSwitch { .. } => panic!("unexpected typed switch in fixture"),
+            }
+        }
+        assert_eq!(
+            incoming.len(),
+            1,
+            "fixture transport must have one exact incoming edge"
+        );
+        origin(body, incoming[0], depth + 1)
+    }
+
+    fn branch_path_shape(
+        body: &fe2o3_kernel_ir::FunctionBody,
+        mut target: fe2o3_kernel_ir::BlockId,
+    ) -> (usize, bool) {
+        let mut stores = 0;
+        for _ in 0..body.blocks.len() {
+            let block = body.blocks.iter().find(|block| block.id == target).unwrap();
+            stores += block
+                .operations
+                .iter()
+                .filter(|operation| matches!(operation.kind, Op::Store { .. }))
+                .count();
+            match block.terminator.as_ref().unwrap() {
+                Term::Branch { target: next, .. } => target = *next,
+                Term::Return { .. } => return (stores, false),
+                Term::Unreachable => return (stores, true),
+                other => panic!("unexpected conditional fixture continuation: {other:?}"),
+            }
+        }
+        panic!("fixture continuation is cyclic");
+    }
+
+    fn graph_shape(owner: &Owner, value: u32, label: &str) -> (ValueId, ValueId) {
+        let module = owner.module();
+        assert_eq!(module.kernels.len(), 1);
+        assert_eq!(module.functions.len(), 1);
+        let function = &module.functions[0];
+        assert_eq!(function.role, fe2o3_kernel_ir::FunctionRole::KernelEntry);
+        assert_eq!(function.signature.parameters.len(), 1);
+        assert!(
+            matches!(&function.signature.parameters[0], Type::Slice(slice)
+            if slice.element.as_ref() == &Type::Scalar(fe2o3_kernel_ir::ScalarType::U32))
+        );
+        let body = function.body.as_ref().unwrap();
+        let operations = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .collect::<Vec<_>>();
+        let single = |predicate: fn(&Op) -> bool| {
+            let found = operations
+                .iter()
+                .copied()
+                .filter(|op| predicate(&op.kind))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                found.len(),
+                1,
+                "{label}: required actual operation multiplicity"
+            );
+            found[0]
+        };
+        assert!(
+            !operations
+                .iter()
+                .any(|operation| matches!(operation.kind, Op::Call { .. }))
+        );
+        let global = single(
+            |op| matches!(op, Op::Intrinsic(intrinsic) if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()),
+        );
+        assert_eq!(global.results.len(), 1);
+        assert_eq!(global.results[0].ty, Type::INDEX);
+        let length = single(|op| matches!(op, Op::SliceLength { .. }));
+        let Op::SliceLength { slice } = length.kind else {
+            unreachable!()
+        };
+        assert_eq!(origin(body, slice, 0), body.parameters[0]);
+        let compare = single(|op| {
+            matches!(
+                op,
+                Op::Compare {
+                    predicate: fe2o3_kernel_ir::ComparePredicate::LessThan,
+                    ..
+                }
+            )
+        });
+        let Op::Compare { lhs, rhs, .. } = compare.kind else {
+            unreachable!()
+        };
+        assert_eq!(origin(body, lhs, 0), global.results[0].id);
+        assert_eq!(origin(body, rhs, 0), length.results[0].id);
+        assert_eq!(compare.results[0].ty, Type::BOOL);
+        let data = single(|op| matches!(op, Op::SliceData { .. }));
+        let Op::SliceData { slice } = data.kind else {
+            unreachable!()
+        };
+        assert_eq!(origin(body, slice, 0), body.parameters[0]);
+        let gep = single(|op| matches!(op, Op::GetElementPointer { .. }));
+        let Op::GetElementPointer { base, offset } = gep.kind else {
+            unreachable!()
+        };
+        assert_eq!(origin(body, base, 0), data.results[0].id);
+        assert_eq!(origin(body, offset, 0), global.results[0].id);
+        assert!(matches!(&gep.results[0].ty, Type::Pointer(pointer)
+            if pointer.pointee.as_ref() == &Type::Scalar(fe2o3_kernel_ir::ScalarType::U32)
+            && pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global));
+        let store = single(|op| matches!(op, Op::Store { .. }));
+        let Op::Store {
+            pointer,
+            value: stored,
+            ..
+        } = store.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(origin(body, pointer, 0), gep.results[0].id);
+        assert!(matches!(defining(body, origin(body, stored, 0)).kind,
+            Op::Constant(fe2o3_kernel_ir::Constant::U32(actual)) if actual == value));
+        let mut switches = 0;
+        for block in &body.blocks {
+            match block.terminator.as_ref().unwrap() {
+                Term::Switch {
+                    selector,
+                    cases,
+                    default_target,
+                    ..
+                } => {
+                    switches += 1;
+                    assert_eq!(
+                        cases.iter().map(|case| case.value).collect::<Vec<_>>(),
+                        vec![0, 1]
+                    );
+                    let cast = defining(body, origin(body, *selector, 0));
+                    assert!(
+                        matches!(&cast.kind, Op::Cast { kind: fe2o3_kernel_ir::CastKind::ZeroExtend, value, to }
+                        if *to == Type::Scalar(fe2o3_kernel_ir::ScalarType::U64)
+                        && origin(body, *value, 0) == compare.results[0].id)
+                    );
+                    assert_eq!(branch_path_shape(body, cases[0].target), (0, false));
+                    assert_eq!(branch_path_shape(body, cases[1].target), (1, false));
+                    assert_eq!(branch_path_shape(body, *default_target), (0, true));
+                    eprintln!("identity-getter {label}: {:?}", block.terminator);
+                }
+                Term::ConditionalBranch {
+                    condition,
+                    then_target,
+                    else_target,
+                    ..
+                } => {
+                    switches += 1;
+                    assert_eq!(origin(body, *condition, 0), compare.results[0].id);
+                    assert_eq!(branch_path_shape(body, *then_target), (1, false));
+                    assert_eq!(branch_path_shape(body, *else_target), (0, false));
+                    eprintln!("identity-getter {label}: {:?}", block.terminator);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(switches, 1, "{label}: exact live Option selector");
+        (compare.results[0].id, gep.results[0].id)
+    }
+
+    #[test]
+    fn identity_getter_source_capture_and_actual_policy3_shape_checkpoint() {
+        for value in [17, 29] {
+            let mut ssa = source_ssa(value);
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+            budget.reserve_storage(PREFIX).unwrap();
+            let capture = ssa
+                .try_capture_occurrences_with_budget_v1(&mut budget)
+                .unwrap();
+            budget.reserve_storage(capture.retained_storage()).unwrap();
+            let inputs = [ranked_root_input_1d(A_NAME, 247, 64)];
+            let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
+            let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                ssa,
+                launch,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                &mut budget,
+            )
+            .unwrap();
+            let source_bytes = source.executable_storage().retained_storage()
+                + source.assert_origin_storage().payload_storage();
+            budget.reserve_storage(source_bytes).unwrap();
+            captured_source(&source);
+            let (present, pointer) = graph_shape(source.executable(), value, "N");
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                let floor = budget.storage();
+                let bound = dialect_amdgcn::bind_production_target_v1(
+                    source.executable().module(),
+                    profile,
+                )
+                .unwrap();
+                let (input, input_storage) = Owner::from_module_ref_with_verification_budget_v12(
+                    bound.module(),
+                    &mut budget,
+                )
+                .unwrap();
+                budget
+                    .reserve_storage(input_storage.retained_storage())
+                    .unwrap();
+                graph_shape(&input, value, "B");
+                let observed =
+                    fe2o3_pliron::optimize_native_neutral_kernel_ir_policy3_v1(&input, &mut budget)
+                        .unwrap();
+                budget
+                    .reserve_storage(observed.storage().retained_storage())
+                    .unwrap();
+                let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
+                let output_storage = checked.storage().retained_storage();
+                budget.reserve_storage(output_storage).unwrap();
+                let (_, output_pointer) = graph_shape(checked.owner(), value, "O");
+                let coordinate_bytes;
+                {
+                    let (coordinates, storage) =
+                        dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                            source.executable(),
+                            &input,
+                            profile,
+                            &mut budget,
+                        )
+                        .unwrap();
+                    coordinate_bytes = storage.retained_storage();
+                    budget.reserve_storage(coordinate_bytes).unwrap();
+                    let (view, storage) =
+                        fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                            &source,
+                            &coordinates,
+                            &checked,
+                            &mut budget,
+                        )
+                        .unwrap();
+                    budget.reserve_storage(storage.retained_storage()).unwrap();
+                    let fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized {
+                        original,
+                        ..
+                    } = view
+                        .block(ROOT, ROOT, SemanticBlockIdV1::from_index(1), &mut budget)
+                        .unwrap()
+                    else {
+                        panic!("source getter N block is absent");
+                    };
+                    let body = source.executable().module().functions[original.function.0 as usize]
+                        .body
+                        .as_ref()
+                        .unwrap();
+                    let block = &body.blocks[original.block as usize];
+                    let Term::Branch { target, arguments } = block.terminator.as_ref().unwrap()
+                    else {
+                        panic!("getter CallReturn did not lower to its actual N branch");
+                    };
+                    let fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized {
+                        original: continuation,
+                        ..
+                    } = view
+                        .block(ROOT, ROOT, SemanticBlockIdV1::from_index(2), &mut budget)
+                        .unwrap()
+                    else {
+                        panic!("source discriminant N block is absent");
+                    };
+                    assert_eq!(continuation.function, original.function);
+                    assert_eq!(*target, body.blocks[continuation.block as usize].id);
+                    let target = body
+                        .blocks
+                        .iter()
+                        .find(|block| block.id == *target)
+                        .unwrap();
+                    assert_eq!(arguments.len(), target.parameters.len());
+                    let plan = source
+                        .semantic_ssa()
+                        .plan_for_function(ROOT)
+                        .unwrap()
+                        .plan();
+                    let planned_arguments = plan
+                        .edge_arguments(fe2o3_mir_model::SsaEdgeIdV1::new(
+                            fe2o3_mir_model::SsaBlockIdV1::new(1),
+                            0,
+                        ))
+                        .unwrap();
+                    if arguments.is_empty() {
+                        assert!(planned_arguments.is_empty());
+                        assert!(
+                            plan.transport_variables(fe2o3_mir_model::SsaBlockIdV1::new(2))
+                                .unwrap()
+                                .is_empty()
+                        );
+                    }
+                    let option_is_transported = planned_arguments
+                        .iter()
+                        .any(|argument| argument.variable().get() == 4);
+                    // Dominating bindings need no physical block-parameter tuple.
+                    for (value, ty) in [
+                        (present, Type::BOOL),
+                        (pointer, defining(body, pointer).results[0].ty.clone()),
+                    ] {
+                        assert!(block.operations.iter().any(|operation| {
+                            operation
+                                .results
+                                .iter()
+                                .any(|result| result.id == value && result.ty == ty)
+                        }));
+                        let mut transported = 0;
+                        for (argument, parameter) in arguments.iter().zip(&target.parameters) {
+                            if origin(body, *argument, 0) == value {
+                                assert_eq!(parameter.ty, ty);
+                                assert_eq!(origin(body, parameter.id, 0), value);
+                                transported += 1;
+                            }
+                        }
+                        if option_is_transported {
+                            assert_eq!(transported, 1);
+                        }
+                    }
+                    let Term::Switch { selector, .. } = target.terminator.as_ref().unwrap() else {
+                        panic!("source discriminant N continuation lacks its integer switch");
+                    };
+                    let discriminant = defining(body, origin(body, *selector, 0));
+                    assert!(
+                        target
+                            .operations
+                            .iter()
+                            .any(|operation| std::ptr::eq(operation, discriminant))
+                    );
+                    assert!(matches!(&discriminant.kind,
+                        Op::Cast { kind: fe2o3_kernel_ir::CastKind::ZeroExtend, value, to }
+                        if origin(body, *value, 0) == present
+                            && *to == Type::Scalar(fe2o3_kernel_ir::ScalarType::U64)));
+                    let fe2o3_lower_mir_kernel::ProductionSourceOutputGlobalAccessV1::Retained {
+                        original,
+                        operation,
+                        source_argument,
+                        value: store_value,
+                        result,
+                        executable,
+                        ..
+                    } = view
+                        .global_access(ROOT, ROOT, 3, Some(1), 0, &mut budget)
+                        .unwrap()
+                    else {
+                        panic!("the own source payload Store has no retained N/O occurrence");
+                    };
+                    assert_eq!(source_argument, 0);
+                    assert!(store_value.is_some() && result.is_none() && executable);
+                    for (owner, coordinate, expected_pointer) in [
+                        (source.executable(), original, pointer),
+                        (checked.owner(), operation, output_pointer),
+                    ] {
+                        let body = owner.module().functions[coordinate.block.function.0 as usize]
+                            .body
+                            .as_ref()
+                            .unwrap();
+                        let store = &body.blocks[coordinate.block.block as usize].operations
+                            [coordinate.operation as usize];
+                        let Op::Store { pointer, .. } = store.kind else {
+                            panic!("exact source Store occurrence did not name an actual Store");
+                        };
+                        assert_eq!(origin(body, pointer, 0), expected_pointer);
+                    }
+                    let live = budget.storage();
+                    let query_bytes;
+                    {
+                        let catalog = view.input_pipeline_catalog(&mut budget).unwrap();
+                        let (inventory, inventory_storage) =
+                            fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(
+                                source.executable(),
+                                &mut budget,
+                            )
+                            .unwrap();
+                        budget
+                            .reserve_storage(inventory_storage.retained_storage())
+                            .unwrap();
+                        let (catalog, catalog_storage) =
+                            fe2o3_kernel_analysis::check_kernel_ir_contract_catalog_v1(
+                                &inventory,
+                                catalog,
+                                &mut budget,
+                            )
+                            .unwrap();
+                        budget
+                            .reserve_storage(catalog_storage.retained_storage())
+                            .unwrap();
+                        let (replayed, replay_storage) = fe2o3_lower_mir_kernel::check_supplied_native_materialization_consistency_v1(
+                            source.semantic_ssa(), source.source_launch(), source.executable(), &catalog,
+                            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), &mut budget).unwrap();
+                        budget
+                            .reserve_storage(replay_storage.retained_storage())
+                            .unwrap();
+                        query_bytes = inventory_storage.retained_storage()
+                            + catalog_storage.retained_storage()
+                            + replay_storage.retained_storage();
+                        assert!(!replayed.grants_authority());
+                    }
+                    budget.release_storage(query_bytes).unwrap();
+                    assert_eq!(budget.storage(), live);
+                    drop(view);
+                    budget.release_storage(storage.retained_storage()).unwrap();
+                }
+                budget.release_storage(coordinate_bytes).unwrap();
+                drop(checked);
+                budget.release_storage(output_storage).unwrap();
+                drop(input);
+                budget
+                    .release_storage(input_storage.retained_storage())
+                    .unwrap();
+                assert_eq!(budget.storage(), floor);
+            }
+            drop(source);
+            budget.release_storage(source_bytes).unwrap();
+            budget.release_storage(capture.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), PREFIX);
+        }
+    }
+}

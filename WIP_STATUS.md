@@ -1,8 +1,8 @@
 # Issue 271 Integration Snapshot
 
-Reviewable WIP, not default activation, tutorial qualification or milestone
-completion. Do not merge this historical tree over current main. Select changes
-against current main and qualify that exact integration separately.
+Reviewable WIP, not default production activation, tutorial qualification or
+milestone completion. Do not merge this historical tree over current main.
+Select and qualify changes against current main separately.
 
 ## Exact Source
 
@@ -10,69 +10,70 @@ against current main and qualify that exact integration separately.
 - Checkout: `/home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913`.
 - Checkout HEAD: `10b190b8267c0c4011b4ef6bbb52680a3c44b391`.
 - Source: 5069 files, manifest SHA256
-  `c177ebe68a9aa58718705bef44d764f48ecffc09aef906c42b16cbbfbf7eea7f`.
-- Previous WIP: `12d7d76ead7b7d523097d870f7d5aaed15eb5e88`.
+  `26b2f1526ab1d918aae514db0dde341ef6f1b0c33c2cc70883538907cc1cc6ea`.
+- Previous WIP: `551648ad418eff780f7d23155c02f12aad21bacc`.
 
-This status file is outside the manifest. Snapshotting preserves checkout
-HEAD/index and verifies every source Git blob.
+This status file is outside the source manifest. Snapshotting preserves the
+checkout HEAD/index and verifies each source Git blob.
 
-## New Integration And Checks
+## New Work
 
-The facade's shared compiler tests now declare their direct `fe2o3-amd-target`
-development dependency. Cargo generated one lockfile dependency edge; the existing
-historical tutorial validator recomputed exactly six lock/contract digest fields
-for three fixtures. No source classification, qualification flag or policy changed.
+The admitted generic DisjointSlice getter/Option checkpoint now covers both
+gfx942/gfx950 and two Store constants. It checks N/B/checked-O shape, source
+occurrences and exact own-Store retention. The semantic factory is not actual
+rustc provenance. Unique-predecessor continuations use dominating SSA values;
+the test no longer incorrectly requires invented phi/block-argument tuples.
 
-On the exact current source:
+`FE2O3_EXTRACT_COLLECTED_SHAPE_V1=1` now selects a bounded, authority-free
+diagnostic in the extraction tool. It uses real rustc collection and the existing
+source import, SSA, occurrence-capture, materialization and target scopes. It
+prints original references, source/types/ownership, SSA and actual N/B/O graphs.
+An exact function-qualified Store query avoids collisions between function-local
+coordinates. Output is capped at four MiB and marked incomplete until all scope
+postflights succeed. Conflicting output modes and malformed selectors refuse;
+dependency/probe passthrough and default production behavior are unchanged.
 
-- 43 facade compiler tests passed, with one existing gfx1151 toolchain test ignored.
-- Facade all-targets checking passed. Both Cargo runs passed source/helper guards.
-- All 19 historical tutorial-manifest tests passed.
-- Default manifest validation passed with 48 unqualified fixtures. The
-  `--require-qualified` command still rejected source-only evidence as expected.
-- Workspace policy passed: 140 members, eight layers, 475 internal declarations.
-- Locked metadata passed for all 32 standalone lockfiles.
-- Source verification passed again after these checks.
+## Exact-Source Checks
 
-These are scoped checks, not full workspace, strict-lint or tutorial qualification.
+- All 839 backend library tests passed, without failures or ignores.
+- All 18 extractor binary tests passed, without failures or ignores.
+- All three explicitly enabled actual-collector integrations passed in 557.90s:
+  positive gfx942/gfx950 shapes, changed reference effect digest, and preserved
+  unsafe/ABI admission refusals. These used six fresh private target builds.
+- Source/helper guards passed. Every owned integration scratch directory was
+  absent afterward. Pinned rustfmt checks passed for all five observer paths.
+- A separate fresh gfx942 diagnostic completed in 1m34s with source, tool and
+  shared-library guards passing and its private target removed. Its saved log
+  SHA256 is `60c8fc5b5059dbbe5e6d6d8b3b376af277727719c77a07ee4a7db0abfadfddbe`.
+  The exact own Store remains retained after six neutral blocks become four
+  optimized blocks. The log is diagnostic text, not authenticated evidence.
 
-## Retained Compiler Integration
+The initial standalone transcript wrapper failed before collection because its
+clean environment lacked the backend library search path. Correcting that DIAG
+wrapper required no compiler or test relaxation; its failed run remains recorded.
 
-The preceding snapshot connected supplied-source/native consistency replay and
-the exact native/target-input catalog relation before the held Stage A and B1
-checked execution, descriptor and native-text checks. Original source functional,
-aggregate, reference, physical-address, fresh Complete formal-memory and target
-geometry checks remain mandatory. No proof record is fabricated or gate bypassed.
+These are scoped compiler checks, not whole-workspace/all-feature, source-proof,
+LLVM, GPU or corpus qualification. The new marker-error unit does not substitute
+for a live callback Err/panic test through rustc. Older lowerer/doc/native test
+results belong to their previously recorded snapshots, not a fresh run here.
 
-Before the dependency-only change, source `b17c4d97` passed eight new chain tests
-and all 831 backend library tests with source/helper guards. The earlier
-`ad6f0bb8` source passed 390 lowerer library tests, 823 backend library tests,
-28 lowerer compile-fail docs and 10 supplied-native integration tests. These
-results are distinct snapshots, not fresh runs on this dependency-sync source.
+## Current Boundaries
 
-## Published Work And Limits
+The generic checked control/effect relation for getter, Some and owned Store is
+still being implemented separately; it is not in this snapshot. Physical merges,
+functional-address composition, original reference/aggregate obligations and
+fresh Complete formal-memory requirements remain enforced. Diagnostic completion
+explicitly says source proof was not run and artifact/launch authority is false.
 
-Both main branches contain `958a80a3d4c7d820df5ec51558b14a475edbb621`, including
-the native replay batch and separately qualified facade dependency correction.
-All five compiler shards and the parity job passed on the new main commit;
-generic-core CI was still running when this status was written. Main has other
-peer changes absent from this historical checkout.
+Both public main refs were last read at `7f90d187702a3059a40c7cfd21576c6eec6c9684`.
+Main includes peer compiler-context and lockfile changes absent from this WIP.
+The eleven-file CPU tooling batch is being independently qualified on current
+main; older CPU observations do not qualify the rebased compiler tree. The
+separate #272 WIP is unchanged by this snapshot.
 
-CPU WIP `10598e5de1cd62dc1667804a9536438f2dcd15c5` records a real standalone
-VecAdd CPU-reference pass at parent `70a55ac76`: six tests and all seven phases
-passed in 1,077.007 seconds within the 1,200-second limit, inputs stayed stable,
-private build/driver scratch was removed and no matching child remained.
-Qualification and all authority flags remain false. No real managed batch,
-GPU result, speedup or whole-corpus result is claimed.
-
-M5/M7 remain active; all M0-M9 acceptance boxes remain open. The next checkpoint
-is the admitted generic DisjointSliceGetMut/Option source/native/optimized shape,
-followed by exact Some-payload control and own-Store address joins. That fixture
-and production extension are not implemented by this snapshot. A real collected
-post-functional-Some positive still requires original per-output and aggregate
-proof execution; approved-runtime qualification remains deferred, not passed.
-
-Protected framing, source/output functional proof composition, wire/worker/host
-integration, policy-4 dispatch, default activation, legacy retirement, complete
-tutorial/simulator/hardware qualification and release/website pins remain open.
-The #272 WIP is unchanged. Existing strict-lint debt is not waived.
+M5/M7 remain active and all M0-M9 acceptance boxes remain open. Default activation,
+complete source/output proof composition, legacy retirement, full tutorial and
+simulator coverage, target-matched hardware runs and release/site pins remain
+unfinished. Approved Verus runtime qualification is deferred, not passed. No
+kernel-name dispatch, verification bypass or runtime qualification exception is
+introduced by this snapshot.
