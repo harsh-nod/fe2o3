@@ -68,11 +68,24 @@ The earlier source passed 882 backend tests and failed the formatting-sensitive
 audit described above; extractor tests did not run on that failed attempt.
 The corrected-source results above supersede it, without treating it as a pass.
 
-Seven exact ignored actual-collector cases and a retained positive transcript
-are being run separately with freshly built binaries, source/tool/config
-guards, bounded logs, and owned scratch cleanup. They have NOT yet qualified
-this snapshot. In particular, passing semantic-factory tests does not establish
-that fresh rustc-collected getter programs pass the N-only Expression prefix.
+All seven explicitly enabled actual-collector integration tests passed on this
+exact source, followed by a retained direct positive transcript. The complete
+run finished in 1,769.55 seconds within its unchanged 1,800-second limit.
+Fresh binaries, source/tool/config guards, complete bounded logs, child reaping
+and owned scratch cleanup all passed. ROOT independently checked the eight
+cases' scratch paths and observed process IDs were absent afterward.
+
+The fresh rustc-collected two-root getter programs passed the N-only full
+Expression/R1 and actual-O D/P/R2 checks on both gfx942 and gfx950. The three-root
+case passed, as did original nonempty-reference refusal, unsafe/ABI admission
+refusals, both-profile reference-shape checks and changed-reference identity.
+The saved direct gfx942 transcript reports exactly two checked roots and two
+global accesses, functional None and absent aggregate, followed by the unique
+postflight completion line. Logs: v344-collected-r2-actual.It7lNDJZ.
+
+This is actual collection and relation testing, not GPU execution, source-proof,
+artifact, launch, optional-reference proof or all-tutorial qualification. The
+run's qualification flag remains false by design; no production gate changes.
 
 ## Remaining Boundaries
 
@@ -92,3 +105,6 @@ That batch removes the scalar-attention storage-budget refusal but exposes a
 later missing-ranked-effect correspondence failure. Pipelined attention still
 refuses a multiply-defined scalar. Main tests cannot qualify this historical
 snapshot, or vice versa. CPU and issue 272 WIP branches are unchanged.
+
+Main's generic CI run 35107039115 and formal-contract run 35107039082 both
+completed successfully. Hardware and tutorial qualification remain separate.
