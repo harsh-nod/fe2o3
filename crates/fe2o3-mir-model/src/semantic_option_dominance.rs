@@ -9,8 +9,8 @@ use crate::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
     SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticLocalRoleV1,
     SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1,
-    SemanticUncheckedBinaryOpV1,
+    SemanticStatementKindV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeShapeV1, SemanticUncheckedBinaryOpV1,
 };
 
 /// Maximum charged CFG, statement, definition, and dominator work.
@@ -371,6 +371,21 @@ pub struct SemanticEnumPayloadDominanceV1 {
     work_units: usize,
 }
 
+fn enum_payload_target_is_unique_v1(
+    targets: &SemanticSwitchTargetsV1,
+    target: SemanticBlockIdV1,
+    budget: &mut WorkBudgetV1,
+) -> Result<bool, SemanticOptionDominanceErrorV1> {
+    budget.charge(targets.values().len().saturating_add(1))?;
+    let occurrences = targets
+        .values()
+        .iter()
+        .filter(|case| case.edge().target() == target)
+        .count()
+        + usize::from(targets.otherwise().target() == target);
+    Ok(occurrences == 1)
+}
+
 impl SemanticEnumPayloadDominanceV1 {
     /// Finds exact variant branches for every enum local with one exact
     /// discriminant binding and switch.
@@ -489,6 +504,11 @@ impl SemanticEnumPayloadDominanceV1 {
                 let Some(target) = target else {
                     continue;
                 };
+                // A shared predecessor block does not establish which edge
+                // arrived, including an otherwise edge with no variant fact.
+                if !enum_payload_target_is_unique_v1(targets, target, &mut budget)? {
+                    continue;
+                }
                 if !dominators.is_reachable(target.index() as usize)
                     || !dominators.has_unique_predecessor(target.index() as usize, *switch_block)
                 {
@@ -508,16 +528,17 @@ impl SemanticEnumPayloadDominanceV1 {
         })
     }
 
-    /// Returns the exact branch identity for one enum local and variant.
+    /// Returns the exact branch identity in O(log V) for one local and variant.
     pub fn availability(
         &self,
         local: SemanticLocalIdV1,
         variant: u32,
     ) -> Option<SemanticEnumPayloadAvailabilityV1> {
-        self.availability_by_local
-            .get(local.index() as usize)?
-            .iter()
-            .find_map(|(candidate, availability)| (*candidate == variant).then_some(*availability))
+        let variants = self.availability_by_local.get(local.index() as usize)?;
+        let index = variants
+            .binary_search_by_key(&variant, |(candidate, _)| *candidate)
+            .ok()?;
+        Some(variants[index].1)
     }
 
     /// Reports in O(1) whether the exact variant edge dominates `block`.
@@ -1073,6 +1094,10 @@ fn local_definition_counts(
 #[cfg(test)]
 #[path = "semantic_argument_entry_v1_tests.rs"]
 mod argument_entry_tests;
+
+#[cfg(test)]
+#[path = "semantic_enum_payload_admission_v1_tests.rs"]
+mod enum_payload_admission_tests;
 
 #[cfg(test)]
 mod tests {

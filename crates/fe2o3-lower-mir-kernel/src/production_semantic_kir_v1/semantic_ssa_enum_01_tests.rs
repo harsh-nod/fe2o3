@@ -239,3 +239,5 @@
             }) if actual == minimum_storage && limit + 1 == minimum_storage
         ));
     }
+
+    include!("semantic_ssa_enum_edge_transfer_v1_tests.rs");

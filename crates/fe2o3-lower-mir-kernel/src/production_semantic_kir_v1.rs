@@ -21437,6 +21437,30 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             "enum downcast does not match its known variant",
                         ));
                     }
+                    // Concrete payload storage does not authenticate a dynamic variant.
+                    // This proof covers the exact unprojected source local only;
+                    // unknown aliases and nested enums need separate authentication.
+                    if variant.is_none()
+                        && (projection_index != 0
+                            || self.function.locals()[index].ty() != semantic_type
+                            || !self
+                                .control_flow_ssa
+                                .ssa_value_locals
+                                .contains(&place.local().index())
+                            || !self
+                                .enum_payload_dominance
+                                .availability(place.local(), expected)
+                                .is_some_and(|availability| {
+                                    self.enum_payload_dominance.allows(availability, block)
+                                }))
+                    {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            statement,
+                            "enum downcast lacks an authenticated variant",
+                        ));
+                    }
                     SemanticValueBindingV1::Enum {
                         discriminant,
                         discriminant_ty,
@@ -25690,6 +25714,7 @@ mod resource_tests {
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
     include!("production_semantic_kir_v1/wrapping_arithmetic_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
+    include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
 
     #[test]
     fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {
