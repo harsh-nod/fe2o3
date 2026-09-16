@@ -13,6 +13,8 @@ use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV
 mod detached_cases;
 #[path = "integration_release_fault_tests.rs"]
 mod fault_cases;
+#[path = "integration_initial_bind_tests.rs"]
+mod initial_bind_cases;
 #[path = "integration_release_late_tests.rs"]
 mod late_cases;
 #[path = "integration_pool_trim_tests.rs"]

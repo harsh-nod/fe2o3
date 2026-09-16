@@ -289,6 +289,18 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary() {
+    native_typed_dispatch_retained_release(1);
+}
+
+#[cfg(feature = "hardware-qualification")]
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_runtime_two_stream_dispatch_uses_primary_and_auxiliary_then_refunds() {
+    native_typed_dispatch_retained_release(2);
+}
+
+#[cfg(feature = "hardware-qualification")]
+fn native_typed_dispatch_retained_release(stream_count: usize) {
     use crate::qualification_gfx942_vecadd_v1::{
         GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
         GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES, Gfx942VecaddQualificationArgumentsV1,
@@ -312,46 +324,57 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
     assert_eq!(context.devices().len(), 1);
     assert_eq!(context.devices()[0].target(), "gfx942:xnack-");
     let device_id = context.devices()[0].id();
-    let stream = context.create_stream(device_id).unwrap();
     let module = context.load_module(device_id, admitted.hsaco()).unwrap();
     let kernel = context
         .resolve_kernel::<Gfx942VecaddQualificationArgumentsV1>(module, admitted.kernel_name())
         .unwrap();
-    let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
-        let allocation = context
-            .allocate(
-                device_id,
-                RuntimeMemoryKindV1::HostVisible,
-                BYTES as u64,
-                ALIGNMENT,
-            )
-            .unwrap();
-        context.write_allocation(allocation, 0, bytes).unwrap();
-        allocation
-    });
-    let arguments =
-        Gfx942VecaddQualificationArgumentsV1::new(allocations[0], allocations[1], allocations[2])
-            .unwrap();
-    let mut submission = context
-        .launch(stream, &kernel, &arguments, admitted.geometry(), &[])
+    let mut prepared = Vec::with_capacity(stream_count);
+    for _ in 0..stream_count {
+        let stream = context.create_stream(device_id).unwrap();
+        let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
+            let allocation = context
+                .allocate(
+                    device_id,
+                    RuntimeMemoryKindV1::HostVisible,
+                    BYTES as u64,
+                    ALIGNMENT,
+                )
+                .unwrap();
+            context.write_allocation(allocation, 0, bytes).unwrap();
+            allocation
+        });
+        let arguments = Gfx942VecaddQualificationArgumentsV1::new(
+            allocations[0],
+            allocations[1],
+            allocations[2],
+        )
         .unwrap();
-    context.flush_stream(stream).unwrap();
-    assert_eq!(
-        context
-            .wait(&mut submission, Duration::from_secs(10))
-            .unwrap(),
-        RuntimePollV1::Succeeded
-    );
-    let mut observed = vec![0; BYTES];
-    for (allocation, expected) in
-        allocations
-            .into_iter()
-            .zip([buffers.left(), buffers.right(), buffers.expected_output()])
-    {
-        context
-            .read_allocation(allocation, 0, &mut observed)
+        prepared.push((stream, allocations, arguments));
+    }
+    let mut launches = Vec::with_capacity(stream_count);
+    for (stream, allocations, arguments) in prepared {
+        let submission = context
+            .launch(stream, &kernel, &arguments, admitted.geometry(), &[])
             .unwrap();
-        assert_eq!(observed, expected, "full-byte input/output comparison");
+        context.flush_stream(stream).unwrap();
+        launches.push((stream, allocations, submission));
+    }
+    let mut observed = vec![0; BYTES];
+    for (_, allocations, submission) in &mut launches {
+        assert_eq!(
+            context.wait(submission, Duration::from_secs(10)).unwrap(),
+            RuntimePollV1::Succeeded,
+        );
+        for (allocation, expected) in allocations.iter().copied().zip([
+            buffers.left(),
+            buffers.right(),
+            buffers.expected_output(),
+        ]) {
+            context
+                .read_allocation(allocation, 0, &mut observed)
+                .unwrap();
+            assert_eq!(observed, expected, "full-byte input/output comparison");
+        }
     }
     let output_sha256 = Sha256::digest(&observed)
         .iter()
@@ -362,14 +385,17 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
         "79fd0768604fe9de0ced87297f7d653343e998926b59e2cce7df5e38194c52b3"
     );
     let live = context.backend().host_visible_backing_usage_v1().unwrap();
-    assert!(live.used_backing_bytes >= 3 * BYTES as u64 && live.used_allocation_records >= 3);
+    assert!(live.used_backing_bytes >= 3 * stream_count as u64 * BYTES as u64);
+    assert!(live.used_allocation_records >= 3 * stream_count as u64);
     assert!(!live.poisoned);
-    context.release_submission(submission).unwrap();
-    for allocation in allocations.into_iter().rev() {
-        context.release_allocation(allocation).unwrap();
+    for (stream, allocations, submission) in launches.into_iter().rev() {
+        context.release_submission(submission).unwrap();
+        for allocation in allocations.into_iter().rev() {
+            context.release_allocation(allocation).unwrap();
+        }
+        context.destroy_stream(stream).unwrap();
     }
     context.unload_module(module).unwrap();
-    context.destroy_stream(stream).unwrap();
     let mut backend = context.shutdown().unwrap();
     assert!(backend.sdma_enabled && backend.queue.is_some());
     let compute_lanes = backend
@@ -377,17 +403,23 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
         .iter()
         .filter_map(|lane| *lane)
         .collect::<Vec<_>>();
-    assert_eq!(compute_lanes.len(), 1);
-    // Public allocations create the SDMA bootstrap primary; ordinary compute
-    // currently materializes an auxiliary lane instead of adopting that primary.
-    assert_eq!(compute_lanes[0].ordinal(), 1);
+    assert_eq!(compute_lanes.len(), stream_count);
+    let compute_ordinals = compute_lanes
+        .iter()
+        .map(|lane| lane.ordinal())
+        .collect::<Vec<_>>();
+    assert_eq!(compute_ordinals, (0..stream_count).collect::<Vec<_>>());
+    assert_eq!(
+        compute_lanes[0],
+        backend.queue.as_ref().unwrap().primary_compute_lane_v1()
+    );
     assert_eq!(
         backend
             .queue
             .as_ref()
             .unwrap()
             .auxiliary_compute_lane_count_v1(),
-        1
+        stream_count - 1
     );
     let usage = observe_shutdown(&mut backend);
     assert!(matches!(
@@ -407,7 +439,7 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(allocation_identities.len(), 3);
+    assert_eq!(allocation_identities.len(), 3 * stream_count);
     let reads = profile
         .events
         .iter()
@@ -453,16 +485,26 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(created.len(), 1);
-    assert_eq!(destroyed.len(), 1);
-    assert_eq!(created[0].1, destroyed[0].1);
+    assert_eq!(created.len(), stream_count);
+    assert_eq!(destroyed.len(), stream_count);
+    assert_eq!(
+        created
+            .iter()
+            .map(|(_, queue)| queue)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        stream_count
+    );
     let published = profile
         .events
         .iter()
         .filter_map(|entry| match entry.event {
             KfdRuntimeProfileEventKindV1::DispatchPublished {
-                dispatch, queue, ..
-            } => Some((entry.sequence, dispatch, queue)),
+                dispatch,
+                queue,
+                stream,
+                ..
+            } => Some((entry.sequence, dispatch, queue, stream)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -476,19 +518,47 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(published.len(), 1);
-    assert_eq!(completed.len(), 1);
-    assert_eq!(published[0].2, created[0].1);
-    assert_eq!(published[0].1, completed[0].1);
-    assert!(
-        created[0].0 < published[0].0
-            && published[0].0 < completed[0].0
-            && completed[0].0 < destroyed[0].0
+    assert_eq!(published.len(), stream_count);
+    assert_eq!(completed.len(), stream_count);
+    let streams = profile
+        .events
+        .iter()
+        .filter_map(|entry| match entry.event {
+            KfdRuntimeProfileEventKindV1::StreamCreated { stream } => Some(stream),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(streams.len(), stream_count);
+    assert_eq!(
+        streams
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        stream_count
     );
+    for ((created_at, queue), stream) in created.iter().zip(&streams) {
+        let (destroyed_at, _) = destroyed
+            .iter()
+            .find(|(_, identity)| identity == queue)
+            .unwrap();
+        let (published_at, dispatch, _, dispatch_stream) = published
+            .iter()
+            .find(|(_, _, identity, _)| identity == queue)
+            .unwrap();
+        assert_eq!(dispatch_stream, stream);
+        let (completed_at, _) = completed
+            .iter()
+            .find(|(_, identity)| identity == dispatch)
+            .unwrap();
+        assert!(
+            created_at < published_at && published_at < completed_at && completed_at < destroyed_at
+        );
+    }
     drop(backend);
     println!("profile_json={}", serde_json::to_string(&profile).unwrap());
     println!("primary_host_usage={usage:?} live_host_usage={live:?}");
     println!(
-        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinal=1 primary_ordinal=0 packets=1 readbacks=3 output_sha256={output_sha256} host_account_refund=complete queue_profile=matched auxiliary_destroy=confirmed completed_primary_root_drop=confirmed backend_drop=completed"
+        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinals={compute_ordinals:?} primary_execution=confirmed packets={stream_count} readbacks={} output_sha256={output_sha256} host_account_refund=complete queue_profile=matched completed_primary_root_drop=confirmed backend_drop=completed",
+        3 * stream_count,
     );
 }

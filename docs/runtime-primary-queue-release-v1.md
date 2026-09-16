@@ -418,18 +418,56 @@ do not qualify native failure retention, primary-executed dispatch, other queue
 profiles, formal correspondence or matched performance. R125 remains accepted;
 R126, A1/A2 and #182 remain open.
 
-Fresh bootstrap-primary adoption needs a distinct initial binding path. Existing
+Fresh bootstrap-primary adoption required a distinct initial binding path. Existing
 rebind APIs require a genuine recycled predecessor or pristine-abort continuation;
-neither can be fabricated for a fresh queue. Initial preparation must root each
-data owner before subsequent fallible initialization, retain the preparation
-through model retake and validation, and publish the primary lane only on success.
-Constructed-parent failure matrices and two-stream routing tests are required
-before advancing the native probe to actual primary execution.
+neither can be fabricated for a fresh queue. The next development packet below
+implements that path without changing either continuation contract.
+
+## Initial Primary Binding
+
+`bind_initial_fixed_dispatch_v1` now binds the first ordinary fixed batch on the
+existing unused primary. A bounded, pre-reserved root holds each returned data
+owner before the next initializer call, preparation through real model retake,
+and the original parent on admitted failure or panic. The initializer's captures
+are destroyed inside the unwind boundary before validation/install. A successful
+binding alone assigns the runtime's logical compute lane. Subsequent streams
+still create auxiliary lanes; existing recycled and pristine-abort rebind paths
+are unchanged.
+
+The constructed-parent matrix checks materialized and preparation prefixes,
+model loan/retake failures and exact precedence, genuine generation exhaustion
+and revision regression, initializer-destructor panic, invalid fresh-state
+ledgers, size bounds, terminal re-entry, original owner identities, authenticated
+foundation placement and generation, host/device accounting and native record
+partitions. These scripted CPU failures are not native fault-injection evidence.
+
+The native single-stream probe now observes actual primary ordinal 0 with no
+auxiliary queue. The two-stream probe observes primary 0 and auxiliary 1, with
+both launches flushed before explicit waits, six complete input/output checks,
+distinct stream/queue attribution and 41 complete observed profile events. The
+single-stream profile has 22 events. All configured host backing charges refund
+on shutdown and repeated shutdown is inert. These are exact-artifact gfx942
+success workflows, not general generated-kernel admission or proof of physical
+overlap. See the [initial-binding receipt](evidence/dev-r126-initial-primary-binding-2026-09-16/README.md)
+for source, raw results and the retained failed experiment.
+
+The initial two-stream experiment allocated the second stream's buffers while
+the first dispatch was pending and received the existing Busy rejection for
+changing SDMA ownership. The passing probe preallocates both sets of buffers;
+it does not remove that restriction. Older NEW/AUXILIARY materializers and
+REBOUND materialization still lose callback-local successful owner prefixes on
+later error/panic, NEW retains its local memory only on ordinary error, and
+same-shape resident overwrite can lose its removed roster on failure. These
+reviewed gaps require retained runtime custody and integrated fault tests; they
+are not repaired by the new primary-only driver. R125 remains accepted and
+R126/A1/A2/#182 remain open.
 
 ## Remaining Qualification
 
-1. Extend the successful allocation and auxiliary-dispatch native probes to actual
-   primary-executed dispatch and applicable failure-retention paths.
+1. Extend the successful allocation, primary and two-stream dispatch native
+   probes to applicable failure-retention paths. Close the legacy materializer,
+   NEW panic and resident-overwrite custody gaps recorded above, and qualify
+   allocation/SDMA ownership changes with pending compute.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.
 2. Qualify the new directional route through genuine public runtime workflows,

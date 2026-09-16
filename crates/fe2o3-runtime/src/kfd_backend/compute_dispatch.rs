@@ -2870,6 +2870,40 @@ impl KfdRuntimeBackendV1 {
                 self.configure_native_device_pool_v1()?;
                 self.configure_native_host_pool_v1()?;
                 self.native_compute_lanes[self.selected_compute_lane] = Some(primary_lane);
+            } else if creates_native_queue && self.native_compute_lanes.iter().all(Option::is_none)
+            {
+                performance.user_data_materializations = user_data_count;
+                let mut materialization_error = None;
+                let error_slot = &mut materialization_error;
+                let count = data.len();
+                let queue = self.queue.as_mut().expect("bootstrap KFD queue exists");
+                queue
+                    .bind_initial_fixed_dispatch_v1(
+                        programs,
+                        [packet],
+                        count,
+                        move |memory, index| {
+                            materialize_initial_data_item_v1(memory, &data[index], index, signature)
+                                .map_err(|detail| {
+                                    *error_slot = Some(detail);
+                                    fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
+                                        "KFD primary data materialization",
+                                    )
+                                })
+                        },
+                    )
+                    .map_err(|error| {
+                        self.terminal_error(
+                            materialization_error
+                                .unwrap_or_else(|| format!("KFD initial primary binding: {error}")),
+                        )
+                    })?;
+                self.native_compute_lanes[self.selected_compute_lane] = Some(
+                    self.queue
+                        .as_ref()
+                        .expect("bound bootstrap primary")
+                        .primary_compute_lane_v1(),
+                );
             } else if creates_native_queue {
                 performance.user_data_materializations = user_data_count;
                 let mut materialization_error = None;
@@ -4994,28 +5028,37 @@ pub(super) fn materialize_initial_data_v1(
     data.try_reserve_exact(specs.len())
         .map_err(|_| "KFD native-data roster allocation failed".to_owned())?;
     for (index, spec) in specs.into_iter().enumerate() {
-        let item = match spec.kind {
-            RuntimeMemoryKindV1::HostVisible => memory
-                .initialize_host_visible_coherent_from_slice_v1(spec.bytes())
-                .map(Gfx942FixedDispatchDataV1::host_visible_initialized)
-                .map_err(|error| format!("KFD host-visible initialization: {error}"))?,
-            RuntimeMemoryKindV1::DeviceLocal => {
-                let owned_bytes = spec.try_owned_bytes()?;
-                let ordinal = u32::try_from(index)
-                    .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
-                let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
-                    .map_err(|error| format!("KFD device-content role: {error}"))?;
-                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
-                    .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
-                memory
-                    .initialize_gfx942_device_memory(owned_bytes, spec.alignment, content)
-                    .map(Gfx942FixedDispatchDataV1::initialized)
-                    .map_err(|error| format!("KFD device-local initialization: {error}"))?
-            }
-        };
+        let item = materialize_initial_data_item_v1(memory, &spec, index, role_identity)?;
         data.push(item);
     }
     Ok(data)
+}
+
+fn materialize_initial_data_item_v1(
+    memory: &mut SharedGttMemorySessionV1,
+    spec: &DataSpecV1,
+    index: usize,
+    role_identity: [u8; 32],
+) -> Result<Gfx942FixedDispatchDataV1, String> {
+    match spec.kind {
+        RuntimeMemoryKindV1::HostVisible => memory
+            .initialize_host_visible_coherent_from_slice_v1(spec.bytes())
+            .map(Gfx942FixedDispatchDataV1::host_visible_initialized)
+            .map_err(|error| format!("KFD host-visible initialization: {error}")),
+        RuntimeMemoryKindV1::DeviceLocal => {
+            let owned_bytes = spec.try_owned_bytes()?;
+            let ordinal = u32::try_from(index)
+                .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
+            let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
+                .map_err(|error| format!("KFD device-content role: {error}"))?;
+            let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
+                .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
+            memory
+                .initialize_gfx942_device_memory(owned_bytes, spec.alignment, content)
+                .map(Gfx942FixedDispatchDataV1::initialized)
+                .map_err(|error| format!("KFD device-local initialization: {error}"))
+        }
+    }
 }
 
 pub(super) fn resident_descriptors_v1(

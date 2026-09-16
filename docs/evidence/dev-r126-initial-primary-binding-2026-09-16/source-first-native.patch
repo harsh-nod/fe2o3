@@ -1,0 +1,1021 @@
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index d5c8a428c..e9fe3b299 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -254,0 +255,2 @@ mod fixed_dispatch;
++#[path = "queue_live/initial_bind.rs"]
++mod initial_bind;
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_initial_bind_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_initial_bind_tests.rs
+new file mode 100644
+index 000000000..4993a009b
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_initial_bind_tests.rs
+@@ -0,0 +1,463 @@
++//! Initial binding on the original completed constructor, not an engine-less facade.
++
++use super::*;
++use crate::queue::dispatch_binding::preparation::PreparationOwnerRefsV1;
++use crate::queue::live::initial_bind::{
++    InitialBindingCustodyV1, InitialBindingParentV1, bind_initial_with_v1,
++    initial_dispatch_state_admitted_v1,
++};
++
++impl InitialBindingParentV1 for Option<Parent> {
++    type Memory = Memory;
++    type TerminalParent = Parent;
++
++    fn preflight<const N: usize>(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        let parent = self
++            .as_ref()
++            .ok_or(ComputeAqlQueueSessionErrorV1::Contract("retained parent"))?;
++        if parent.poisoned
++            || !initial_dispatch_state_admitted_v1(
++                &parent.unpublished,
++                parent.dispatch.is_some(),
++                parent.detached_generation,
++                parent.detached_count,
++                parent.detached_identities.len(),
++                parent.detached_next,
++            )
++        {
++            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
++        }
++        validate_fixed_batch_ring::<N>(4096)?;
++        parent.completion.ensure_releasable()?;
++        parent
++            .dependency
++            .ensure_idle()
++            .map_err(map_dependency_target_use_error_v1)?;
++        preflight_primary_owners_v1::<Fixture>(
++            &parent.engine,
++            parent.key,
++            parent.signals.as_ref(),
++            parent.exception.as_ref(),
++            parent.doorbell.as_ref(),
++        )
++    }
++
++    fn currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        step("initial-currentness")?;
++        self.as_mut()
++            .unwrap()
++            .engine
++            .prepare_operation()
++            .map_err(map_native)
++    }
++
++    fn with_preparation(
++        &mut self,
++        work: impl FnOnce(&mut Memory) -> Result<(), ComputeAqlQueueSessionErrorV1>,
++    ) -> Result<
++        (
++            Result<(), ComputeAqlQueueSessionErrorV1>,
++            Result<(), ComputeAqlQueueSessionErrorV1>,
++        ),
++        ComputeAqlQueueSessionErrorV1,
++    > {
++        execute_live_model_custody_v1(
++            self.as_mut().unwrap(),
++            |parent| {
++                step("initial-loan")?;
++                let engine = &mut parent.engine;
++                engine
++                    .backend
++                    .session
++                    .primary_loan(&mut engine.foundation)
++                    .map_err(Into::into)
++            },
++            |parent| work(&mut parent.engine.backend.session),
++            |parent, loan| {
++                step("initial-retake-before")?;
++                let engine = &mut parent.engine;
++                if trace()
++                    .borrow()
++                    .fault
++                    .is_some_and(|(name, _, _)| name == "initial-reclaim-regress")
++                {
++                    engine
++                        .backend
++                        .session
++                        .primary_regress_loan_revision_v1(&loan);
++                }
++                engine
++                    .backend
++                    .session
++                    .primary_reclaim(&mut engine.foundation, loan)?;
++                step("initial-retake-after")
++            },
++            |parent| parent.poison_release(),
++        )
++    }
++
++    fn validate<const N: usize>(
++        &mut self,
++        preparation: &FixedDispatchPreparationCustodyV1<N>,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        let parent = self.as_mut().unwrap();
++        assert!(parent.dispatch.is_none());
++        step("initial-validation")?;
++        parent
++            .engine
++            .backend
++            .session
++            .primary_validate_live_dispatch_memory_v1(
++                &preparation.completed()?.device_authorities_inline_v1(),
++            )
++            .map_err(Into::into)
++    }
++
++    fn install(&mut self, dispatch: DispatchResourceOwnerV1) {
++        self.as_mut().unwrap().dispatch = Some(dispatch);
++    }
++
++    fn take_terminal_parent(&mut self) -> Parent {
++        let mut parent = self.take().unwrap();
++        parent.poison_release();
++        parent
++    }
++}
++
++fn exercise(
++    fault: Option<(&'static str, usize, bool)>,
++    preparation_fault: Option<(PreparationStageV1, bool)>,
++    sdma: bool,
++) {
++    let (parent, t, gate) = if sdma {
++        sdma_cases::with_sdma(false)
++    } else {
++        constructed(false)
++    };
++    let baseline = parent.engine.backend.session.primary_identities();
++    let original_data = parent.engine.backend.session.observation();
++    let original_drops = t.borrow().drops;
++    let original_resources = original_resource_ids(&parent);
++    let original_signal = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++    let original_key = parent.key;
++    let platform = |p: &Parent| {
++        let e = p.exception.as_ref().unwrap();
++        (
++            e.runtime.identity,
++            e.event.identity,
++            e.shadows.identity,
++            p.doorbell.as_ref().unwrap().identity,
++        )
++    };
++    let original_platform = platform(&parent);
++    let mut parent = Some(parent);
++    if fault.is_some_and(|(name, _, _)| name == "initial-loan-exhausted") {
++        parent
++            .as_mut()
++            .unwrap()
++            .engine
++            .backend
++            .session
++            .primary_expire_loan_generation_v1();
++    }
++    let initialized = RefCell::new(Vec::with_capacity(3));
++    let initializer = |memory: &mut Memory, index: usize| {
++        step("initial-data")?;
++        assert_eq!(index, initialized.borrow().len());
++        let data = if index == 1 {
++            memory.device(true)
++        } else {
++            memory.host(true)
++        };
++        initialized.borrow_mut().push(data.storage_identity());
++        Ok(data)
++    };
++    let (programs, packets) = recipe();
++    let mut root = InitialBindingCustodyV1::new(programs, packets, initializer);
++    root.preparation_fault = preparation_fault;
++    let address = &*root as *const _ as usize;
++    let retained = RefCell::new(None);
++    t.borrow_mut().fault = fault;
++    let _ = take_dispatch_terminal_process_gate_record_v1();
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        bind_initial_with_v1(&mut parent, root, 3, |root| {
++            assert_eq!(&*root as *const _ as usize, address);
++            *retained.borrow_mut() = Some(root);
++        })
++    }));
++    let success = fault.is_none() && preparation_fault.is_none();
++    let panic = preparation_fault.is_some_and(|(_, panic)| panic)
++        || fault.is_some_and(|(_, _, panic)| panic);
++    assert_eq!(matches!(result, Ok(Ok(()))), success);
++    assert_eq!(result.is_err(), panic);
++    if let Err(payload) = &result {
++        if let Some((stage, true)) = preparation_fault {
++            assert_eq!(
++                payload.downcast_ref::<(&str, PreparationStageV1)>(),
++                Some(&("dispatch preparation", stage))
++            );
++        } else {
++            let (name, occurrence, _) = fault.unwrap();
++            assert_eq!(
++                payload.downcast_ref::<(&str, usize)>(),
++                Some(&(name, occurrence))
++            );
++        }
++    }
++    assert_eq!(take_dispatch_terminal_process_gate_record_v1(), !success);
++    assert_eq!(parent.is_some(), success);
++    let retained = retained.into_inner();
++    assert_eq!(retained.is_some(), !success);
++    let p = parent
++        .as_ref()
++        .or_else(|| retained.as_ref().unwrap().terminal_parent.as_ref())
++        .unwrap();
++    assert_eq!(p.poisoned, !success);
++    assert_eq!(p.key, original_key);
++    assert_eq!(original_resource_ids(p), original_resources);
++    assert_eq!(
++        Memory::primary_token_identity(p.signals.as_ref().unwrap()),
++        original_signal
++    );
++    assert_eq!(platform(p), original_platform);
++    assert_eq!(p.sdma.is_some(), sdma);
++    assert!(p.unpublished.is_clear());
++    assert_eq!(
++        (p.detached_count, p.detached_generation, p.detached_next),
++        (0, None, None)
++    );
++    assert!(p.detached_identities.is_empty());
++    let memory = &p.engine.backend.session;
++    memory.primary_assert_accounts_and_records(t.borrow().session);
++    memory.assert_original_records_unchanged(&original_data);
++    assert_eq!(t.borrow().drops, original_drops);
++    assert!(
++        !t.borrow()
++            .calls
++            .iter()
++            .any(|name| matches!(*name, "create" | "publish" | "destroy"))
++    );
++    let mut owners = PreparationOwnerRefsV1::default();
++    if let Some(root) = &retained {
++        owners.data(&root.data);
++        if let Some(preparation) = &root.preparation {
++            preparation.primary_collect_owners_v1(&mut owners);
++            preparation.primary_assert_replacement_generation_v1(Some(1), None);
++            if let Some((stage, _)) = preparation_fault {
++                preparation.primary_assert_failed_stage_v1(stage);
++            }
++        } else {
++            assert_eq!(
++                fixed_dispatch_storage_identities(&root.data),
++                *initialized.borrow()
++            );
++        }
++        assert!(p.dispatch.is_none());
++    } else {
++        let dispatch = p.dispatch.as_ref().unwrap();
++        assert_eq!(dispatch.primary_fixture_next_generation_v1(), 1);
++        owners.dispatch(dispatch);
++    }
++    memory.primary_assert_shared_layouts_v1(&owners.shared);
++    memory.primary_assert_device_partition_v1(&owners.device_leases, &owners.device_authorities);
++    let mut identities = baseline;
++    identities.extend(owners.shared.iter().map(|(id, _)| *id));
++    identities.extend(memory.primary_terminal_identities());
++    let expected = memory.primary_identities();
++    assert_eq!(identities.len(), expected.len());
++    assert_eq!(
++        identities
++            .iter()
++            .collect::<std::collections::HashSet<_>>()
++            .len(),
++        identities.len()
++    );
++    assert_eq!(
++        identities
++            .into_iter()
++            .collect::<std::collections::HashSet<_>>(),
++        expected.into_iter().collect()
++    );
++    assert_eq!(gate.observation(), (false, false));
++    if success {
++        let p = parent.as_mut().unwrap();
++        p.engine
++            .backend
++            .session
++            .primary_authenticate(&p.engine.foundation)
++            .unwrap();
++        assert!(
++            parent.preflight::<3>().is_err(),
++            "initial entry is one-shot"
++        );
++        t.borrow_mut().fault = None;
++        let mut release = PrimaryReleaseStateV1::<Fixture>::new();
++        release.release_in_place(parent.as_mut().unwrap()).unwrap();
++        parent
++            .as_ref()
++            .unwrap()
++            .engine
++            .backend
++            .session
++            .primary_assert_all_released_v1();
++        if let Some(sdma) = release.sdma.as_mut() {
++            sdma.cleanup_local_mappings();
++        }
++    } else {
++        let before = p.engine.backend.session.observation();
++        let calls = t.borrow().calls.clone();
++        assert!(parent.preflight::<3>().is_err());
++        assert_eq!(p.engine.backend.session.observation(), before);
++        assert_eq!(t.borrow().calls, calls);
++    }
++}
++
++#[test]
++fn constructed_initial_binding_uses_original_primary_with_and_without_sdma() {
++    exercise(None, None, false);
++    exercise(None, None, true);
++}
++
++#[test]
++fn constructed_initial_binding_keeps_every_materialized_prefix_on_error_and_panic() {
++    for index in 1..=3 {
++        for panic in [false, true] {
++            exercise(Some(("initial-data", index, panic)), None, false);
++        }
++    }
++}
++
++#[test]
++fn constructed_initial_binding_keeps_every_preparation_prefix_on_error_and_panic() {
++    let mut stages = vec![
++        PreparationStageV1::Generation,
++        PreparationStageV1::Plan,
++        PreparationStageV1::Capacity,
++        PreparationStageV1::DataRetention,
++        PreparationStageV1::KernargAllocate,
++        PreparationStageV1::KernargMaterialize,
++        PreparationStageV1::KernargMap,
++        PreparationStageV1::KernargRetain,
++        PreparationStageV1::Commit,
++        PreparationStageV1::Complete,
++    ];
++    for index in 0..3 {
++        stages.extend([
++            PreparationStageV1::CodeAllocate(index),
++            PreparationStageV1::CodeMaterialize(index),
++            PreparationStageV1::CodeSeal(index),
++            PreparationStageV1::CodeMap(index),
++            PreparationStageV1::CodeRetain(index),
++            PreparationStageV1::CodeResolve(index),
++            PreparationStageV1::PacketResolve(index),
++        ]);
++    }
++    for stage in stages {
++        for panic in [false, true] {
++            exercise(None, Some((stage, panic)), false);
++        }
++    }
++}
++
++#[test]
++fn constructed_initial_binding_retains_original_parent_across_model_and_validation_failures() {
++    for name in [
++        "initial-currentness",
++        "initial-loan",
++        "initial-retake-before",
++        "initial-retake-after",
++        "initial-validation",
++    ] {
++        for panic in [false, true] {
++            exercise(Some((name, 1, panic)), None, false);
++        }
++    }
++    exercise(Some(("initial-loan-exhausted", 1, false)), None, false);
++    exercise(Some(("initial-reclaim-regress", 1, false)), None, false);
++    for name in ["initial-retake-before", "initial-retake-after"] {
++        for operation_panic in [false, true] {
++            for retake_panic in [false, true] {
++                exercise(
++                    Some((name, 1, retake_panic)),
++                    Some((PreparationStageV1::CodeResolve(0), operation_panic)),
++                    false,
++                );
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_initial_binding_rejects_nonfresh_ledgers_before_any_effect() {
++    for case in 0..5 {
++        let (mut p, t, _) = constructed(case == 0);
++        match case {
++            0 => assert!(p.dispatch.is_some()),
++            1 => p.detached_generation = Some(0),
++            2 => p.detached_generation = Some(7),
++            3 => p.detached_count = 1,
++            4 => p.detached_next = Some(0),
++            _ => unreachable!(),
++        }
++        let before = p.engine.backend.session.observation();
++        let original_ids = original_resource_ids(&p);
++        let original_drops = t.borrow().drops;
++        let mut parent = Some(p);
++        let (programs, packets) = recipe();
++        let root = InitialBindingCustodyV1::new(programs, packets, |_: &mut Memory, _: usize| {
++            panic!("rejected initial bind must not initialize")
++        });
++        let retained = RefCell::new(None);
++        let _ = take_dispatch_terminal_process_gate_record_v1();
++        assert!(
++            bind_initial_with_v1(&mut parent, root, 3, |root| {
++                *retained.borrow_mut() = Some(root);
++            })
++            .is_err()
++        );
++        assert!(!take_dispatch_terminal_process_gate_record_v1());
++        let retained = retained.into_inner().unwrap();
++        assert!(
++            retained.terminal_parent.is_none()
++                && retained.data.is_empty()
++                && retained.preparation.is_none()
++        );
++        let p = parent.as_ref().unwrap();
++        assert!(!p.poisoned);
++        assert_eq!(original_resource_ids(p), original_ids);
++        assert_eq!(p.engine.backend.session.observation(), before);
++        assert!(t.borrow().calls.is_empty());
++        assert_eq!(t.borrow().drops, original_drops);
++    }
++}
++
++#[test]
++fn constructed_initial_binding_bounds_inputs_before_allocation_or_currentness() {
++    let (p, t, _) = constructed(false);
++    let before = p.engine.backend.session.observation();
++    let mut parent = Some(p);
++    let (programs, packets) = recipe();
++    let root = InitialBindingCustodyV1::new(programs, packets, |_: &mut Memory, _: usize| {
++        panic!("oversized initial bind must not initialize")
++    });
++    let retained = RefCell::new(None);
++    assert!(
++        bind_initial_with_v1(&mut parent, root, usize::MAX, |root| {
++            *retained.borrow_mut() = Some(root);
++        })
++        .is_err()
++    );
++    let retained = retained.into_inner().unwrap();
++    assert!(retained.terminal_parent.is_none() && retained.data.capacity() == 0);
++    assert_eq!(
++        parent
++            .as_ref()
++            .unwrap()
++            .engine
++            .backend
++            .session
++            .observation(),
++        before
++    );
++    assert!(t.borrow().calls.is_empty());
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index 0c6fb2eef..cdd8fb5a9 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -15,0 +16,2 @@ mod fault_cases;
++#[path = "integration_initial_bind_tests.rs"]
++mod initial_bind_cases;
+diff --git a/crates/fe2o3-kfd/src/queue_live/initial_bind.rs b/crates/fe2o3-kfd/src/queue_live/initial_bind.rs
+new file mode 100644
+index 000000000..a43bbfa19
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/initial_bind.rs
+@@ -0,0 +1,264 @@
++//! Initial ordinary binding on an existing primary, with rooted partial inputs.
++
++#![forbid(unsafe_code)]
++
++use super::*;
++use crate::queue::dispatch_binding::{
++    GFX942_MAX_FIXED_DISPATCH_DATA_V1, preparation::PreparationMemoryV1,
++    prepare_public_fixed_dispatch_resources_in_place,
++};
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++pub(super) fn initial_dispatch_state_admitted_v1(
++    unpublished: &UnpublishedDispatchStateV1,
++    attached: bool,
++    generation: Option<u64>,
++    count: usize,
++    identities: usize,
++    insertion: Option<usize>,
++) -> bool {
++    unpublished.is_clear()
++        && !attached
++        && generation.is_none()
++        && count == 0
++        && identities == 0
++        && insertion.is_none()
++}
++
++pub(super) trait InitialBindingParentV1 {
++    type Memory: PreparationMemoryV1;
++    type TerminalParent;
++
++    fn preflight<const N: usize>(&self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn with_preparation(
++        &mut self,
++        work: impl FnOnce(&mut Self::Memory) -> Result<(), ComputeAqlQueueSessionErrorV1>,
++    ) -> Result<
++        (
++            Result<(), ComputeAqlQueueSessionErrorV1>,
++            Result<(), ComputeAqlQueueSessionErrorV1>,
++        ),
++        ComputeAqlQueueSessionErrorV1,
++    >;
++    fn validate<const N: usize>(
++        &mut self,
++        preparation: &FixedDispatchPreparationCustodyV1<N>,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn install(&mut self, dispatch: DispatchResourceOwnerV1);
++    fn take_terminal_parent(&mut self) -> Self::TerminalParent;
++}
++
++pub(super) struct InitialBindingCustodyV1<'a, const N: usize, I, P> {
++    pub(super) programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'a>>,
++    packets: Option<[Gfx942FixedDispatchPacketV1; N]>,
++    initializer: I,
++    pub(super) data: Vec<Gfx942FixedDispatchDataV1>,
++    pub(super) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
++    pub(super) terminal_parent: Option<P>,
++    started: bool,
++    #[cfg(test)]
++    pub(super) preparation_fault: Option<(
++        crate::queue::dispatch_binding::preparation::PreparationStageV1,
++        bool,
++    )>,
++}
++
++impl<'a, const N: usize, I, P> InitialBindingCustodyV1<'a, N, I, P> {
++    pub(super) fn new(
++        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'a>>,
++        packets: [Gfx942FixedDispatchPacketV1; N],
++        initializer: I,
++    ) -> Box<Self> {
++        Box::new(Self {
++            programs,
++            packets: Some(packets),
++            initializer,
++            data: Vec::new(),
++            preparation: None,
++            terminal_parent: None,
++            started: false,
++            #[cfg(test)]
++            preparation_fault: None,
++        })
++    }
++}
++
++pub(super) fn bind_initial_with_v1<'a, const N: usize, P, I>(
++    parent: &mut P,
++    mut root: Box<InitialBindingCustodyV1<'a, N, I, P::TerminalParent>>,
++    data_count: usize,
++    retain: impl FnOnce(Box<InitialBindingCustodyV1<'a, N, I, P::TerminalParent>>),
++) -> Result<(), ComputeAqlQueueSessionErrorV1>
++where
++    P: InitialBindingParentV1,
++    I: FnMut(
++        &mut P::Memory,
++        usize,
++    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1>,
++{
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        parent.preflight::<N>()?;
++        if data_count > GFX942_MAX_FIXED_DISPATCH_DATA_V1 {
++            return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
++                requested: data_count,
++                maximum: GFX942_MAX_FIXED_DISPATCH_DATA_V1,
++            }
++            .into());
++        }
++        root.data.try_reserve_exact(data_count).map_err(|_| {
++            ComputeAqlQueueSessionErrorV1::Contract("initial dispatch data roster allocation")
++        })?;
++        root.started = true;
++        parent.currentness()?;
++        let (operation, retake) = parent.with_preparation(|memory| {
++            for index in 0..data_count {
++                let data = (root.initializer)(memory, index)?;
++                // Capacity was reserved before entry; no fallible step separates owners.
++                root.data.push(data);
++            }
++            root.preparation = Some(FixedDispatchPreparationCustodyV1::new(
++                root.packets.take().expect("rooted initial packets"),
++                core::mem::take(&mut root.data),
++            ));
++            let preparation = root
++                .preparation
++                .as_mut()
++                .expect("rooted initial preparation");
++            #[cfg(test)]
++            if let Some((stage, panic)) = root.preparation_fault {
++                preparation.primary_inject_stage_v1(stage, panic);
++            }
++            prepare_public_fixed_dispatch_resources_in_place(memory, &root.programs, preparation)
++                .map_err(Into::into)
++        })?;
++        retake?;
++        operation?;
++        let preparation = root
++            .preparation
++            .as_mut()
++            .expect("completed initial preparation");
++        parent.validate(preparation)?;
++        let dispatch = preparation.take_completed()?;
++        parent.install(dispatch);
++        Ok(())
++    }));
++    match result {
++        Ok(Ok(())) => Ok(()),
++        result => {
++            if root.started || result.is_err() {
++                root.terminal_parent = Some(parent.take_terminal_parent());
++                poison_process_global_after_dispatch_terminal_v1();
++            }
++            retain(root);
++            match result {
++                Ok(Err(error)) => Err(error),
++                Err(payload) => resume_unwind(payload),
++                Ok(Ok(())) => unreachable!(),
++            }
++        }
++    }
++}
++
++impl InitialBindingParentV1 for &mut ComputeAqlQueueSessionV1 {
++    type Memory = SharedGttMemorySessionV1;
++    type TerminalParent = ComputeAqlQueueSessionV1;
++
++    fn preflight<const N: usize>(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        if self.terminal_poisoned {
++            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
++        }
++        if self.key != self.compute_lane_session
++            || self.has_any_persistent_compute_attachment_v1()
++            || self.terminal_dependency.is_some()
++            || self.sdma_pool_trim.is_some()
++            || !initial_dispatch_state_admitted_v1(
++                &self.unpublished_dispatch,
++                self.dispatch.is_some(),
++                self.detached_dispatch_generation,
++                self.detached_data_count,
++                self.detached_data_identities.len(),
++                self.detached_next_insertion_index,
++            )
++        {
++            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
++        }
++        validate_fixed_batch_ring::<N>(self.observation.ring_bytes)?;
++        self.completion_owner.ensure_releasable()?;
++        self.dependency_owner
++            .ensure_idle()
++            .map_err(map_dependency_target_use_error_v1)?;
++        let engine = self
++            .engine
++            .as_ref()
++            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++                "missing initial binding engine",
++            ))?;
++        // Validate the primary owners, not teardown admission: live SDMA buffers are allowed.
++        primary_release::preflight_primary_owners_v1::<
++            construction_primary::LinuxPrimaryEnvironmentV1,
++        >(
++            engine,
++            self.key,
++            self.completion_signals.as_ref(),
++            self.exception.as_ref(),
++            self.doorbell.as_ref(),
++        )
++    }
++
++    fn currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.check_currentness()
++    }
++
++    fn with_preparation(
++        &mut self,
++        work: impl FnOnce(&mut Self::Memory) -> Result<(), ComputeAqlQueueSessionErrorV1>,
++    ) -> Result<
++        (
++            Result<(), ComputeAqlQueueSessionErrorV1>,
++            Result<(), ComputeAqlQueueSessionErrorV1>,
++        ),
++        ComputeAqlQueueSessionErrorV1,
++    > {
++        self.with_live_queue_memory_model_custody(work)
++    }
++
++    fn validate<const N: usize>(
++        &mut self,
++        preparation: &FixedDispatchPreparationCustodyV1<N>,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.validate_persistent_bind_preparation_v1(preparation)
++    }
++
++    fn install(&mut self, dispatch: DispatchResourceOwnerV1) {
++        self.dispatch = Some(dispatch);
++    }
++
++    fn take_terminal_parent(&mut self) -> Self::TerminalParent {
++        self.take_for_terminal_auxiliary_construction_v1()
++    }
++}
++
++impl ComputeAqlQueueSessionV1 {
++    /// Prepares the first ordinary fixed batch on an existing, unused primary.
++    /// This does not publish or fabricate recycled/pristine-abort history.
++    ///
++    /// Each initializer call returns one owner, which is rooted before the next
++    /// call. Initializers must retain any native owners they create but do not
++    /// return. Consumed inputs remain retained on rejection; failures after
++    /// admission retain the original parent until process teardown.
++    pub fn bind_initial_fixed_dispatch_v1<const N: usize>(
++        &mut self,
++        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
++        packets: [Gfx942FixedDispatchPacketV1; N],
++        data_count: usize,
++        initialize: impl FnMut(
++            &mut SharedGttMemorySessionV1,
++            usize,
++        )
++            -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1>,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        let root = InitialBindingCustodyV1::new(programs, packets, initialize);
++        bind_initial_with_v1(&mut &mut *self, root, data_count, core::mem::forget)
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+index 9c3a14cd6..b95346b19 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+@@ -2872,0 +2873,34 @@ impl KfdRuntimeBackendV1 {
++            } else if creates_native_queue && self.native_compute_lanes.iter().all(Option::is_none)
++            {
++                performance.user_data_materializations = user_data_count;
++                let mut materialization_error = None;
++                let error_slot = &mut materialization_error;
++                let count = data.len();
++                let queue = self.queue.as_mut().expect("bootstrap KFD queue exists");
++                queue
++                    .bind_initial_fixed_dispatch_v1(
++                        programs,
++                        [packet],
++                        count,
++                        move |memory, index| {
++                            materialize_initial_data_item_v1(memory, &data[index], index, signature)
++                                .map_err(|detail| {
++                                    *error_slot = Some(detail);
++                                    fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                                        "KFD primary data materialization",
++                                    )
++                                })
++                        },
++                    )
++                    .map_err(|error| {
++                        self.terminal_error(
++                            materialization_error
++                                .unwrap_or_else(|| format!("KFD initial primary binding: {error}")),
++                        )
++                    })?;
++                self.native_compute_lanes[self.selected_compute_lane] = Some(
++                    self.queue
++                        .as_ref()
++                        .expect("bound bootstrap primary")
++                        .primary_compute_lane_v1(),
++                );
+@@ -4997,19 +5031 @@ pub(super) fn materialize_initial_data_v1(
+-        let item = match spec.kind {
+-            RuntimeMemoryKindV1::HostVisible => memory
+-                .initialize_host_visible_coherent_from_slice_v1(spec.bytes())
+-                .map(Gfx942FixedDispatchDataV1::host_visible_initialized)
+-                .map_err(|error| format!("KFD host-visible initialization: {error}"))?,
+-            RuntimeMemoryKindV1::DeviceLocal => {
+-                let owned_bytes = spec.try_owned_bytes()?;
+-                let ordinal = u32::try_from(index)
+-                    .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
+-                let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
+-                    .map_err(|error| format!("KFD device-content role: {error}"))?;
+-                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
+-                    .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
+-                memory
+-                    .initialize_gfx942_device_memory(owned_bytes, spec.alignment, content)
+-                    .map(Gfx942FixedDispatchDataV1::initialized)
+-                    .map_err(|error| format!("KFD device-local initialization: {error}"))?
+-            }
+-        };
++        let item = materialize_initial_data_item_v1(memory, &spec, index, role_identity)?;
+@@ -5020,0 +5037,27 @@ pub(super) fn materialize_initial_data_v1(
++fn materialize_initial_data_item_v1(
++    memory: &mut SharedGttMemorySessionV1,
++    spec: &DataSpecV1,
++    index: usize,
++    role_identity: [u8; 32],
++) -> Result<Gfx942FixedDispatchDataV1, String> {
++    match spec.kind {
++        RuntimeMemoryKindV1::HostVisible => memory
++            .initialize_host_visible_coherent_from_slice_v1(spec.bytes())
++            .map(Gfx942FixedDispatchDataV1::host_visible_initialized)
++            .map_err(|error| format!("KFD host-visible initialization: {error}")),
++        RuntimeMemoryKindV1::DeviceLocal => {
++            let owned_bytes = spec.try_owned_bytes()?;
++            let ordinal = u32::try_from(index)
++                .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
++            let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
++                .map_err(|error| format!("KFD device-content role: {error}"))?;
++            let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
++                .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
++            memory
++                .initialize_gfx942_device_memory(owned_bytes, spec.alignment, content)
++                .map(Gfx942FixedDispatchDataV1::initialized)
++                .map_err(|error| format!("KFD device-local initialization: {error}"))
++        }
++    }
++}
++
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+index b57d027af..e288a79b1 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -291,0 +292,12 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
++    native_typed_dispatch_retained_release(1);
++}
++
++#[cfg(feature = "hardware-qualification")]
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn native_runtime_two_stream_dispatch_uses_primary_and_auxiliary_then_refunds() {
++    native_typed_dispatch_retained_release(2);
++}
++
++#[cfg(feature = "hardware-qualification")]
++fn native_typed_dispatch_retained_release(stream_count: usize) {
+@@ -315 +326,0 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    let stream = context.create_stream(device_id).unwrap();
+@@ -320,17 +331,20 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
+-        let allocation = context
+-            .allocate(
+-                device_id,
+-                RuntimeMemoryKindV1::HostVisible,
+-                BYTES as u64,
+-                ALIGNMENT,
+-            )
+-            .unwrap();
+-        context.write_allocation(allocation, 0, bytes).unwrap();
+-        allocation
+-    });
+-    let arguments =
+-        Gfx942VecaddQualificationArgumentsV1::new(allocations[0], allocations[1], allocations[2])
+-            .unwrap();
+-    let mut submission = context
+-        .launch(stream, &kernel, &arguments, admitted.geometry(), &[])
++    let mut launches = Vec::with_capacity(stream_count);
++    for _ in 0..stream_count {
++        let stream = context.create_stream(device_id).unwrap();
++        let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
++            let allocation = context
++                .allocate(
++                    device_id,
++                    RuntimeMemoryKindV1::HostVisible,
++                    BYTES as u64,
++                    ALIGNMENT,
++                )
++                .unwrap();
++            context.write_allocation(allocation, 0, bytes).unwrap();
++            allocation
++        });
++        let arguments = Gfx942VecaddQualificationArgumentsV1::new(
++            allocations[0],
++            allocations[1],
++            allocations[2],
++        )
+@@ -338,15 +352,2 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    context.flush_stream(stream).unwrap();
+-    assert_eq!(
+-        context
+-            .wait(&mut submission, Duration::from_secs(10))
+-            .unwrap(),
+-        RuntimePollV1::Succeeded
+-    );
+-    let mut observed = vec![0; BYTES];
+-    for (allocation, expected) in
+-        allocations
+-            .into_iter()
+-            .zip([buffers.left(), buffers.right(), buffers.expected_output()])
+-    {
+-        context
+-            .read_allocation(allocation, 0, &mut observed)
++        let submission = context
++            .launch(stream, &kernel, &arguments, admitted.geometry(), &[])
+@@ -354 +355,19 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-        assert_eq!(observed, expected, "full-byte input/output comparison");
++        context.flush_stream(stream).unwrap();
++        launches.push((stream, allocations, submission));
++    }
++    let mut observed = vec![0; BYTES];
++    for (_, allocations, submission) in &mut launches {
++        assert_eq!(
++            context.wait(submission, Duration::from_secs(10)).unwrap(),
++            RuntimePollV1::Succeeded,
++        );
++        for (allocation, expected) in allocations.iter().copied().zip([
++            buffers.left(),
++            buffers.right(),
++            buffers.expected_output(),
++        ]) {
++            context
++                .read_allocation(allocation, 0, &mut observed)
++                .unwrap();
++            assert_eq!(observed, expected, "full-byte input/output comparison");
++        }
+@@ -365 +384,2 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    assert!(live.used_backing_bytes >= 3 * BYTES as u64 && live.used_allocation_records >= 3);
++    assert!(live.used_backing_bytes >= 3 * stream_count as u64 * BYTES as u64);
++    assert!(live.used_allocation_records >= 3 * stream_count as u64);
+@@ -367,3 +387,6 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    context.release_submission(submission).unwrap();
+-    for allocation in allocations.into_iter().rev() {
+-        context.release_allocation(allocation).unwrap();
++    for (stream, allocations, submission) in launches.into_iter().rev() {
++        context.release_submission(submission).unwrap();
++        for allocation in allocations.into_iter().rev() {
++            context.release_allocation(allocation).unwrap();
++        }
++        context.destroy_stream(stream).unwrap();
+@@ -372 +394,0 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    context.destroy_stream(stream).unwrap();
+@@ -380,4 +402,10 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    assert_eq!(compute_lanes.len(), 1);
+-    // Public allocations create the SDMA bootstrap primary; ordinary compute
+-    // currently materializes an auxiliary lane instead of adopting that primary.
+-    assert_eq!(compute_lanes[0].ordinal(), 1);
++    assert_eq!(compute_lanes.len(), stream_count);
++    let compute_ordinals = compute_lanes
++        .iter()
++        .map(|lane| lane.ordinal())
++        .collect::<Vec<_>>();
++    assert_eq!(compute_ordinals, (0..stream_count).collect::<Vec<_>>());
++    assert_eq!(
++        compute_lanes[0],
++        backend.queue.as_ref().unwrap().primary_compute_lane_v1()
++    );
+@@ -390 +418 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-        1
++        stream_count - 1
+@@ -410 +438 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    assert_eq!(allocation_identities.len(), 3);
++    assert_eq!(allocation_identities.len(), 3 * stream_count);
+@@ -456,3 +484,10 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    assert_eq!(created.len(), 1);
+-    assert_eq!(destroyed.len(), 1);
+-    assert_eq!(created[0].1, destroyed[0].1);
++    assert_eq!(created.len(), stream_count);
++    assert_eq!(destroyed.len(), stream_count);
++    assert_eq!(
++        created
++            .iter()
++            .map(|(_, queue)| queue)
++            .collect::<std::collections::HashSet<_>>()
++            .len(),
++        stream_count
++    );
+@@ -479,9 +514,19 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-    assert_eq!(published.len(), 1);
+-    assert_eq!(completed.len(), 1);
+-    assert_eq!(published[0].2, created[0].1);
+-    assert_eq!(published[0].1, completed[0].1);
+-    assert!(
+-        created[0].0 < published[0].0
+-            && published[0].0 < completed[0].0
+-            && completed[0].0 < destroyed[0].0
+-    );
++    assert_eq!(published.len(), stream_count);
++    assert_eq!(completed.len(), stream_count);
++    for (created_at, queue) in &created {
++        let (destroyed_at, _) = destroyed
++            .iter()
++            .find(|(_, identity)| identity == queue)
++            .unwrap();
++        let (published_at, dispatch, _) = published
++            .iter()
++            .find(|(_, _, identity)| identity == queue)
++            .unwrap();
++        let (completed_at, _) = completed
++            .iter()
++            .find(|(_, identity)| identity == dispatch)
++            .unwrap();
++        assert!(
++            created_at < published_at && published_at < completed_at && completed_at < destroyed_at
++        );
++    }
+@@ -492 +537,2 @@ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary(
+-        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinal=1 primary_ordinal=0 packets=1 readbacks=3 output_sha256={output_sha256} host_account_refund=complete queue_profile=matched auxiliary_destroy=confirmed completed_primary_root_drop=confirmed backend_drop=completed"
++        "native_runtime_typed_dispatch_retained_release=complete selector=retained kernel=vecadd compute_ordinals={compute_ordinals:?} primary_execution=confirmed packets={stream_count} readbacks={} output_sha256={output_sha256} host_account_refund=complete queue_profile=matched completed_primary_root_drop=confirmed backend_drop=completed",
++        3 * stream_count,

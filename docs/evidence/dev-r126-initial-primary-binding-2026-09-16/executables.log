@@ -1,0 +1,7 @@
+32d3f36afcfc3cb9cdbeaf455b5eeebad58ab99516519b721897fafb777148eb  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/source-published.patch
+d1fe67d69e2831e50ca7eff7a0f154c882b82bbc687e6f8a6e849f946bf9d976  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/source-review.patch
+01d29712c914ddb7e556a2b7162621e84410d3084924d5dbd66d3c6122b02ee2  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/kfd-gnu-published
+cb32fe7d7b910b270bd4a811cccda277d26938dadcae2b03cbb3d37517cc4fbe  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/kfd-musl-published
+f5bb075c415cd0442a61674aac9d0b0f1ad970310cc153c4986f6495c6ab010b  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/runtime-gnu-qualified
+d85366c97e302b747c9b9130173b83312e35bbc45b40f7a5293d99a30eb51fef  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/runtime-musl-qualified
+620e448da2983d1a131e52d8fbe82a516bfbd7bb43cac50fb9a49849da386a8e  /home/harsh/.codex-tmp/r126-initial-bind.HNpyqy/runtime-native-qualified

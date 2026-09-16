@@ -252,6 +252,8 @@ use construction_primary::{
 mod dispatch;
 #[path = "queue_live/fixed_dispatch.rs"]
 mod fixed_dispatch;
+#[path = "queue_live/initial_bind.rs"]
+mod initial_bind;
 #[path = "queue_live/model_loan.rs"]
 pub(in crate::queue) mod model_loan;
 use model_loan::execute_live_model_custody_v1;

@@ -1,0 +1,11 @@
+
+running 6 tests
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::constructed_initial_binding_bounds_inputs_before_allocation_or_currentness ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::constructed_initial_binding_keeps_every_materialized_prefix_on_error_and_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::constructed_initial_binding_keeps_every_preparation_prefix_on_error_and_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::constructed_initial_binding_rejects_nonfresh_ledgers_before_any_effect ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::constructed_initial_binding_retains_original_parent_across_model_and_validation_failures ... ok
+test queue::live::construction_primary::integration_tests::release_cases::initial_bind_cases::constructed_initial_binding_uses_original_primary_with_and_without_sdma ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1308 filtered out; finished in 35.58s
+
