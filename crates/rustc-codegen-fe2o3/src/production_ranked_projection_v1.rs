@@ -130,11 +130,19 @@ struct ProjectedSemanticAccessSiteV1 {
     statement: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuardedAccessFailureV1 {
+    Trap,
+    // Only an authenticated total intrinsic may mint this effect-free edge.
+    ContinueWithoutAccess,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GuardedRankedAccessV1 {
     view: ProductionRankedValueIdV1,
     indices: Vec<ProductionRankedValueV1>,
     checked_success: Option<ProductionRankedValueV1>,
+    failure: GuardedAccessFailureV1,
     comparisons: Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
@@ -5474,6 +5482,7 @@ fn project_strided_read_effects_v1(
             view,
             indices: vec![row, column],
             checked_success: None,
+            failure: GuardedAccessFailureV1::ContinueWithoutAccess,
             comparisons: vec![(row, rows), (column, columns)],
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
@@ -8257,6 +8266,7 @@ fn project_intrinsic_contracts(
                 view,
                 indices: vec![index],
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
                 comparisons: vec![(index, extent)],
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
@@ -8952,6 +8962,7 @@ fn project_intrinsic_contracts(
             view,
             indices: vec![index],
             checked_success,
+            failure: GuardedAccessFailureV1::Trap,
             comparisons,
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
@@ -19930,6 +19941,7 @@ fn build_ranked_cfg(
                             access_block,
                             failure_block,
                             live.len(),
+                            access.failure,
                         )?;
                     } else {
                         append_predicate_blocks(
@@ -19999,12 +20011,39 @@ fn build_ranked_cfg(
                         source: access.source,
                         semantic_site: access.semantic_site,
                     });
-                    push_block_at(
-                        &mut blocks,
-                        failure_block,
-                        Vec::new(),
-                        ProductionRankedTerminatorV1::Trap,
-                    )?;
+                    match access.failure {
+                        GuardedAccessFailureV1::Trap => push_block_at(
+                            &mut blocks,
+                            failure_block,
+                            Vec::new(),
+                            ProductionRankedTerminatorV1::Trap,
+                        )?,
+                        GuardedAccessFailureV1::ContinueWithoutAccess if !live.is_empty() => {
+                            let block = ranked_block_id(failure_block)?;
+                            push_block_at_with_index_arguments(
+                                &mut blocks,
+                                failure_block,
+                                u32::try_from(live.len()).map_err(|_| {
+                                    ProductionRankedProjectionErrorV1::Unsupported(
+                                        "live induction argument count does not fit u32",
+                                    )
+                                })?,
+                                Vec::new(),
+                                ProductionRankedTerminatorV1::BranchArgs {
+                                    arguments: live_induction_block_arguments(block, live)?,
+                                    target: ranked_block_id(continuation)?,
+                                },
+                            )?;
+                        }
+                        GuardedAccessFailureV1::ContinueWithoutAccess => push_block_at(
+                            &mut blocks,
+                            failure_block,
+                            Vec::new(),
+                            ProductionRankedTerminatorV1::Branch {
+                                target: ranked_block_id(continuation)?,
+                            },
+                        )?,
+                    }
                     current = continuation;
                     operations = Vec::new();
                 }
@@ -20843,6 +20882,7 @@ fn append_predicate_blocks(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_predicate_blocks_with_index_arguments(
     blocks: &mut Vec<ProductionRankedBlockV1>,
     first_block: usize,
@@ -20851,6 +20891,7 @@ fn append_predicate_blocks_with_index_arguments(
     true_block: usize,
     false_block: usize,
     argument_count: usize,
+    failure: GuardedAccessFailureV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     if predicate.comparisons.is_empty() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -20885,7 +20926,10 @@ fn append_predicate_blocks_with_index_arguments(
                 lhs,
                 rhs,
                 true_arguments: arguments.clone(),
-                false_arguments: Vec::new(),
+                false_arguments: match failure {
+                    GuardedAccessFailureV1::Trap => Vec::new(),
+                    GuardedAccessFailureV1::ContinueWithoutAccess => arguments,
+                },
                 true_block: ranked_block_id(next)?,
                 false_block: ranked_block_id(false_block)?,
             },
@@ -23830,6 +23874,7 @@ fn project_place_access_with_atomic(
                 view: view_id,
                 indices: ranked_indices,
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
                 comparisons,
                 access,
                 memory_space,
@@ -24052,6 +24097,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/scalar_literal_range_v1_tests.rs");
     include!("production_ranked_projection_v1/scalar_pipeline_payload_v1_tests.rs");
+    include!("production_ranked_projection_v1/total_read_control_v1_tests.rs");
 
     // Isolated CFG tests retain synthetic facts; full-entry tests below use
     // genuine materialized owners and the production assertion query.
@@ -39667,6 +39713,7 @@ mod tests {
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),

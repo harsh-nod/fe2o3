@@ -19,64 +19,75 @@ fn finite_loop_induction_v1(summary: &CanonicalEpochLoopV1, block: usize) -> Opt
 
 // Discovery is a candidate search. This rechecks *every* edge, including an
 // otherwise unmatched incoming argument, before a candidate gains proof use.
+struct FiniteLoopEdgeFailureV1 {
+    source: usize,
+    target: usize,
+    detail: &'static str,
+}
+
 fn finite_loop_edges_exact_v1(
     context: &Context,
     inventory: &BoundedPlironFunctionInventoryV1,
     summary: &CanonicalEpochLoopV1,
     successors: &[Vec<usize>],
     resources: &mut EquivalenceResourceMeterV1,
-) -> bool {
+) -> Result<(), FiniteLoopEdgeFailureV1> {
     let inside = |block| block == summary.header || summary.body_members.contains(&block);
     for (source, edges) in successors.iter().enumerate() {
         for (ordinal, target) in edges.iter().copied().enumerate() {
+            let reject = |detail| FiniteLoopEdgeFailureV1 {
+                source,
+                target,
+                detail,
+            };
             if !inside(source) {
                 if inside(target) && (source != summary.entry || target != summary.header) {
-                    return false;
+                    return Err(reject("unproved loop side entry"));
                 }
                 continue;
             }
             if !inside(target) {
                 if source != summary.header || target != summary.exit {
-                    return false;
+                    return Err(reject("unproved loop side exit"));
                 }
                 continue;
             }
             if target == summary.header && source != summary.latch {
-                return false;
+                return Err(reject("non-latch backedge"));
             }
             let (Some(source_value), Some(target_value)) = (
                 finite_loop_induction_v1(summary, source),
                 finite_loop_induction_v1(summary, target),
             ) else {
-                return false;
+                return Err(reject("missing exact induction value"));
             };
             let target_ref = inventory.blocks()[target].deref(context);
             let Some(position) = target_ref
                 .arguments()
                 .position(|value| value == target_value)
             else {
-                return false;
+                return Err(reject("induction is not a destination block argument"));
             };
             let Some(terminator) = inventory.blocks()[source]
                 .deref(context)
                 .get_terminator(context)
             else {
-                return false;
+                return Err(reject("missing source terminator"));
             };
             let Ok(control) = ControlViewV1::observe(context, terminator) else {
-                return false;
+                return Err(reject("unsupported exact control shape"));
             };
             let Ok(edge) = control.edge(ordinal) else {
-                return false;
+                return Err(reject("invalid edge occurrence"));
             };
             if edge.target() != inventory.blocks()[target] {
-                return false;
+                return Err(reject("edge occurrence changed its destination"));
             }
             let Ok((value, destination)) = edge.argument_at(position) else {
-                return false;
+                return Err(reject("missing exact edge argument"));
             };
             if destination != target_value {
-                return false;
+                return Err(reject("edge argument changed its destination"));
             }
             let matches = if target == summary.header {
                 index_offset(context, value, source_value, resources) == Some(1)
@@ -84,11 +95,11 @@ fn finite_loop_edges_exact_v1(
                 index_values_equivalent(context, value, source_value, resources)
             };
             if !matches {
-                return false;
+                return Err(reject("edge argument changed the authenticated induction"));
             }
         }
     }
-    true
+    Ok(())
 }
 
 fn finite_inner_operations_supported_v1(
@@ -149,7 +160,7 @@ fn admit_finite_nested_epoch_loops_v1(
                 && finite_inner_operations_supported_v1(context, inventory, candidate)
         })
         .filter(|candidate| {
-            finite_loop_edges_exact_v1(context, inventory, candidate, successors, resources)
+            finite_loop_edges_exact_v1(context, inventory, candidate, successors, resources).is_ok()
         })
         .collect::<Vec<_>>();
     let mut admitted = Vec::new();
@@ -366,17 +377,22 @@ fn verify_finite_two_phase_pipeline_v1(
         || distance != 1
         || !index_constant(context, summary.bound)
             .is_some_and(|bound| bound > 0 && bound <= u64::MAX / 2)
-        || !finite_loop_edges_exact_v1(
-            context,
-            inventory,
-            summary,
-            &discovery.cfg_successors,
-            resources,
-        )
     {
         return Err(reject(
             "finite two-phase loop lacks exact non-wrapping induction transport",
         ));
+    }
+    if let Err(failure) = finite_loop_edges_exact_v1(
+        context,
+        inventory,
+        summary,
+        &discovery.cfg_successors,
+        resources,
+    ) {
+        return Err(reject(&format!(
+            "finite loop edge {} -> {}: {}",
+            failure.source, failure.target, failure.detail,
+        )));
     }
     if !finite_uniform_participation_v1(
         context,
