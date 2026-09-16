@@ -27,6 +27,215 @@ use sha2::{Digest, Sha256};
 
 const PRODUCTION_RUSTC_LLVM_TARGET: &str = "amdgcn-amd-amdhsa";
 
+include!("compiler_result_proof_inputs_v1.rs");
+
+#[allow(
+    dead_code,
+    reason = "shared support includes consumers without result-shape tests"
+)]
+pub(crate) fn ordinary_aggregate_result_owner_v1(
+    seed: u8,
+    width: usize,
+) -> ProductionSemanticMirOwnerV1 {
+    assert!((1..=2).contains(&width));
+    let base = semantic_owner(seed);
+    let root = &base.semantic().functions()[0];
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let output = SemanticTypeIdV1::from_index(2);
+    let scalar = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 32, 4),
+        SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+    );
+    let types = vec![
+        unit_type(seed),
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(210, seed)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(210, seed)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(4),
+                4,
+                SemanticBackendReprV1::scalar(scalar),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            }),
+        ),
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(211, seed)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(211, seed)),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(4 * width as u64),
+                4,
+                if width == 1 {
+                    SemanticBackendReprV1::scalar(scalar)
+                } else {
+                    SemanticBackendReprV1::scalar_pair(scalar, scalar)
+                },
+                false,
+                SemanticAggregateLayoutV1::new(
+                    if width == 1 {
+                        vec![0, 4]
+                    } else {
+                        vec![0, 4, 4]
+                    },
+                    vec![],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(
+                SemanticAggregateTypeV1::new(if width == 1 {
+                    vec![u32_ty, unit]
+                } else {
+                    vec![u32_ty, unit, u32_ty]
+                })
+                .unwrap(),
+            ),
+        ),
+    ];
+    let attrs = SemanticAbiValueAttributesV1::new(
+        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+        SemanticAbiExtensionV1::None,
+        0,
+        None,
+    )
+    .unwrap();
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(212, seed)),
+        root.abi().layout_identity(),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::Rust,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(
+            output,
+            if width == 1 {
+                SemanticAbiPassModeV1::Direct(attrs)
+            } else {
+                SemanticAbiPassModeV1::Pair {
+                    first: attrs,
+                    second: attrs,
+                }
+            },
+        ),
+    )
+    .unwrap();
+    let number = SemanticOperandV1::Constant(SemanticConstantV1::new(
+        u32_ty,
+        SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(9, 4).unwrap()),
+    ));
+    let mut operands = vec![
+        number.clone(),
+        SemanticOperandV1::Constant(SemanticConstantV1::new(
+            unit,
+            SemanticConstantValueV1::ZeroSized,
+        )),
+    ];
+    if width == 2 {
+        operands.push(number);
+    }
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(1, seed)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(212, seed)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(212, seed)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(212, seed)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(212, seed)),
+        source,
+        abi,
+        vec![SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(213, seed)),
+            output,
+            SemanticLocalRoleV1::Return,
+            source,
+        )],
+        SemanticBlockIdV1::from_index(0),
+        vec![block(
+            214,
+            seed,
+            vec![SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], output).unwrap(),
+                    SemanticRvalueV1::new(
+                        output,
+                        SemanticRvalueKindV1::Aggregate(
+                            SemanticAggregateRvalueV1::new(
+                                SemanticAggregateKindV1::Tuple,
+                                operands,
+                            )
+                            .unwrap(),
+                        ),
+                    ),
+                )),
+            )],
+            SemanticTerminatorKindV1::Return,
+        )],
+    )
+    .unwrap();
+    let mut locals = root.locals().to_vec();
+    locals.push(SemanticLocalDeclV1::new(
+        SemanticLocalIdentityV1::from_sha256(bytes(215, seed)),
+        output,
+        SemanticLocalRoleV1::Temporary,
+        source,
+    ));
+    let mut blocks = root.blocks().to_vec();
+    blocks.push(block(
+        216,
+        seed,
+        vec![],
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(0),
+                vec![],
+                Some(SemanticCallDestinationV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], output).unwrap(),
+                    SemanticControlFlowEdgeV1::new(SemanticEdgeRoleV1::CallReturn, root.entry()),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        ),
+    ));
+    let root = SemanticFunctionDeclV1::new(
+        root.identity(),
+        root.role(),
+        root.item_definition_identity(),
+        root.monomorphization_identity(),
+        root.generic_type_arguments_identity(),
+        root.const_generic_arguments_identity(),
+        root.source(),
+        root.abi().clone(),
+        locals,
+        SemanticBlockIdV1::from_index(2),
+        blocks,
+    )
+    .unwrap()
+    .with_kernel_entry(root.kernel_entry().unwrap().clone());
+    let admitted = InertSemanticMirRequestV1::new(
+        base.semantic().target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![helper, root],
+        vec![SemanticFunctionIdV1::from_index(1)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
 #[allow(
     dead_code,
     reason = "shared support includes consumers without RustCall tests"

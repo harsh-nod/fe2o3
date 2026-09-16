@@ -398,13 +398,22 @@ fn prepay_argument_shape_v1(
     ty: SemanticTypeIdV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    prepay_typed_shape_v1(semantic.types(), ty, semantic.callables().len(), budget)
+}
+
+fn prepay_typed_shape_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    callable_count: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
     // Existing pure shape selection has a 256-node structural cap. Prepay its
     // worst-case path copies, range sorting, vector relocation, and transparent
     // carrier walk before calling it. This deliberately conservative allowance
     // is scratch per adjusted argument, never retained correspondence evidence.
-    let shape = semantic.types()[ty.index() as usize].shape();
+    let shape = types[ty.index() as usize].shape();
     let mut nodes = 0;
-    count_argument_shape_nodes_v1(semantic.types(), ty, &mut nodes, budget)?;
+    count_argument_shape_nodes_v1(types, ty, &mut nodes, budget)?;
     let fields = match shape {
         SemanticTypeShapeV1::Aggregate(fields) | SemanticTypeShapeV1::Tuple(fields) => {
             fields.fields().len()
@@ -415,7 +424,7 @@ fn prepay_argument_shape_v1(
     budget.charge_work(argument_sum_v1(&[
         argument_product_v1(paths, 8)?,
         argument_product_v1(nodes, 64)?,
-        argument_product_v1(semantic.callables().len(), 4)?,
+        argument_product_v1(callable_count, 4)?,
         argument_product_v1(fields, 8)?,
     ])?)?;
     budget.reserve_storage(argument_sum_v1(&[

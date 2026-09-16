@@ -721,6 +721,12 @@ fn decode_and_validate_correspondence(
     semantic_mir: &AdmittedInertSemanticMirV1,
     kernel_ir: &Module,
 ) -> Result<InertCanonicalSemanticU32InductionEvidenceV1, CompilerMultiRootProofValidationErrorV1> {
+    if !fe2o3_lower_mir_kernel::legacy_correspondence_source_results_supported_v4(semantic_mir) {
+        return Err(correspondence_error(
+            expected_ordinal,
+            "V4/V5 correspondence does not encode aggregate result components",
+        ));
+    }
     let mut reader = CorrespondenceReaderV1::new(bytes);
     let ordinal = u32::try_from(expected_ordinal).map_err(|_| {
         CompilerMultiRootProofValidationErrorV1::CorrespondencePayload {
@@ -791,6 +797,17 @@ fn decode_and_validate_correspondence(
                     "correspondence names an absent semantic function",
                 )
             })?;
+        if role == 2
+            && !fe2o3_lower_mir_kernel::legacy_correspondence_result_supported_v4(
+                semantic_mir.types(),
+                semantic.abi(),
+            )
+        {
+            return Err(correspondence_error(
+                expected_ordinal,
+                "V4/V5 correspondence does not encode aggregate result components",
+            ));
+        }
         let target = kernel_ir
             .functions
             .iter()
@@ -1789,6 +1806,93 @@ mod tests {
         MultiRootNeutralKirIdentityV2, MultiRootProofRosterInputsV2,
         MultiRootProofRosterRootInputV2,
     };
+
+    #[test]
+    fn multi_root_decoder_rejects_ordinary_aggregate_results() {
+        use fe2o3_kernel_ir::{Function, Signature};
+        use fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1;
+
+        // V2 requires two records; this decoder test selects only semantic root 1.
+        let roots =
+            [(1, "alpha", 0x31_u8), (7, "zeta", 0x32_u8)].map(|(semantic_root, name, identity)| {
+                MultiRootProofRosterRootInputV2 {
+                    semantic_root,
+                    semantic_root_identity: [identity; 32],
+                    kernel_binding: [identity; 32],
+                    source_rank: 1,
+                    workgroup: [1, 1, 1],
+                    logical_name: name,
+                    export_symbol: name,
+                    kernel_id: name,
+                    payload: b"x",
+                }
+            });
+        let roster = MultiRootProofRosterTranscriptV2::new(MultiRootProofRosterInputsV2 {
+            kind: MultiRootProofRosterKindV2::Correspondence,
+            semantic_mir_sha256: [0x11; 32],
+            neutral_kir: MultiRootNeutralKirIdentityV2::new(
+                MultiRootCanonicalKirVersionV2::V9,
+                4096,
+                [0x21; 32],
+            )
+            .unwrap(),
+            roster_identity: [0x51; 32],
+            canonical_kernel_order: &[0, 1],
+            roots: &roots,
+        })
+        .unwrap();
+        let mut kir = Module::new("aggregate_guard");
+        kir.functions
+            .push(Function::declaration("h", Signature::new(vec![], vec![])));
+        let frame = |out: &mut Vec<u8>, bytes: &[u8]| {
+            out.extend_from_slice(&u32::try_from(bytes.len()).unwrap().to_le_bytes());
+            out.extend_from_slice(bytes);
+        };
+        for width in [1, 2] {
+            let owner = compiler_proof_inputs_v3::ordinary_aggregate_result_owner_v1(0x20, width);
+            let semantic = owner.semantic();
+            assert_eq!(
+                semantic.functions()[0].abi().extern_abi(),
+                SemanticExternAbiV1::Rust
+            );
+            let report = analyze_semantic_u32_induction_no_overflow_v1(
+                semantic,
+                SemanticFunctionIdV1::from_index(1),
+            )
+            .unwrap();
+            let induction =
+                InertCanonicalSemanticU32InductionEvidenceV1::from_report(&report).unwrap();
+            for (function, role, symbol) in
+                [(0_u32, 2, b"h".as_slice()), (1, 1, b"alpha".as_slice())]
+            {
+                let mut payload = CORRESPONDENCE_MAGIC_V1.to_vec();
+                payload.extend_from_slice(&CORRESPONDENCE_VERSION_V1.to_le_bytes());
+                payload.extend_from_slice(&CORRESPONDENCE_POLICY_V1.to_le_bytes());
+                payload.extend_from_slice(&0_u32.to_le_bytes());
+                payload.extend_from_slice(&1_u32.to_le_bytes());
+                frame(&mut payload, induction.canonical_bytes());
+                payload.extend_from_slice(&1_u32.to_le_bytes());
+                payload.extend_from_slice(&function.to_le_bytes());
+                payload.push(role);
+                frame(&mut payload, symbol);
+                assert!(matches!(
+                    decode_and_validate_correspondence(
+                        &payload,
+                        0,
+                        roster.root(0).unwrap(),
+                        semantic,
+                        &kir
+                    ),
+                    Err(
+                        CompilerMultiRootProofValidationErrorV1::CorrespondencePayload {
+                            root: 0,
+                            detail: "V4/V5 correspondence does not encode aggregate result components",
+                        }
+                    )
+                ));
+            }
+        }
+    }
 
     fn roster(
         kind: MultiRootProofRosterKindV2,

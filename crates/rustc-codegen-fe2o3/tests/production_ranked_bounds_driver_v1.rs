@@ -965,6 +965,57 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
             "export ordinary Rust FnOnce closures",
         );
         assert!(exported.status.success(), "{}", exported.stderr);
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap();
+        let pair = vec![fe2o3_kernel_ir::Type::Scalar(fe2o3_kernel_ir::ScalarType::U32); 2];
+        let mut calls = 0;
+        for operation in module
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+        {
+            let fe2o3_kernel_ir::OperationKind::Call { callee, .. } = &operation.kind else {
+                continue;
+            };
+            if operation.results.len() != 2 {
+                continue;
+            }
+            let helper = module
+                .function(callee)
+                .expect("defined aggregate-result helper");
+            assert_eq!(helper.role, fe2o3_kernel_ir::FunctionRole::InternalHelper);
+            assert_eq!(helper.signature.results, pair);
+            assert!(
+                operation
+                    .results
+                    .iter()
+                    .zip(&pair)
+                    .all(|(value, ty)| &value.ty == ty)
+            );
+            let returns = helper
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator {
+                    Some(fe2o3_kernel_ir::Terminator::Return { values }) => Some(values),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!returns.is_empty());
+            assert!(returns.iter().all(|values| values.len() == 2));
+            calls += 1;
+        }
+        assert!(
+            calls > 0,
+            "ordinary tuple-result Call must survive optimization"
+        );
         for (seed, lhs, rhs) in [
             (13_u32, 29_u32, 11_u32),
             (0, 0, 0),

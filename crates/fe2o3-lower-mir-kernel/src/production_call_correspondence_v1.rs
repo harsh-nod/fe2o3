@@ -16,18 +16,71 @@ enum SemanticKirCallReturnKindV1 {
         call_operation: u32,
         destination_end: u32,
         destination: SemanticKirCallDestinationV1,
-        transport: Option<CallResultTransportV1>,
+        transport: CallComponentSpanV1,
     },
     Return {
-        input: Option<ValueId>,
-        conversion: Option<u32>,
+        components: CallComponentSpanV1,
     },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CallResultTransportV1 {
-    slot: u32,
-    conversion: Option<u32>,
+struct CallComponentSpanV1 {
+    first: u32,
+    count: u32,
+}
+
+impl CallComponentSpanV1 {
+    const EMPTY: Self = Self { first: 0, count: 0 };
+
+    fn range(self) -> Result<std::ops::Range<usize>, ProductionSemanticKirErrorV1> {
+        if self.count == 0 && self.first != 0 {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let end = self
+            .first
+            .checked_add(self.count)
+            .ok_or(ArgumentResourceV1::Arithmetic)?;
+        Ok(self.first as usize..end as usize)
+    }
+
+    fn rebase(&mut self, offset: u32) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.count != 0 {
+            self.first = self
+                .first
+                .checked_add(offset)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+        }
+        self.range()?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallResultComponentV1 {
+    Return {
+        input: ValueId,
+        conversion: Option<u32>,
+    },
+    Transport {
+        slot: u32,
+        conversion: Option<u32>,
+    },
+}
+
+impl SemanticKirCallReturnV1 {
+    fn components(self) -> CallComponentSpanV1 {
+        match self.kind {
+            SemanticKirCallReturnKindV1::Call { transport, .. } => transport,
+            SemanticKirCallReturnKindV1::Return { components } => components,
+        }
+    }
+
+    fn rebase_components(&mut self, offset: u32) -> Result<(), ProductionSemanticKirErrorV1> {
+        match &mut self.kind {
+            SemanticKirCallReturnKindV1::Call { transport, .. } => transport.rebase(offset),
+            SemanticKirCallReturnKindV1::Return { components } => components.rebase(offset),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,11 +96,18 @@ enum SemanticKirCallDestinationV1 {
     },
 }
 
-fn helper_result_shape_v1(
+struct HelperResultShapeV1 {
+    local: SemanticLocalIdV1,
+    source_type: SemanticTypeIdV1,
+    aggregate: bool,
+    components: Vec<ByValueKernelParameterComponentV1>,
+}
+
+fn helper_result_components_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     function_id: SemanticFunctionIdV1,
-) -> Result<(SemanticLocalIdV1, Option<Type>), ProductionSemanticKirErrorV1> {
+) -> Result<HelperResultShapeV1, ProductionSemanticKirErrorV1> {
     let mut returns = function
         .locals()
         .iter()
@@ -65,6 +125,7 @@ fn helper_result_shape_v1(
     if declaration.ty() != abi.source_output_type()
         || abi.return_value().ty() != abi.source_output_type()
         || abi.return_value().adjusted().is_some()
+        || abi.return_value().pointee_override().is_some()
     {
         return Err(unsupported(
             function_id.index(),
@@ -73,30 +134,19 @@ fn helper_result_shape_v1(
             "helper return ABI type changed",
         ));
     }
-    let ty = match abi.return_value().mode() {
-        SemanticAbiPassModeV1::Ignore
-            if types[abi.source_output_type().index() as usize]
-                .layout()
-                .size_bytes()
-                == Some(0) =>
-        {
-            None
-        }
-        SemanticAbiPassModeV1::Direct(_) => {
-            Some(lower_scalar_type(types, abi.source_output_type())?)
-        }
-        _ => {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper return is not one ignored zero-sized value or one direct scalar",
-            ));
-        }
-    };
+    let aggregate = !matches!(
+        types[abi.source_output_type().index() as usize].shape(),
+        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
+    );
+    let components = lower_by_value_abi_components_v1(types, function, abi.return_value())?;
     let local =
         u32::try_from(local).map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    Ok((SemanticLocalIdV1::from_index(local), ty))
+    Ok(HelperResultShapeV1 {
+        local: SemanticLocalIdV1::from_index(local),
+        source_type: abi.source_output_type(),
+        aggregate,
+        components,
+    })
 }
 
 fn call_operation_ordinal_v1(
@@ -118,15 +168,11 @@ impl SemanticFunctionLoweringV1<'_> {
         block: SemanticBlockIdV1,
         kind: SemanticKirCallReturnKindV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        if self.call_returns.rows.len() >= self.call_returns.requested {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
-        self.call_returns.rows.push(SemanticKirCallReturnV1 {
+        self.call_returns.sites.push(SemanticKirCallReturnV1 {
             correspondence_owner: self.correspondence_owner,
             semantic_function: self.semantic_function,
             semantic_block: block,
             kind,
-        });
-        Ok(())
+        })
     }
 }

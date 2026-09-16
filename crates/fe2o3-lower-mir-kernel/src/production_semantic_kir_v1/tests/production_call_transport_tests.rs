@@ -3,12 +3,61 @@ use fe2o3_mir_model::semantic_mir_v1::{SemanticSwitchTargetV1, SemanticSwitchTar
 use fe2o3_mir_model::{SsaBlockIdV1, SsaEdgeIdV1};
 
 fn diamond_owner() -> ProductionSemanticSsaOwnerV1 {
-    let original = call_owner(false, ArgumentCallResult::Scalar);
+    diamond_owner_from(call_owner(false, ArgumentCallResult::Scalar))
+}
+
+pub(super) fn diamond_owner_from(
+    original: ProductionSemanticSsaOwnerV1,
+) -> ProductionSemanticSsaOwnerV1 {
+    diamond_owner_with_prefix(original, None)
+}
+
+pub(super) fn diamond_owner_with_prefix(
+    original: ProductionSemanticSsaOwnerV1,
+    prefix: Option<u32>,
+) -> ProductionSemanticSsaOwnerV1 {
     let semantic = original.source_semantic();
     let mut functions = semantic.functions().to_vec();
     for (index, function) in functions.iter_mut().enumerate().skip(1) {
         let old = function.blocks();
         let source = function.source();
+        let mut locals = function.locals().to_vec();
+        let mut continuation = old[2].statements().to_vec();
+        let copy = |destination, input, ty| {
+            SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(destination), vec![], ty)
+                        .unwrap(),
+                    SemanticRvalueV1::new(
+                        ty,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(input), vec![], ty)
+                                .unwrap(),
+                        )),
+                    ),
+                )),
+            )
+        };
+        let prefix_statements = match prefix {
+            Some(2) => {
+                continuation.push(copy(3, 2, PAIR));
+                vec![copy(2, 3, PAIR)]
+            }
+            Some(4) => {
+                let observed = locals.len() as u32;
+                locals.push(SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([201 + index as u8; 32]),
+                    ZERO,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ));
+                continuation.push(copy(observed, 4, ZERO));
+                vec![copy(4, 4, ZERO)]
+            }
+            None => vec![],
+            _ => panic!("known prefix local"),
+        };
         let edge = |role, target| {
             SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
         };
@@ -56,18 +105,24 @@ fn diamond_owner() -> ProductionSemanticSsaOwnerV1 {
             SemanticBasicBlockV1::new(
                 old[1].identity(),
                 source,
-                vec![],
+                prefix_statements.clone(),
                 SemanticTerminatorV1::new(source, returning.clone()),
             )
             .unwrap(),
             SemanticBasicBlockV1::new(
                 SemanticBlockIdentityV1::from_sha256([49 + 20 * index as u8; 32]),
                 source,
-                vec![],
+                prefix_statements,
                 SemanticTerminatorV1::new(source, returning),
             )
             .unwrap(),
-            old[2].clone(),
+            SemanticBasicBlockV1::new(
+                old[2].identity(),
+                source,
+                continuation,
+                old[2].terminator().clone(),
+            )
+            .unwrap(),
         ];
         let replacement = SemanticFunctionDeclV1::new(
             function.identity(),
@@ -78,7 +133,7 @@ fn diamond_owner() -> ProductionSemanticSsaOwnerV1 {
             function.const_generic_arguments_identity(),
             source,
             function.abi().clone(),
-            function.locals().to_vec(),
+            locals,
             function.entry(),
             blocks,
         )
@@ -124,7 +179,7 @@ fn call_result_phi_transport_borrows_the_original_plan_and_exact_physical_slot()
                 &mut budget,
                 |view| {
                     let transport = view
-                        .result_transport()
+                        .result_transport(0)
                         .expect("diamond requires the result phi");
                     assert!(transport.conversion().is_none());
                     assert_eq!(transport.value(), view.operation().results[0].id);
@@ -186,7 +241,7 @@ fn call_result_transport_rejects_missing_wrong_slot_and_invalid_conversion() {
                 matches!(
                     kind,
                     SemanticKirCallReturnKindV1::Call {
-                        transport: Some(_),
+                        transport: CallComponentSpanV1 { count: 1, .. },
                         ..
                     }
                 )
@@ -194,10 +249,19 @@ fn call_result_transport_rejects_missing_wrong_slot_and_invalid_conversion() {
         else {
             panic!("missing phi anchor");
         };
-        match mutation {
-            0 => *transport = None,
-            1 => transport.as_mut().unwrap().slot = u32::MAX,
-            _ => transport.as_mut().unwrap().conversion = Some(*destination_end),
+        if mutation == 0 {
+            *transport = CallComponentSpanV1::EMPTY;
+        } else {
+            let CallResultComponentV1::Transport { slot, conversion } =
+                &mut changed.call_result_components[transport.first as usize]
+            else {
+                panic!("wrong component kind");
+            };
+            if mutation == 1 {
+                *slot = u32::MAX;
+            } else {
+                *conversion = Some(*destination_end);
+            }
         }
         check_both(
             &source,

@@ -51,7 +51,7 @@ pub enum ProductionCallDestinationV1<'a> {
     },
 }
 
-/// One applicable scalar result component on the caller's continuation edge.
+/// One applicable result component on the caller's continuation edge.
 #[derive(Clone, Copy, Debug)]
 pub struct ProductionCallResultTransportV1<'a> {
     slot: u32,
@@ -78,8 +78,7 @@ impl<'a> ProductionCallResultTransportV1<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct ProductionCallReturnV1<'a> {
     block: &'a BasicBlock,
-    input: Option<ValueId>,
-    conversion: Option<&'a Operation>,
+    components: &'a [CallResultComponentV1],
 }
 
 impl<'a> ProductionCallReturnV1<'a> {
@@ -87,13 +86,80 @@ impl<'a> ProductionCallReturnV1<'a> {
     pub const fn block(self) -> &'a BasicBlock {
         self.block
     }
-    /// None for ignored results; never fabricates a zero-sized KIR value.
-    pub const fn input(self) -> Option<ValueId> {
-        self.input
+    /// Number of physical components; ignored structural fields add no value.
+    pub const fn component_count(self) -> usize {
+        self.components.len()
+    }
+    /// Pre-conversion value for an explicit result ordinal in the callee namespace.
+    pub fn input(self, component: usize) -> Option<ValueId> {
+        match self.components.get(component)? {
+            CallResultComponentV1::Return { input, .. } => Some(*input),
+            _ => unreachable!("checked return component"),
+        }
     }
     /// Exact optional INDEX -> U64 return conversion.
-    pub const fn conversion(self) -> Option<&'a Operation> {
-        self.conversion
+    pub fn conversion(self, component: usize) -> Option<&'a Operation> {
+        match self.components.get(component)? {
+            CallResultComponentV1::Return { conversion, .. } => {
+                conversion.map(|ordinal| &self.block.operations[ordinal as usize])
+            }
+            _ => unreachable!("checked return component"),
+        }
+    }
+}
+
+/// Exact source result leaf paired with its caller's physical result definition.
+#[derive(Clone, Copy, Debug)]
+pub struct ProductionCallResultV1<'a> {
+    path: &'a [SemanticKirParameterProjectionV1],
+    semantic_type: SemanticTypeIdV1,
+    offset: u64,
+    value: &'a ValueDef,
+}
+
+impl<'a> ProductionCallResultV1<'a> {
+    /// Source field/array path, not an edge slot or byte offset.
+    pub const fn path(self) -> &'a [SemanticKirParameterProjectionV1] {
+        self.path
+    }
+    /// Exact scalar leaf type from the callee's source output.
+    pub const fn semantic_type(self) -> SemanticTypeIdV1 {
+        self.semantic_type
+    }
+    /// Byte offset in the source result layout, not the internal calling convention.
+    pub const fn byte_offset(self) -> u64 {
+        self.offset
+    }
+    /// Actual caller result with its function-local identity and KIR type.
+    pub const fn value(self) -> &'a ValueDef {
+        self.value
+    }
+}
+
+/// One result structure node, including zero-sized fields and composite parents.
+pub struct ProductionCallResultNodeV1<'a> {
+    semantic_type: SemanticTypeIdV1,
+    path: &'a [ProductionArgumentProjectionV1],
+    first: usize,
+    results: &'a [ValueDef],
+}
+
+impl ProductionCallResultNodeV1<'_> {
+    /// Exact source node type.
+    pub const fn semantic_type(&self) -> SemanticTypeIdV1 {
+        self.semantic_type
+    }
+    /// Borrowed source path valid for this visitor call only.
+    pub const fn path(&self) -> &[ProductionArgumentProjectionV1] {
+        self.path
+    }
+    /// Half-open physical result slots; zero nodes have an empty range.
+    pub fn physical_range(&self) -> std::ops::Range<usize> {
+        self.first..self.first + self.results.len()
+    }
+    /// Actual caller result definitions covered by this node.
+    pub const fn results(&self) -> &[ValueDef] {
+        self.results
     }
 }
 
@@ -119,6 +185,14 @@ impl<'a> ProductionCallReturnV1<'a> {
 ///     drop(saved);
 /// }
 /// ```
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionCallViewV1;
+/// fn escape_result_node(view: &mut ProductionCallViewV1<'_, '_>) {
+///     let mut saved = None;
+///     view.visit_result_nodes(|node| { saved = Some(node); Ok(()) }).unwrap();
+///     drop(saved);
+/// }
+/// ```
 pub struct ProductionCallViewV1<'s, 'w> {
     entry: ProductionArgumentViewV1<'s, 'w>,
     caller: &'s SemanticKirFunctionCorrespondenceV1,
@@ -126,10 +200,12 @@ pub struct ProductionCallViewV1<'s, 'w> {
     block: &'s BasicBlock,
     operation: &'s Operation,
     destination: ProductionCallDestinationV1<'s>,
-    transport: Option<ProductionCallResultTransportV1<'s>>,
+    transport: &'s [CallResultComponentV1],
+    result_shape: &'s HelperResultShapeV1,
     definitions: &'s [fe2o3_mir_model::SsaArgumentV1],
     arguments: &'s [fe2o3_mir_model::SsaArgumentV1],
     returns: &'s [SemanticKirCallReturnV1],
+    components: &'s [CallResultComponentV1],
 }
 
 impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
@@ -141,7 +217,7 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
     pub const fn source(&self) -> &'s SemanticDirectCallV1 {
         self.source
     }
-    /// Original actual Call, with zero or one scalar result.
+    /// Original actual Call, with the complete ordered scalar result vector.
     pub const fn operation(&self) -> &'s Operation {
         self.operation
     }
@@ -157,9 +233,84 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
     pub const fn destination(&self) -> ProductionCallDestinationV1<'s> {
         self.destination
     }
-    /// No immediate transport is not evidence that a scalar result was discarded.
-    pub const fn result_transport(&self) -> Option<ProductionCallResultTransportV1<'s>> {
-        self.transport
+    /// Number of physical results, excluding zero-sized structural fields.
+    pub const fn result_count(&self) -> usize {
+        self.operation.results.len()
+    }
+    /// Callee source output type, independent of physical component count.
+    pub const fn result_source_type(&self) -> SemanticTypeIdV1 {
+        self.result_shape.source_type
+    }
+    /// Original callee return local, not the caller's destination local.
+    pub const fn result_local(&self) -> SemanticLocalIdV1 {
+        self.result_shape.local
+    }
+    /// Distinguishes singleton/zero aggregates from scalar source results.
+    pub const fn result_is_aggregate(&self) -> bool {
+        self.result_shape.aggregate
+    }
+    /// Constant-time result-slot lookup, including source path/layout identity.
+    pub fn result_component(&self, component: usize) -> Option<ProductionCallResultV1<'s>> {
+        let (path, semantic_type, _, offset, _) = self.result_shape.components.get(component)?;
+        Some(ProductionCallResultV1 {
+            path,
+            semantic_type: *semantic_type,
+            offset: *offset,
+            value: &self.operation.results[component],
+        })
+    }
+    /// Looks up an explicit result ordinal, not an edge slot. Missing immediate
+    /// transport is not evidence that this result was discarded.
+    pub fn result_transport(
+        &self,
+        component: usize,
+    ) -> Option<ProductionCallResultTransportV1<'s>> {
+        let CallResultComponentV1::Transport { slot, conversion } =
+            *self.transport.get(component)?
+        else {
+            unreachable!("checked transport component");
+        };
+        let Some(Terminator::Branch { arguments, .. }) = &self.block.terminator else {
+            unreachable!("checked continuation");
+        };
+        Some(ProductionCallResultTransportV1 {
+            slot,
+            value: arguments[slot as usize],
+            conversion: conversion.map(|ordinal| &self.block.operations[ordinal as usize]),
+        })
+    }
+    /// Visits the checked result structure, including every ignored node.
+    pub fn visit_result_nodes(
+        &mut self,
+        mut visit: impl for<'n> FnMut(
+            ProductionCallResultNodeV1<'n>,
+        ) -> Result<(), ProductionSemanticKirErrorV1>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let floor = self.entry.budget.storage();
+        let result = (|| {
+            let types = self.entry.data.semantic.types();
+            prepay_typed_shape_v1(types, self.result_shape.source_type, 0, self.entry.budget)?;
+            append_parameter_structure_v1(
+                types,
+                self.result_shape.source_type,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut 0,
+                0,
+                &mut |node| {
+                    visit(ProductionCallResultNodeV1 {
+                        semantic_type: node.ty,
+                        path: node.path,
+                        first: node.physical.start,
+                        results: &self.operation.results[node.physical],
+                    })
+                },
+            )
+        })();
+        self.entry
+            .budget
+            .release_storage(self.entry.budget.storage() - floor)?;
+        result
     }
     /// Original source-plan definitions on the returning edge, including zero-width locals.
     pub fn edge_definitions(
@@ -231,15 +382,13 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
                 .returns
                 .binary_search_by_key(&block.id.0, |row| row.semantic_block.index())
                 .expect("checked return coverage");
-            let SemanticKirCallReturnKindV1::Return { input, conversion } =
-                self.returns[index].kind
+            let SemanticKirCallReturnKindV1::Return { components } = self.returns[index].kind
             else {
                 unreachable!("checked return anchor");
             };
             visit(ProductionCallReturnV1 {
                 block,
-                input,
-                conversion: conversion.map(|ordinal| &block.operations[ordinal as usize]),
+                components: call_components_v1(self.components, components)?,
             })?;
         }
         Ok(())
@@ -247,7 +396,7 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
 }
 
 impl ProductionSemanticKirOwnerV1 {
-    /// Borrows a checked call, its complete callee entry ABI and zero/scalar results.
+    /// Borrows a checked call, its complete callee entry ABI and result components.
     ///
     /// ```compile_fail
     /// use fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1;
@@ -290,6 +439,19 @@ impl ProductionPreRankedKirOwnerV1 {
     ///     let mut saved = None;
     ///     owner.with_checked_call_v1(f, f, b, budget, |view| {
     ///         view.visit_returns(|site| { saved = Some(site); Ok(()) })
+    ///     }).unwrap();
+    ///     drop(saved);
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionIdV1 as F, SemanticBlockIdV1 as B};
+    /// fn escape_result(owner: &ProductionPreRankedKirOwnerV1, budget: &mut Budget<'_>, f: F, b: B) {
+    ///     let mut saved = None;
+    ///     owner.with_checked_call_v1(f, f, b, budget, |view| {
+    ///         saved = Some(view.result_component(0).unwrap());
+    ///         Ok(())
     ///     }).unwrap();
     ///     drop(saved);
     /// }
@@ -353,6 +515,7 @@ fn with_call_view_v1<'w, R>(
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
     let semantic = owner.source_semantic();
     let index_floor = budget.storage();
+    // Both immutable owner constructors seal global component ownership once.
     let targets = CallTargetIndexV1::new(module, &rows.lowered_functions, budget)?;
     let (caller, target) = targets.source(selected.0, selected.1, budget)?;
     budget.charge_work(argument_product_v1(
@@ -381,6 +544,7 @@ fn with_call_view_v1<'w, R>(
         target,
         &targets,
         caller_rows,
+        &rows.call_result_components,
         caller_spans,
         budget,
     )?;
@@ -420,6 +584,7 @@ fn with_call_view_v1<'w, R>(
         callee_target,
         &targets,
         returns,
+        &rows.call_result_components,
         callee_spans,
         budget,
     )?;
@@ -446,18 +611,7 @@ fn with_call_view_v1<'w, R>(
             store: &block.operations[destination_end as usize - 1],
         },
     };
-    let transport = transport.map(|transport| {
-        let Some(Terminator::Branch { arguments, .. }) = &block.terminator else {
-            unreachable!("checked continuation");
-        };
-        ProductionCallResultTransportV1 {
-            slot: transport.slot,
-            value: arguments[transport.slot as usize],
-            conversion: transport
-                .conversion
-                .map(|ordinal| &block.operations[ordinal as usize]),
-        }
-    });
+    let transport = call_components_v1(&rows.call_result_components, transport)?;
     let plan = owner
         .plan_for_function(selected.1)
         .ok_or_else(mismatch)?
@@ -467,6 +621,15 @@ fn with_call_view_v1<'w, R>(
     let arguments = plan.edge_arguments(edge).ok_or_else(mismatch)?;
     drop(targets);
     budget.release_storage(budget.storage() - index_floor)?;
+    let result_function = &semantic.functions()[callee.index() as usize];
+    budget.charge_work(result_function.locals().len())?;
+    prepay_typed_shape_v1(
+        semantic.types(),
+        result_function.abi().source_output_type(),
+        0,
+        budget,
+    )?;
+    let result_shape = helper_result_components_v1(semantic.types(), result_function, *callee)?;
     budget.charge_work(argument_sum_v1(&[
         rows.parameter_bindings.len(),
         rows.parameter_component_bindings.len(),
@@ -502,9 +665,11 @@ fn with_call_view_v1<'w, R>(
                 operation,
                 destination,
                 transport,
+                result_shape: &result_shape,
                 definitions,
                 arguments,
                 returns,
+                components: &rows.call_result_components,
             };
             use_view(&mut view)
         },

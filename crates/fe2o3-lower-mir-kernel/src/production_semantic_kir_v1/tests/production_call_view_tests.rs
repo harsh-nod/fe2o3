@@ -3,6 +3,9 @@ use super::*;
 #[path = "production_call_transport_tests.rs"]
 mod transport_tests;
 
+#[path = "production_call_result_tests.rs"]
+mod result_tests;
+
 #[test]
 fn call_result_store_substitution_rejects_even_when_kir_types_still_verify() {
     for result in [ArgumentCallResult::Retained, ArgumentCallResult::Projected] {
@@ -149,10 +152,15 @@ fn coordinated_return_graph_and_anchor_substitution_still_requires_full_replay()
     );
     for row in &mut rows.call_returns {
         if row.semantic_function.index() == 0 {
-            let SemanticKirCallReturnKindV1::Return { input, .. } = &mut row.kind else {
+            let SemanticKirCallReturnKindV1::Return { components } = row.kind else {
                 unreachable!();
             };
-            *input = Some(replacement);
+            for component in &mut rows.call_result_components[components.range().unwrap()] {
+                let CallResultComponentV1::Return { input, .. } = component else {
+                    unreachable!();
+                };
+                *input = replacement;
+            }
         }
     }
     // Agreement between a graph and its anchors is deliberately insufficient.
@@ -243,15 +251,16 @@ fn inspect(
             assert!(
                 matches!(store.kind, OperationKind::Store { value, .. } if value == view.operation().results[0].id)
             );
-            assert!(view.result_transport().is_none());
+            assert!(view.result_transport(0).is_none());
         }
         _ => panic!("destination classification changed"),
     }
     let mut returns = 0;
     view.visit_returns(|site| {
         returns += 1;
-        assert_eq!(site.input().is_some(), scalar);
-        assert!(site.conversion().is_none());
+        assert_eq!(site.component_count(), usize::from(scalar));
+        assert_eq!(site.input(0).is_some(), scalar);
+        assert!(site.conversion(0).is_none());
         assert!(matches!(
             site.block().terminator,
             Some(Terminator::Return { .. })
@@ -428,15 +437,15 @@ fn production_call_checker_rejects_missing_duplicate_foreign_and_changed_anchors
                     }
                 }
                 8 => {
-                    let SemanticKirCallReturnKindV1::Return { input, .. } =
+                    let SemanticKirCallReturnKindV1::Return { components } =
                         &mut changed.call_returns[returned].kind
                     else {
                         unreachable!();
                     };
-                    *input = if input.is_some() {
-                        None
+                    *components = if components.count != 0 {
+                        CallComponentSpanV1::EMPTY
                     } else {
-                        Some(ValueId(0))
+                        CallComponentSpanV1 { first: 0, count: 1 }
                     };
                 }
                 _ => unreachable!(),

@@ -1,11 +1,11 @@
 // Requested logical payload, excluding allocator excess and immutable inputs.
-// The construction ledger is shared across functions and root merges.
-struct CallReturnBufferV1 {
-    rows: Vec<SemanticKirCallReturnV1>,
+// Site headers and typed components share one construction ledger.
+struct CallPayloadBufferV1<T> {
+    rows: Vec<T>,
     requested: usize,
 }
 
-impl CallReturnBufferV1 {
+impl<T> CallPayloadBufferV1<T> {
     fn empty() -> Self {
         Self {
             rows: Vec::new(),
@@ -13,21 +13,10 @@ impl CallReturnBufferV1 {
         }
     }
 
-    fn for_function(
-        function: &SemanticFunctionDeclV1,
+    fn new(
+        count: usize,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        budget.charge_work(function.blocks().len())?;
-        let count = function
-            .blocks()
-            .iter()
-            .filter(|block| {
-                matches!(
-                    block.terminator().kind(),
-                    SemanticTerminatorKindV1::Call(_) | SemanticTerminatorKindV1::Return
-                )
-            })
-            .count();
         let bytes = Self::bytes(count)?;
         budget.reserve_storage(bytes)?;
         match argument_vec_v1(count) {
@@ -42,7 +31,7 @@ impl CallReturnBufferV1 {
         }
     }
 
-    fn from_box(rows: Box<[SemanticKirCallReturnV1]>) -> Self {
+    fn from_box(rows: Box<[T]>) -> Self {
         Self {
             requested: rows.len(),
             rows: rows.into_vec(),
@@ -50,7 +39,15 @@ impl CallReturnBufferV1 {
     }
 
     fn bytes(count: usize) -> Result<usize, ArgumentResourceV1> {
-        argument_product_v1(count, std::mem::size_of::<SemanticKirCallReturnV1>())
+        argument_product_v1(count, std::mem::size_of::<T>())
+    }
+
+    fn push(&mut self, row: T) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.rows.len() >= self.requested {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        self.rows.push(row);
+        Ok(())
     }
 
     fn append(
@@ -71,7 +68,6 @@ impl CallReturnBufferV1 {
                     .min(limit)
                     .max(total);
                 budget.charge_work(self.rows.len())?;
-                // Old and new requested backing storage can coexist during growth.
                 budget.reserve_storage(Self::bytes(next)?)?;
                 self.rows
                     .try_reserve_exact(next - self.rows.len())
@@ -99,19 +95,197 @@ impl CallReturnBufferV1 {
     fn into_box(
         self,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<Box<[SemanticKirCallReturnV1]>, ProductionSemanticKirErrorV1> {
+    ) -> Result<Box<[T]>, ProductionSemanticKirErrorV1> {
         let floor = budget.storage();
         let old = Self::bytes(self.requested)?;
         let result = (|| {
             let retained = Self::bytes(self.rows.len())?;
             budget.charge_work(self.rows.len())?;
             budget.reserve_storage(retained)?;
-            // Quota denial and Vec growth are recoverable. As with other owned
-            // correspondence slices, allocator failure during Box compaction
-            // follows the standard library's process-level allocation policy.
+            // Box compaction follows the standard library's allocation-failure policy.
             let rows = self.rows.into_boxed_slice();
             budget.release_storage(old)?;
             Ok(rows)
+        })();
+        if result.is_err() {
+            let retained = floor
+                .checked_sub(old)
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            budget.release_storage(
+                budget
+                    .storage()
+                    .checked_sub(retained)
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?;
+        }
+        result
+    }
+}
+
+struct CallReturnBufferV1 {
+    sites: CallPayloadBufferV1<SemanticKirCallReturnV1>,
+    components: CallPayloadBufferV1<CallResultComponentV1>,
+}
+
+impl CallReturnBufferV1 {
+    fn empty() -> Self {
+        Self {
+            sites: CallPayloadBufferV1::empty(),
+            components: CallPayloadBufferV1::empty(),
+        }
+    }
+
+    fn for_function(
+        function: &SemanticFunctionDeclV1,
+        callables: &[SemanticCallableDeclV1],
+        signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
+        return_width: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        budget.charge_work(function.blocks().len())?;
+        let lookup = argument_product_v1(
+            signatures.len().checked_ilog2().unwrap_or(0) as usize + 2,
+            24,
+        )?;
+        let (mut count, mut components) = (0_usize, 0_usize);
+        for block in function.blocks() {
+            let width = match block.terminator().kind() {
+                SemanticTerminatorKindV1::Return => return_width,
+                SemanticTerminatorKindV1::Call(call) => {
+                    if let Some(SemanticCallableDeclV1::Defined { function }) =
+                        callables.get(call.callee().index() as usize)
+                    {
+                        budget.charge_work(lookup)?;
+                        // Unreachable targets need not belong to the retained helper closure.
+                        signatures
+                            .get(function)
+                            .map_or(0, |signature| signature.result_types.len())
+                    } else {
+                        0
+                    }
+                }
+                _ => continue,
+            };
+            count = argument_sum_v1(&[count, 1])?;
+            components = argument_sum_v1(&[components, width])?;
+        }
+        if components > u32::MAX as usize {
+            return Err(ArgumentResourceV1::Arithmetic.into());
+        }
+        budget.charge_work(argument_product_v1(components, 32)?)?;
+        let floor = budget.storage();
+        let result = (|| {
+            Ok(Self {
+                sites: CallPayloadBufferV1::new(count, budget)?,
+                components: CallPayloadBufferV1::new(components, budget)?,
+            })
+        })();
+        if result.is_err() {
+            budget.release_storage(budget.storage() - floor)?;
+        }
+        result
+    }
+
+    fn from_box(
+        sites: Box<[SemanticKirCallReturnV1]>,
+        components: Box<[CallResultComponentV1]>,
+    ) -> Self {
+        Self {
+            sites: CallPayloadBufferV1::from_box(sites),
+            components: CallPayloadBufferV1::from_box(components),
+        }
+    }
+
+    fn bytes(sites: usize, components: usize) -> Result<usize, ArgumentResourceV1> {
+        argument_sum_v1(&[
+            CallPayloadBufferV1::<SemanticKirCallReturnV1>::bytes(sites)?,
+            CallPayloadBufferV1::<CallResultComponentV1>::bytes(components)?,
+        ])
+    }
+
+    fn requested_bytes(&self) -> Result<usize, ArgumentResourceV1> {
+        Self::bytes(self.sites.requested, self.components.requested)
+    }
+
+    fn component_span(
+        &self,
+        first: usize,
+    ) -> Result<CallComponentSpanV1, ProductionSemanticKirErrorV1> {
+        let count = self
+            .components
+            .rows
+            .len()
+            .checked_sub(first)
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        if count == 0 {
+            return Ok(CallComponentSpanV1::EMPTY);
+        }
+        Ok(CallComponentSpanV1 {
+            first: u32::try_from(first).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+            count: u32::try_from(count).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+        })
+    }
+
+    fn append(
+        &mut self,
+        mut source: Self,
+        limit: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let floor = budget.storage();
+        let old = self.requested_bytes()?;
+        let consumed = source.requested_bytes()?;
+        let result = (|| {
+            enforce_limit(
+                ProductionSemanticKirResourceV1::Blocks,
+                argument_sum_v1(&[self.sites.rows.len(), source.sites.rows.len()])?,
+                limit,
+            )?;
+            budget.charge_work(source.sites.rows.len())?;
+            let offset = u32::try_from(self.components.rows.len())
+                .map_err(|_| ArgumentResourceV1::Arithmetic)?;
+            u32::try_from(argument_sum_v1(&[
+                self.components.rows.len(),
+                source.components.rows.len(),
+            ])?)
+            .map_err(|_| ArgumentResourceV1::Arithmetic)?;
+            for row in &mut source.sites.rows {
+                row.rebase_components(offset)?;
+            }
+            self.components
+                .append(source.components, u32::MAX as usize, budget)?;
+            let result = self.sites.append(source.sites, limit, budget);
+            if result.is_err() {
+                self.components.rows.truncate(offset as usize);
+            }
+            result
+        })();
+        let retained = floor
+            .checked_sub(old)
+            .and_then(|n| n.checked_sub(consumed))
+            .and_then(|n| n.checked_add(self.requested_bytes().ok()?))
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        budget.release_storage(
+            budget
+                .storage()
+                .checked_sub(retained)
+                .ok_or(ArgumentResourceV1::Accounting)?,
+        )?;
+        result
+    }
+
+    fn into_box(
+        self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<
+        (Box<[SemanticKirCallReturnV1]>, Box<[CallResultComponentV1]>),
+        ProductionSemanticKirErrorV1,
+    > {
+        let floor = budget.storage();
+        let old = self.requested_bytes()?;
+        let result = (|| {
+            let components = self.components.into_box(budget)?;
+            Ok((self.sites.into_box(budget)?, components))
         })();
         if result.is_err() {
             let retained = floor
@@ -131,8 +305,8 @@ impl CallReturnBufferV1 {
         &mut self,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ArgumentResourceV1> {
-        budget.charge_work(argument_product_v1(self.rows.len(), 128)?)?;
-        sort_correspondence_keys_v1(&mut self.rows, 31, &|row| {
+        budget.charge_work(argument_product_v1(self.sites.rows.len(), 128)?)?;
+        sort_correspondence_keys_v1(&mut self.sites.rows, 31, &|row| {
             u64::from(row.semantic_block.index())
         });
         Ok(())
@@ -146,32 +320,32 @@ impl CallReturnBufferV1 {
         if functions.len() > u32::MAX as usize {
             return Err(ArgumentResourceV1::Arithmetic.into());
         }
-        // Pinned BTreeMap nodes contain at most 11 keys, compared linearly.
-        // Allow two identity comparisons per key and extra traversal work.
         let lookup = argument_product_v1(
-            argument_sum_v1(&[functions.len().checked_ilog2().unwrap_or(0) as usize, 2])?,
+            functions.len().checked_ilog2().unwrap_or(0) as usize + 2,
             24,
         )?;
         budget.charge_work(argument_product_v1(
-            self.rows.len(),
+            self.sites.rows.len(),
             argument_sum_v1(&[lookup, 196])?,
         )?)?;
         let floor = budget.storage();
         let result = (|| {
             budget.reserve_storage(argument_product_v1(
-                self.rows.len(),
+                self.sites.rows.len(),
                 std::mem::size_of::<(u64, SemanticKirCallReturnV1)>(),
             )?)?;
-            let mut indexed = argument_vec_v1(self.rows.len())?;
-            for row in &self.rows {
+            let mut indexed = argument_vec_v1(self.sites.rows.len())?;
+            for row in &self.sites.rows {
                 let ordinal = functions
                     .get(&(row.correspondence_owner, row.semantic_function))
                     .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                let key = ((*ordinal as u64) << 32) | u64::from(row.semantic_block.index());
-                indexed.push((key, *row));
+                indexed.push((
+                    ((*ordinal as u64) << 32) | u64::from(row.semantic_block.index()),
+                    *row,
+                ));
             }
             sort_correspondence_keys_v1(&mut indexed, 63, &|row| row.0);
-            for (row, (_, sorted)) in self.rows.iter_mut().zip(indexed) {
+            for (row, (_, sorted)) in self.sites.rows.iter_mut().zip(indexed) {
                 *row = sorted;
             }
             Ok(())

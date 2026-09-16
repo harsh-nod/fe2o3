@@ -17,78 +17,92 @@ impl SemanticFunctionLoweringV1<'_> {
                     "function return local is missing",
                 )
             })?;
-        let mut input = None;
-        let mut conversion = None;
-        let terminator = match self.result_types.as_slice() {
-            [] => Ok(Terminator::Return { values: Vec::new() }),
-            [expected] => {
-                let expected = expected.clone();
-                let binding = self
-                    .locals
-                    .get(return_local)
-                    .and_then(Option::as_ref)
-                    .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                        function: self.semantic_function.index(),
-                        block: block.index(),
-                        statement: None,
-                        local: return_local as u32,
-                    })?;
-                let (value, actual) = binding.clone().value().map_err(|detail| {
+        if self
+            .retained_local_slots
+            .contains_key(&(return_local as u32))
+            && !matches!(
+                self.types[self.function.locals()[return_local].ty().index() as usize].shape(),
+                SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
+            )
+        {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "aggregate helper return requires a whole SSA local",
+            ));
+        }
+        let inputs = if self.result_types.is_empty() {
+            Vec::new()
+        } else {
+            self.locals
+                .get(return_local)
+                .and_then(Option::as_ref)
+                .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                    function: self.semantic_function.index(),
+                    block: block.index(),
+                    statement: None,
+                    local: return_local as u32,
+                })?
+                .values()
+                .map_err(|detail| {
                     unsupported(
                         self.semantic_function.index(),
                         Some(block.index()),
                         None,
                         detail,
                     )
-                })?;
-                input = Some(value);
-                let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
-                    conversion = Some(call_operation_ordinal_v1(operations, block)?);
-                    self.emit(
-                        operations,
-                        expected.clone(),
-                        OperationKind::Cast {
-                            kind: CastKind::Bitcast,
-                            value,
-                            to: expected,
-                        },
-                    )?
-                    .value()
-                    .map_err(|detail| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            detail,
-                        )
-                    })?
-                    .0
+                })?
+        };
+        if inputs.len() != self.result_types.len() {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let first = self.call_returns.components.rows.len();
+        let mut returned = argument_vec_v1(inputs.len())?;
+        for (slot, (input, actual)) in inputs.into_iter().enumerate() {
+            let expected = self.result_types[slot].clone();
+            let (value, conversion) =
+                if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
+                    let ordinal = call_operation_ordinal_v1(operations, block)?;
+                    let value = self
+                        .emit(
+                            operations,
+                            expected.clone(),
+                            OperationKind::Cast {
+                                kind: CastKind::Bitcast,
+                                value: input,
+                                to: expected,
+                            },
+                        )?
+                        .value()
+                        .map_err(|detail| {
+                            unsupported(
+                                self.semantic_function.index(),
+                                Some(block.index()),
+                                None,
+                                detail,
+                            )
+                        })?
+                        .0;
+                    (value, Some(ordinal))
                 } else if actual == expected {
-                    value
+                    (input, None)
                 } else {
                     return Err(unsupported(
                         self.semantic_function.index(),
                         Some(block.index()),
                         None,
-                        "helper return local type changed",
+                        "helper return local component type changed",
                     ));
                 };
-                Ok(Terminator::Return {
-                    values: vec![value],
-                })
-            }
-            _ => Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "helper has more than one lowered return value",
-            )),
-        }?;
-        self.record_call_return_v1(
-            block,
-            SemanticKirCallReturnKindV1::Return { input, conversion },
-        )?;
-        Ok(terminator)
+            self.call_returns
+                .components
+                .push(CallResultComponentV1::Return { input, conversion })?;
+            returned.push(value);
+        }
+        let components = self.call_returns.component_span(first)?;
+        self.record_call_return_v1(block, SemanticKirCallReturnKindV1::Return { components })?;
+        Ok(Terminator::Return { values: returned })
     }
 
     fn lower_defined_call(
@@ -132,13 +146,40 @@ impl SemanticFunctionLoweringV1<'_> {
             })?;
         if call.arguments().len() != signature.parameter_semantic_types.len()
             || signature.call_arguments.len() != signature.parameter_types.len()
-            || signature.result_types.len() > 1
         {
             return Err(unsupported(
                 self.semantic_function.index(),
                 Some(block.index()),
                 None,
                 "defined call argument or result arity changed",
+            ));
+        }
+        let destination = call.destination().ok_or_else(|| {
+            unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "returning defined call has no continuation destination",
+            )
+        })?;
+        if destination.place().ty() != signature.result_semantic_type {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let aggregate = !matches!(
+            self.types[signature.result_semantic_type.index() as usize].shape(),
+            SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
+        );
+        if aggregate
+            && (!destination.place().projections().is_empty()
+                || self
+                    .retained_local_slots
+                    .contains_key(&destination.place().local().index()))
+        {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "aggregate helper result requires a whole SSA destination",
             ));
         }
         let prepared_destination = match call.destination() {
@@ -265,47 +306,19 @@ impl SemanticFunctionLoweringV1<'_> {
             }
             arguments.push(value);
         }
-        let destination = call.destination().ok_or_else(|| {
-            unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "returning defined call has no continuation destination",
-            )
-        })?;
         let call_operation = call_operation_ordinal_v1(operations, block)?;
-        let binding = match signature.result_types.as_slice() {
-            [] => {
-                self.push_operation(operations, || {
-                    Operation::new(
-                        Vec::new(),
-                        OperationKind::Call {
-                            callee: callee_id,
-                            arguments,
-                        },
-                    )
-                })?;
-                SemanticValueBindingV1::Unit
-            }
-            [result] => self.emit(
-                operations,
-                result.clone(),
-                OperationKind::Call {
-                    callee: callee_id,
-                    arguments,
-                },
-            )?,
-            _ => unreachable!("bounded helper plan admits at most one result"),
-        };
-        let watch = match (
-            &destination_witness,
-            operations[call_operation as usize].results.as_slice(),
-        ) {
-            (SemanticKirCallDestinationV1::Local, [result]) => {
-                Some((destination.place().local(), result.id))
-            }
-            _ => None,
-        };
+        let results = self.emit_results(
+            operations,
+            signature.result_types,
+            OperationKind::Call {
+                callee: callee_id,
+                arguments,
+            },
+        )?;
+        let binding =
+            binding_from_value_defs(self.types, signature.result_semantic_type, &results)?;
+        let watch = matches!(destination_witness, SemanticKirCallDestinationV1::Local)
+            .then_some((destination.place().local(), results.as_slice()));
         self.finish_call_destination_v1(
             block,
             destination.place(),

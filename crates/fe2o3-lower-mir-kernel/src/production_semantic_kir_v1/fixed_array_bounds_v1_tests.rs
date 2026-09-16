@@ -156,7 +156,8 @@ impl Fixture {
             64,
             PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 64)),
             None,
-            CallReturnBufferV1::for_function(&self.function, &mut budget).unwrap(),
+            CallReturnBufferV1::for_function(&self.function, &[], &BTreeMap::new(), 0, &mut budget)
+                .unwrap(),
         )
         .unwrap()
     }

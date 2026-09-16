@@ -4,6 +4,8 @@ const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
 const ZERO: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
 const TUPLE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 
+include!("production_call_result_fixture.rs");
+
 fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemanticSsaOwnerV1 {
     argument_owner_shape(
         expanded,
@@ -70,13 +72,37 @@ fn argument_call_owner(
     result_mode: ArgumentCallResult,
     two_calls: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
-    let scalar_result = result_mode != ArgumentCallResult::Zero;
+    argument_call_owner_with_result(
+        expanded,
+        shape,
+        shared,
+        deep_zero,
+        fixed,
+        result_mode,
+        two_calls,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn argument_call_owner_with_result(
+    expanded: bool,
+    shape: ArgumentTupleShape,
+    shared: bool,
+    deep_zero: bool,
+    fixed: bool,
+    result_mode: ArgumentCallResult,
+    two_calls: bool,
+    result_shape: Option<ArgumentHelperResultShape>,
+) -> ProductionSemanticSsaOwnerV1 {
+    let scalar_result = result_mode != ArgumentCallResult::Zero
+        && result_shape != Some(ArgumentHelperResultShape::Zero);
+    let result_destination = scalar_result || result_shape.is_some();
     let private_result = matches!(
         result_mode,
         ArgumentCallResult::Retained | ArgumentCallResult::Projected
     );
     assert!(!scalar_result || shape == ArgumentTupleShape::Mixed);
-    let result_ty = if scalar_result { U32 } else { UNIT };
     let empty = matches!(
         shape,
         ArgumentTupleShape::EmptyUnit | ArgumentTupleShape::EmptyTuple
@@ -204,6 +230,11 @@ fn argument_call_owner(
             ));
         }
     }
+    let result_ty = match result_shape {
+        Some(shape) => argument_result_declaration(shape, &mut types),
+        None if scalar_result => U32,
+        None => UNIT,
+    };
     let reference_ty = SemanticTypeIdV1::from_index(types.len() as u32);
     if private_result {
         types.push(call_result_reference_type());
@@ -288,7 +319,10 @@ fn argument_call_owner(
         },
         result_ty,
         adjusted,
-        value(result_ty),
+        result_shape.map_or_else(
+            || value(result_ty),
+            |shape| argument_result_abi(shape, result_ty, attrs),
+        ),
     )
     .unwrap()
     .with_source_argument_ownership(vec![
@@ -320,27 +354,49 @@ fn argument_call_owner(
             ));
         }
     }
-    let assign_use = |destination, operand| {
+    let assign_use = |destination: SemanticPlaceV1, operand| {
+        let ty = destination.ty();
         SemanticStatementV1::new(
             source,
             SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                 destination,
-                SemanticRvalueV1::new(U32, SemanticRvalueKindV1::Use(operand)),
+                SemanticRvalueV1::new(ty, SemanticRvalueKindV1::Use(operand)),
             )),
         )
     };
-    let helper_statements = if scalar_result {
-        let from = if expanded {
-            place(1 + u32::from(fixed), U32)
+    let from = if expanded {
+        place(1 + u32::from(fixed), U32)
+    } else {
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1 + u32::from(fixed)),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(2), U32).unwrap()],
+            U32,
+        )
+        .unwrap()
+    };
+    let helper_statements = if let Some(shape) = result_shape {
+        let pair_from = if expanded {
+            place(3 + u32::from(fixed), PAIR)
         } else {
             SemanticPlaceV1::new(
                 SemanticLocalIdV1::from_index(1 + u32::from(fixed)),
-                vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(2), U32).unwrap()],
-                U32,
+                vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), PAIR).unwrap()],
+                PAIR,
             )
             .unwrap()
         };
-        vec![assign_use(place(0, U32), SemanticOperandV1::Copy(from))]
+        vec![SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(0, result_ty),
+                argument_result_value(shape, result_ty, from.clone(), pair_from),
+            )),
+        )]
+    } else if scalar_result {
+        vec![assign_use(
+            place(0, U32),
+            SemanticOperandV1::Copy(from.clone()),
+        )]
     } else {
         vec![]
     };
@@ -358,7 +414,7 @@ fn argument_call_owner(
                     26,
                     helper_statements,
                     SemanticTerminatorKindV1::SwitchInt {
-                        discriminant: SemanticOperandV1::Copy(place(0, U32)),
+                        discriminant: SemanticOperandV1::Copy(from),
                         targets: SemanticSwitchTargetsV1::new(
                             vec![SemanticSwitchTargetV1::new(
                                 0,
@@ -420,8 +476,8 @@ fn argument_call_owner(
                 }),
         );
         locals.push(local(tag + 6, TUPLE, SemanticLocalRoleV1::Temporary));
-        if scalar_result {
-            locals.push(local(tag + 10, U32, SemanticLocalRoleV1::Temporary));
+        if result_destination {
+            locals.push(local(tag + 10, result_ty, SemanticLocalRoleV1::Temporary));
         }
         if private_result {
             locals.push(local(
@@ -431,8 +487,8 @@ fn argument_call_owner(
             ));
         }
         let observed = locals.len() as u32;
-        if scalar_result {
-            locals.push(local(tag + 12, U32, SemanticLocalRoleV1::Temporary));
+        if result_destination {
+            locals.push(local(tag + 12, result_ty, SemanticLocalRoleV1::Temporary));
         }
         let tuple_value = if shape != ArgumentTupleShape::Mixed {
             SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(SemanticConstantV1::new(
@@ -497,17 +553,22 @@ fn argument_call_owner(
                 )),
             ));
         }
-        let destination = match result_mode {
-            ArgumentCallResult::Zero => place(0, UNIT),
-            ArgumentCallResult::Scalar | ArgumentCallResult::Retained => place(6, U32),
-            ArgumentCallResult::Projected => SemanticPlaceV1::new(
-                SemanticLocalIdV1::from_index(7),
-                vec![
-                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap(),
-                ],
-                U32,
-            )
-            .unwrap(),
+        let destination = if result_shape.is_some() {
+            place(6, result_ty)
+        } else {
+            match result_mode {
+                ArgumentCallResult::Zero => place(0, UNIT),
+                ArgumentCallResult::Scalar | ArgumentCallResult::Retained => place(6, U32),
+                ArgumentCallResult::Projected => SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(7),
+                    vec![
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32)
+                            .unwrap(),
+                    ],
+                    U32,
+                )
+                .unwrap(),
+            }
         };
         let call = |target| {
             SemanticDirectCallV1::new_callable(
@@ -545,10 +606,10 @@ fn argument_call_owner(
         }
         blocks.push(block(
             if two_calls { tag + 13 } else { tag + 8 },
-            if scalar_result {
+            if result_destination {
                 vec![assign_use(
-                    place(observed, U32),
-                    SemanticOperandV1::Copy(place(6, U32)),
+                    place(observed, result_ty),
+                    SemanticOperandV1::Copy(place(6, result_ty)),
                 )]
             } else {
                 vec![]
@@ -597,7 +658,7 @@ fn argument_call_owner(
     )
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
-    .unwrap();
+    .unwrap_or_else(|error| panic!("helper result {result_shape:?}: {error:?}"));
     ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap(),

@@ -194,6 +194,24 @@ fn prepare_lineage_evidence_v1(
     neutral_kir: ProductionCanonicalKernelIrIdentityV1,
 ) -> Result<PreparedLineageEvidenceV1, ProductionSemanticLineageErrorV3> {
     let semantic = admitted.semantic_kir().semantic().semantic();
+    if !fe2o3_lower_mir_kernel::legacy_correspondence_source_results_supported_v4(semantic)
+        || admitted
+            .semantic_kir()
+            .correspondence()
+            .lowered_functions()
+            .iter()
+            .any(|row| {
+                row.role() == fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper
+                    && !fe2o3_lower_mir_kernel::legacy_correspondence_result_supported_v4(
+                        semantic.types(),
+                        semantic.functions()[row.semantic_function().index() as usize].abi(),
+                    )
+            })
+    {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "V4/V5 correspondence does not encode aggregate result components",
+        ));
+    }
     if ranked.root_count() == 0
         || ranked.root_count() != semantic.roots().len()
         || ranked.root_count() != target_module.kernels.len()

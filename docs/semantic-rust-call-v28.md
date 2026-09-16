@@ -193,12 +193,28 @@ its destination boundaries. An unprojected local has no address preparation;
 a retained scalar local has an exact private Store; a projected destination has
 an address prepared before operand evaluation and an exact result Store afterward.
 These stores are unguarded, nonvolatile and use the admitted alignment.
-An ignored result has no invented KIR value. Scalar returns either preserve the
-actual value or use the single permitted INDEX-to-U64 bitcast.
+An ignored result has no invented KIR value. Pointer-free ordinary aggregate
+results use the same exact source-layout/ABI component checker as by-value
+arguments. Eligible Ignore, Direct, Pair, simple integer Cast and sized Indirect
+carriers become an ordered scalar KIR result vector, not a new calling convention
+or a source pointer. Field order is source order even when physical layout order
+differs. Embedded pointers, enums and unions remain unsupported. This adds no
+capability admission or permission to use authority-bearing source types.
+Aggregate caller destinations and callee return locals must be
+whole SSA values; retained or projected aggregate result storage is refused.
+
+`result_count()` and `result_component(ordinal)` expose every physical result
+with its source type, field/array path and byte offset. `visit_result_nodes`
+includes composite parents and ignored fields, even for zero- and one-component
+aggregates. `visit_returns` visits each callee Return once; `component_count()`,
+`input(ordinal)` and `conversion(ordinal)` expose its complete ordered vector.
+Repeated input ValueIds remain separate occurrences. Each component either
+preserves its actual value or uses the permitted INDEX-to-U64 bitcast.
 
 The view borrows edge definitions and arguments from the original semantic SSA
-plan. For an applicable scalar result, the existing component-emission loop
-captures its physical continuation slot and optional transport bitcast. Source
+plan. For each applicable result component, the existing emission loop
+captures its physical continuation slot and optional transport bitcast, exposed
+as `result_transport(ordinal)`. Source
 SSA ordinals are not physical slots: earlier locals can have several components
 or no components. A result used through dominance need not appear in the
 immediate successor's parameters. Absence of an edge slot does not mean the
@@ -207,10 +223,15 @@ namespace.
 
 The checker uses one borrowed module target index and one function-local value
 and block index; it does not rescan all functions or all blocks for every call.
-Construction caches qualified sort keys once. Query scratch stays charged until
+Construction caches qualified sort keys once and checks complete ownership of
+the flat typed component pool. Full replay repeats that check; individual queries
+validate the selected caller/callee spans without rescanning the whole pool.
+Query scratch stays charged until
 its owner drops, with metered lookups and repeated visits; callbacks cannot retain
 checked references outside the scope. Immutable owner payload is excluded from
 the query budget, unlike the retained-anchor charge during production validation.
+Component reservations, merge rebasing, compaction and validation scratch share
+the existing work/storage ledger; failure restores the incoming live floor.
 
 These checks establish the live structural correspondence, not independent
 functional equivalence. Full owner lowering replay still authenticates source
@@ -229,6 +250,19 @@ source-field/local-projection/physical-parameter mappings, function-qualified
 rosters and synthetic spans, replay in verifier and finalizer, and hostile
 mutation coverage. No argument identity may be inferred from iteration order
 or reused as kernel-launch authority.
+
+Nonzero aggregate helper results, including scalar-backed singleton wrappers,
+also remain outside frozen V4/V5 evidence. Live evidence producers, compiler
+lineage preparation and singleton/multi-root verifier function binding explicitly
+refuse them based on the source output shape and FnAbi, not KIR result arity.
+The check covers the retained source closure independently of supplied proof
+rows. Exact selected kernel bodies retain their special entry result handling;
+only their recognized transparent wrappers may call them with those results.
+Omitting a helper row or relabeling it as an entry cannot evade this envelope.
+This conservative refusal includes retained calls even if optimization removes
+them; it is not completion of the serialized function/component relation.
+The historical scalar and exact Ignore/ZST result envelope is unchanged. A
+successful multi-result Call/Return simulation does not bypass this refusal.
 
 Codec, SSA, lowering and ordinary-source simulator tests exercise different
 stages. Neither a model test nor a successful simulator comparison establishes

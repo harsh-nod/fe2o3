@@ -199,9 +199,10 @@ fn direct_scalar_helper_plan_v1(
         parameter_local_bindings.push(binding);
     }
 
-    let result_types = helper_result_shape_v1(types, function, function_id)?
-        .1
+    let result_types = helper_result_components_v1(types, function, function_id)?
+        .components
         .into_iter()
+        .map(|(_, _, ty, _, _)| ty)
         .collect();
     Ok(LoweredFunctionPlanV1 {
         correspondence_owner,

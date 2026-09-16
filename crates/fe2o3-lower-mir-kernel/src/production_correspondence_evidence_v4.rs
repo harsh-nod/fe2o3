@@ -36,6 +36,93 @@ const TERMINATOR_RECORD_BYTES_V4: usize = 20;
 const SYNTHETIC_RECORD_BYTES_V4: usize = 16;
 const PARAMETER_RECORD_BYTES_V4: usize = 12;
 
+/// The frozen V4 relation (also nested in V5) has no aggregate-result component
+/// evidence. Preserve its scalar and ignored/ZST envelope until that relation
+/// is versioned; this predicate alone authenticates no source or execution.
+pub fn legacy_correspondence_result_supported_v4(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    abi: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionAbiV1,
+) -> bool {
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticAbiPassModeV1, SemanticTypeShapeV1};
+    let value = abi.return_value();
+    if value.ty() != abi.source_output_type()
+        || value.adjusted().is_some()
+        || value.pointee_override().is_some()
+    {
+        return false;
+    }
+    let Some(declaration) = types.get(value.ty().index() as usize) else {
+        return false;
+    };
+    match declaration.shape() {
+        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
+            matches!(value.mode(), SemanticAbiPassModeV1::Direct(_))
+        }
+        _ => {
+            declaration.layout().size_bytes() == Some(0)
+                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
+        }
+    }
+}
+
+/// Checks the whole retained source envelope, independently of a supplied proof
+/// roster. Only exact kernel bodies may have special entry results, and only
+/// their transparent root wrappers may call them with those results.
+pub fn legacy_correspondence_source_results_supported_v4(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+) -> bool {
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticCallableDeclV1, SemanticTerminatorKindV1};
+    let unsupported = semantic
+        .functions()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, function)| {
+            (!legacy_correspondence_result_supported_v4(semantic.types(), function.abi()))
+                .then_some(index)
+        })
+        .collect::<BTreeSet<_>>();
+    if unsupported.is_empty() {
+        return true;
+    }
+    let mut bodies = BTreeSet::new();
+    let mut wrappers = BTreeSet::new();
+    for root in semantic.roots() {
+        let Some(selected) = semantic.select_kernel_body_for_root_v1(*root) else {
+            return false;
+        };
+        bodies.insert(selected.body().index() as usize);
+        if selected.has_transparent_result_wrapper() {
+            wrappers.insert((
+                selected.root().index() as usize,
+                selected.body().index() as usize,
+            ));
+        }
+    }
+    if !unsupported.is_subset(&bodies) {
+        return false;
+    }
+    semantic
+        .functions()
+        .iter()
+        .enumerate()
+        .all(|(caller, function)| {
+            function.blocks().iter().all(|block| {
+                let callable = match block.terminator().kind() {
+                    SemanticTerminatorKindV1::Call(call) => call.callee(),
+                    SemanticTerminatorKindV1::TailCall(call) => call.callee(),
+                    _ => return true,
+                };
+                let Some(SemanticCallableDeclV1::Defined { function: callee }) =
+                    semantic.callables().get(callable.index() as usize)
+                else {
+                    return true;
+                };
+                let callee = callee.index() as usize;
+                !unsupported.contains(&callee) || wrappers.contains(&(caller, callee))
+            })
+        })
+}
+
 /// Exact semantic block to KIR block correspondence under the current versioned KIR owner.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MirToKirBlockCorrespondenceEvidenceV4 {
@@ -253,6 +340,18 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
             .iter()
             .map(|record| record.semantic_function().index())
             .collect::<BTreeSet<_>>();
+        let semantic = owner.semantic().semantic();
+        if !legacy_correspondence_source_results_supported_v4(semantic)
+            || correspondence.lowered_functions().iter().any(|row| {
+                row.role() == crate::SemanticKirFunctionRoleV1::InternalHelper
+                    && !legacy_correspondence_result_supported_v4(
+                        semantic.types(),
+                        semantic.functions()[row.semantic_function().index() as usize].abi(),
+                    )
+            })
+        {
+            return Err(ProductionCorrespondenceEvidenceErrorV4::UnsupportedAggregateResult);
+        }
         let function_count = u32::try_from(covered_functions.len())
             .map_err(|_| ProductionCorrespondenceEvidenceErrorV4::Overflow)?;
         let mut blocks = correspondence
@@ -543,6 +642,8 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
 pub enum ProductionCorrespondenceEvidenceErrorV4 {
     /// Live equivalence replay failed.
     LiveOwner(String),
+    /// Frozen V4/V5 custody cannot represent aggregate result components.
+    UnsupportedAggregateResult,
     /// Nested semantic induction report evidence failed.
     Induction(SemanticU32InductionEvidenceErrorV1),
     /// Aggregate exceeds the outer receipt budget.
@@ -573,6 +674,8 @@ impl fmt::Display for ProductionCorrespondenceEvidenceErrorV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LiveOwner(error) => write!(formatter, "live semantic-KIR owner failed: {error}"),
+            Self::UnsupportedAggregateResult => formatter
+                .write_str("V4/V5 correspondence does not encode aggregate result components"),
             Self::Induction(error) => {
                 write!(formatter, "semantic induction evidence failed: {error}")
             }
