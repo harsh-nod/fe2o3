@@ -1,5 +1,10 @@
 use super::*;
 
+mod materialization;
+use materialization::{
+    materialize_in_retained_session_v1, materialize_with_custody_v1, overwrite_with_custody_v1,
+};
+
 pub(super) fn three_binding_persistent_compute_access_shape_v1(
     semantic_launch: KfdRuntimeSemanticLaunchV1,
     bindings: &[BackendBindingV1],
@@ -2838,25 +2843,29 @@ impl KfdRuntimeBackendV1 {
             );
             if creates_native_queue && self.queue.is_none() {
                 performance.user_data_materializations = user_data_count;
+                if self.terminal_memory.is_some() {
+                    return Err(
+                        self.terminal_error("KFD materialization session is already retained")
+                    );
+                }
                 let device = self.admitted_device.take().ok_or_else(|| {
                     Self::rejected(
                         KfdRuntimeBackendErrorKindV1::Unsupported,
                         "the admitted KFD queue lifecycle has already retired",
                     )
                 })?;
-                let mut memory = device
+                let memory = device
                     .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                         self.device_backing_budget,
                         self.host_visible_backing_budget,
                     )
                     .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
-                let native_data = match materialize_initial_data_v1(&mut memory, data, signature) {
-                    Ok(data) => data,
-                    Err(detail) => {
-                        self.terminal_memory = Some(memory);
-                        return Err(self.terminal_error(detail));
-                    }
-                };
+                self.terminal_memory = Some(memory);
+                let (memory, native_data) =
+                    materialize_in_retained_session_v1(&mut self.terminal_memory, |memory| {
+                        materialize_initial_data_v1(memory, data, signature)
+                    })
+                    .map_err(|detail| self.terminal_error(detail))?;
                 let queue = memory
                     .create_compute_aql_queue_with_fixed_dispatch(
                         KFD_RUNTIME_RING_BYTES_V1,
@@ -2940,7 +2949,7 @@ impl KfdRuntimeBackendV1 {
                     queue
                         .with_compute_lane_v1(native_lane, |queue| {
                             let native_data = match self.resident_data.take() {
-                                Some(mut resident)
+                                Some(resident)
                                     if same_resident_storage_shape_v1(
                                         &resident.descriptors,
                                         &resident_descriptors,
@@ -2949,19 +2958,19 @@ impl KfdRuntimeBackendV1 {
                                     }) =>
                                 {
                                     reused_resident_data = true;
-                                    let overwrite = resident
-                                        .data
-                                        .iter_mut()
-                                        .zip(resident.descriptors.iter().zip(&data))
-                                        .enumerate()
-                                        .try_for_each(|(index, (native, (prior, spec)))| {
+                                    let writer = &mut *queue;
+                                    overwrite_with_custody_v1(
+                                        resident.descriptors,
+                                        resident.data,
+                                        move |index, prior, native| {
+                                            let spec = &data[index];
                                             if !resident_data_needs_host_overwrite_v1(
                                                 prior,
                                                 spec.content_sha256,
                                             ) {
                                                 return Ok(());
                                             }
-                                            queue
+                                            writer
                                                 .overwrite_detached_initialized_host_visible_fixed_dispatch_data(
                                                     index,
                                                     native,
@@ -2971,8 +2980,9 @@ impl KfdRuntimeBackendV1 {
                                                 .map_err(|error| {
                                                     format!("KFD resident-data overwrite: {error}")
                                                 })
-                                        });
-                                    overwrite.map(|()| resident.data)
+                                        },
+                                        core::mem::forget,
+                                    )
                                 }
                                 Some(resident) => with_resident_release_custody_v1(
                                     resident.descriptors,
@@ -5024,14 +5034,29 @@ pub(super) fn materialize_initial_data_v1(
     specs: Vec<DataSpecV1>,
     role_identity: [u8; 32],
 ) -> Result<Vec<Gfx942FixedDispatchDataV1>, String> {
-    let mut data = Vec::new();
-    data.try_reserve_exact(specs.len())
-        .map_err(|_| "KFD native-data roster allocation failed".to_owned())?;
-    for (index, spec) in specs.into_iter().enumerate() {
-        let item = materialize_initial_data_item_v1(memory, &spec, index, role_identity)?;
-        data.push(item);
-    }
-    Ok(data)
+    materialize_with_custody_v1(
+        specs,
+        "KFD native-data roster allocation failed",
+        |index, spec| {
+            let result = materialize_initial_data_item_v1(memory, spec, index, role_identity);
+            #[cfg(test)]
+            if result.is_err() {
+                super::retained_release_tests::observe_materialization_failure_usage(
+                    memory.host_visible_backing_usage_v1(),
+                );
+            }
+            result
+        },
+        |custody| {
+            // Test observation must not release owners even if the observer unwinds.
+            let _retained = core::mem::ManuallyDrop::new(custody);
+            #[cfg(test)]
+            super::retained_release_tests::observe_materialization_retention(
+                &_retained.specs,
+                &_retained.data,
+            );
+        },
+    )
 }
 
 fn materialize_initial_data_item_v1(
@@ -5164,41 +5189,43 @@ pub(super) fn materialize_rebound_data_v1(
     specs: Vec<DataSpecV1>,
     role_identity: [u8; 32],
 ) -> Result<Vec<Gfx942FixedDispatchDataV1>, String> {
-    let mut data = Vec::new();
-    data.try_reserve_exact(specs.len())
-        .map_err(|_| "KFD rebound-data roster allocation failed".to_owned())?;
-    for (index, spec) in specs.into_iter().enumerate() {
-        queue
-            .preflight_fixed_dispatch_data_insertion(index)
-            .map_err(|error| format!("KFD dispatch-data insertion preflight: {error}"))?;
-        let item = match spec.kind {
-            RuntimeMemoryKindV1::HostVisible => queue
-                .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
-                    index,
-                    spec.bytes(),
-                )
-                .map_err(|error| format!("KFD host-visible insertion: {error}"))?,
-            RuntimeMemoryKindV1::DeviceLocal => {
-                let owned_bytes = spec.try_owned_bytes()?;
-                let ordinal = u32::try_from(index)
-                    .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
-                let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
-                    .map_err(|error| format!("KFD device-content role: {error}"))?;
-                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
-                    .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
-                queue
-                    .insert_initialized_fixed_dispatch_data(
+    materialize_with_custody_v1(
+        specs,
+        "KFD rebound-data roster allocation failed",
+        |index, spec| {
+            queue
+                .preflight_fixed_dispatch_data_insertion(index)
+                .map_err(|error| format!("KFD dispatch-data insertion preflight: {error}"))?;
+            let item = match spec.kind {
+                RuntimeMemoryKindV1::HostVisible => queue
+                    .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
                         index,
-                        owned_bytes,
-                        spec.alignment,
-                        content,
+                        spec.bytes(),
                     )
-                    .map_err(|error| format!("KFD device-local insertion: {error}"))?
-            }
-        };
-        data.push(item);
-    }
-    Ok(data)
+                    .map_err(|error| format!("KFD host-visible insertion: {error}"))?,
+                RuntimeMemoryKindV1::DeviceLocal => {
+                    let owned_bytes = spec.try_owned_bytes()?;
+                    let ordinal = u32::try_from(index)
+                        .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
+                    let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
+                        .map_err(|error| format!("KFD device-content role: {error}"))?;
+                    let content =
+                        Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
+                            .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
+                    queue
+                        .insert_initialized_fixed_dispatch_data(
+                            index,
+                            owned_bytes,
+                            spec.alignment,
+                            content,
+                        )
+                        .map_err(|error| format!("KFD device-local insertion: {error}"))?
+                }
+            };
+            Ok(item)
+        },
+        core::mem::forget,
+    )
 }
 
 #[cfg(test)]
@@ -5211,30 +5238,37 @@ mod borrowed_initialization_tests {
     #[test]
     fn borrowed_initialization_runtime_preserves_both_materializers_and_device_owned_path() {
         let source = include_str!("compute_dispatch.rs");
-        for (name, next, borrowed) in [
+        let initial = source
+            .split_once("pub(super) fn materialize_initial_data_v1(")
+            .unwrap()
+            .1
+            .split_once("fn materialize_initial_data_item_v1(")
+            .unwrap()
+            .0;
+        assert!(initial.contains("materialize_with_custody_v1("));
+        assert!(
+            initial
+                .contains("materialize_initial_data_item_v1(memory, spec, index, role_identity)")
+        );
+        for (start, end, borrowed) in [
             (
-                "materialize_initial_data_v1",
-                "resident_descriptors_v1",
+                "fn materialize_initial_data_item_v1(",
+                "pub(super) fn resident_descriptors_v1(",
                 "initialize_host_visible_coherent_from_slice_v1(spec.bytes())",
             ),
             (
-                "materialize_rebound_data_v1",
-                "unused_end_marker",
+                "pub(super) fn materialize_rebound_data_v1(",
+                "#[cfg(test)]\nmod resident_release_tests;",
                 "insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(index,spec.bytes()",
             ),
         ] {
-            let start = format!("pub(super) fn {name}(");
-            let end = format!("pub(super) fn {next}(");
             let body = source
-                .split(&start)
-                .nth(1)
+                .split_once(start)
                 .unwrap()
-                .split(&end)
-                .next()
+                .1
+                .split_once(end)
                 .unwrap()
-                .split("#[cfg(test)]")
-                .next()
-                .unwrap();
+                .0;
             let (before_device, device) = body
                 .split_once("RuntimeMemoryKindV1::DeviceLocal =>")
                 .unwrap();

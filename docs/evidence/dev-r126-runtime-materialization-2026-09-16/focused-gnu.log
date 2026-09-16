@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.24s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 13 tests
+test kfd_backend::compute_dispatch::materialization::tests::materialization_capacity_failure_is_before_any_callback ... ok
+test kfd_backend::compute_dispatch::materialization::tests::materialization_capture_destructor_panic_retains_complete_output ... ok
+test kfd_backend::compute_dispatch::materialization::tests::materialization_formatting_panic_keeps_lower_and_returned_owners_separate ... ok
+test kfd_backend::compute_dispatch::materialization::tests::materialization_failure_retains_prefix_specs_and_callback_captures ... ok
+test kfd_backend::compute_dispatch::materialization::tests::materialization_reserves_only_the_output_roster ... ok
+test kfd_backend::compute_dispatch::materialization::tests::materialization_metadata_destructor_panic_retains_complete_output ... ok
+test kfd_backend::compute_dispatch::materialization::tests::materialization_success_transfers_each_owner_once_in_order ... ok
+test kfd_backend::compute_dispatch::materialization::tests::overwrite_capture_destructor_panic_retains_completed_writes ... ok
+test kfd_backend::compute_dispatch::materialization::tests::overwrite_mismatched_rosters_reject_before_writing_and_retain_both ... ok
+test kfd_backend::compute_dispatch::materialization::tests::overwrite_errors_and_panics_retain_full_roster_and_partial_writes ... ok
+test kfd_backend::compute_dispatch::materialization::tests::overwrite_success_reuses_original_storage_without_allocation ... ok
+test kfd_backend::compute_dispatch::materialization::tests::session_error_and_panic_leave_exact_mutated_owner_installed ... ok
+test kfd_backend::compute_dispatch::materialization::tests::session_success_transfers_once_and_missing_session_has_no_effect ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 753 filtered out; finished in 0.00s
+

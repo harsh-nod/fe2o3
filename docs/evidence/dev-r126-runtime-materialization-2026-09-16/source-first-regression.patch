@@ -1,0 +1,1232 @@
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+index b95346b19..bd19101c7 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+@@ -1,5 +1,10 @@
+ use super::*;
+ 
++mod materialization;
++use materialization::{
++    materialize_in_retained_session_v1, materialize_with_custody_v1, overwrite_with_custody_v1,
++};
++
+ pub(super) fn three_binding_persistent_compute_access_shape_v1(
+     semantic_launch: KfdRuntimeSemanticLaunchV1,
+     bindings: &[BackendBindingV1],
+@@ -2838,25 +2843,29 @@ impl KfdRuntimeBackendV1 {
+             );
+             if creates_native_queue && self.queue.is_none() {
+                 performance.user_data_materializations = user_data_count;
++                if self.terminal_memory.is_some() {
++                    return Err(
++                        self.terminal_error("KFD materialization session is already retained")
++                    );
++                }
+                 let device = self.admitted_device.take().ok_or_else(|| {
+                     Self::rejected(
+                         KfdRuntimeBackendErrorKindV1::Unsupported,
+                         "the admitted KFD queue lifecycle has already retired",
+                     )
+                 })?;
+-                let mut memory = device
++                let memory = device
+                     .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+                         self.device_backing_budget,
+                         self.host_visible_backing_budget,
+                     )
+                     .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
+-                let native_data = match materialize_initial_data_v1(&mut memory, data, signature) {
+-                    Ok(data) => data,
+-                    Err(detail) => {
+-                        self.terminal_memory = Some(memory);
+-                        return Err(self.terminal_error(detail));
+-                    }
+-                };
++                self.terminal_memory = Some(memory);
++                let (memory, native_data) =
++                    materialize_in_retained_session_v1(&mut self.terminal_memory, |memory| {
++                        materialize_initial_data_v1(memory, data, signature)
++                    })
++                    .map_err(|detail| self.terminal_error(detail))?;
+                 let queue = memory
+                     .create_compute_aql_queue_with_fixed_dispatch(
+                         KFD_RUNTIME_RING_BYTES_V1,
+@@ -2940,7 +2949,7 @@ impl KfdRuntimeBackendV1 {
+                     queue
+                         .with_compute_lane_v1(native_lane, |queue| {
+                             let native_data = match self.resident_data.take() {
+-                                Some(mut resident)
++                                Some(resident)
+                                     if same_resident_storage_shape_v1(
+                                         &resident.descriptors,
+                                         &resident_descriptors,
+@@ -2949,19 +2958,19 @@ impl KfdRuntimeBackendV1 {
+                                     }) =>
+                                 {
+                                     reused_resident_data = true;
+-                                    let overwrite = resident
+-                                        .data
+-                                        .iter_mut()
+-                                        .zip(resident.descriptors.iter().zip(&data))
+-                                        .enumerate()
+-                                        .try_for_each(|(index, (native, (prior, spec)))| {
++                                    let writer = &mut *queue;
++                                    overwrite_with_custody_v1(
++                                        resident.descriptors,
++                                        resident.data,
++                                        move |index, prior, native| {
++                                            let spec = &data[index];
+                                             if !resident_data_needs_host_overwrite_v1(
+                                                 prior,
+                                                 spec.content_sha256,
+                                             ) {
+                                                 return Ok(());
+                                             }
+-                                            queue
++                                            writer
+                                                 .overwrite_detached_initialized_host_visible_fixed_dispatch_data(
+                                                     index,
+                                                     native,
+@@ -2971,8 +2980,9 @@ impl KfdRuntimeBackendV1 {
+                                                 .map_err(|error| {
+                                                     format!("KFD resident-data overwrite: {error}")
+                                                 })
+-                                        });
+-                                    overwrite.map(|()| resident.data)
++                                        },
++                                        core::mem::forget,
++                                    )
+                                 }
+                                 Some(resident) => with_resident_release_custody_v1(
+                                     resident.descriptors,
+@@ -5024,14 +5034,29 @@ pub(super) fn materialize_initial_data_v1(
+     specs: Vec<DataSpecV1>,
+     role_identity: [u8; 32],
+ ) -> Result<Vec<Gfx942FixedDispatchDataV1>, String> {
+-    let mut data = Vec::new();
+-    data.try_reserve_exact(specs.len())
+-        .map_err(|_| "KFD native-data roster allocation failed".to_owned())?;
+-    for (index, spec) in specs.into_iter().enumerate() {
+-        let item = materialize_initial_data_item_v1(memory, &spec, index, role_identity)?;
+-        data.push(item);
+-    }
+-    Ok(data)
++    materialize_with_custody_v1(
++        specs,
++        "KFD native-data roster allocation failed",
++        |index, spec| {
++            let result = materialize_initial_data_item_v1(memory, spec, index, role_identity);
++            #[cfg(test)]
++            if result.is_err() {
++                super::retained_release_tests::observe_materialization_failure_usage(
++                    memory.host_visible_backing_usage_v1(),
++                );
++            }
++            result
++        },
++        |custody| {
++            // Test observation must not release owners even if the observer unwinds.
++            let _retained = core::mem::ManuallyDrop::new(custody);
++            #[cfg(test)]
++            super::retained_release_tests::observe_materialization_retention(
++                &_retained.specs,
++                &_retained.data,
++            );
++        },
++    )
+ }
+ 
+ fn materialize_initial_data_item_v1(
+@@ -5164,41 +5189,43 @@ pub(super) fn materialize_rebound_data_v1(
+     specs: Vec<DataSpecV1>,
+     role_identity: [u8; 32],
+ ) -> Result<Vec<Gfx942FixedDispatchDataV1>, String> {
+-    let mut data = Vec::new();
+-    data.try_reserve_exact(specs.len())
+-        .map_err(|_| "KFD rebound-data roster allocation failed".to_owned())?;
+-    for (index, spec) in specs.into_iter().enumerate() {
+-        queue
+-            .preflight_fixed_dispatch_data_insertion(index)
+-            .map_err(|error| format!("KFD dispatch-data insertion preflight: {error}"))?;
+-        let item = match spec.kind {
+-            RuntimeMemoryKindV1::HostVisible => queue
+-                .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
+-                    index,
+-                    spec.bytes(),
+-                )
+-                .map_err(|error| format!("KFD host-visible insertion: {error}"))?,
+-            RuntimeMemoryKindV1::DeviceLocal => {
+-                let owned_bytes = spec.try_owned_bytes()?;
+-                let ordinal = u32::try_from(index)
+-                    .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
+-                let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
+-                    .map_err(|error| format!("KFD device-content role: {error}"))?;
+-                let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
+-                    .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
+-                queue
+-                    .insert_initialized_fixed_dispatch_data(
++    materialize_with_custody_v1(
++        specs,
++        "KFD rebound-data roster allocation failed",
++        |index, spec| {
++            queue
++                .preflight_fixed_dispatch_data_insertion(index)
++                .map_err(|error| format!("KFD dispatch-data insertion preflight: {error}"))?;
++            let item = match spec.kind {
++                RuntimeMemoryKindV1::HostVisible => queue
++                    .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
+                         index,
+-                        owned_bytes,
+-                        spec.alignment,
+-                        content,
++                        spec.bytes(),
+                     )
+-                    .map_err(|error| format!("KFD device-local insertion: {error}"))?
+-            }
+-        };
+-        data.push(item);
+-    }
+-    Ok(data)
++                    .map_err(|error| format!("KFD host-visible insertion: {error}"))?,
++                RuntimeMemoryKindV1::DeviceLocal => {
++                    let owned_bytes = spec.try_owned_bytes()?;
++                    let ordinal = u32::try_from(index)
++                        .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
++                    let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
++                        .map_err(|error| format!("KFD device-content role: {error}"))?;
++                    let content =
++                        Gfx942DeviceContentDescriptorV1::from_bytes(role, &owned_bytes)
++                            .map_err(|error| format!("KFD device-content descriptor: {error}"))?;
++                    queue
++                        .insert_initialized_fixed_dispatch_data(
++                            index,
++                            owned_bytes,
++                            spec.alignment,
++                            content,
++                        )
++                        .map_err(|error| format!("KFD device-local insertion: {error}"))?
++                }
++            };
++            Ok(item)
++        },
++        core::mem::forget,
++    )
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/materialization.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/materialization.rs
+new file mode 100644
+index 000000000..bdf24776f
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/materialization.rs
+@@ -0,0 +1,122 @@
++//! Runtime custody around lower native initialization and borrowed overwrites.
++
++#![forbid(unsafe_code)]
++
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++pub(super) struct MaterializationCustodyV1<S, T, I> {
++    pub(super) specs: Vec<S>,
++    pub(super) data: Vec<T>,
++    initializer: Option<I>,
++}
++
++pub(super) fn materialize_with_custody_v1<S, T, I>(
++    specs: Vec<S>,
++    capacity_error: &'static str,
++    initialize: I,
++    retain: impl FnOnce(MaterializationCustodyV1<S, T, I>),
++) -> Result<Vec<T>, String>
++where
++    I: FnMut(usize, &S) -> Result<T, String>,
++{
++    let mut custody = MaterializationCustodyV1 {
++        specs,
++        data: Vec::new(),
++        initializer: Some(initialize),
++    };
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        custody
++            .data
++            .try_reserve_exact(custody.specs.len())
++            .map_err(|_| capacity_error.to_owned())?;
++        for (index, spec) in custody.specs.iter().enumerate() {
++            // The lower call retains anything it cannot return; we root each return.
++            let item = (custody.initializer.as_mut().expect("rooted initializer"))(index, spec)?;
++            custody.data.push(item);
++        }
++        // Complete capture/metadata destruction while every native owner is rooted.
++        drop(custody.initializer.take());
++        drop(core::mem::take(&mut custody.specs));
++        Ok(())
++    }));
++    match result {
++        Ok(Ok(())) => Ok(custody.data),
++        Ok(Err(error)) => {
++            retain(custody);
++            Err(error)
++        }
++        Err(payload) => {
++            retain(custody);
++            resume_unwind(payload)
++        }
++    }
++}
++
++/// The callback retains any native outputs it cannot return. The session stays
++/// installed until the complete output is ready for the consuming constructor.
++pub(super) fn materialize_in_retained_session_v1<M, T>(
++    session: &mut Option<M>,
++    initialize: impl FnOnce(&mut M) -> Result<T, String>,
++) -> Result<(M, T), String> {
++    let data = initialize(
++        session
++            .as_mut()
++            .ok_or_else(|| "KFD materialization session is missing".to_owned())?,
++    )?;
++    Ok((
++        session.take().expect("borrowed session remains installed"),
++        data,
++    ))
++}
++
++pub(super) struct ResidentOverwriteCustodyV1<D, T, I> {
++    pub(super) descriptors: Vec<D>,
++    pub(super) data: Vec<T>,
++    overwrite: Option<I>,
++}
++
++pub(super) fn overwrite_with_custody_v1<D, T, I>(
++    descriptors: Vec<D>,
++    data: Vec<T>,
++    overwrite: I,
++    retain: impl FnOnce(ResidentOverwriteCustodyV1<D, T, I>),
++) -> Result<Vec<T>, String>
++where
++    I: FnMut(usize, &D, &mut T) -> Result<(), String>,
++{
++    let mut custody = ResidentOverwriteCustodyV1 {
++        descriptors,
++        data,
++        overwrite: Some(overwrite),
++    };
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        if custody.descriptors.len() != custody.data.len() {
++            return Err("KFD resident-data overwrite roster mismatch".to_owned());
++        }
++        for (index, (descriptor, data)) in custody
++            .descriptors
++            .iter()
++            .zip(&mut custody.data)
++            .enumerate()
++        {
++            (custody.overwrite.as_mut().expect("rooted overwrite"))(index, descriptor, data)?;
++        }
++        drop(custody.overwrite.take());
++        drop(core::mem::take(&mut custody.descriptors));
++        Ok(())
++    }));
++    match result {
++        Ok(Ok(())) => Ok(custody.data),
++        Ok(Err(error)) => {
++            retain(custody);
++            Err(error)
++        }
++        Err(payload) => {
++            retain(custody);
++            resume_unwind(payload)
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/materialization/tests.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/materialization/tests.rs
+new file mode 100644
+index 000000000..9936dca5f
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch/materialization/tests.rs
+@@ -0,0 +1,541 @@
++//! Tests of the production custody drivers, not native allocation qualification.
++
++use super::*;
++use crate::kfd_backend::drain_capture::tests::counted;
++use std::cell::{Cell, RefCell};
++use std::rc::Rc;
++
++#[derive(Debug)]
++struct Probe {
++    index: usize,
++    bytes: [u8; 4],
++    dropped: Rc<RefCell<Vec<usize>>>,
++}
++
++impl Probe {
++    fn new(index: usize, dropped: &Rc<RefCell<Vec<usize>>>) -> Self {
++        Self {
++            index,
++            bytes: [0; 4],
++            dropped: Rc::clone(dropped),
++        }
++    }
++}
++
++impl Drop for Probe {
++    fn drop(&mut self) {
++        self.dropped.borrow_mut().push(self.index);
++    }
++}
++
++struct DropPanic {
++    payload: Option<Box<(&'static str, usize)>>,
++}
++
++impl DropPanic {
++    fn touch(&self) {}
++}
++
++impl Drop for DropPanic {
++    fn drop(&mut self) {
++        resume_unwind(self.payload.take().unwrap());
++    }
++}
++
++struct Unformattable;
++
++impl std::fmt::Display for Unformattable {
++    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        std::panic::panic_any(("error formatting", 23usize));
++    }
++}
++
++#[test]
++fn materialization_success_transfers_each_owner_once_in_order() {
++    for count in [0, 1, 3, 16] {
++        let dropped = Rc::new(RefCell::new(Vec::new()));
++        let mut calls = Vec::new();
++        let result = materialize_with_custody_v1(
++            (0..count).collect(),
++            "capacity",
++            |index, spec| {
++                assert_eq!(index, *spec);
++                calls.push(index);
++                Ok(Probe::new(index, &dropped))
++            },
++            |_| panic!("successful materialization retained"),
++        )
++        .unwrap();
++        assert_eq!(calls, (0..count).collect::<Vec<_>>());
++        assert_eq!(result.iter().map(|p| p.index).collect::<Vec<_>>(), calls);
++        assert!(dropped.borrow().is_empty());
++        drop(result);
++        assert_eq!(*dropped.borrow(), calls);
++    }
++}
++
++#[test]
++fn materialization_reserves_only_the_output_roster() {
++    for count in [0, 1, 3, 16] {
++        let specs = (0..count).collect::<Vec<usize>>();
++        let (result, allocations) = counted(|| {
++            materialize_with_custody_v1(
++                specs,
++                "capacity",
++                |index, _| Ok(index),
++                |_| panic!("success retained"),
++            )
++        });
++        assert_eq!(allocations, usize::from(count != 0));
++        assert_eq!(result.unwrap(), (0..count).collect::<Vec<_>>());
++    }
++}
++
++fn materialization_failure(fail_at: usize, lower_owns_current: bool, panicked: bool) {
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let specs = vec![17usize, 29, 41];
++    let spec_storage = (specs.as_ptr(), specs.capacity());
++    let capture = Probe::new(99, &dropped);
++    let native_drops = Rc::clone(&dropped);
++    let calls = Rc::new(RefCell::new(Vec::new()));
++    let calls_in = Rc::clone(&calls);
++    let lower = Rc::new(RefCell::new(None));
++    let lower_in = Rc::clone(&lower);
++    let payload = Box::new(("initializer", fail_at));
++    let payload_pointer = &*payload as *const _;
++    let mut payload = Some(payload);
++    let mut retained = None;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        materialize_with_custody_v1(
++            specs,
++            "capacity",
++            move |index, _| {
++                let _ = &capture;
++                calls_in.borrow_mut().push(index);
++                if index == fail_at {
++                    if lower_owns_current {
++                        *lower_in.borrow_mut() = Some(Probe::new(index, &native_drops));
++                    }
++                    if panicked {
++                        resume_unwind(payload.take().unwrap());
++                    }
++                    return Err(format!("initializer {index}"));
++                }
++                Ok(Probe::new(index, &native_drops))
++            },
++            |custody| retained = Some(custody),
++        )
++    }));
++    if panicked {
++        let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++        assert_eq!(&*payload as *const _, payload_pointer);
++    } else {
++        assert_eq!(
++            result.unwrap().unwrap_err(),
++            format!("initializer {fail_at}")
++        );
++    }
++    let custody = retained.unwrap();
++    assert_eq!(custody.specs, [17, 29, 41]);
++    assert_eq!(
++        (custody.specs.as_ptr(), custody.specs.capacity()),
++        spec_storage
++    );
++    assert!(custody.initializer.is_some());
++    assert_eq!(custody.data.len(), fail_at);
++    assert!(custody.data.capacity() >= 3);
++    assert_eq!(
++        custody.data.iter().map(|p| p.index).collect::<Vec<_>>(),
++        (0..fail_at).collect::<Vec<_>>()
++    );
++    assert_eq!(*calls.borrow(), (0..=fail_at).collect::<Vec<_>>());
++    assert_eq!(
++        lower.borrow().as_ref().map(|p| p.index),
++        lower_owns_current.then_some(fail_at)
++    );
++    assert!(dropped.borrow().is_empty());
++    drop(custody);
++    drop(lower.borrow_mut().take());
++    let mut actual = dropped.borrow().clone();
++    actual.sort_unstable();
++    let mut expected = (0..(fail_at + usize::from(lower_owns_current))).collect::<Vec<_>>();
++    expected.push(99);
++    assert_eq!(actual, expected);
++}
++
++#[test]
++fn materialization_failure_retains_prefix_specs_and_callback_captures() {
++    for index in 0..3 {
++        for lower_owns_current in [false, true] {
++            for panicked in [false, true] {
++                materialization_failure(index, lower_owns_current, panicked);
++            }
++        }
++    }
++}
++
++#[test]
++fn materialization_capacity_failure_is_before_any_callback() {
++    let called = Cell::new(false);
++    let mut retained = None;
++    // A ZST roster expresses deterministic capacity overflow without a huge allocation.
++    let result = materialize_with_custody_v1(
++        vec![(); usize::MAX],
++        "native roster capacity",
++        |_, _| {
++            called.set(true);
++            Ok(1u64)
++        },
++        |custody| retained = Some(custody),
++    );
++    assert_eq!(result, Err("native roster capacity".to_owned()));
++    assert!(!called.get());
++    let custody = retained.unwrap();
++    assert_eq!(custody.specs.len(), usize::MAX);
++    assert_eq!(custody.data.capacity(), 0);
++    assert!(custody.initializer.is_some());
++}
++
++#[test]
++fn materialization_formatting_panic_keeps_lower_and_returned_owners_separate() {
++    for fail_at in 0..3 {
++        let dropped = Rc::new(RefCell::new(Vec::new()));
++        let lower = RefCell::new(None);
++        let mut retained = None;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            materialize_with_custody_v1(
++                vec![0usize, 1, 2],
++                "capacity",
++                |index, _| {
++                    let item = Probe::new(index, &dropped);
++                    if index == fail_at {
++                        *lower.borrow_mut() = Some(item);
++                        return Err(format!("native failure: {Unformattable}"));
++                    }
++                    Ok(item)
++                },
++                |custody| retained = Some(custody),
++            )
++        }));
++        assert_eq!(
++            *result.unwrap_err().downcast::<(&str, usize)>().unwrap(),
++            ("error formatting", 23)
++        );
++        let custody = retained.unwrap();
++        assert_eq!(custody.data.len(), fail_at);
++        assert_eq!(lower.borrow().as_ref().unwrap().index, fail_at);
++        assert!(dropped.borrow().is_empty());
++    }
++}
++
++#[test]
++fn materialization_capture_destructor_panic_retains_complete_output() {
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let output_drops = Rc::clone(&dropped);
++    let payload = Box::new(("initializer destructor", 3usize));
++    let pointer = &*payload as *const _;
++    let bomb = DropPanic {
++        payload: Some(payload),
++    };
++    let mut retained = None;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        materialize_with_custody_v1(
++            vec![0usize, 1, 2],
++            "capacity",
++            move |index, _| {
++                bomb.touch();
++                Ok(Probe::new(index, &output_drops))
++            },
++            |custody| retained = Some(custody),
++        )
++    }));
++    let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++    assert_eq!(&*payload as *const _, pointer);
++    let custody = retained.unwrap();
++    assert!(custody.initializer.is_none());
++    assert_eq!(custody.specs, [0, 1, 2]);
++    assert_eq!(custody.data.len(), 3);
++    assert!(dropped.borrow().is_empty());
++}
++
++#[test]
++fn materialization_metadata_destructor_panic_retains_complete_output() {
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let payload = Box::new(("metadata destructor", 1usize));
++    let pointer = &*payload as *const _;
++    let specs = vec![DropPanic {
++        payload: Some(payload),
++    }];
++    let mut retained = None;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        materialize_with_custody_v1(
++            specs,
++            "capacity",
++            |index, _| Ok(Probe::new(index, &dropped)),
++            |custody| retained = Some(custody),
++        )
++    }));
++    let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++    assert_eq!(&*payload as *const _, pointer);
++    let custody = retained.unwrap();
++    assert!(custody.specs.is_empty());
++    assert!(custody.initializer.is_none());
++    assert_eq!(custody.data.len(), 1);
++    assert!(dropped.borrow().is_empty());
++}
++
++#[test]
++fn session_success_transfers_once_and_missing_session_has_no_effect() {
++    let called = Cell::new(false);
++    let result = materialize_in_retained_session_v1(&mut None::<Probe>, |_| {
++        called.set(true);
++        Ok(())
++    });
++    assert_eq!(
++        result.unwrap_err(),
++        "KFD materialization session is missing"
++    );
++    assert!(!called.get());
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let mut slot = Some(Probe::new(17, &dropped));
++    let (session, output) = materialize_in_retained_session_v1(&mut slot, |session| {
++        session.bytes = [4; 4];
++        Ok(Probe::new(29, &dropped))
++    })
++    .unwrap();
++    assert!(slot.is_none());
++    assert_eq!(session.index, 17);
++    assert_eq!(session.bytes, [4; 4]);
++    assert!(dropped.borrow().is_empty());
++    drop((session, output));
++    assert_eq!(*dropped.borrow(), [17, 29]);
++}
++
++#[test]
++fn session_error_and_panic_leave_exact_mutated_owner_installed() {
++    for panicked in [false, true] {
++        let dropped = Rc::new(RefCell::new(Vec::new()));
++        let mut slot = Some(Probe::new(17, &dropped));
++        let pointer = slot.as_ref().unwrap() as *const _;
++        let payload = Box::new(("session", 17usize));
++        let payload_pointer = &*payload as *const _;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            materialize_in_retained_session_v1(&mut slot, |session| {
++                session.bytes[0] = 7;
++                if panicked {
++                    resume_unwind(payload);
++                }
++                Err::<(), _>("session failure".to_owned())
++            })
++        }));
++        if panicked {
++            let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++            assert_eq!(&*payload as *const _, payload_pointer);
++        } else {
++            assert_eq!(result.unwrap().unwrap_err(), "session failure");
++        }
++        let session = slot.as_ref().unwrap();
++        assert_eq!(session as *const _, pointer);
++        assert_eq!(session.index, 17);
++        assert_eq!(session.bytes, [7, 0, 0, 0]);
++        assert!(dropped.borrow().is_empty());
++    }
++}
++
++#[test]
++fn overwrite_success_reuses_original_storage_without_allocation() {
++    for count in [0, 1, 3, 16] {
++        let descriptors = (0..count).collect::<Vec<usize>>();
++        let data = vec![0usize; count];
++        let storage = (data.as_ptr(), data.capacity());
++        let (result, allocations) = counted(|| {
++            overwrite_with_custody_v1(
++                descriptors,
++                data,
++                |index, descriptor, item| {
++                    assert_eq!(index, *descriptor);
++                    *item = index + 7;
++                    Ok(())
++                },
++                |_| panic!("success retained"),
++            )
++        });
++        let data = result.unwrap();
++        assert_eq!(allocations, 0);
++        assert_eq!((data.as_ptr(), data.capacity()), storage);
++        assert_eq!(data, (7..(count + 7)).collect::<Vec<_>>());
++    }
++}
++
++fn overwrite_failure(fail_at: usize, panicked: bool, formatting: bool) {
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let data = (0..3).map(|i| Probe::new(i, &dropped)).collect::<Vec<_>>();
++    let storage = (data.as_ptr(), data.capacity());
++    let descriptors = vec![(0, [5u8; 32]), (1, [7; 32]), (2, [9; 32])];
++    let metadata_storage = (descriptors.as_ptr(), descriptors.capacity());
++    let expected = descriptors.clone();
++    let calls = Rc::new(RefCell::new(Vec::new()));
++    let calls_in = Rc::clone(&calls);
++    let capture = Probe::new(99, &dropped);
++    let payload = Box::new(("overwrite", fail_at));
++    let pointer = &*payload as *const _;
++    let mut payload = Some(payload);
++    let mut retained = None;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        overwrite_with_custody_v1(
++            descriptors,
++            data,
++            move |index, descriptor, item| {
++                let _ = &capture;
++                assert_eq!(index, descriptor.0);
++                assert_eq!(index, item.index);
++                calls_in.borrow_mut().push(index);
++                item.bytes[..2].fill(11);
++                if index == fail_at {
++                    if panicked {
++                        resume_unwind(payload.take().unwrap());
++                    }
++                    if formatting {
++                        return Err(format!("overwrite: {Unformattable}"));
++                    }
++                    return Err(format!("overwrite {index}"));
++                }
++                item.bytes[2..].fill(13);
++                Ok(())
++            },
++            |custody| retained = Some(custody),
++        )
++    }));
++    if panicked {
++        let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++        assert_eq!(&*payload as *const _, pointer);
++    } else if formatting {
++        assert_eq!(
++            *result.unwrap_err().downcast::<(&str, usize)>().unwrap(),
++            ("error formatting", 23)
++        );
++    } else {
++        assert_eq!(result.unwrap().unwrap_err(), format!("overwrite {fail_at}"));
++    }
++    let custody = retained.unwrap();
++    assert_eq!((custody.data.as_ptr(), custody.data.capacity()), storage);
++    assert_eq!(
++        (custody.descriptors.as_ptr(), custody.descriptors.capacity()),
++        metadata_storage
++    );
++    assert_eq!(custody.descriptors, expected);
++    assert!(custody.overwrite.is_some());
++    assert_eq!(*calls.borrow(), (0..=fail_at).collect::<Vec<_>>());
++    for (index, item) in custody.data.iter().enumerate() {
++        assert_eq!(item.index, index);
++        assert_eq!(
++            item.bytes,
++            if index < fail_at {
++                [11, 11, 13, 13]
++            } else if index == fail_at {
++                [11, 11, 0, 0]
++            } else {
++                [0; 4]
++            }
++        );
++    }
++    assert!(dropped.borrow().is_empty());
++    drop(custody);
++    assert_eq!(*dropped.borrow(), [0, 1, 2, 99]);
++}
++
++#[test]
++fn overwrite_errors_and_panics_retain_full_roster_and_partial_writes() {
++    for index in 0..3 {
++        overwrite_failure(index, false, false);
++        overwrite_failure(index, true, false);
++        overwrite_failure(index, false, true);
++    }
++}
++
++#[test]
++fn overwrite_mismatched_rosters_reject_before_writing_and_retain_both() {
++    for (metadata_count, data_count) in [(0, 3), (3, 0), (2, 3), (3, 2)] {
++        let descriptors = (0..metadata_count).collect::<Vec<usize>>();
++        let data = (0..data_count).collect::<Vec<usize>>();
++        let metadata_storage = (descriptors.as_ptr(), descriptors.capacity());
++        let storage = (data.as_ptr(), data.capacity());
++        let mut retained = None;
++        let result = overwrite_with_custody_v1(
++            descriptors,
++            data,
++            |_, _, _| panic!("mismatch must reject before writes"),
++            |custody| retained = Some(custody),
++        );
++        assert_eq!(
++            result.unwrap_err(),
++            "KFD resident-data overwrite roster mismatch"
++        );
++        let custody = retained.unwrap();
++        assert_eq!(
++            (custody.descriptors.as_ptr(), custody.descriptors.capacity()),
++            metadata_storage
++        );
++        assert_eq!((custody.data.as_ptr(), custody.data.capacity()), storage);
++        assert_eq!(custody.descriptors, (0..metadata_count).collect::<Vec<_>>());
++        assert_eq!(custody.data, (0..data_count).collect::<Vec<_>>());
++    }
++}
++
++#[test]
++fn overwrite_capture_destructor_panic_retains_completed_writes() {
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let payload = Box::new(("overwrite destructor", 1usize));
++    let pointer = &*payload as *const _;
++    let bomb = DropPanic {
++        payload: Some(payload),
++    };
++    let mut retained = None;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        overwrite_with_custody_v1(
++            vec![17usize],
++            vec![Probe::new(17, &dropped)],
++            move |_, _, item| {
++                bomb.touch();
++                item.bytes = [7; 4];
++                Ok(())
++            },
++            |custody| retained = Some(custody),
++        )
++    }));
++    let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++    assert_eq!(&*payload as *const _, pointer);
++    let custody = retained.unwrap();
++    assert!(custody.overwrite.is_none());
++    assert_eq!(custody.descriptors, [17]);
++    assert_eq!(custody.data[0].bytes, [7; 4]);
++    assert!(dropped.borrow().is_empty());
++}
++
++#[test]
++fn overwrite_metadata_destructor_panic_retains_completed_writes() {
++    let dropped = Rc::new(RefCell::new(Vec::new()));
++    let payload = Box::new(("overwrite metadata destructor", 1usize));
++    let pointer = &*payload as *const _;
++    let mut retained = None;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        overwrite_with_custody_v1(
++            vec![DropPanic {
++                payload: Some(payload),
++            }],
++            vec![Probe::new(17, &dropped)],
++            |_, _, item| {
++                item.bytes = [7; 4];
++                Ok(())
++            },
++            |custody| retained = Some(custody),
++        )
++    }));
++    let payload = result.unwrap_err().downcast::<(&str, usize)>().unwrap();
++    assert_eq!(&*payload as *const _, pointer);
++    let custody = retained.unwrap();
++    assert!(custody.overwrite.is_none());
++    assert!(custody.descriptors.is_empty());
++    assert_eq!(custody.data[0].bytes, [7; 4]);
++    assert!(dropped.borrow().is_empty());
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+index 759f3d77d..d43285f62 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -18,6 +18,47 @@ thread_local! {
+     static PRIMARY_HOST_USAGE: Cell<Option<PrimaryHostUsage>> = const { Cell::new(None) };
+ }
+ 
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++struct MaterializationRetention {
++    calls: usize,
++    spec_count: usize,
++    retained_count: usize,
++    layouts: [Option<fe2o3_kfd::Gfx942FixedDispatchDataLayoutV1>; 3],
++    failure_usage: Option<Gfx942HostVisibleBackingUsageV1>,
++}
++
++thread_local! {
++    static MATERIALIZATION_RETENTION: Cell<Option<MaterializationRetention>> = const { Cell::new(None) };
++}
++
++pub(super) fn observe_materialization_failure_usage(
++    usage: Option<Gfx942HostVisibleBackingUsageV1>,
++) {
++    MATERIALIZATION_RETENTION.with(|slot| {
++        if let Some(mut observation) = slot.get() {
++            observation.failure_usage = usage;
++            slot.set(Some(observation));
++        }
++    });
++}
++
++pub(super) fn observe_materialization_retention(
++    specs: &[DataSpecV1],
++    data: &[Gfx942FixedDispatchDataV1],
++) {
++    MATERIALIZATION_RETENTION.with(|slot| {
++        if let Some(mut observation) = slot.get() {
++            observation.calls = observation.calls.saturating_add(1);
++            observation.spec_count = specs.len();
++            observation.retained_count = data.len();
++            for (layout, data) in observation.layouts.iter_mut().zip(data) {
++                *layout = Some(data.layout());
++            }
++            slot.set(Some(observation));
++        }
++    });
++}
++
+ pub(super) fn observe_primary_host_usage(owner: &PrimaryQueueReleaseCustodyV1, completed: bool) {
+     PRIMARY_HOST_USAGE.with(|slot| {
+         if let Some(mut usage) = slot.get() {
+@@ -299,6 +340,288 @@ fn native_runtime_two_stream_dispatch_uses_primary_and_auxiliary_then_refunds()
+     native_typed_dispatch_retained_release(2);
+ }
+ 
++#[cfg(feature = "hardware-qualification")]
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID; terminal retention until process exit"]
++fn native_runtime_auxiliary_budget_failure_retains_initialized_prefix() {
++    use crate::qualification_gfx942_vecadd_v1::{
++        GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
++        GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES, Gfx942VecaddQualificationArgumentsV1,
++        admit_gfx942_vecadd_qualification_v1,
++    };
++    use crate::{RuntimeContextV1, RuntimeErrorV1};
++
++    let prefix: usize = std::env::var("FE2O3_TEST_NATIVE_INITIALIZED_PREFIX")
++        .unwrap_or_else(|_| "2".to_owned())
++        .parse()
++        .unwrap();
++    assert!(prefix <= 2);
++    let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
++    let buffers = admitted.host_buffers().unwrap();
++    let mut backend =
++        KfdRuntimeBackendV1::open_gfx942_vecadd_qualification_v1(native_device()).unwrap();
++    backend
++        .configure_host_visible_backing_budget_v1(
++            Gfx942HostVisibleBackingBudgetV1::new((37 + 4 * prefix as u64) * 1024 * 1024, 128)
++                .unwrap(),
++        )
++        .unwrap();
++    backend
++        .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x78; 32], 128).unwrap())
++        .unwrap();
++    // Terminal retention intentionally lasts until this isolated test process exits.
++    // Do not run ordinary shutdown or Drop on the terminal context, even on assertion failure.
++    let mut context = core::mem::ManuallyDrop::new(RuntimeContextV1::open(backend).unwrap());
++    let device = context.devices()[0].id();
++    let module = context.load_module(device, admitted.hsaco()).unwrap();
++    let kernel = context
++        .resolve_kernel::<Gfx942VecaddQualificationArgumentsV1>(module, admitted.kernel_name())
++        .unwrap();
++    let mut prepared = Vec::with_capacity(2);
++    for _ in 0..2 {
++        let stream = context.create_stream(device).unwrap();
++        let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
++            let allocation = context
++                .allocate(
++                    device,
++                    RuntimeMemoryKindV1::HostVisible,
++                    BYTES as u64,
++                    ALIGNMENT,
++                )
++                .unwrap();
++            context.write_allocation(allocation, 0, bytes).unwrap();
++            allocation
++        });
++        prepared.push((
++            stream,
++            Gfx942VecaddQualificationArgumentsV1::new(
++                allocations[0],
++                allocations[1],
++                allocations[2],
++            )
++            .unwrap(),
++        ));
++    }
++    let (first_stream, first_args) = &prepared[0];
++    let _first = context
++        .launch(*first_stream, &kernel, first_args, admitted.geometry(), &[])
++        .unwrap();
++    context.flush_stream(*first_stream).unwrap();
++    let before = context.backend().host_visible_backing_usage_v1().unwrap();
++    let primary = context.backend().native_compute_lanes[0].unwrap();
++    assert_eq!(primary.ordinal(), 0);
++    assert!(context.backend().native_compute_lanes[1].is_none());
++    let active = context
++        .backend()
++        .active
++        .iter()
++        .chain(context.backend().compute_pipeline.iter())
++        .next()
++        .unwrap();
++    let first_identity = (active.id, active.stream, active.allocations.clone());
++    let second_backend_stream = *context
++        .backend()
++        .streams
++        .keys()
++        .find(|stream| **stream != active.stream)
++        .unwrap();
++    let publications_before = context
++        .backend()
++        .profiler
++        .as_ref()
++        .unwrap()
++        .recorded_events_for_test_v1()
++        .iter()
++        .filter(|event| {
++            matches!(
++                event.event,
++                KfdRuntimeProfileEventKindV1::NativeQueueCreated { .. }
++                    | KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
++            )
++        })
++        .cloned()
++        .collect::<Vec<_>>();
++    assert_eq!(
++        (before.used_backing_bytes, before.used_allocation_records),
++        (38_281_216, 12)
++    );
++    assert_eq!(
++        (
++            before.reserved_records,
++            before.retained_records,
++            before.quarantined_records,
++            before.poisoned
++        ),
++        (0, 12, 0, false)
++    );
++    assert!(
++        before.used_backing_bytes + prefix as u64 * BYTES as u64
++            <= before.budget.max_backing_bytes()
++    );
++    assert!(
++        before.used_backing_bytes + (prefix as u64 + 1) * BYTES as u64
++            > before.budget.max_backing_bytes()
++    );
++
++    MATERIALIZATION_RETENTION.with(|slot| slot.set(Some(MaterializationRetention::default())));
++    // Leave primary work logically pending so this launch must select AUX, not rebind lane 0.
++    let (second_stream, second_args) = &prepared[1];
++    let result = context
++        .launch(
++            *second_stream,
++            &kernel,
++            second_args,
++            admitted.geometry(),
++            &[],
++        )
++        .and_then(|_| context.flush_stream(*second_stream));
++    let error = match result {
++        Err(RuntimeErrorV1::BackendTerminal(error)) => error,
++        other => panic!("expected terminal native budget rejection, got {other:?}"),
++    };
++    assert_eq!(
++        error.detail(),
++        "KFD host-visible initialization: host-visible backing resource credits: runtime resource credit error: Capacity"
++    );
++    assert!(context.is_terminal() && context.backend().terminal);
++    assert_eq!(context.backend().native_compute_lanes[0], Some(primary));
++    assert!(context.backend().native_compute_lanes[1].is_none());
++    assert_eq!(
++        context
++            .backend()
++            .queue
++            .as_ref()
++            .unwrap()
++            .auxiliary_compute_lane_count_v1(),
++        0
++    );
++    assert_eq!(context.backend().allocations.len(), 6);
++    assert_eq!(context.backend().pending_compute.len(), 1);
++    assert_eq!(
++        context
++            .backend()
++            .pending_compute
++            .values()
++            .next()
++            .unwrap()
++            .launch
++            .stream,
++        second_backend_stream
++    );
++    let active = context
++        .backend()
++        .active
++        .iter()
++        .chain(context.backend().compute_pipeline.iter())
++        .find(|active| active.id == first_identity.0)
++        .unwrap();
++    assert_eq!(
++        (active.id, active.stream, &active.allocations),
++        (first_identity.0, first_identity.1, &first_identity.2)
++    );
++    assert!(active.execution.is_some());
++    let observation = MATERIALIZATION_RETENTION.with(Cell::get).unwrap();
++    assert_eq!(
++        (
++            observation.calls,
++            observation.spec_count,
++            observation.retained_count
++        ),
++        (1, 3, prefix)
++    );
++    for layout in &observation.layouts[..prefix] {
++        let layout = layout.unwrap();
++        assert_eq!(
++            layout.kind(),
++            fe2o3_kfd::Gfx942FixedDispatchDataKindV1::HostVisibleCoherent
++        );
++        assert_eq!(layout.requested_bytes(), BYTES as u64);
++        assert_eq!(layout.alignment(), 4096);
++    }
++    assert!(observation.layouts[prefix..].iter().all(Option::is_none));
++    let failure_usage = observation.failure_usage.unwrap();
++    assert_eq!(failure_usage.budget, before.budget);
++    assert_eq!(
++        failure_usage.used_backing_bytes,
++        before.used_backing_bytes + prefix as u64 * BYTES as u64
++    );
++    assert_eq!(
++        failure_usage.used_allocation_records,
++        before.used_allocation_records + prefix as u64
++    );
++    assert_eq!(
++        failure_usage.retained_records,
++        before.retained_records + prefix
++    );
++    assert_eq!(
++        (
++            failure_usage.reserved_records,
++            failure_usage.quarantined_records
++        ),
++        (before.reserved_records, before.quarantined_records)
++    );
++    // This is an inert pre-retake snapshot; the lower constructor subsequently retains its parent.
++    assert!(!failure_usage.poisoned);
++    let events = context
++        .backend()
++        .profiler
++        .as_ref()
++        .unwrap()
++        .recorded_events_for_test_v1();
++    assert_eq!(
++        events
++            .iter()
++            .filter(|event| matches!(
++                event.event,
++                KfdRuntimeProfileEventKindV1::NativeQueueCreated { .. }
++            ))
++            .count(),
++        1
++    );
++    assert_eq!(
++        events
++            .iter()
++            .filter(|event| matches!(
++                event.event,
++                KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
++            ))
++            .count(),
++        1
++    );
++    let event_count = events.len();
++    assert_eq!(
++        events
++            .iter()
++            .filter(|event| matches!(
++                event.event,
++                KfdRuntimeProfileEventKindV1::NativeQueueCreated { .. }
++                    | KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
++            ))
++            .cloned()
++            .collect::<Vec<_>>(),
++        publications_before
++    );
++    assert!(context.flush_stream(*second_stream).is_err());
++    assert_eq!(MATERIALIZATION_RETENTION.with(Cell::get), Some(observation));
++    assert_eq!(
++        context
++            .backend()
++            .profiler
++            .as_ref()
++            .unwrap()
++            .recorded_events_for_test_v1()
++            .len(),
++        event_count
++    );
++    MATERIALIZATION_RETENTION.with(|slot| slot.set(None));
++    println!(
++        "before_auxiliary={before:?} retained_materialization={observation:?} terminal_error={error:?}"
++    );
++    println!(
++        "native_auxiliary_budget_failure=retained initialized_prefix={prefix} unpublished_auxiliary=confirmed retry=inert reclamation=process_exit_only"
++    );
++}
++
+ #[cfg(feature = "hardware-qualification")]
+ fn native_typed_dispatch_retained_release(stream_count: usize) {
+     use crate::qualification_gfx942_vecadd_v1::{

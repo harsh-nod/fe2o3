@@ -454,20 +454,62 @@ for source, raw results and the retained failed experiment.
 The initial two-stream experiment allocated the second stream's buffers while
 the first dispatch was pending and received the existing Busy rejection for
 changing SDMA ownership. The passing probe preallocates both sets of buffers;
-it does not remove that restriction. Older NEW/AUXILIARY materializers and
-REBOUND materialization still lose callback-local successful owner prefixes on
-later error/panic, NEW retains its local memory only on ordinary error, and
-same-shape resident overwrite can lose its removed roster on failure. These
-reviewed gaps require retained runtime custody and integrated fault tests; they
-are not repaired by the new primary-only driver. R125 remains accepted and
+it does not remove that restriction. At that checkpoint, older NEW/AUXILIARY
+materializers and REBOUND materialization still lost callback-local successful
+owner prefixes on later error/panic, NEW retained its local memory only on ordinary
+error, and same-shape resident overwrite could lose its removed roster on failure.
+These reviewed gaps required retained runtime custody and integrated fault tests;
+they were not repaired by the primary-only driver. R125 remains accepted and
 R126/A1/A2/#182 remain open.
+
+## Runtime Materialization Custody
+
+The subsequent runtime packet roots the original specification vector and every
+returned native owner before the next initializer call. NEW installs its genuine
+memory session in `terminal_memory` before initialization and transfers it only
+after complete success. REBOUND uses the same prefix driver. Resident overwrite
+roots both original vectors before any borrowed write; errors and panics retain
+successful writes, partial current-item mutation and untouched suffixes without
+rollback or retry. Capture and metadata destructors run inside the unwind guard
+before native-owner transfer. Original errors and panic payloads are preserved.
+
+Fourteen production-driver CPU tests cover these custody boundaries, capacity
+rejection, vector storage, callback/metadata destruction and partial writes. The
+materializer adds only its output-vector reservation; the overwrite driver makes
+no additional allocations in the measured success cases. These are driver-level
+allocation counts, not native throughput measurements or a total-memory bound.
+GNU and musl runtime suites each pass 764 tests with four opt-in hardware tests
+ignored locally. Strict Clippy, formatting, no-default-feature compilation and the
+unsafe-source policy pass.
+
+Three process-isolated MI300X budget-rejection cases exercise the public runtime
+AUXILIARY route while primary work stays logically pending. Budgets of 37/41/45
+MiB reject initialization after exactly 0/1/2 returned 4 MiB native owners. The
+tests inspect the actual retained typed prefixes, exact pre-retake account
+charges, preserved first execution identity, retained second-stream pending
+request and unchanged queue/publication records. A repeated public flush is inert.
+These cases retain resources until process exit; they do not demonstrate a
+successful terminal shutdown, refund, native ioctl failure or physical overlap.
+Allocation, primary dispatch and preallocated two-stream success probes also
+pass on the new binary. See the
+[materialization receipt](evidence/dev-r126-runtime-materialization-2026-09-16/README.md).
+
+Pending-compute allocation remains blocked. Review identified a prerequisite:
+fresh allocation can return an owner through `with_live_queue_memory_model`
+before model retake succeeds, losing the returned authority on retake failure.
+Fix that custody boundary before separating existing-SDMA-owner admission from
+actual SDMA creation. HostVisible and DeviceLocal initialization need separate
+noninterference/currentness qualification; existing copy and persistent-compute
+alias restrictions must remain intact. R125 remains accepted; this packet does
+not accept R126 or close A1/A2/#182.
 
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
-   probes to applicable failure-retention paths. Close the legacy materializer,
-   NEW panic and resident-overwrite custody gaps recorded above, and qualify
-   allocation/SDMA ownership changes with pending compute.
+   probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
+   NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
+   ownership changes with pending compute after rooting lower allocation outputs
+   through model retake.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.
 2. Qualify the new directional route through genuine public runtime workflows,
