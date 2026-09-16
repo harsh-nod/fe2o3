@@ -5,6 +5,9 @@ use fe2o3_kernel_ir::{
     CanonicalKirDefinitionCoordinateV1 as Definition,
 };
 
+#[path = "production_slice_call_composition_v1_tests.rs"]
+mod call_composition;
+
 fn site(block: u32, statement: u32, access: u32, assertion: u32) -> ProductionSliceAccessSiteV1 {
     let root = SemanticFunctionIdV1::from_index(0);
     ProductionSliceAccessSiteV1::new(
@@ -71,7 +74,24 @@ fn slice_owner(
     elided: bool,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> ProductionPreRankedKirOwnerV1 {
-    let (ssa, launch) = fixture_with_blocks_and_symbol(
+    let (ssa, launch) = slice_source(changed_index, elided);
+    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+        ssa,
+        launch,
+        ProductionSemanticKirLimitsV1::default(),
+        budget,
+    )
+    .unwrap()
+}
+
+fn slice_source(
+    changed_index: bool,
+    elided: bool,
+) -> (
+    ProductionSemanticSsaOwnerV1,
+    crate::ProductionSourceLaunchRosterV1,
+) {
+    fixture_with_blocks_and_symbol(
         Fixture::ElidedBounds,
         false,
         |_, _| {
@@ -124,14 +144,7 @@ fn slice_owner(
         },
         |_| "slice_view_root".into(),
         &[U32],
-    );
-    ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-        ssa,
-        launch,
-        ProductionSemanticKirLimitsV1::default(),
-        budget,
     )
-    .unwrap()
 }
 
 fn with_slice_owner(
@@ -186,26 +199,25 @@ fn read_binds_exact_entry_slice_extent_index_and_source_argument() {
         let Definition::FunctionArgument { function, .. } = input else {
             unreachable!()
         };
-        for carrier in [data, length] {
-            let value = inventory
-                .definitions()
-                .iter()
-                .find(|row| row.coordinate == carrier)
-                .unwrap()
-                .value
-                .unwrap();
-            assert_eq!(
-                value_origin_v1::resolve_whole_value_origin_v1(
-                    inventory,
-                    owner.executable(),
-                    function,
-                    value,
-                    budget,
-                )
-                .unwrap(),
-                Some(input)
-            );
-        }
+        value_origin_v1::with_whole_value_origins_v1(
+            inventory,
+            owner.executable(),
+            function,
+            budget,
+            |origins, budget| {
+                for carrier in [data, length] {
+                    let value = inventory
+                        .definitions()
+                        .iter()
+                        .find(|row| row.coordinate == carrier)
+                        .unwrap()
+                        .value
+                        .unwrap();
+                    assert_eq!(origins.resolve(value, budget).unwrap(), Some(input));
+                }
+            },
+        )
+        .unwrap();
     });
 }
 

@@ -283,8 +283,20 @@ impl<'g> CanonicalKirInventoryV1<'g> {
         value: ValueId,
         budget: &mut Budget<'_>,
     ) -> Result<Option<&CanonicalKirDefinitionRefV1<'g>>> {
-        Ok(find_value(&self.value_index, function, value, budget)?
+        Ok(self
+            .definition_index_for_value(function, value, budget)?
             .and_then(|index| self.definitions.get(index)))
+    }
+
+    /// Index into this inventory's definition roster, not a durable identity.
+    /// Prepared analyses use this to index dense facts without a second search.
+    pub fn definition_index_for_value(
+        &self,
+        function: FunctionCoordinate,
+        value: ValueId,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<usize>> {
+        find_value(&self.value_index, function, value, budget)
     }
 
     fn build(

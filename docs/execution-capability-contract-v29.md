@@ -1,0 +1,103 @@
+# Execution Capability Integration Contract
+
+Status: allocated implementation contract for #272/#275, not an admitted wire
+format or executable feature. M0 and M1 remain incomplete. The production
+importer still rejects staged context/tile terminals. The implementation must
+use the one production graph and existing verification and launch gates.
+
+## Independent Version Allocations
+
+| Namespace | Allocation | Base |
+| --- | --- | --- |
+| Semantic MIR | V29 | Published V28 |
+| Canonical KIR | V15 | Published V12 |
+| Registered semantic operations | V3, Execution family 6 | Published V2 |
+
+These versions do not activate intermediate historical formats. Semantic MIR
+V16-V26, held numerical V27 and historical KIR V13/V14 remain separate. Match
+explicit supported schemas, not a numeric range that admits those drafts.
+
+The following tags are reserved together; codecs are not yet implemented.
+
+| Operation | MIR intrinsic | KIR operation | Execution opcode |
+| --- | --- | --- | --- |
+| ContextIssue | 81 | 32 | 1 |
+| WorkgroupDerive | 82 | 33 | 2 |
+| WorkgroupScopeEnd | 83 | 34 | 3 |
+| MaskedTileLoadU32 | 84 | 35 | 4 |
+| MaskedTileIntoFragmentU32 | 85 | 36 | 5 |
+| LaneFragmentIntoPartsU32 | 86 | 37 | 6 |
+
+KIR type tags 9/10/11/12 denote context/workgroup/masked-u32-tile/u32-fragment.
+All four are non-storable. Semantic type payload tags, trusted source terminal
+identities and checked-transformation receipt versions require their own closed
+inventories and allocations. In particular, source CombinedV4 tags through 121
+and semantic intrinsic 68 are occupied. ScopeEnd has no public Rust terminal.
+
+## Ownership And Effects
+
+One private, session-bound original/optimized issuance receipt authenticates
+logical ContextIssue against the physical wrapper. Preserve physical export,
+target, launch and argument order. There is no caller-supplied context kernarg.
+Type equality and zero-sized layout never authenticate issuance.
+
+WorkgroupDerive exclusively borrows its actual context. Its graph occurrence
+identifies the scope; sequential InitialEpoch scopes remain distinct. LoadMasked
+borrows that workgroup, so multiple loads are legal. IntoFragment consumes a
+tile, and IntoParts consumes a fragment. Their exact producer, scope, epoch and
+geometry remain associated with those values.
+
+ScopeEnd consumes the workgroup, explicitly discards the exact remaining live
+tiles/fragments of that scope, and releases its context borrow. Reject missing,
+duplicate or foreign discard operands and subsequent scoped uses. Source values
+are affine: unused tiles may be dropped, not forced through IntoParts.
+ScopeEnd is not a GPU barrier or proof of memory visibility.
+
+Issuance, acquire, consume and scope end carry ordered compiler effects even
+when physically inert. Masked loads additionally carry physical Reads. Empty
+physical effects never justify deleting, duplicating or reordering lifecycle
+operations. Rust reference provenance must survive authenticated materialization;
+do not turn a zero-sized context borrow into an ordinary addressable pointer.
+
+## CFG And Structured Lowering
+
+The first implementation checks acyclic, same-function capability regions after
+generic checked callback materialization. Propagate ownership along actual CFG
+edges and require exact state equality at joins. Mutually exclusive branches
+may each consume the same incoming value. Every admitted exit closes its scope.
+Reject capability phis, residual capability calls, exceptional exits, unreachable
+capability islands and cycles until complete rules exist. Trapping operations
+must be checked as well as terminators. Ordinary parts can escape; roles cannot.
+
+IntoParts returns E u32 values followed by E bool masks using ordinary aggregate
+transport. Keep 1 <= L <= 256, 1 <= E <= 125 and initial [L, 1, 1] geometry.
+Checked address overflow or an out-of-bounds mask yields zero, false and no Read.
+Blocked/Striped selection is immutable and binds source/SSA, structured input,
+root, target, launch and covered operations before scalarization. Per-lane
+results need independent distribution-specific oracles. Balanced ownership does
+not prove workgroup-uniform arrival, input/base, numerical behavior or coverage.
+
+Checked expansion must replay each generated guard/load/result and discharged
+lifecycle operation against the exact input/output graph and schedule. The
+existing Retained/ConstantFrom lineage is insufficient. Preserve original
+call-path/access lineage and the complete ranked/formal effect census. Do not
+relax the helper-purity gate as a substitute for that integration.
+
+Lower/discharge all structured roles and operations on the same graph before
+existing simulator or LLVM export. Residual operations reject; neither erased
+types nor matching layouts can stand in for a successful lifecycle proof.
+
+## Required Acceptance
+
+Land types, codecs, bounded structural/scope verification, operand/effect
+traversal and transformation replay together before admission. Test duplicate
+issuance, overlapping/wrong/missing scope ends, repeated legal loads, stale or
+double consumption, affine disposal, balanced branches, asymmetric joins,
+bypasses, traps, cycles, hidden storage, source/schedule substitution, swapped
+parts, exact Read traces, old-decoder refusal and exact/one-short budgets.
+
+The first ordinary-source positive returns parts from with_workgroup and
+folds/stores in the logical root, including empty/tail/full/overflow/canary cases.
+Manual KIR fixtures alone do not establish production support. General helper
+reads, reduction, protected proof and target-matched hardware remain separate
+required integration work under the full roadmap, not implied by this contract.
