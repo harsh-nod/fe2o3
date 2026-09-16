@@ -3919,3 +3919,5 @@ fn declarations_are_explicitly_unsupported() {
         }]
     );
 }
+
+include!("uniformity/proven_no_overflow_control.rs");
