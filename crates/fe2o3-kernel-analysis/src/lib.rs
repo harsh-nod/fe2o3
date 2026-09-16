@@ -7,6 +7,7 @@
 
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
+mod canonical_kir_call_effects_v1;
 mod canonical_kir_contract_catalog_v1;
 mod canonical_kir_coordinate_preservation_v1;
 mod canonical_kir_inventory_v1;
@@ -41,6 +42,7 @@ mod uniformity;
 
 #[cfg(feature = "authenticated-machine-effect")]
 pub use authenticated_machine_effect::*;
+pub use canonical_kir_call_effects_v1::*;
 pub use canonical_kir_contract_catalog_v1::*;
 pub use canonical_kir_coordinate_preservation_v1::*;
 pub use canonical_kir_inventory_v1::*;
