@@ -235,6 +235,15 @@ pub(crate) fn rustc_mir_body_sha256_v1<'tcx>(
     instance: Instance<'tcx>,
 ) -> [u8; 32] {
     let body = tcx.instance_mir(instance.def);
+    borrowed_rustc_mir_body_sha256_v1(tcx, instance, body)
+}
+
+/// Hash a retained source body without querying (and stealing) optimized MIR.
+pub(crate) fn borrowed_rustc_mir_body_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &rustc_middle::mir::Body<'tcx>,
+) -> [u8; 32] {
     domain_digest(
         MIR_BODY_DOMAIN_V1,
         &[

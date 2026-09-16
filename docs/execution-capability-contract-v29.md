@@ -2,7 +2,9 @@
 
 Status: the inert semantic MIR V29 types and callable codec are implemented;
 executable capability integration is not complete. M0 and M1 remain incomplete. The production
-importer still rejects staged context/tile terminals. The implementation must
+importer constructs authenticated ContextIssue but still rejects workgroup/tile
+terminals. Source identity 122 and the context commitment are an unpublished
+draft pending the shared #271 allocation. The implementation must
 use the one production graph and existing verification and launch gates.
 
 ## Independent Version Allocations
@@ -65,11 +67,26 @@ their existing production schema selection.
 
 This is type representation, not capability issuance. In particular, a caller
 parameter with a capability type does not gain authority: executable
-materialization still rejects before aggregate/ZST erasure or export. The five
-source terminals remain rejected. Their future importer must consume the
-original/optimized entry receipt into the actual request and recover only the
-authenticated issuer-to-helper move when rustc erases its ZST argument. It must
-not accept arbitrary role constants or infer brands/epochs from equal layouts.
+materialization still rejects before aggregate/ZST erasure or export. The four
+remaining source terminals remain rejected. ContextIssue consumes the move-only
+original/optimized entry receipt through preflight and actual body construction.
+Collection ordinals are not semantic IDs: the receipt joins exact Instances to
+the sorted function table and checked local/block mappings. It also retains the
+exact optimized body, so stale or substituted MIR cannot reuse call coordinates.
+
+Only the authenticated helper's argument zero can recover an erased context as
+a move from the issuer destination. Surviving moves and ordinary ZST operands
+are preserved. Both call occurrences, destinations, return edges and unwind
+actions must be consumed once, independent of semantic block construction order.
+The real rustc signature, FnAbi, type identity, physical root and existing
+reference-effect bindings remain intact. No arbitrary role constant is admitted.
+
+The draft V5 body-child extension binds the separately captured original MIR
+digest, original and optimized occurrences, sorted function/local/block IDs,
+and restored-argument binding. The original body is hashed while borrowed,
+without querying optimized MIR. The existing function child binds optimized
+MIR; ordinary bodies receive no extra transcript fields. This is source custody
+and inert construction, not checked KIR materialization or executable authority.
 
 ## Ownership And Effects
 

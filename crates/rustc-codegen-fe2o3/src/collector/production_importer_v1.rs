@@ -303,7 +303,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     if !exact_ordered_axes_match(retained_roots, independently_observed_roots) {
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
-    context_entries
+    let context_entries = context_entries
         .validate_for_import_v1(tcx, &collection)
         .map_err(ProductionSemanticImportErrorV1::ContextCustody)?;
     let reference_effect_bindings =
@@ -326,13 +326,14 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         sha256: rustc_identity_inventory_sha256,
         canonical_transcript: rustc_identity_inventory_transcript,
     } = identity_inventory;
-    let plan = match build_production_semantic_preflight_plan_v1(
+    let mut plan = match build_production_semantic_preflight_plan_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         functions,
         roots,
         rustc_identity_inventory_sha256,
         debug_source_capture,
+        Some(context_entries),
     ) {
         Ok(plan) => plan,
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
@@ -378,7 +379,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     let semantic_mir = construct_complete_request_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
-        &plan,
+        &mut plan,
         semantic_types.into_records(),
         semantic_function_abis,
         semantic_terminal_abis,
@@ -432,7 +433,7 @@ fn require_lineage_transcript_bound_v3(
 fn construct_complete_request_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
-    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+    plan: &mut ProductionSemanticPreflightPlanV1<'tcx>,
     types: Vec<SemanticTypeDeclV1>,
     function_abis: ConstructedSemanticFunctionAbisV1,
     terminal_abis: ConstructedSemanticFunctionAbisV1,
@@ -510,6 +511,7 @@ fn construct_complete_request_v1<'tcx>(
         });
     }
 
+    let mut context_entries = plan.take_context_entries_v29();
     let mut functions = Vec::new();
     functions
         .try_reserve_exact(plan.function_producers().len())
@@ -638,6 +640,7 @@ fn construct_complete_request_v1<'tcx>(
                     direct_calls: &direct_calls,
                     terminal_expansions: &terminal_expansions,
                     normalized_intrinsics: &normalized_intrinsics,
+                    context_entry: context_entries.remove(&function_id),
                 },
                 &mut body_owner,
             )
@@ -645,6 +648,9 @@ fn construct_complete_request_v1<'tcx>(
         );
     }
 
+    if !context_entries.is_empty() {
+        return Err(body_owner_table_mismatch_v1("unused context root binding"));
+    }
     let contains_execution_roles = types.iter().any(|ty| {
         matches!(
             ty.rust_type_kind(),
@@ -948,6 +954,29 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::ContextIssue
+            if inputs.is_empty() && rust_inputs.is_empty()
+                && abi.canon_abi() == SemanticCanonAbiV1::Rust
+                && abi.extern_abi() == SemanticExternAbiV1::Rust
+                && !abi.c_variadic()
+                && output == abi.return_value().ty()
+                && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+                && abi.return_value().adjusted().is_none()
+                && abi.return_value().pointee_override().is_none()
+                && matches!(rust_output.kind(), TyKind::Adt(definition, arguments)
+                    if definition.is_struct() && arguments.len() == 4
+                        && arguments[0].as_region().is_some()
+                        && arguments[1..].iter().all(|arg| arg.as_type().is_some())
+                        && trusted_device_items::classify(tcx, definition.did()) == Some(TrustedDeviceItem::KernelContext))
+                && types.get(output.index() as usize).is_some_and(|ty|
+                    ty.identity() == crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(tcx, rust_output)
+                        && ty.rust_type_kind() == fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(
+                            fe2o3_mir_model::semantic_mir_v1::SemanticExecutionRoleV29::KernelContext)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::Execution(
+                fe2o3_mir_model::semantic_mir_v1::SemanticExecutionOperationV29::ContextIssue { context: output },
+            ))
+        }
         ProductionTerminalExpansionV1::ThreadIndex(axis)
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -2741,7 +2770,8 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::ContextIssue
+        | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -4058,6 +4088,8 @@ const fn terminal_operation_tag_for_schema_v1(
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     match expansion {
+        // Draft allocation requested in #271; do not publish before acknowledgment.
+        ProductionTerminalExpansionV1::ContextIssue => 122,
         ProductionTerminalExpansionV1::ThreadIndex(
             fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
         ) => 13,
@@ -4548,6 +4580,28 @@ mod tests {
         use crate::production_semantic_terminal_v1::{
             ProductionBf16ConversionV1, ProductionTerminalExpansionV1,
         };
+        for (expansion, tag) in [
+            (ProductionTerminalExpansionV1::Gfx950LdsTransposePublish, 83),
+            (ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent, 118),
+            (
+                ProductionTerminalExpansionV1::DisjointBlockComponentIndex,
+                119,
+            ),
+            (ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor, 120),
+            (
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1,
+                121,
+            ),
+            (ProductionTerminalExpansionV1::ContextIssue, 122),
+        ] {
+            assert_eq!(
+                terminal_operation_tag_for_schema_v1(
+                    expansion,
+                    TerminalIdentitySchemaV1::CombinedV4
+                ),
+                tag
+            );
+        }
 
         let pipeline = [
             ProductionTerminalExpansionV1::WorkgroupPipelineCurrent,

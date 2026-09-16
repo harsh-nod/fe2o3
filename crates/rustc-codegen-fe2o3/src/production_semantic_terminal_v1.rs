@@ -22,6 +22,7 @@ pub(crate) enum ProductionBf16ConversionV1 {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
+    ContextIssue,
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -154,6 +155,9 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
 impl ProductionSemanticTerminalRuleV1 {
     pub(crate) const fn from_trusted_device_item(item: TrustedDeviceItem) -> Self {
         match item {
+            TrustedDeviceItem::KernelContextIssue => {
+                Self::Expand(ProductionTerminalExpansionV1::ContextIssue)
+            }
             TrustedDeviceItem::ThreadIndexX => Self::Expand(
                 ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
             ),
@@ -484,6 +488,9 @@ impl ProductionSemanticTerminalRuleV1 {
     #[cfg(test)]
     const fn trusted_device_item(self) -> TrustedDeviceItem {
         match self {
+            Self::Expand(ProductionTerminalExpansionV1::ContextIssue) => {
+                TrustedDeviceItem::KernelContextIssue
+            }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X)) => {
                 TrustedDeviceItem::ThreadIndexX
             }
@@ -836,6 +843,10 @@ mod tests {
     fn fill_terminals_have_explicit_workload_neutral_expansions() {
         let cases = [
             (
+                TrustedDeviceItem::KernelContextIssue,
+                ProductionTerminalExpansionV1::ContextIssue,
+            ),
+            (
                 TrustedDeviceItem::ThreadIndexX,
                 ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
             ),
@@ -1145,7 +1156,6 @@ mod tests {
     fn every_unimplemented_terminal_is_retained_as_an_explicit_rejection() {
         for item in [
             TrustedDeviceItem::KernelContext,
-            TrustedDeviceItem::KernelContextIssue,
             TrustedDeviceItem::ExecutionWorkgroupCapability,
             TrustedDeviceItem::ExecutionWorkgroupCurrent,
             TrustedDeviceItem::MaskedTile1D,

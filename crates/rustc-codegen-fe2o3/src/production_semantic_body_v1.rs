@@ -394,6 +394,7 @@ fn require_canonical_callable_id_v1(
 }
 
 pub(crate) struct ProductionSemanticBodyInputV1<'a, 'tcx> {
+    pub(crate) context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     pub(crate) tcx: TyCtxt<'tcx>,
     pub(crate) instance: Instance<'tcx>,
     pub(crate) body: &'a Body<'tcx>,
@@ -571,6 +572,7 @@ impl ConstructionTotalsV1 {
 }
 
 struct BodyProducerV1<'a, 'owner, 'tcx> {
+    context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     body: &'a Body<'tcx>,
@@ -604,17 +606,21 @@ type CallTablesV1<'a, 'tcx> = (
 );
 
 pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
-    input: ProductionSemanticBodyInputV1<'a, 'tcx>,
+    mut input: ProductionSemanticBodyInputV1<'a, 'tcx>,
     owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<SemanticFunctionDeclV1, ProductionSemanticBodyErrorV1> {
     validate_export_role_v1(input.role, &input.export)?;
     let abi = input.abi.clone();
     let export = input.export.clone();
     let entry = input.entry;
-    let mut producer = BodyProducerV1::new(&input, owner)?;
+    let context_entry = input.context_entry.take();
+    let mut producer = BodyProducerV1::new(&input, owner, context_entry)?;
     let locals = producer.construct_locals()?;
     let blocks = producer.construct_blocks()?;
     producer.require_all_call_bindings_consumed()?;
+    if let Some(context) = producer.context_entry.take() {
+        context.finish().map_err(table)?;
+    }
 
     let ProductionSemanticFunctionIdentitiesV1 {
         identity,
@@ -650,6 +656,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
     fn new(
         input: &'a ProductionSemanticBodyInputV1<'a, 'tcx>,
         owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
+        context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     ) -> Result<Self, ProductionSemanticBodyErrorV1> {
         let owned_callable = owner.defined_callable(input.instance)?;
         if owned_callable.index() != input.function.index() {
@@ -683,6 +690,18 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             build_local_tables_v1(input.body, input.local_bindings, owner)?;
         let (blocks_by_raw, blocks_by_semantic) =
             build_block_tables_v1(input.body, input.block_bindings, owner)?;
+        if let Some(context) = &context_entry {
+            owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
+            context
+                .validate_body(
+                    input.instance,
+                    input.function,
+                    input.body,
+                    |raw| locals_by_raw.get(raw).map(|binding| binding.semantic_local),
+                    |raw| blocks_by_raw.get(raw).map(|binding| binding.semantic_block),
+                )
+                .map_err(table)?;
+        }
         if blocks_by_raw
             .get(START_BLOCK.index())
             .map(|binding| binding.semantic_block)
@@ -730,6 +749,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 ),
             })?;
         let mut producer = Self {
+            context_entry,
             tcx: input.tcx,
             instance: input.instance,
             body: input.body,
@@ -1243,9 +1263,27 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 let resolved = resolve_direct_call_v1(self.tcx, self.instance, self.body, func)
                     .map_err(|construct| unsupported(construct, block, None))?;
                 let semantic_callee = self.resolve_call_binding(raw_block, resolved, args.len())?;
+                let restored = if let Some(context) = &mut self.context_entry {
+                    self.owner
+                        .charge(SemanticMirResourceV1::ValidationWork, 1)?;
+                    context
+                        .consume_call(self.body, raw_block as usize, resolved, args.len())
+                        .map_err(table)?
+                } else {
+                    None
+                };
                 let mut arguments = try_vec_v1(args.len(), SemanticMirResourceV1::CallArguments)?;
-                for argument in args {
-                    arguments.push(self.construct_operand(&argument.node, block, None)?);
+                for (ordinal, argument) in args.iter().enumerate() {
+                    let restored_operand;
+                    let operand = if ordinal == 0
+                        && let Some(local) = restored
+                    {
+                        restored_operand = Operand::Move(Place::from(local));
+                        &restored_operand
+                    } else {
+                        &argument.node
+                    };
+                    arguments.push(self.construct_operand(operand, block, None)?);
                 }
                 let destination = if let Some(target) = target {
                     Some(SemanticCallDestinationV1::new(
@@ -1846,6 +1884,11 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             },
         };
         if let Some(expansion) = expansion {
+            if expansion == ProductionTerminalExpansionV1::ContextIssue
+                && self.context_entry.is_none()
+            {
+                return Err(table("context issuer without source custody"));
+            }
             let recipe = self
                 .terminal_expansions_by_raw
                 .get(index)
@@ -2285,7 +2328,8 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
-        ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::ContextIssue
+        | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -2485,6 +2529,10 @@ mod tests {
 
     #[test]
     fn terminal_expansion_arities_are_closed() {
+        assert_eq!(
+            terminal_argument_count_v1(ProductionTerminalExpansionV1::ContextIssue),
+            Some(0)
+        );
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
             Some(0)
