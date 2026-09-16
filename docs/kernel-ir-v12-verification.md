@@ -1,7 +1,7 @@
 # Kernel IR V12 Verification
 
-Status: shared compiler infrastructure, not production V12 graph optimization,
-target lowering, or formal qualification.
+Status: shared compiler infrastructure with native V12 lowering support, not
+completed production V12 graph migration or formal qualification.
 
 ## One Semantic Verifier
 
@@ -135,20 +135,34 @@ not launch or proof authority. Direct verification events make this
 memory-only report incomplete because it cannot represent compiler ordering;
 indirect events are reported through unavailable call effects.
 
+Native actual-owner lowering is implemented in
+[lowering_native_v12.rs](../crates/fe2o3-amdgcn-model/src/lowering_native_v12.rs)
+for exact `gfx942:xnack-` and `gfx950:xnack-` targets. These entry points borrow
+the actual `VerifiedCanonicalKernelIrModuleV12`; they do not reconstruct an
+executable from a caller-supplied identity pair or rerun the optimizer. Semantic
+anchors bind the owner's full digest and canonical length. Existing target,
+operation, helper-ABI and resource checks, including the multi-body anchor
+absence policy, remain in force. Returned LLVM is inert, not source/formal
+admission, protected publication, launch evidence or hardware qualification.
+The lowering engine retains its separate resource policy.
+
 The following boundaries remain closed:
 
 - AMDGPU raw-Module entry points reject V12 vectors and verification events
   before LLVM emission, including unused declarations, nested types,
   unreachable blocks, dead results, and types embedded in legacy operations.
-- Existing Pliron graph import, legacy optimizer admission, simulation
+  Native actual-owner lowering preserves that feature preflight. Historical
+  module-plus-identity lowering APIs still reject a V12 identity.
+- Historical Pliron graph import, legacy optimizer admission, simulation
   containers, and simulator execution retain their unsupported-V12 boundaries.
+  Separate native V12 graph/transition APIs are not historical admission routes.
 - Formal-memory extraction does not admit vector operations or verification
   events as completed modeled effects. A call to a marker-bearing helper
   cannot be skipped as a pure call.
-- No catalog-key authentication, V12 production graph migration, V12
-  optimization or target legalization, tutorial-wide compiler qualification,
-  hardware execution, or formal compiler verification follows from this
-  shared-verifier boundary.
+- No catalog-key authentication, completed V12 production graph migration,
+  arbitrary V12 feature legalization, tutorial-wide compiler qualification,
+  hardware execution, or formal compiler verification follows from these
+  shared-verifier and native-lowering boundaries.
 
 ## Canonical Transition Receipts
 

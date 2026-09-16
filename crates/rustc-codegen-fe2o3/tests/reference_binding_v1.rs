@@ -79,6 +79,19 @@ fn run_feature(target: &Path, feature: &str) -> String {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn aggregate_component_reference_reaches_the_proof_boundary() {
+    let target = ScratchTarget::new();
+    let stderr = run_feature(&target.0, "reference-aggregate");
+    assert!(
+        stderr.contains("functional-refinement proof runtime unavailable")
+            && stderr.contains("compilation stopped before proof admission or artifact emission")
+            && !stderr.contains("UnmodeledGpuValue"),
+        "aggregate component did not complete the source-to-reference join:\n{stderr}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_rejected() {
     let target = ScratchTarget::new();
     let positive = run_feature(&target.0, "reference-positive");
