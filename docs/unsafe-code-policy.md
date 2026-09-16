@@ -41,6 +41,16 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The source-safety fixture `owned_unsafe_closure.rs` deliberately contains one
+empty unsafe block inside an owned `FnOnce` closure. It exercises rooted source
+rejection even when MIR optimization removes the empty block. There is no unsafe
+operation or runtime permission to replace with a safe API: removing the syntax
+would remove the negative case. The inventory records this test-only block;
+`production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics`
+must continue rejecting it before artifact export. This reconciles the fixture
+introduced in `669713204edf8f6685b79f604bd5f05708cedcf2`, without changing its
+source or the inventory gate.
+
 - Keep pure compiler, simulator, debugger-engine, and profiler-analysis modules
   unsafe-free, using `forbid(unsafe_code)` where the crate boundary supports it.
 - Prefer existing safe typed OS APIs. Keep descriptor ownership in `OwnedFd`,
