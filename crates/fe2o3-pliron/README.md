@@ -24,10 +24,16 @@ depends on the core and publicly re-exports its existing API for downstream
 compatibility.
 
 The dependency is pinned to reviewed Pliron v0.17.0 fork commit
-`161c385576d45d4e634ba179fa93a545b91124e6`. It is a strict descendant of
+`cc902cc8c669b5de2b292ae8638d9e8311bc735b`. It is a strict descendant of
 upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and adds
 private context provenance on upstream pointers and the mutation-attempt epoch
 used by the production analysis boundary.
+
+The fork also exposes a nonallocating byte-length query for live SSA value
+names. It reads borrowed debug metadata and checks length arithmetic, allowing
+analysis preflight to measure names without constructing diagnostic strings.
+The query is linear in defining arity plus attribute count; it provides no
+semantic proof or resource-admission authority by itself.
 
 The fork also provides opt-in rewrite observers and occurrence notifications for
 CFG merging, unreachable-block removal, and dead block-argument removal. The

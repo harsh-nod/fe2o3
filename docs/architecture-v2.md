@@ -726,7 +726,7 @@ future MLIR lower half without changing the source API, artifact manifest, or
 verification model.
 
 The current implementation pins Pliron v0.17.0 commit
-`161c385576d45d4e634ba179fa93a545b91124e6` and provides a bounded context,
+`cc902cc8c669b5de2b292ae8638d9e8311bc735b` and provides a bounded context,
 private context-identity, registration, and pass-plan shell. The reviewed
 upstream pointers carry context provenance, and fe2o3 additionally authenticates
 owner, stage, root, and graph epoch. Production analysis is private to the

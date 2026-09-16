@@ -1,4 +1,853 @@
 #[cfg(test)]
+fn component_race_names_v1() -> RaceNameCensusV1 {
+    // Inert formula inputs only; production obtains these from the live graph.
+    RaceNameCensusV1 {
+        name_storage: 64,
+        scan_work: 0,
+        execution_lookup_work: 0,
+    }
+}
+
+#[cfg(test)]
+mod name_census_tests {
+    use super::*;
+    use crate::production_analysis::pliron_ir_identity::{
+        LivePlironStructuralIdentityProviderV1, derive_pliron_ir_structural_identity_v1,
+    };
+    use crate::production_analysis::pliron_pass_contract::PlironStructuralIdentityProviderV1;
+    use dialect_kernel::{IndexType, RankedViewType, ReturnOp};
+    use pliron::{
+        builtin::types::FunctionType,
+        debug_info::{set_block_arg_name, set_operation_result_name},
+        dialect::DialectName,
+    };
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+    };
+
+    fn unlimited() -> ProductionAnalysisResourceLimitsV1 {
+        ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX)
+    }
+
+    fn context() -> Context {
+        let mut context = Context::new();
+        dialect_kernel::register_dialect(
+            &mut context,
+            &DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        dialect_gpu::register_dialect(&mut context).unwrap();
+        context
+    }
+
+    fn fixture(
+        context: &mut Context,
+        name: &str,
+        arguments: usize,
+        accesses: usize,
+    ) -> (FuncOp, Value, Value) {
+        assert!(arguments > 0);
+        let ty = IndexType::get(context).into();
+        let function_type = FunctionType::get(context, vec![ty; arguments], vec![]);
+        let function = FuncOp::new(context, name.try_into().unwrap(), function_type);
+        let entry = function.get_entry_block(context);
+        let index = entry.deref(context).get_argument(arguments - 1);
+        let view_type = RankedViewType::new(context, 32, true, vec![8]).unwrap();
+        let view = RankedViewOp::new_in_space(context, view_type, vec![], MemorySpaceAttr::Global)
+            .unwrap();
+        view.get_operation().insert_at_back(entry, context);
+        for _ in 0..accesses {
+            // Read-only effects still construct names before later race filtering.
+            let access = RankedAccessOp::new(
+                context,
+                AccessKindAttr::Read,
+                view.result(context),
+                vec![index],
+            )
+            .unwrap();
+            access.get_operation().insert_at_back(entry, context);
+        }
+        ReturnOp::new(context)
+            .get_operation()
+            .insert_at_back(entry, context);
+        (function, view.result(context), index)
+    }
+
+    fn census(context: &Context, function: &FuncOp) -> ProductionAnalysisInputCensusV1 {
+        LivePlironStructuralIdentityProviderV1::new(context, function)
+            .capture_with_resource_limits_v1(unlimited())
+            .ok()
+            .expect("actual fixture passes structural identity admission")
+            .input_census
+    }
+
+    fn rename(context: &Context, value: Value, name: &str) {
+        let index = value.find_index(context);
+        let name = Some(name.try_into().unwrap());
+        match value.defining_entity() {
+            DefiningEntity::Op(operation) => {
+                set_operation_result_name(context, operation, index, name)
+            }
+            DefiningEntity::Block(block) => set_block_arg_name(context, block, index, name),
+        }
+    }
+
+    #[test]
+    fn race_name_census_matches_actual_names_and_counts_repeated_read_operands() {
+        for arguments in [1, 37] {
+            let mut context = context();
+            let (function, view, index) = fixture(&mut context, "name_population", arguments, 2);
+            rename(&context, view, &"v".repeat(8_192));
+            rename(&context, index, &"i".repeat(16_384));
+            let census = census(&context, &function);
+            let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+            let mut queried = Vec::new();
+            let names = collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                census,
+                unlimited(),
+                |value| {
+                    queried.push(value);
+                    value.unique_name_byte_len(&context)
+                },
+            )
+            .unwrap();
+            assert_eq!(queried, [view, index, view, index]);
+            assert_eq!(
+                names.name_storage,
+                index.unique_name(&context).as_ref().len()
+            );
+            assert!(names.name_storage > view.unique_name(&context).as_ref().len());
+            let lookup =
+                census.max_operation_arity.max(census.block_arguments) + 20 * census.attributes;
+            assert_eq!(names.execution_lookup_work, lookup);
+            assert_eq!(
+                names.scan_work,
+                32 + 8 * census.blocks
+                    + 12 * census.operations
+                    + 4 * census.operands
+                    + (census.operands + census.operations) * (lookup + 80)
+            );
+            let mut analyses = PlironAnalysisManagerV1::new(&function);
+            analyses.prepare_sparse_indices(&context, &function);
+            let sparse = analyses.sparse_indices().unwrap();
+            let expected = race_resource_upper_bound_for_shape_v1(
+                census,
+                names,
+                static_invocation_shape_for_resource_v1(sparse, None),
+                presburger_invocation_shape_for_resource_v1(sparse.launch_extents()),
+                unlimited(),
+            )
+            .unwrap();
+            assert_eq!(
+                preflight_race_resource_upper_bound_v1(
+                    &context,
+                    &function,
+                    analyses.function_inventory().ok(),
+                    census,
+                    sparse,
+                    None,
+                    unlimited(),
+                ),
+                Ok(expected)
+            );
+            assert_eq!(
+                preflight_race_resource_upper_bound_v1(
+                    &context,
+                    &function,
+                    None,
+                    census,
+                    sparse,
+                    None,
+                    unlimited(),
+                ),
+                Err(race_name_census_error_v1())
+            );
+        }
+    }
+
+    #[test]
+    fn race_name_census_admits_scratch_and_work_before_queries_and_charges_scan_once() {
+        let mut context = context();
+        let (function, _, _) = fixture(&mut context, "name_scan_limits", 1, 1);
+        let census = census(&context, &function);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        let work = race_name_scan_work_v1(census).unwrap();
+        for (work_limit, peak_limit, expected) in [
+            (work - 1, 16, "work upper bound"),
+            (work, 15, "peak storage upper bound"),
+        ] {
+            let queries = Cell::new(0);
+            let error = collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                census,
+                ProductionAnalysisResourceLimitsV1::new(work_limit, peak_limit),
+                |value| {
+                    queries.set(queries.get() + 1);
+                    value.unique_name_byte_len(&context)
+                },
+            )
+            .unwrap_err();
+            assert_eq!(queries.get(), 0);
+            assert_eq!(
+                error,
+                ProductionAnalysisResourceLimitV1 {
+                    phase: ProductionAnalysisResourcePhaseV1::RaceFreedom,
+                    resource: expected
+                }
+            );
+        }
+        let names = collect_race_name_census_v1(
+            &context,
+            &function,
+            &inventory,
+            census,
+            ProductionAnalysisResourceLimitsV1::new(work, 16),
+            |value| value.unique_name_byte_len(&context),
+        )
+        .unwrap();
+        assert_eq!(names.scan_work, work);
+        assert_eq!(names.name_storage, 38);
+        assert_eq!(RACE_NAME_CENSUS_SCRATCH_V1, 8 + 3 + 2 + 1 + 2);
+        assert_eq!(
+            std::mem::size_of::<RaceNameScanV1>(),
+            8 * std::mem::size_of::<usize>()
+        );
+        assert_eq!(
+            std::mem::size_of::<RaceNameCensusV1>(),
+            3 * std::mem::size_of::<usize>()
+        );
+        let with_scan =
+            calculate_race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None)
+                .unwrap();
+        let without_scan = calculate_race_resource_upper_bound_for_shape_v1(
+            census,
+            RaceNameCensusV1 {
+                scan_work: 0,
+                ..names
+            },
+            Some((2, 1)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            with_scan.bound.work_upper_bound() - without_scan.bound.work_upper_bound(),
+            work
+        );
+        assert_eq!(
+            with_scan.bound.peak_storage_upper_bound(),
+            without_scan.bound.peak_storage_upper_bound()
+        );
+    }
+
+    #[test]
+    fn race_name_census_checks_count_and_arity_prefixes_before_affected_queries() {
+        let mut context = context();
+        let (function, _, _) = fixture(&mut context, "name_prefix", 37, 1);
+        let actual = census(&context, &function);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        assert!(actual.operands > 0 && actual.results > 0 && actual.attributes > 0);
+        let mut cases = Vec::new();
+        let mut changed = actual;
+        changed.blocks -= 1;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.operations -= 1;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.operands -= 1;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.results -= 1;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.block_arguments -= 1;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.attributes = 0;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.max_operation_arity = 1;
+        cases.push(changed);
+        let mut changed = actual;
+        changed.ranked_accesses = 0;
+        cases.push(changed);
+        for supplied in cases {
+            let queries = Cell::new(0);
+            let error = collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                supplied,
+                unlimited(),
+                |value| {
+                    queries.set(queries.get() + 1);
+                    value.unique_name_byte_len(&context)
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, race_name_census_error_v1());
+            assert_eq!(queries.get(), 0);
+        }
+        // A count surplus is an inert hostile input, not authenticated custody.
+        let mut surplus = actual;
+        surplus.operands += 1;
+        let queries = Cell::new(0);
+        assert_eq!(
+            collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                surplus,
+                unlimited(),
+                |value| {
+                    queries.set(queries.get() + 1);
+                    value.unique_name_byte_len(&context)
+                }
+            )
+            .unwrap_err(),
+            race_name_census_error_v1()
+        );
+        assert_eq!(queries.get(), 2);
+    }
+
+    #[test]
+    fn race_name_census_rejects_foreign_inventory_and_value_before_lookup() {
+        let mut context = context();
+        let (function, _, _) = fixture(&mut context, "name_owner", 1, 1);
+        let (foreign, view, _) = fixture(&mut context, "name_foreign", 1, 1);
+        let actual = census(&context, &function);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &foreign).unwrap();
+        assert_eq!(
+            collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                actual,
+                unlimited(),
+                |_| { panic!("foreign inventory reached name lookup") }
+            )
+            .unwrap_err(),
+            race_name_census_error_v1()
+        );
+        assert_eq!(
+            require_race_name_value_v1(&context, &function, view, actual),
+            Err(race_name_census_error_v1())
+        );
+    }
+
+    #[test]
+    fn race_name_census_refreshes_debug_only_names_and_rejects_mid_scan_mutation() {
+        let mut context = context();
+        let (function, view, index) = fixture(&mut context, "name_epoch", 1, 1);
+        rename(&context, view, "short_view");
+        rename(&context, index, "short_index");
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        let before = derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        let old_census = census(&context, &function);
+        let old_epoch = context.ir_mutation_attempt_epoch().unwrap();
+        let old = collect_race_name_census_v1(
+            &context,
+            &function,
+            &inventory,
+            old_census,
+            unlimited(),
+            |value| value.unique_name_byte_len(&context),
+        )
+        .unwrap();
+        rename(&context, view, &"x".repeat(32_768));
+        let after = derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        assert!(before.exactly_matches(&after));
+        assert_ne!(old_epoch, context.ir_mutation_attempt_epoch().unwrap());
+        let fresh_census = census(&context, &function);
+        assert_eq!(old_census.identifier_bytes, fresh_census.identifier_bytes);
+        let fresh = collect_race_name_census_v1(
+            &context,
+            &function,
+            &inventory,
+            fresh_census,
+            unlimited(),
+            |value| value.unique_name_byte_len(&context),
+        )
+        .unwrap();
+        assert!(fresh.name_storage > old.name_storage);
+        assert_eq!(
+            fresh.name_storage,
+            view.unique_name(&context).as_ref().len()
+        );
+        let queries = Cell::new(0);
+        assert_eq!(
+            collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                fresh_census,
+                unlimited(),
+                |value| {
+                    if queries.get() == 0 {
+                        rename(&context, index, "changed_during_scan");
+                    }
+                    queries.set(queries.get() + 1);
+                    value.unique_name_byte_len(&context)
+                }
+            )
+            .unwrap_err(),
+            race_name_census_error_v1()
+        );
+        assert_eq!(queries.get(), 2);
+    }
+
+    #[test]
+    fn race_name_census_query_error_and_panic_do_not_publish_a_partial_maximum() {
+        let mut context = context();
+        let (function, _, _) = fixture(&mut context, "name_failure", 1, 1);
+        let census = census(&context, &function);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        let epoch = context.ir_mutation_attempt_epoch().unwrap();
+        let mut queries = 0;
+        assert_eq!(
+            collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                census,
+                unlimited(),
+                |_| {
+                    queries += 1;
+                    None
+                }
+            )
+            .unwrap_err(),
+            race_resource_overflow_v1()
+        );
+        assert_eq!(queries, 1);
+        let entered = Cell::new(false);
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let _ = collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                census,
+                unlimited(),
+                |_| {
+                    entered.set(true);
+                    panic!("name census query panic")
+                },
+            );
+        }))
+        .unwrap_err();
+        assert!(entered.get());
+        assert_eq!(
+            panic.downcast_ref::<&'static str>(),
+            Some(&"name census query panic")
+        );
+        assert_eq!(context.ir_mutation_attempt_epoch().unwrap(), epoch);
+        let retry = collect_race_name_census_v1(
+            &context,
+            &function,
+            &inventory,
+            census,
+            unlimited(),
+            |value| value.unique_name_byte_len(&context),
+        )
+        .unwrap();
+        assert_eq!(retry.name_storage, 38);
+    }
+
+    #[test]
+    fn race_name_formula_uses_explicit_names_not_unrelated_identifier_bytes() {
+        let census = ProductionAnalysisInputCensusV1 {
+            operations: 1,
+            ranked_accesses: 1,
+            ..Default::default()
+        };
+        let names = RaceNameCensusV1 {
+            name_storage: 91,
+            scan_work: 123,
+            execution_lookup_work: 57,
+        };
+        let base =
+            calculate_race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None)
+                .unwrap();
+        let changed = calculate_race_resource_upper_bound_for_shape_v1(
+            ProductionAnalysisInputCensusV1 {
+                identifier_bytes: usize::MAX,
+                ..census
+            },
+            names,
+            Some((2, 1)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(base.bound, changed.bound);
+        let no_lookup = calculate_race_resource_upper_bound_for_shape_v1(
+            census,
+            RaceNameCensusV1 {
+                execution_lookup_work: 0,
+                ..names
+            },
+            Some((2, 1)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            base.bound.work_upper_bound() - no_lookup.bound.work_upper_bound(),
+            2 * 57
+        );
+        for invalid in [
+            RaceNameCensusV1 {
+                name_storage: usize::MAX,
+                ..names
+            },
+            RaceNameCensusV1 {
+                scan_work: usize::MAX,
+                ..names
+            },
+            RaceNameCensusV1 {
+                execution_lookup_work: usize::MAX,
+                ..names
+            },
+        ] {
+            assert!(
+                matches!(calculate_race_resource_upper_bound_for_shape_v1(census, invalid, Some((2,1)), None), Err(error) if error == race_resource_overflow_v1())
+            );
+        }
+        assert_eq!(MAX_PLIRON_RACE_INVOCATIONS_V1, 65_536);
+        assert_eq!(MAX_PLIRON_RACE_EFFECT_INSTANCES_V1, 1_048_576);
+        assert_eq!(MAX_PLIRON_RACE_FINDINGS_V1, 4_096);
+    }
+
+    #[test]
+    fn race_name_census_excludes_the_actual_checked_success_operand() {
+        let mut context = context();
+        let function_type = FunctionType::get(&context, vec![], vec![]);
+        let function = FuncOp::new(
+            &mut context,
+            "checked_name_population".try_into().unwrap(),
+            function_type,
+        );
+        let entry = function.get_entry_block(&context);
+        let invocation = InvocationIndexOp::new(&mut context, 0, 64);
+        let zero = IndexConstantOp::new(&mut context, 0);
+        let one = IndexConstantOp::new(&mut context, 1);
+        let extent = IndexConstantOp::new(&mut context, 4_096);
+        let invocation_value = invocation.result(&context);
+        let zero_value = zero.result(&context);
+        let one_value = one.result(&context);
+        let extent_value = extent.result(&context);
+        let view_type = RankedViewType::new(&mut context, 32, true, vec![DYNAMIC_EXTENT]).unwrap();
+        let view = RankedViewOp::new_in_space(
+            &mut context,
+            view_type,
+            vec![extent_value],
+            MemorySpaceAttr::Global,
+        )
+        .unwrap();
+        let checked = CheckedRowStripedIndex2DOp::new_predicated(
+            &mut context,
+            invocation_value,
+            zero_value,
+            one_value,
+            extent_value,
+            extent_value,
+            extent_value,
+            [64, 64],
+        );
+        let index = checked.result(&context);
+        let success = checked.success(&context).unwrap();
+        let view_value = view.result(&context);
+        let access = RankedAccessOp::new_predicated(
+            &mut context,
+            AccessKindAttr::Read,
+            view_value,
+            index,
+            success,
+        )
+        .unwrap();
+        let ret = ReturnOp::new(&mut context);
+        for operation in [
+            invocation.get_operation(),
+            zero.get_operation(),
+            one.get_operation(),
+            extent.get_operation(),
+            view.get_operation(),
+            checked.get_operation(),
+            access.get_operation(),
+            ret.get_operation(),
+        ] {
+            operation.insert_at_back(entry, &context);
+        }
+        rename(&context, view.result(&context), &"v".repeat(95));
+        rename(&context, index, &"i".repeat(129));
+        rename(&context, success, &"s".repeat(65_536));
+        assert_eq!(access.get_operation().deref(&context).get_num_operands(), 3);
+        assert_eq!(access.checked_success(&context), Some(success));
+        assert_eq!(access.indices(&context), [index]);
+        let census = census(&context, &function);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        let mut queried = Vec::new();
+        let names = collect_race_name_census_v1(
+            &context,
+            &function,
+            &inventory,
+            census,
+            unlimited(),
+            |value| {
+                queried.push(value);
+                value.unique_name_byte_len(&context)
+            },
+        )
+        .unwrap();
+        assert_eq!(queried, [view.result(&context), index]);
+        assert_eq!(
+            names.name_storage,
+            index.unique_name(&context).as_ref().len()
+        );
+        assert!(success.unique_name_byte_len(&context).unwrap() > names.name_storage);
+    }
+
+    #[test]
+    fn race_name_census_bounds_real_retained_view_and_unresolved_index_payloads() {
+        for unresolved in [false, true] {
+            let (report, expected_view, expected_index, maximum) = {
+                let mut context = context();
+                let function_type = FunctionType::get(&context, vec![], vec![]);
+                let function = FuncOp::new(
+                    &mut context,
+                    "retained_name_population".try_into().unwrap(),
+                    function_type,
+                );
+                let entry = function.get_entry_block(&context);
+                let access_block = pliron::basic_block::BasicBlock::new(
+                    &mut context,
+                    Some("access".try_into().unwrap()),
+                    vec![],
+                );
+                let exit = pliron::basic_block::BasicBlock::new(
+                    &mut context,
+                    Some("exit".try_into().unwrap()),
+                    vec![],
+                );
+                access_block.insert_at_back(function.get_region(&context), &context);
+                exit.insert_at_back(function.get_region(&context), &context);
+                let view_type = RankedViewType::new(&mut context, 32, true, vec![1]).unwrap();
+                let view = RankedViewOp::new_in_space(
+                    &mut context,
+                    view_type,
+                    vec![],
+                    MemorySpaceAttr::Global,
+                )
+                .unwrap();
+                let invocation = InvocationIndexOp::new(&mut context, 0, 2);
+                let (index, index_operation) = if unresolved {
+                    let index = dialect_kernel::IndexUnknownOp::new(&mut context);
+                    (index.result(&context), index.get_operation())
+                } else {
+                    let index = IndexConstantOp::new(&mut context, 0);
+                    (index.result(&context), index.get_operation())
+                };
+                let extent = IndexConstantOp::new(&mut context, 1);
+                let extent_value = extent.result(&context);
+                let view_value = view.result(&context);
+                let guard = IndexLessThanBranchOp::new(
+                    &mut context,
+                    index,
+                    extent_value,
+                    access_block,
+                    exit,
+                );
+                let write = RankedAccessOp::new(
+                    &mut context,
+                    AccessKindAttr::Write,
+                    view_value,
+                    vec![index],
+                )
+                .unwrap();
+                let to_exit = dialect_kernel::BranchOp::new(&mut context, exit);
+                let ret = ReturnOp::new(&mut context);
+                for operation in [
+                    view.get_operation(),
+                    invocation.get_operation(),
+                    index_operation,
+                    extent.get_operation(),
+                    guard.get_operation(),
+                ] {
+                    operation.insert_at_back(entry, &context);
+                }
+                write.get_operation().insert_at_back(access_block, &context);
+                to_exit
+                    .get_operation()
+                    .insert_at_back(access_block, &context);
+                ret.get_operation().insert_at_back(exit, &context);
+                rename(&context, view.result(&context), &"v".repeat(8_192));
+                rename(&context, index, &"i".repeat(16_384));
+                let census = census(&context, &function);
+                let inventory =
+                    BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+                let names = collect_race_name_census_v1(
+                    &context,
+                    &function,
+                    &inventory,
+                    census,
+                    unlimited(),
+                    |value| value.unique_name_byte_len(&context),
+                )
+                .unwrap();
+                let expected_view = view.result(&context).unique_name(&context).to_string();
+                let expected_index = index.unique_name(&context).to_string();
+                assert_eq!(names.name_storage, expected_index.len());
+                // This entrypoint runs the real bounds prerequisite before race.
+                let report = run_pliron_ranked_race_check_v1(&context, &function);
+                (report, expected_view, expected_index, names.name_storage)
+            };
+            // The report owns its diagnostic after the original Context is gone.
+            if unresolved {
+                assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+                let [
+                    RankedRaceFindingV1::UnresolvedIndex {
+                        value, dimension, ..
+                    },
+                ] = report.findings()
+                else {
+                    panic!(
+                        "expected actual unresolved-index report: {:?}",
+                        report.findings()
+                    );
+                };
+                assert_eq!(*dimension, 0);
+                assert_eq!(value, &expected_index);
+                assert_eq!(value.len(), maximum);
+            } else {
+                assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+                let [
+                    RankedRaceFindingV1::ConflictingEffects {
+                        view,
+                        indices,
+                        first,
+                        second,
+                    },
+                ] = report.findings()
+                else {
+                    panic!(
+                        "expected actual conflicting-effects report: {:?}",
+                        report.findings()
+                    );
+                };
+                assert_eq!(view, &expected_view);
+                assert!(view.len() <= maximum);
+                assert_eq!(indices, &[0]);
+                assert_eq!(first.invocation(), &[0]);
+                assert_eq!(second.invocation(), &[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn race_name_census_allocation_only_uses_the_full_u64_origin_bound() {
+        let mut context = context();
+        let function_type = FunctionType::get(&context, vec![], vec![]);
+        let function = FuncOp::new(
+            &mut context,
+            "allocation_name_population".try_into().unwrap(),
+            function_type,
+        );
+        let entry = function.get_entry_block(&context);
+        let effect = AllocationEffectOp::new(
+            &mut context,
+            AccessKindAttr::Read,
+            MemorySpaceAttr::Global,
+            u64::MAX,
+            1,
+        )
+        .unwrap();
+        let ret = ReturnOp::new(&mut context);
+        effect.get_operation().insert_at_back(entry, &context);
+        ret.get_operation().insert_at_back(entry, &context);
+        let actual = census(&context, &function);
+        assert_eq!(actual.ranked_accesses, 0);
+        assert_eq!(actual.allocation_effects, 1);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        let names = collect_race_name_census_v1(
+            &context,
+            &function,
+            &inventory,
+            actual,
+            unlimited(),
+            |_| panic!("allocation-only census queried an SSA name"),
+        )
+        .unwrap();
+        assert_eq!(
+            names.name_storage,
+            format!("allocation origin {}", u64::MAX).len()
+        );
+        assert_eq!(names.name_storage, 38);
+        let mut missing_effect = actual;
+        missing_effect.allocation_effects = 0;
+        assert_eq!(
+            collect_race_name_census_v1(
+                &context,
+                &function,
+                &inventory,
+                missing_effect,
+                unlimited(),
+                |_| { panic!("allocation-only deficit queried an SSA name") }
+            )
+            .unwrap_err(),
+            race_name_census_error_v1()
+        );
+        assert!(run_pliron_ranked_race_check_v1(&context, &function).is_clean());
+    }
+
+    #[test]
+    fn race_name_scan_arithmetic_overflow_refuses_before_query() {
+        let mut context = context();
+        let (function, _, _) = fixture(&mut context, "name_overflow", 1, 1);
+        let actual = census(&context, &function);
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        for supplied in [
+            ProductionAnalysisInputCensusV1 {
+                blocks: usize::MAX,
+                ..actual
+            },
+            ProductionAnalysisInputCensusV1 {
+                operations: usize::MAX,
+                ..actual
+            },
+            ProductionAnalysisInputCensusV1 {
+                operands: usize::MAX,
+                ..actual
+            },
+            ProductionAnalysisInputCensusV1 {
+                attributes: usize::MAX,
+                ..actual
+            },
+            ProductionAnalysisInputCensusV1 {
+                max_operation_arity: usize::MAX,
+                ..actual
+            },
+        ] {
+            assert_eq!(
+                collect_race_name_census_v1(
+                    &context,
+                    &function,
+                    &inventory,
+                    supplied,
+                    unlimited(),
+                    |_| { panic!("overflow reached query") }
+                )
+                .unwrap_err(),
+                race_resource_overflow_v1()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod status_tests {
     use super::*;
 
@@ -118,11 +967,14 @@ mod status_tests {
         // three eight-unit frames, and eight invocation decode items.
         // The single symbolic pair also prepays twelve root queries and
         // three comparisons: 12*4+3=51. These queries allocate nothing.
-        const EXACT_WORK: usize = 3_067;
+        // Two possible name constructions each pay 4*64+64 work; the scan's
+        // sixteen logical slots and two 64-byte copies add to temporary space.
+        const EXACT_WORK: usize = 3_707;
         const EXACT_RETAINED: usize = 1_272;
-        const EXACT_PEAK: usize = 68_502;
+        const EXACT_PEAK: usize = 68_646;
         let exact = race_resource_upper_bound_for_shape_v1(
             census,
+            component_race_names_v1(),
             Some((2, 1)),
             None,
             ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK),
@@ -134,6 +986,7 @@ mod status_tests {
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 Some((2, 1)),
                 None,
                 ProductionAnalysisResourceLimitsV1::new(EXACT_WORK - 1, EXACT_PEAK),
@@ -146,6 +999,7 @@ mod status_tests {
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 Some((2, 1)),
                 None,
                 ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK - 1),
@@ -167,6 +1021,7 @@ mod status_tests {
         };
         let bound = race_resource_upper_bound_for_shape_v1(
             census,
+            component_race_names_v1(),
             Some((64, 1)),
             None,
             ProductionAnalysisResourceLimitsV1::new(usize::MAX, 4_000_000),
@@ -182,6 +1037,7 @@ mod status_tests {
                 allocation_effects: 0,
                 ..census
             },
+            component_race_names_v1(),
             Some((64, 1)),
             None,
             ProductionAnalysisResourceLimitsV1::new(usize::MAX, 4_000_000),
@@ -192,6 +1048,7 @@ mod status_tests {
         assert!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 Some((64, 1)),
                 None,
                 ProductionAnalysisResourceLimitsV1::new(
@@ -204,6 +1061,7 @@ mod status_tests {
         assert!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 Some((64, 1)),
                 None,
                 ProductionAnalysisResourceLimitsV1::new(
@@ -223,16 +1081,17 @@ mod status_tests {
             ..ProductionAnalysisInputCensusV1::default()
         };
         for (shape, work) in [
-            (None, 1_051_203),
-            (Some((0, 1)), 1_051_203),
-            (Some((1, 1)), 2_707),
+            (None, 1_051_843),
+            (Some((0, 1)), 1_051_843),
+            (Some((1, 1)), 3_347),
         ] {
             const RETAINED: usize = 1_272;
             // Effect collection (88), four signal/class sets (8), one retained
             // diagnostic and one construction temporary. No exact map/query.
-            const PEAK: usize = 88 + 8 + 2 * RETAINED;
+            const PEAK: usize = 88 + 8 + 2 * RETAINED + 2 * 64 + 16;
             let bound = race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 shape,
                 None,
                 ProductionAnalysisResourceLimitsV1::new(work, PEAK),
@@ -246,7 +1105,14 @@ mod status_tests {
                 ProductionAnalysisResourceLimitsV1::new(work, PEAK - 1),
             ] {
                 assert!(
-                    race_resource_upper_bound_for_shape_v1(census, shape, None, limits).is_err()
+                    race_resource_upper_bound_for_shape_v1(
+                        census,
+                        component_race_names_v1(),
+                        shape,
+                        None,
+                        limits
+                    )
+                    .is_err()
                 );
             }
         }
@@ -262,15 +1128,21 @@ mod status_tests {
             ..ProductionAnalysisInputCensusV1::default()
         };
         let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
-        let bound = race_resource_upper_bound_for_shape_v1(census, None, None, limits).unwrap();
+        let names = RaceNameCensusV1 {
+            name_storage: 32_832,
+            ..component_race_names_v1()
+        };
+        let bound =
+            race_resource_upper_bound_for_shape_v1(census, names, None, None, limits).unwrap();
         const PER_FINDING: usize = 3 * 8 + 32_768 + 64 + 1_024 + 160;
         assert_eq!(bound.retained_storage_upper_bound(), PER_FINDING);
         assert_eq!(
             bound.peak_storage_upper_bound(),
-            64 * (8 + 16 + 32_768 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING
+            64 * (8 + 16 + 32_768 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING + 2 * 32_832 + 16
         );
         assert!(
-            race_resource_upper_bound_for_shape_v1(census, Some((2, 1)), None, limits).is_err()
+            race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None, limits)
+                .is_err()
         );
     }
 
@@ -335,17 +1207,19 @@ mod status_tests {
         };
         let bound = race_resource_upper_bound_for_shape_v1(
             census,
+            component_race_names_v1(),
             None,
             shape,
             ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
         )
         .unwrap();
         assert_eq!(bound.retained_storage_upper_bound(), 1_272);
-        assert_eq!(bound.work_upper_bound(), 1_051_203 + work);
-        assert_eq!(bound.peak_storage_upper_bound(), 2_640 + storage);
+        assert_eq!(bound.work_upper_bound(), 1_051_843 + work);
+        assert_eq!(bound.peak_storage_upper_bound(), 2_784 + storage);
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 None,
                 shape,
                 ProductionAnalysisResourceLimitsV1::new(
@@ -358,6 +1232,7 @@ mod status_tests {
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 None,
                 shape,
                 ProductionAnalysisResourceLimitsV1::new(
@@ -373,6 +1248,7 @@ mod status_tests {
         assert!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 None,
                 shape,
                 ProductionAnalysisResourceLimitsV1::new(
@@ -455,6 +1331,7 @@ mod status_tests {
                     allocation_effects: 1,
                     ..ProductionAnalysisInputCensusV1::default()
                 },
+                component_race_names_v1(),
                 Some((1, 1)),
                 None,
                 ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
@@ -494,6 +1371,7 @@ mod status_tests {
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
+                component_race_names_v1(),
                 Some((1, 1)),
                 None,
                 ProductionAnalysisResourceLimitsV1::new(usize::MAX, usize::MAX),
@@ -515,6 +1393,7 @@ mod numeric_preflight_tests {
                 ranked_accesses: 1,
                 ..ProductionAnalysisInputCensusV1::default()
             },
+            component_race_names_v1(),
             Some((2, 1)),
             None,
         )
@@ -541,7 +1420,7 @@ mod numeric_preflight_tests {
     #[test]
     fn race_numeric_preflight_exposes_existing_small_calculation_terms() {
         let numbers = small_numbers();
-        let per_finding = 3 * 8 + usize::BITS as usize + 1_024 + 160;
+        let per_finding = 3 * 8 + 64 + 1_024 + 160;
         assert_eq!(numbers.census.operations, 1);
         assert_eq!(numbers.effects, 1);
         assert_eq!(numbers.effect_pairs, 1);
@@ -551,21 +1430,24 @@ mod numeric_preflight_tests {
         assert_eq!(numbers.charged_effect_instances, 2);
         assert_eq!(numbers.retained_effect_instances, 2);
         assert_eq!(numbers.retained_finding_count, 1);
-        assert_eq!(numbers.name_storage, usize::BITS as usize);
+        assert_eq!(numbers.name_storage, 64);
         assert_eq!(numbers.per_finding_storage, per_finding);
         assert_eq!(numbers.raw_evaluation_work, 24 * 8 + 24 * 3);
         assert_eq!(numbers.raw_evaluation_temporary, 6 + 3 * 8 + 8);
         assert_eq!(numbers.symbolic_work, 8 * 8 + 16);
         assert_eq!(numbers.presburger_work, 0);
         assert_eq!(numbers.presburger_temporary, 0);
-        assert_eq!(numbers.work, 32 + 80 + 51 + 2 * 48 + 264);
-        assert_eq!(numbers.effect_state, 8 + 16 + usize::BITS as usize);
+        assert_eq!(
+            numbers.work,
+            32 + 80 + 51 + 2 * 48 + 264 + 2 * (4 * 64 + 64)
+        );
+        assert_eq!(numbers.effect_state, 8 + 16 + 64);
         assert_eq!(numbers.address_state, 2 * (8 * 9 + 64));
         assert_eq!(numbers.attempted_finding, per_finding);
         assert_eq!(numbers.conflict_class_storage, 4_097 * 16);
         assert_eq!(
             numbers.temporary,
-            numbers.effect_state + 272 + per_finding + 4_097 * 16 + 8 + 38
+            numbers.effect_state + 272 + per_finding + 4_097 * 16 + 8 + 38 + 2 * 64 + 16
         );
         assert_eq!(
             numbers.bound.work_upper_bound(),
@@ -581,13 +1463,15 @@ mod numeric_preflight_tests {
         let limits = ProductionAnalysisResourceLimitsV1::new(19, 23);
         write_race_resource_preflight_v1(true, &mut output, &numbers, limits);
         let fields = fields(&output);
-        let core_work = 32 + 80 + 51 + 2 * 48 + 264;
-        let temporary = (8 + 16 + usize::BITS as usize)
+        let core_work = 32 + 80 + 51 + 2 * 48 + 264 + 2 * (4 * 64 + 64);
+        let temporary = (8 + 16 + 64)
             + 2 * (8 * 9 + 64)
             + per_finding
             + 4_097 * 16
             + 8
-            + (6 + 3 * 8 + 8);
+            + (6 + 3 * 8 + 8)
+            + 2 * 64
+            + 16;
         assert_eq!(
             fields,
             BTreeMap::from([
@@ -612,13 +1496,13 @@ mod numeric_preflight_tests {
                 ("charged_instances", 2),
                 ("retained_instances", 2),
                 ("finding_count", 1),
-                ("name_storage", usize::BITS as usize),
+                ("name_storage", 64),
                 ("per_finding_storage", per_finding),
                 ("core_work", core_work),
                 ("raw_work", 24 * 8 + 24 * 3),
                 ("presburger_work", 0),
                 ("symbolic_work", 8 * 8 + 16),
-                ("effect_state", 8 + 16 + usize::BITS as usize),
+                ("effect_state", 8 + 16 + 64),
                 ("address_state", 2 * (8 * 9 + 64)),
                 ("attempted_finding", per_finding),
                 ("conflict_class_storage", 4_097 * 16),
@@ -750,9 +1634,13 @@ mod numeric_preflight_tests {
             ..ProductionAnalysisInputCensusV1::default()
         };
         for shape in [None, Some((0, 1)), Some((1, 1)), Some((2, 1))] {
-            let numbers =
-                calculate_race_resource_upper_bound_for_shape_v1(census, shape, Some((65_537, 1)))
-                    .unwrap();
+            let numbers = calculate_race_resource_upper_bound_for_shape_v1(
+                census,
+                component_race_names_v1(),
+                shape,
+                Some((65_537, 1)),
+            )
+            .unwrap();
             let mut output = Vec::new();
             write_race_resource_preflight_v1(
                 true,
@@ -797,7 +1685,12 @@ mod numeric_preflight_tests {
             },
         ] {
             let result = finish_race_resource_preflight_v1(
-                calculate_race_resource_upper_bound_for_shape_v1(census, Some((1, 1)), None),
+                calculate_race_resource_upper_bound_for_shape_v1(
+                    census,
+                    component_race_names_v1(),
+                    Some((1, 1)),
+                    None,
+                ),
                 ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
                 |_, _| panic!("overflow emitted a complete numeric record"),
             );

@@ -8,7 +8,8 @@ mod ownership_resource_tests {
         RankedViewOp, RankedViewType, ReturnOp, register_dialect,
     };
     use pliron::{
-        builtin::types::FunctionType, dialect::DialectName, op::Op, operation::verify_operation,
+        builtin::types::FunctionType, debug_info::set_operation_result_name, dialect::DialectName,
+        op::Op, operation::verify_operation,
     };
 
     fn bound(
@@ -169,6 +170,15 @@ mod ownership_resource_tests {
     }
 
     fn read_function(context: &mut Context, name: &str, accesses: usize, index: u64) -> FuncOp {
+        read_function_with_view(context, name, accesses, index).0
+    }
+
+    fn read_function_with_view(
+        context: &mut Context,
+        name: &str,
+        accesses: usize,
+        index: u64,
+    ) -> (FuncOp, RankedViewOp) {
         register_dialect(context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
         dialect_gpu::register_dialect(context).unwrap();
         let function = FuncOp::new(
@@ -196,7 +206,7 @@ mod ownership_resource_tests {
             .get_operation()
             .insert_at_back(entry, context);
         verify_operation(function.get_operation(), context).unwrap();
-        function
+        (function, view)
     }
 
     fn census(context: &Context, function: &FuncOp) -> ProductionAnalysisInputCensusV1 {
@@ -248,11 +258,11 @@ mod ownership_resource_tests {
     fn ownership_empty_does_not_skip_primary_race_storage_admission() {
         const FINDING_ROWS: usize = 4_096;
         let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
-        // A concurrent launch's possible fallback findings exceed the ceiling,
-        // independently of earlier analyses' retained storage estimates.
+        // This length exceeds the ceiling only if repeated per fallback finding.
+        // The unrelated function symbol must not be treated as a stored value name.
         let name = "n".repeat(limits.max_peak_storage() / FINDING_ROWS + 1);
         let context = &mut Context::new();
-        let function = read_function(context, &name, 64, 0);
+        let (function, view) = read_function_with_view(context, &name, 64, 0);
         let input = census(context, &function);
         assert_eq!(input.ownership_contracts, 0);
         assert_eq!(input.ranked_accesses, 64);
@@ -276,18 +286,44 @@ mod ownership_resource_tests {
             .get_operation()
             .insert_at_front(function.get_entry_block(context), context);
         assert_eq!(census(context, &function).operations, 68);
-        let result = require_production_pliron_checks_before_lowering_v2(context, &function);
-        assert!(
-            matches!(
-                &result,
-                Err(ProductionPlironPreloweringErrorV2::ResourceLimit {
-                    phase: Phase::RaceFreedom,
-                    producing_pass: None,
-                    resource: "peak storage upper bound",
-                }),
+        let concurrent = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("an unrelated long function symbol is not a retained race diagnostic name");
+        assert!(concurrent.is_clean());
+        assert!(concurrent.race().is_clean());
+        assert!(concurrent.ownership().is_clean());
+        assert!(concurrent.preservation().is_exact_identity());
+        assert_eq!(concurrent.preservation().certificates().len(), 9);
+        assert!(!concurrent.grants_compiler_refinement_authority());
+        assert!(!concurrent.grants_artifact_or_launch_authority());
+
+        // The very same access population now has an actual stored view name.
+        set_operation_result_name(
+            context,
+            view.get_operation(),
+            0,
+            Some(name.as_str().try_into().unwrap()),
+        );
+        let stored_name_bytes = view.result(context).unique_name_byte_len(context).unwrap();
+        assert!(stored_name_bytes > name.len());
+        assert!(stored_name_bytes.checked_mul(FINDING_ROWS).unwrap() > limits.max_peak_storage());
+        let named = census(context, &function);
+        assert_eq!(named.ownership_contracts, 0);
+        assert_eq!(named.ranked_accesses, 64);
+        assert_eq!(named.allocation_effects, 0);
+        assert_eq!(named.operations, 68);
+        let error = match require_production_pliron_checks_before_lowering_v2(context, &function) {
+            Ok(_) => panic!(
+                "actual view name ({stored_name_bytes} bytes, 64 reads) bypassed race storage admission"
             ),
-            "long no-contract fixture (name bytes={}, reads=64): {result:?}",
-            name.len(),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            ProductionPlironPreloweringErrorV2::ResourceLimit {
+                phase: Phase::RaceFreedom,
+                producing_pass: None,
+                resource: "peak storage upper bound",
+            },
         );
     }
 
