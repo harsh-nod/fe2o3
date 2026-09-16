@@ -59,18 +59,41 @@ pub(crate) fn verification_type_nodes_v1(
     }
 }
 
-/// Validates nested fixed-vector nodes while charging each inspected type node
-/// before reading it. Exact V12 decoding has already bounded this recursion.
-pub(crate) fn verification_invalid_vector_type_v12_v1(
-    ty: &Type,
+#[derive(Default)]
+pub(crate) struct VerificationTypeFactsV15 {
+    pub(crate) vector_error: Option<FixedVectorTypeErrorV12>,
+    pub(crate) invalid_execution_role: bool,
+    pub(crate) contains_execution_role: bool,
+}
+
+/// Validates vector and execution nodes in one traversal, charging each type
+/// node before reading it, including ordinary legacy scalar terminals.
+pub(crate) fn verification_type_facts_v15(
+    mut ty: &Type,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-) -> Result<Option<FixedVectorTypeErrorV12>, CanonicalKernelIrVerificationResourceErrorV1> {
-    budget.charge_work(1)?;
-    match ty {
-        Type::Vector(vector) => Ok(vector.validate().err()),
-        Type::Pointer(pointer) => verification_invalid_vector_type_v12_v1(&pointer.pointee, budget),
-        Type::Slice(slice) => verification_invalid_vector_type_v12_v1(&slice.element, budget),
-        Type::Unit | Type::Scalar(_) | Type::Execution(_) => Ok(None),
+) -> Result<VerificationTypeFactsV15, CanonicalKernelIrVerificationResourceErrorV1> {
+    let mut nested = false;
+    loop {
+        budget.charge_work(1)?;
+        match ty {
+            Type::Vector(vector) => {
+                return Ok(VerificationTypeFactsV15 {
+                    vector_error: vector.validate().err(),
+                    ..VerificationTypeFactsV15::default()
+                });
+            }
+            Type::Execution(role) => {
+                return Ok(VerificationTypeFactsV15 {
+                    vector_error: None,
+                    invalid_execution_role: nested || role.validate().is_err(),
+                    contains_execution_role: true,
+                });
+            }
+            Type::Pointer(pointer) => ty = &pointer.pointee,
+            Type::Slice(slice) => ty = &slice.element,
+            Type::Unit | Type::Scalar(_) => return Ok(VerificationTypeFactsV15::default()),
+        }
+        nested = true;
     }
 }
 
