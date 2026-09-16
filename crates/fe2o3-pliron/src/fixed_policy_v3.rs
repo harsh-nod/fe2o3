@@ -149,6 +149,167 @@ impl DominanceCseBudgetV1 for CseLedger<'_, '_> {
 /// totals + 56 final graph identity + 32 map digest + 8 * 60 pass bytes.
 pub const POLICY3_EXECUTION_RECORD_BYTES_V1: usize = 776;
 
+/// Closed framing failures, not evidence that optimizer execution occurred.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Policy3ExecutionClaimErrorV1 {
+    /// Wrong fixed length, control fields, reserved bits or structural roster.
+    Framing,
+    /// The claimed canonical B/O identities differ from the supplied owners.
+    Endpoint,
+    /// The declared fixed policy caps or profile pass count differ.
+    Profile,
+    /// A pass tag, boolean or reserved row field is outside the fixed roster.
+    Pass,
+    /// The caller's canonical ledger refused the framing work.
+    Resource(Resource),
+}
+
+impl std::fmt::Display for Policy3ExecutionClaimErrorV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unauthenticated policy-3 execution claim: {self:?}")
+    }
+}
+impl std::error::Error for Policy3ExecutionClaimErrorV1 {}
+
+/// Borrowed, syntactically checked execution claims only. This does not
+/// establish publication provenance, execution occurrence, actual work, or a
+/// semantic B/O relation. Dynamic profile/report/epoch fields remain claims.
+/// The caller retains and accounts for the borrowed bytes and endpoint owners.
+/// No constructor or conversion to the sealed execution witness is exposed.
+///
+/// ```compile_fail
+/// use fe2o3_pliron::{UnauthenticatedPolicy3ExecutionClaimV1, Policy3ExecutionWitnessV1};
+/// fn authenticate(claim: UnauthenticatedPolicy3ExecutionClaimV1<'_>)
+///     -> Policy3ExecutionWitnessV1 { claim }
+/// ```
+pub struct UnauthenticatedPolicy3ExecutionClaimV1<'wire> {
+    bytes: &'wire [u8; POLICY3_EXECUTION_RECORD_BYTES_V1],
+}
+
+impl UnauthenticatedPolicy3ExecutionClaimV1<'_> {
+    /// Exact borrowed bytes, not a trusted execution witness.
+    pub const fn canonical_bytes(&self) -> &[u8; POLICY3_EXECUTION_RECORD_BYTES_V1] {
+        self.bytes
+    }
+
+    /// Declared dynamic profile work, not independently authenticated usage.
+    pub fn declared_profile_work(&self) -> u64 {
+        u64::from_le_bytes(self.bytes[96..104].try_into().expect("fixed record field"))
+    }
+
+    /// A framed claim never grants execution or final admission authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Read the existing record without reconstructing or rerunning an optimizer.
+/// Exactly two framing units plus 776 logical byte-inspection units are paid
+/// before inspection; there is no heap allocation or owned payload receipt.
+/// Endpoint digest/length matching binds the claim to these admitted B/O
+/// identities, but cannot authenticate the claimed execution history.
+pub fn read_unauthenticated_policy3_execution_claim_v1<'wire>(
+    input: &Owner,
+    output: &Owner,
+    bytes: &'wire [u8],
+    budget: &mut Budget<'_>,
+) -> Result<UnauthenticatedPolicy3ExecutionClaimV1<'wire>, Policy3ExecutionClaimErrorV1> {
+    use Policy3ExecutionClaimErrorV1 as E;
+    budget.charge_work(2).map_err(E::Resource)?;
+    let bytes: &[u8; POLICY3_EXECUTION_RECORD_BYTES_V1] =
+        bytes.try_into().map_err(|_| E::Framing)?;
+    budget
+        .charge_work(POLICY3_EXECUTION_RECORD_BYTES_V1)
+        .map_err(E::Resource)?;
+    let mut reader = ClaimReaderV1 { bytes, cursor: 0 };
+    if reader.u16()? != 3
+        || reader.u16()? != 1
+        || reader.u16()? != POLICY3_PASSES.len() as u16
+        || reader.u16()? != 0
+    {
+        return Err(E::Framing);
+    }
+    for owner in [input, output] {
+        let digest = reader.raw::<32>()?;
+        let length = reader.u64()?;
+        if digest != owner.canonical().identity().digest()
+            || length != owner.canonical().identity().canonical_length()
+        {
+            return Err(E::Endpoint);
+        }
+        if length > POLICY3_CANONICAL_CAP as u64 {
+            return Err(E::Profile);
+        }
+    }
+    // Numeric claims are decoded as fixed-width fields, not trusted resource
+    // allowances. Only the closed profile's pass count and fixed caps bind here.
+    for ordinal in 0..6 {
+        let value = reader.u64()?;
+        if ordinal == 4 && value != POLICY3_PASSES.len() as u64 {
+            return Err(E::Profile);
+        }
+    }
+    for cap in [
+        POLICY3_CANONICAL_CAP,
+        POLICY3_CANONICAL_CAP,
+        POLICY3_MAX_PASSES,
+        POLICY3_GRAPH_CAP,
+        POLICY3_SESSION_WORK_CAP,
+    ] {
+        if reader.u64()? != cap as u64 {
+            return Err(E::Profile);
+        }
+    }
+    for _ in 0..4 {
+        let _ = reader.u64()?;
+    }
+    let _final_graph_digest = reader.raw::<32>()?;
+    for _ in 0..3 {
+        let _ = reader.u64()?;
+    }
+    let _map_digest = reader.raw::<32>()?;
+    for pass in POLICY3_PASSES {
+        let tag = reader.raw::<1>()?[0];
+        let changed = reader.raw::<1>()?[0];
+        if tag != pass_tag(pass) || changed > 1 || reader.u16()? != 0 {
+            return Err(E::Pass);
+        }
+        for _ in 0..7 {
+            let _ = reader.u64()?;
+        }
+    }
+    if reader.cursor != bytes.len() {
+        return Err(E::Framing);
+    }
+    Ok(UnauthenticatedPolicy3ExecutionClaimV1 { bytes })
+}
+
+struct ClaimReaderV1<'a> {
+    bytes: &'a [u8],
+    cursor: usize,
+}
+impl<'a> ClaimReaderV1<'a> {
+    fn raw<const N: usize>(&mut self) -> Result<&'a [u8; N], Policy3ExecutionClaimErrorV1> {
+        let end = self
+            .cursor
+            .checked_add(N)
+            .ok_or(Policy3ExecutionClaimErrorV1::Framing)?;
+        let value = self
+            .bytes
+            .get(self.cursor..end)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(Policy3ExecutionClaimErrorV1::Framing)?;
+        self.cursor = end;
+        Ok(value)
+    }
+    fn u16(&mut self) -> Result<u16, Policy3ExecutionClaimErrorV1> {
+        Ok(u16::from_le_bytes(*self.raw()?))
+    }
+    fn u64(&mut self) -> Result<u64, Policy3ExecutionClaimErrorV1> {
+        Ok(u64::from_le_bytes(*self.raw()?))
+    }
+}
+
 /// Domain-separated diagnostic identity only. Full frame equality, the sealed
 /// execution witness, and independent semantic checking remain mandatory.
 pub fn policy3_execution_receipt_digest_v1(
