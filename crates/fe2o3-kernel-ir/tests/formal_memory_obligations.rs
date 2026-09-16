@@ -2746,3 +2746,380 @@ fn many_guarded_accesses_reuse_one_deep_unsupported_pointer_chain() {
         ACCESS_COUNT as usize
     );
 }
+
+fn unsigned_literal_transport_module(value: Constant, cast: Option<CastKind>) -> Module {
+    let mut operations = vec![op(2, value.ty(), OperationKind::Constant(value))];
+    let offset = if let Some(kind) = cast {
+        operations.push(op(
+            3,
+            Type::INDEX,
+            OperationKind::Cast {
+                kind,
+                value: ValueId(2),
+                to: Type::INDEX,
+            },
+        ));
+        ValueId(3)
+    } else {
+        ValueId(2)
+    };
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    operations.extend([
+        op(
+            4,
+            pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(0) },
+        ),
+        op(
+            5,
+            pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(4),
+                offset,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(5),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ]);
+    module_with_kernel(
+        vec![global_slice(AccessMode::ReadWrite), Type::F32],
+        operations,
+        dynamic_1d(),
+    )
+}
+
+#[test]
+fn exact_unsigned_literal_transports_preserve_byte_and_alias_obligations() {
+    for value in [0, 3, 17] {
+        for (constant, cast) in [
+            (Constant::Index(value), None),
+            (Constant::U64(value), None),
+            (Constant::U64(value), Some(CastKind::Bitcast)),
+        ] {
+            let mut module = unsigned_literal_transport_module(constant, cast);
+            let function = &mut module.functions[0];
+            function
+                .signature
+                .parameters
+                .push(global_slice(AccessMode::ReadWrite));
+            let body = function.body.as_mut().unwrap();
+            body.parameters.push(ValueId(99));
+            let offset = if cast.is_some() {
+                ValueId(3)
+            } else {
+                ValueId(2)
+            };
+            let pointer = global_pointer(AccessMode::ReadWrite);
+            body.blocks[0].operations.extend([
+                op(
+                    100,
+                    pointer.clone(),
+                    OperationKind::SliceData { slice: ValueId(99) },
+                ),
+                op(
+                    101,
+                    pointer,
+                    OperationKind::GetElementPointer {
+                        base: ValueId(100),
+                        offset,
+                    },
+                ),
+                Operation::new(
+                    vec![],
+                    OperationKind::Store {
+                        pointer: ValueId(101),
+                        value: ValueId(1),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+            ]);
+            let analysis = analyze(&module, 1);
+            assert!(analysis.is_complete(), "{analysis:?}");
+            let obligations = analysis.obligations();
+            assert_eq!(obligations.accesses().len(), 2);
+            for (access, parameter) in obligations.accesses().iter().zip([0, 2]) {
+                assert_eq!(access.allocation().parameter_index(), parameter);
+                assert_eq!(access.kind(), FormalMemoryAccessKind::Write);
+                assert_eq!(
+                    access.byte_offset(),
+                    ByteExpression::invocation_affine(value * 4, 0)
+                );
+                assert_eq!(access.byte_width(), 4);
+                assert_eq!(access.alignment(), 4);
+            }
+            assert_eq!(obligations.bounds_requirements().len(), 2);
+            assert!(
+                obligations
+                    .bounds_requirements()
+                    .iter()
+                    .all(|bound| bound.minimum_byte_len() == (value + 1) * 4)
+            );
+            assert_eq!(obligations.runtime_alias_requirements().len(), 1);
+            let alias = obligations.runtime_alias_requirements()[0];
+            assert_eq!(
+                (
+                    alias.left().parameter_index(),
+                    alias.right().parameter_index()
+                ),
+                (0, 2)
+            );
+            assert_eq!(
+                (
+                    alias.left_accessed_bytes().start(),
+                    alias.left_accessed_bytes().end_exclusive()
+                ),
+                (value * 4, (value + 1) * 4)
+            );
+            assert_eq!(alias.left_accessed_bytes(), alias.right_accessed_bytes());
+            assert!(obligations.inter_invocation_conflicts().is_empty());
+        }
+    }
+}
+
+#[test]
+fn unsigned_literal_cast_keeps_conflicts_and_both_overflow_stages() {
+    for cast in [None, Some(CastKind::Bitcast)] {
+        let analysis = analyze(
+            &unsigned_literal_transport_module(Constant::U64(17), cast),
+            8,
+        );
+        assert!(analysis.is_complete());
+        assert_eq!(analysis.obligations().inter_invocation_conflicts().len(), 1);
+        for (value, retained_accesses) in [(u64::MAX / 4 + 1, 0), (u64::MAX / 4, 1)] {
+            let analysis = analyze(
+                &unsigned_literal_transport_module(Constant::U64(value), cast),
+                1,
+            );
+            assert!(matches!(
+                analysis.incomplete_reasons(),
+                [FormalMemoryIncompleteReason::AddressArithmeticOverflow { .. }]
+            ));
+            assert_eq!(analysis.obligations().accesses().len(), retained_accesses);
+            assert!(analysis.obligations().bounds_requirements().is_empty());
+        }
+    }
+}
+
+#[test]
+fn unsigned_literal_cast_does_not_admit_other_ancestry() {
+    let mut cases = vec![unsigned_literal_transport_module(
+        Constant::U32(17),
+        Some(CastKind::ZeroExtend),
+    )];
+    let mut dynamic = unsigned_literal_transport_module(Constant::U64(17), Some(CastKind::Bitcast));
+    dynamic.functions[0]
+        .signature
+        .parameters
+        .push(Type::Scalar(ScalarType::U64));
+    let body = dynamic.functions[0].body.as_mut().unwrap();
+    body.parameters.push(ValueId(2));
+    body.blocks[0].operations.remove(0);
+    cases.push(dynamic);
+    for operator in [BinaryOp::Add, BinaryOp::Multiply] {
+        let mut arithmetic =
+            unsigned_literal_transport_module(Constant::U64(17), Some(CastKind::Bitcast));
+        let operations = &mut arithmetic.functions[0].body.as_mut().unwrap().blocks[0].operations;
+        operations[0] = op(
+            20,
+            Type::Scalar(ScalarType::U64),
+            OperationKind::Constant(Constant::U64(17)),
+        );
+        operations.insert(
+            1,
+            op(
+                2,
+                Type::Scalar(ScalarType::U64),
+                OperationKind::Binary {
+                    op: operator,
+                    lhs: ValueId(20),
+                    rhs: ValueId(20),
+                },
+            ),
+        );
+        cases.push(arithmetic);
+    }
+    let mut signed = unsigned_literal_transport_module(Constant::U64(17), Some(CastKind::Bitcast));
+    let operations = &mut signed.functions[0].body.as_mut().unwrap().blocks[0].operations;
+    operations[0] = op(
+        20,
+        Type::Scalar(ScalarType::I64),
+        OperationKind::Constant(Constant::I64(17)),
+    );
+    operations.insert(
+        1,
+        op(
+            2,
+            Type::Scalar(ScalarType::U64),
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: ValueId(20),
+                to: Type::Scalar(ScalarType::U64),
+            },
+        ),
+    );
+    cases.push(signed);
+    for module in cases {
+        let analysis = analyze(&module, 1);
+        assert!(matches!(
+            analysis.incomplete_reasons(),
+            [FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }]
+        ));
+        assert!(analysis.obligations().accesses().is_empty());
+    }
+}
+
+#[test]
+fn unsigned_literal_transport_rejects_malformed_ir_before_extraction() {
+    let base = unsigned_literal_transport_module(Constant::U64(17), Some(CastKind::Bitcast));
+    let mut cases = Vec::new();
+    for mutation in 0..6 {
+        let mut module = base.clone();
+        let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+        match mutation {
+            0 => operations[0].results[0].ty = Type::INDEX,
+            1 => {
+                operations[0] = op(
+                    2,
+                    Type::Scalar(ScalarType::U32),
+                    OperationKind::Constant(Constant::U32(17)),
+                )
+            }
+            2 => {
+                operations[1].kind = OperationKind::Cast {
+                    kind: CastKind::Truncate,
+                    value: ValueId(2),
+                    to: Type::INDEX,
+                }
+            }
+            3 => operations[1].results[0].ty = Type::Scalar(ScalarType::U64),
+            4 => {
+                operations[1].kind = OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: ValueId(999),
+                    to: Type::INDEX,
+                }
+            }
+            5 => operations[1]
+                .results
+                .push(ValueDef::new(ValueId(999), Type::INDEX)),
+            _ => unreachable!(),
+        }
+        cases.push(module);
+    }
+    for module in cases {
+        assert!(matches!(
+            derive_kernel_memory_obligations(
+                &module,
+                &KernelId::new("kernel"),
+                ExplicitLaunchExtent1d::Exact(1),
+                FormalIndexWidth::Bits64
+            ),
+            Err(FormalMemoryObligationError::InvalidModule(_))
+        ));
+    }
+}
+
+#[test]
+fn unsigned_literal_cast_forwards_only_one_exact_ssa_origin() {
+    for mixed in [false, true] {
+        let mut module =
+            unsigned_literal_transport_module(Constant::U64(17), Some(CastKind::Bitcast));
+        module.functions[0].signature.parameters.push(Type::BOOL);
+        let body = module.functions[0].body.as_mut().unwrap();
+        body.parameters.push(ValueId(99));
+        let mut entry = body.blocks.remove(0);
+        let rest = entry.operations.split_off(1);
+        entry.operations.push(op(
+            98,
+            Type::Scalar(ScalarType::U64),
+            OperationKind::Constant(Constant::U64(17)),
+        ));
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(99),
+            then_target: BlockId(1),
+            then_arguments: vec![ValueId(2)],
+            else_target: BlockId(1),
+            else_arguments: vec![if mixed { ValueId(98) } else { ValueId(2) }],
+        });
+        let mut successor = BasicBlock::new(BlockId(1));
+        successor
+            .parameters
+            .push(ValueDef::new(ValueId(97), Type::Scalar(ScalarType::U64)));
+        successor.operations = rest;
+        successor.operations[0].kind = OperationKind::Cast {
+            kind: CastKind::Bitcast,
+            value: ValueId(97),
+            to: Type::INDEX,
+        };
+        successor.terminator = Some(Terminator::Return { values: vec![] });
+        body.blocks = vec![entry, successor];
+        let analysis = analyze(&module, 1);
+        assert_eq!(analysis.is_complete(), !mixed, "{analysis:?}");
+        if mixed {
+            assert!(matches!(
+                analysis.incomplete_reasons(),
+                [FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }]
+            ));
+        } else {
+            assert_eq!(
+                analysis.obligations().accesses()[0].byte_offset(),
+                ByteExpression::invocation_affine(68, 0)
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_unsigned_literal_cast_remains_iterative_and_width64_only() {
+    let mut module = unsigned_literal_transport_module(Constant::U64(17), Some(CastKind::Bitcast));
+    let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+    let tail = operations.split_off(2);
+    let mut previous = ValueId(3);
+    for result in (10..1034).rev() {
+        operations.push(op(
+            result,
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: previous,
+                rhs: ValueId(3),
+            },
+        ));
+        previous = ValueId(result);
+    }
+    operations.extend(tail);
+    let gep = operations
+        .iter_mut()
+        .find(|operation| matches!(operation.kind, OperationKind::GetElementPointer { .. }))
+        .unwrap();
+    gep.kind = OperationKind::GetElementPointer {
+        base: ValueId(4),
+        offset: previous,
+    };
+    let analysis = analyze(&module, 1);
+    assert!(analysis.is_complete(), "{analysis:?}");
+    assert_eq!(
+        analysis.obligations().accesses()[0].byte_offset(),
+        ByteExpression::invocation_affine(17 * 1025 * 4, 0)
+    );
+    let narrow = derive_kernel_memory_obligations(
+        &module,
+        &KernelId::new("kernel"),
+        ExplicitLaunchExtent1d::Exact(1),
+        FormalIndexWidth::Bits32,
+    )
+    .unwrap();
+    assert!(matches!(
+        narrow.incomplete_reasons(),
+        [FormalMemoryIncompleteReason::UnsupportedIndexWidth {
+            width: FormalIndexWidth::Bits32
+        }]
+    ));
+    assert!(narrow.obligations().accesses().is_empty());
+}

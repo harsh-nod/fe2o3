@@ -182,6 +182,22 @@ The following boundaries remain closed:
   hardware execution, or formal compiler verification follows from these
   shared-verifier and native-lowering boundaries.
 
+## Literal Address Extraction
+
+Formal-memory affine extraction recognizes correctly typed `U64` literals and
+their exact representation-preserving `U64`-to-`Index` bitcast under the existing
+64-bit index-width contract. Block-parameter forwarding must resolve to one
+exact definition; equal-valued but distinct origins are not merged by this rule.
+The shared iterative expression cache retains its checked byte-offset and
+access-end arithmetic, bounds and alias requirements, and inter-invocation
+conflicts. Dynamic U64 values, U64 arithmetic, signed ancestry and other casts
+are not promoted into affine mathematics by this extension.
+
+A Complete analysis means that modeled obligations were extracted. It does
+not discharge bounds or alias requirements, remove detected conflicts, prove
+source refinement, or grant production admission. Unsupported index widths and
+unmodeled address ancestry remain explicitly incomplete.
+
 ## Canonical Transition Receipts
 
 The [transition receipt codec](../crates/fe2o3-kernel-ir/src/canonical_kir_transition_receipt_v1.rs)

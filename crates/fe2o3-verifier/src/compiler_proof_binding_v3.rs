@@ -391,7 +391,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 semantic_mir.identity().sha256(),
                 semantic_mir.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "semantic MIR",
         ),
         (
@@ -400,7 +400,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 middle_end.identity().sha256(),
                 middle_end.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "middle end",
         ),
         (
@@ -409,7 +409,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 kernel_ir.identity().sha256(),
                 kernel_ir.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "Kernel IR",
         ),
         (
@@ -418,7 +418,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 mir_to_kir_correspondence.identity().sha256(),
                 mir_to_kir_correspondence.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "MIR-to-KIR correspondence",
         ),
         (
@@ -427,7 +427,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 formal_memory.identity().sha256(),
                 formal_memory.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "formal memory",
         ),
     ] {
@@ -444,7 +444,7 @@ pub fn validate_compiler_proof_inputs_v4(
         mir_to_kir_correspondence,
         formal_memory,
     )
-    .map_err(CompilerProofInputValidationErrorV4::Stage)?;
+    .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?;
     let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
         association.verus_execution_evidence(),
     )
@@ -1495,7 +1495,7 @@ pub enum CompilerProofInputValidationErrorV4 {
         field: &'static str,
     },
     /// One of the five shared compiler stages failed strict decoding or cross-checking.
-    Stage(CompilerProofInputValidationErrorV3),
+    Stage(Box<CompilerProofInputValidationErrorV3>),
     /// The nested aggregate Verus execution failed canonical decode or signed receipt import.
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
     /// The signed aggregate receipt names a different live PLIRON middle-end record.
@@ -1531,7 +1531,7 @@ impl Error for CompilerProofInputValidationErrorV4 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ProofBindingDecode(error) => Some(error),
-            Self::Stage(error) => Some(error),
+            Self::Stage(error) => Some(error.as_ref()),
             Self::VerusEvidence(error) => Some(error),
             Self::ProofBindingIdentityMismatch { .. } | Self::VerusMiddleEndMismatch => None,
         }

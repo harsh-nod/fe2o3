@@ -164,6 +164,25 @@ requires both the sealed execution witness and the independently checked
 input/output relation. Its owner cannot be converted to the historical
 policy-2 owner, and plain receipt bytes do not construct execution custody.
 
+Published receipt bytes also have a separate semantic-replay API,
+`decode_and_check_published_policy3_semantic_relation_v1`. It borrows the exact
+already admitted input/output owners and wire bytes, validates the fixed record
+framing and policy roster, and independently checks the semantic transition.
+Its `ReplayedPolicy3SemanticRelationV1` retains all three borrows. It does not
+rerun the optimizer or construct a sealed execution witness.
+
+The embedded `UnauthenticatedPolicy3ExecutionClaimV1` remains an untrusted
+execution claim: well-framed altered dynamic counters can accompany a valid
+semantic relation. A protected producer/publication join is still required to
+authenticate execution provenance. Framing, endpoint digests and successful
+semantic replay alone do not provide it. The local sealed-owner decoder keeps
+its stricter exact execution-record comparison.
+
+Replay uses the original caller ledger; borrowed owners/wire remain separately
+caller-reserved. The returned storage receipt accounts for owned semantic rows
+and the enclosing wrapper once, and must be reserved before further allocation.
+This is not whole-compiler allocation accounting or final production admission.
+
 The candidate uses the caller's existing resource ledger and is discarded on
 failure. Integer-identity rewrites are not in this schedule. This API supplies
 neither final source/memory/refinement admission nor artifact/launch authority;

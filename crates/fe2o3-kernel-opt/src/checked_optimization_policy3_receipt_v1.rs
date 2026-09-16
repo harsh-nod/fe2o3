@@ -14,7 +14,8 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_pliron::{
     CheckedNeutralKernelIrOwnerPolicy3V1 as CheckedOwner, POLICY3_EXECUTION_RECORD_BYTES_V1,
-    policy3_execution_receipt_digest_v1,
+    Policy3ExecutionClaimErrorV1, UnauthenticatedPolicy3ExecutionClaimV1,
+    policy3_execution_receipt_digest_v1, read_unauthenticated_policy3_execution_claim_v1,
 };
 use std::{
     error::Error,
@@ -36,6 +37,8 @@ pub enum CanonicalPolicy3ExecutionReceiptErrorV1 {
     Limit,
     InputHistory,
     ExecutionWitness,
+    /// Published record syntax or endpoint failure, not execution authentication.
+    ExecutionClaim(Policy3ExecutionClaimErrorV1),
     Codec(CanonicalKirTransitionReceiptErrorV1),
     Semantic(SemanticError),
     Resource(Resource),
@@ -373,6 +376,156 @@ pub fn decode_and_check_canonical_policy3_execution_receipt_v1<'input, 'checked>
             checked,
             semantic,
             wire,
+            storage: CanonicalPolicy3ExecutionReceiptStorageV1(retained),
+        })
+    })
+}
+
+/// Independently replayed B/O semantics plus explicitly unauthenticated
+/// execution claims. This type proves neither publication provenance nor actual
+/// optimizer execution, source proof, formal memory safety or final admission.
+/// It cannot produce a sealed execution owner. All three inputs remain borrowed.
+///
+/// ```compile_fail
+/// use fe2o3_kernel_opt::ReplayedPolicy3SemanticRelationV1;
+/// fn duplicate(receipt: ReplayedPolicy3SemanticRelationV1<'_, '_, '_>) {
+///     let _ = receipt.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+///     VerifiedCanonicalKernelIrModuleV12 as Owner};
+/// use fe2o3_kernel_opt::{ReplayedPolicy3SemanticRelationV1 as Receipt,
+///     decode_and_check_published_policy3_semantic_relation_v1 as decode};
+/// fn escape_wire<'i, 'o>(input: &'i Owner, output: &'o Owner,
+///     bytes: Vec<u8>, budget: &mut Budget<'_>) -> Receipt<'i, 'o, 'static> {
+///     decode(input, output, &bytes, budget).unwrap()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+///     VerifiedCanonicalKernelIrModuleV12 as Owner};
+/// use fe2o3_kernel_opt::{ReplayedPolicy3SemanticRelationV1 as Receipt,
+///     decode_and_check_published_policy3_semantic_relation_v1 as decode};
+/// fn escape_input<'o, 'w>(input: Owner, output: &'o Owner,
+///     bytes: &'w [u8], budget: &mut Budget<'_>) -> Receipt<'static, 'o, 'w> {
+///     decode(&input, output, bytes, budget).unwrap()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+///     VerifiedCanonicalKernelIrModuleV12 as Owner};
+/// use fe2o3_kernel_opt::{ReplayedPolicy3SemanticRelationV1 as Receipt,
+///     decode_and_check_published_policy3_semantic_relation_v1 as decode};
+/// fn escape_output<'i, 'w>(input: &'i Owner, output: Owner,
+///     bytes: &'w [u8], budget: &mut Budget<'_>) -> Receipt<'i, 'static, 'w> {
+///     decode(input, &output, bytes, budget).unwrap()
+/// }
+/// ```
+pub struct ReplayedPolicy3SemanticRelationV1<'input, 'output, 'wire> {
+    semantic: CheckedCanonicalOptimizationReceiptV1<'input, 'output>,
+    claim: UnauthenticatedPolicy3ExecutionClaimV1<'wire>,
+    storage: CanonicalPolicy3ExecutionReceiptStorageV1,
+}
+impl<'input, 'output> ReplayedPolicy3SemanticRelationV1<'input, 'output, '_> {
+    /// The unchanged semantic checker result on these exact admitted B/O owners.
+    pub const fn semantic_receipt(
+        &self,
+    ) -> &CheckedCanonicalOptimizationReceiptV1<'input, 'output> {
+        &self.semantic
+    }
+    /// Syntactically checked claims, not the sealed actual execution witness.
+    pub const fn unauthenticated_execution_claim(
+        &self,
+    ) -> &UnauthenticatedPolicy3ExecutionClaimV1<'_> {
+        &self.claim
+    }
+    /// Owned semantic receipt plus the enclosing header, excluding borrowed wire
+    /// and B/O. Success transfers this reservation; reserve it immediately.
+    pub const fn storage(&self) -> CanonicalPolicy3ExecutionReceiptStorageV1 {
+        self.storage
+    }
+    /// No execution, source, formal or final admission authority is granted.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+}
+
+fn replay_frame_v1<'wire>(
+    bytes: &'wire [u8],
+    budget: &mut Budget<'_>,
+) -> Result<(&'wire [u8], &'wire [u8]), E> {
+    const HEADER: usize = CANONICAL_POLICY3_EXECUTION_RECEIPT_HEADER_V1;
+    budget.charge_work(32)?;
+    if bytes.len() < HEADER {
+        return Err(E::Header);
+    }
+    if bytes.len() > MAX_CANONICAL_POLICY3_EXECUTION_RECEIPT_BYTES_V1 {
+        return Err(E::Limit);
+    }
+    if bytes[..8] != CANONICAL_POLICY3_EXECUTION_RECEIPT_MAGIC_V1
+        || bytes[8..12] != [1, 0, 0, 0]
+        || u32::from_le_bytes(bytes[12..16].try_into().map_err(|_| E::Header)?) != HEADER as u32
+    {
+        return Err(E::Header);
+    }
+    let total = usize::try_from(u64::from_le_bytes(
+        bytes[16..24].try_into().map_err(|_| E::Header)?,
+    ))
+    .map_err(|_| E::Limit)?;
+    let body = usize::try_from(u64::from_le_bytes(
+        bytes[24..32].try_into().map_err(|_| E::Header)?,
+    ))
+    .map_err(|_| E::Limit)?;
+    if checked_length(body)? != total || total != bytes.len() {
+        return Err(E::Header);
+    }
+    Ok((&bytes[32..HEADER], &bytes[HEADER..]))
+}
+
+fn replay_wrapper_storage_v1() -> Result<usize, Resource> {
+    size_of::<ReplayedPolicy3SemanticRelationV1<'_, '_, '_>>()
+        .checked_sub(size_of::<CheckedCanonicalOptimizationReceiptV1<'_, '_>>())
+        .ok_or(Resource::Arithmetic)
+}
+
+fn reserve_replay_wrapper_v1(semantic: usize, budget: &mut Budget<'_>) -> Result<usize, E> {
+    budget.charge_work(3)?;
+    let wrapper = replay_wrapper_storage_v1()?;
+    budget.reserve_storage(wrapper)?;
+    semantic
+        .checked_add(wrapper)
+        .ok_or_else(|| Resource::Arithmetic.into())
+}
+
+/// Independently check the existing semantic body against actual admitted B/O,
+/// without executing optimization or manufacturing a sealed execution owner.
+/// The caller accounts for B/O and borrowed wire throughout the returned borrow.
+/// Success transfers only `storage()`; reserve it before further allocation.
+/// Framing costs 32 + 2 + 776 logical work units before the existing semantic
+/// decoder. Wrapper accounting costs three units and counts the semantic header
+/// once. Dynamic execution claims remain unauthenticated even on success.
+pub fn decode_and_check_published_policy3_semantic_relation_v1<'input, 'output, 'wire>(
+    input: &'input Owner,
+    output: &'output Owner,
+    bytes: &'wire [u8],
+    budget: &mut Budget<'_>,
+) -> Result<ReplayedPolicy3SemanticRelationV1<'input, 'output, 'wire>, E> {
+    scoped(budget, |budget| {
+        let (record, body) = replay_frame_v1(bytes, budget)?;
+        let claim = read_unauthenticated_policy3_execution_claim_v1(input, output, record, budget)
+            .map_err(E::ExecutionClaim)?;
+        let semantic =
+            decode_and_check_canonical_optimization_receipt_v1(input, output, body, budget)
+                .map_err(E::Semantic)?;
+        budget.reserve_storage(semantic.storage().retained_storage())?;
+        let retained = reserve_replay_wrapper_v1(semantic.storage().retained_storage(), budget)?;
+        Ok(ReplayedPolicy3SemanticRelationV1 {
+            semantic,
+            claim,
             storage: CanonicalPolicy3ExecutionReceiptStorageV1(retained),
         })
     })
