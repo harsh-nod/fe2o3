@@ -58,6 +58,25 @@ fn helper(parameters: Vec<Type>, operations: Vec<Operation>) -> Function {
 
 fn assert_all_public_paths_reject(module: &Module, expected: LoweringDiagnosticCode) {
     verify_module(module).expect("the backend must reject semantically valid V12 input");
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 1_000_000_000);
+    let (native, storage) =
+        VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
+            module,
+            &mut budget,
+        )
+        .unwrap();
+    budget.reserve_storage(storage.retained_storage()).unwrap();
+    for result in [
+        fe2o3_amdgcn_model::lower_canonical_v12_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(&native),
+        fe2o3_amdgcn_model::lower_canonical_v12_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(&native),
+    ] {
+        let errors = result.unwrap_err();
+        assert!(errors.contains(expected), "{errors}");
+    }
+    drop(native);
+    budget.release_storage(storage.retained_storage()).unwrap();
+    assert_eq!(budget.storage(), 0);
     let kernel = KernelId::new("kernel");
     let scalar_owner = VerifiedCanonicalKernelIrV8::from_module(scalar_module()).unwrap();
     let anchor = ProductionSemanticAnchorKirIdentityV1::from_v8(&scalar_owner);
