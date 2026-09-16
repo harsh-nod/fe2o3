@@ -25996,7 +25996,7 @@ mod resource_tests {
         )
     }
 
-    fn scalar_transmute_semantic_owner() -> ProductionSemanticMirOwnerV1 {
+    pub(super) fn scalar_transmute_semantic_owner() -> ProductionSemanticMirOwnerV1 {
         let unit = SemanticTypeIdV1::from_index(0);
         let u32_ty = SemanticTypeIdV1::from_index(1);
         let f32_ty = SemanticTypeIdV1::from_index(2);

@@ -1643,3 +1643,350 @@ mod functional_address_component_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod functional_address_captured_index_tests {
+    use super::*;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        InertSemanticMirRequestV1, SemanticAssignmentV1, SemanticBasicBlockV1, SemanticMirLimitsV1,
+        SemanticRvalueV1, SemanticStatementV1,
+    };
+    use fe2o3_pliron::{
+        ProductionSemanticSsaFunctionOccurrencesV1 as Captured, ProductionSemanticSsaLimitsV1,
+        ProductionSemanticSsaOwnerV1,
+    };
+
+    const PREFIX: usize = 13;
+    const FIRST_DEFINE: SourceOutputFullAddressEventKeyV1 = (0, 0, 0, 0, 2, 0);
+    const COPY_USE: SourceOutputFullAddressEventKeyV1 = (0, 1, 3, 0, 0, 0);
+    const SECOND_DEFINE: SourceOutputFullAddressEventKeyV1 = (0, 1, 0, 0, 2, 0);
+
+    fn with_captured_rows(body: impl FnOnce(&Captured<'_>, &mut AssertOriginBudgetV1<'_>)) {
+        let seed = resource_tests::scalar_transmute_semantic_owner();
+        let semantic = seed.semantic();
+        let function = &semantic.functions()[0];
+        let block = &function.blocks()[0];
+        let local = SemanticLocalIdV1::from_index(1);
+        let ty = function.locals()[1].ty();
+        let place = SemanticPlaceV1::new(local, vec![], ty).unwrap();
+        let mut statements = block.statements().to_vec();
+        assert_eq!(statements.len(), 1);
+        statements.push(SemanticStatementV1::new(
+            function.source(),
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place.clone(),
+                SemanticRvalueV1::new(
+                    ty,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place)),
+                ),
+            )),
+        ));
+        let changed = SemanticFunctionDeclV1::new(
+            function.identity(),
+            function.role(),
+            function.item_definition_identity(),
+            function.monomorphization_identity(),
+            function.generic_type_arguments_identity(),
+            function.const_generic_arguments_identity(),
+            function.source(),
+            function.abi().clone(),
+            function.locals().to_vec(),
+            function.entry(),
+            vec![
+                SemanticBasicBlockV1::new(
+                    block.identity(),
+                    block.source(),
+                    statements,
+                    block.terminator().clone(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+        .with_kernel_entry(function.kernel_entry().unwrap().clone());
+        let admitted = InertSemanticMirRequestV1::new_with_callables(
+            semantic.target(),
+            semantic.types().to_vec(),
+            semantic.allocations().to_vec(),
+            semantic.statics().to_vec(),
+            semantic.vtables().to_vec(),
+            vec![changed],
+            semantic.callables().to_vec(),
+            semantic.roots().to_vec(),
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+        let mut ssa = ProductionSemanticSsaOwnerV1::try_new(
+            ProductionSemanticMirOwnerV1::try_new(
+                admitted,
+                fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(PREFIX).unwrap();
+        let receipt = ssa
+            .try_capture_occurrences_with_budget_v1(&mut budget)
+            .unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let floor = budget.storage();
+        {
+            let occurrences = ssa.occurrences_v1().unwrap();
+            let captured = occurrences
+                .function(SemanticFunctionIdV1::from_index(0))
+                .unwrap();
+            assert!(std::ptr::eq(captured.owner(), &ssa));
+            body(&captured, &mut budget);
+        }
+        assert_eq!(budget.storage(), floor);
+        drop(ssa);
+        budget.release_storage(receipt.retained_storage()).unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+        budget.release_storage(PREFIX).unwrap();
+        assert_eq!(work.failed_work(), None);
+    }
+
+    fn with_index(
+        captured: &Captured<'_>,
+        budget: &mut AssertOriginBudgetV1<'_>,
+        body: impl FnOnce(
+            &mut SourceOutputFullAddressWorkspaceV1,
+            &mut AssertOriginBudgetV1<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionSourceOutputErrorV1> {
+        source_output_global_scratch_scope_v1(budget, |budget| {
+            let mut workspace = source_output_full_address_workspace_v1(budget)?;
+            source_output_full_address_events_v1(&mut workspace, captured, budget)?;
+            assert_eq!(workspace.events.len(), 3);
+            body(&mut workspace, budget)
+        })
+    }
+
+    #[test]
+    fn functional_address_real_capture_rejects_corrupt_event_index_rows() {
+        with_captured_rows(|captured, budget| {
+            let floor = budget.storage();
+            with_index(captured, budget, |workspace, budget| {
+                let live = budget.storage();
+                let at = workspace
+                    .events
+                    .iter()
+                    .position(|row| row.0 == COPY_USE)
+                    .unwrap();
+                let original = workspace.events[at];
+                let different = workspace
+                    .events
+                    .iter()
+                    .find(|row| row.0 == FIRST_DEFINE)
+                    .unwrap()
+                    .1;
+                assert_ne!(original.1, different);
+                let exact = &captured.events()[original.1];
+                assert!(exact.is_reachable() && exact.is_promoted());
+                assert!(std::ptr::eq(
+                    source_output_full_address_event_v1(workspace, captured, COPY_USE, budget)?,
+                    exact,
+                ));
+                let removed = workspace.events.remove(at);
+                assert!(matches!(
+                    source_output_full_address_event_v1(workspace, captured, COPY_USE, budget),
+                    Err(ProductionSourceOutputErrorV1::Invalid(
+                        "full address exact source event absent"
+                    ))
+                ));
+                workspace.events.insert(at, removed);
+                assert_eq!(workspace.events[at], original);
+                assert_eq!(budget.storage(), live);
+                for (ordinal, expected) in [
+                    (
+                        captured.events().len(),
+                        "full address source event index differs",
+                    ),
+                    (
+                        different,
+                        "full address source event is not exact reachable promoted occurrence",
+                    ),
+                ] {
+                    assert!(std::ptr::eq(
+                        source_output_full_address_event_v1(workspace, captured, COPY_USE, budget)?,
+                        exact,
+                    ));
+                    workspace.events[at].1 = ordinal;
+                    assert!(matches!(
+                        source_output_full_address_event_v1(workspace, captured, COPY_USE, budget),
+                        Err(ProductionSourceOutputErrorV1::Invalid(actual)) if actual == expected
+                    ));
+                    assert_eq!(budget.storage(), live);
+                    workspace.events[at] = original;
+                    assert!(std::ptr::eq(
+                        source_output_full_address_event_v1(workspace, captured, COPY_USE, budget)?,
+                        exact,
+                    ));
+                }
+                assert_eq!(budget.storage(), live);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+
+    #[test]
+    fn functional_address_real_capture_checks_use_and_definition_identity() {
+        with_captured_rows(|captured, budget| {
+            let floor = budget.storage();
+            with_index(captured, budget, |workspace, budget| {
+                let live = budget.storage();
+                let local = SemanticLocalIdV1::from_index(1);
+                let other_local = SemanticLocalIdV1::from_index(0);
+                let values = [FIRST_DEFINE, SECOND_DEFINE].map(|key| {
+                    let row = source_output_full_address_event_v1(workspace, captured, key, budget)
+                        .unwrap();
+                    let Some(SsaResolvedEventV1::Define { variable, value }) = row.resolved()
+                    else {
+                        panic!("actual promoted assignment must have a captured definition");
+                    };
+                    assert_eq!(variable.get(), local.index());
+                    assert!(matches!(value, SsaValueV1::Definition(_)));
+                    value
+                });
+                assert_ne!(values[0], values[1]);
+                assert_eq!(
+                    source_output_full_address_use_v1(
+                        workspace, captured, COPY_USE, local, budget
+                    )?,
+                    values[0],
+                );
+                for (key, wrong_local) in [(COPY_USE, other_local), (FIRST_DEFINE, local)] {
+                    assert_eq!(
+                        source_output_full_address_use_v1(
+                            workspace, captured, COPY_USE, local, budget
+                        )?,
+                        values[0],
+                    );
+                    assert!(matches!(
+                        source_output_full_address_use_v1(
+                            workspace,
+                            captured,
+                            key,
+                            wrong_local,
+                            budget
+                        ),
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full address captured source use differs"
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), live);
+                    assert_eq!(
+                        source_output_full_address_use_v1(
+                            workspace, captured, COPY_USE, local, budget
+                        )?,
+                        values[0],
+                    );
+                }
+                for (key, wrong_local, wrong_value) in [
+                    (FIRST_DEFINE, other_local, values[0]),
+                    (FIRST_DEFINE, local, values[1]),
+                    (COPY_USE, local, values[0]),
+                ] {
+                    source_output_full_address_define_v1(
+                        workspace,
+                        captured,
+                        FIRST_DEFINE,
+                        local,
+                        values[0],
+                        budget,
+                    )?;
+                    assert!(matches!(
+                        source_output_full_address_define_v1(
+                            workspace,
+                            captured,
+                            key,
+                            wrong_local,
+                            wrong_value,
+                            budget
+                        ),
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full identity captured definition differs"
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), live);
+                    source_output_full_address_define_v1(
+                        workspace,
+                        captured,
+                        FIRST_DEFINE,
+                        local,
+                        values[0],
+                        budget,
+                    )?;
+                }
+                assert_eq!(
+                    source_output_full_address_use_v1(
+                        workspace, captured, COPY_USE, local, budget
+                    )?,
+                    values[0],
+                );
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+
+    #[test]
+    fn functional_address_real_capture_index_scope_restores_errors_panics_and_reentry() {
+        with_captured_rows(|captured, budget| {
+            let floor = budget.storage();
+            let before = budget.work();
+            let mut error_entered = false;
+            let error = with_index(captured, budget, |workspace, budget| {
+                source_output_full_address_event_v1(workspace, captured, COPY_USE, budget)?;
+                error_entered = true;
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "captured index callback error",
+                ))
+            });
+            assert!(error_entered);
+            assert!(matches!(
+                error,
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "captured index callback error"
+                ))
+            ));
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > before);
+            let after_error = budget.work();
+            let mut panic_entered = false;
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_index(captured, budget, |workspace, budget| {
+                    source_output_full_address_event_v1(workspace, captured, COPY_USE, budget)?;
+                    panic_entered = true;
+                    panic!("captured index callback panic");
+                })
+            }))
+            .expect_err("the entered captured-index callback must unwind");
+            assert!(panic_entered);
+            let payload = panic
+                .downcast_ref::<&'static str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+            assert_eq!(payload, Some("captured index callback panic"));
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > after_error);
+            let after_panic = budget.work();
+            with_index(captured, budget, |workspace, budget| {
+                source_output_full_address_event_v1(workspace, captured, COPY_USE, budget)?;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > after_panic);
+        });
+    }
+}
