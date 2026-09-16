@@ -299,6 +299,34 @@ slice does not become a whole aggregate variable: unavailable aggregate storage
 stays explicit. These joins do not independently prove the absolute source meaning
 of a coherently replaced helper map; they grant no compiler or execution authority.
 
+## Call-Qualified Effect Coverage
+
+The production ranked projector independently checks helper emptiness against
+the exact executable inventory already used for assertion analysis. A bounded,
+iterative call-graph analysis distinguishes complete-empty, complete-nonempty
+and incomplete results. Both physical memory and compiler-ordering effects count;
+declarations, recursive dependencies and opaque assembly remain incomplete.
+Every retained helper association is checked, including helpers whose separate
+source analysis already established scalar determinism. No empty-effect result
+establishes return values, termination or convergence.
+
+For nonempty functions, a scoped visitor retains each original effect operation
+and its ordered call-site path. Two calls to the same reader remain two different
+instances, with the actual caller operands and the same callee-local access
+coordinate. It does not expand loop iterations or assert runtime ordering.
+Path expansion is work-bounded; callback results are provisional until traversal
+returns successfully. Scratch is released on error or unwind, and borrowed paths
+cannot escape the callback. No second executable graph or serialized evidence
+format is introduced.
+
+This is an executable occurrence relation, not helper-read admission. Complete
+read coverage still needs checked argument/view substitution along each call,
+the exact slice extent/index/guard, function-qualified ranked replay and formal
+memory obligations. Until those consumers are implemented, materialization's
+empty-effect requirement and the existing read/proof refusals remain unchanged.
+The existing source-reading helper remains a negative test, not a simulation
+or GPU success.
+
 ## Evidence boundary
 
 Legacy serialized V4/V5 proof correspondence does not encode the complete

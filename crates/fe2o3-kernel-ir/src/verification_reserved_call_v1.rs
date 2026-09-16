@@ -13,6 +13,40 @@ use crate::{
 const DIAGNOSTIC_PREFIX_V1: &str = "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_";
 const FLOAT_PREFIX_V1: &str = "__fe2o3_ir_float_v1_";
 
+#[cfg(test)]
+#[path = "verification_reserved_call_effects_v1_tests.rs"]
+mod effect_tests;
+
+impl crate::Operation {
+    /// Allocation-free equivalent of `has_complete_effect_summary`, charging
+    /// descriptor/name classification before inspection. This classifies only
+    /// registered local effects, not ordinary callees or program safety.
+    pub fn has_complete_effect_summary_with_budget_v1(
+        &self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
+        budget.charge_work(1)?;
+        let crate::OperationKind::Call { callee, arguments } = &self.kind else {
+            return Ok(!matches!(
+                self.kind,
+                crate::OperationKind::InlineAssembly(_)
+            ));
+        };
+        charge_prefix_comparisons_v1(callee, budget)?;
+        if callee.as_str().starts_with(DIAGNOSTIC_PREFIX_V1) {
+            charge_diagnostic_lookup_v1(callee, budget)?;
+            return Ok(AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee)
+                .is_some_and(|descriptor| descriptor.arity() == arguments.len()));
+        }
+        if callee.as_str().starts_with(FLOAT_PREFIX_V1) {
+            charge_float_lookup_v1(callee, budget)?;
+            return Ok(FloatOperation::intrinsic_descriptor_v1(callee)
+                .is_some_and(|descriptor| descriptor.arity() == arguments.len()));
+        }
+        Ok(false)
+    }
+}
+
 fn charge_prefix_comparisons_v1(
     id: &FunctionId,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,

@@ -30,6 +30,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     Inventory(CanonicalKirInventoryErrorV1),
     Sparse(CanonicalKirSparseErrorV1),
     Origin(SemanticKirAssertOriginErrorV1),
+    CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
     Binding(&'static str),
 }
 impl fmt::Display for CanonicalAssertionErrorV1 {
@@ -39,6 +40,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::Inventory(error) => error.fmt(f),
             Self::Sparse(error) => error.fmt(f),
             Self::Origin(error) => error.fmt(f),
+            Self::CallEffects(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
         }
     }
@@ -50,6 +52,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::Inventory(error) => Some(error),
             Self::Sparse(error) => Some(error),
             Self::Origin(error) => Some(error),
+            Self::CallEffects(error) => Some(error),
             Self::Binding(_) => None,
         }
     }
@@ -120,6 +123,30 @@ pub(super) struct CanonicalAssertionSessionV1<'r, 'i, 'g, 'b, 'w> {
     budget: &'b mut Budget<'w>,
 }
 impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
+    #[cfg(test)]
+    pub(super) fn callable_effect_summaries_with_query_budget_v1(
+        &self,
+        source: &RankedProjectionSourceV1<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<super::DefinedCallableEmptyEffectSummariesV1, ProjectionError> {
+        super::derive_materialized_callable_effect_summaries_v1(
+            source,
+            self.report.inventory(),
+            budget,
+        )
+    }
+
+    pub(super) fn callable_effect_summaries(
+        &mut self,
+        source: &RankedProjectionSourceV1<'_>,
+    ) -> Result<super::DefinedCallableEmptyEffectSummariesV1, ProjectionError> {
+        super::derive_materialized_callable_effect_summaries_v1(
+            source,
+            self.report.inventory(),
+            self.budget,
+        )
+    }
+
     #[cfg(test)]
     pub(super) fn retained_floor_for_test_v1(&self) -> usize {
         self.budget.storage()
