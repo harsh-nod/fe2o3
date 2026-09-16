@@ -745,3 +745,115 @@ int main(int argc, char **argv) {
     assert!(!runner_marker.exists(), "raced runner executed");
     assert!(!rustdoc_marker.exists(), "raced rustdoc executed");
 }
+
+fn binding_selected_test(workspace: &TestWorkspace, selector: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .args(["test", "--locked", "--manifest-path"])
+        .arg(workspace.0.join("managed/Cargo.toml"))
+        .args(selector)
+        .env("CARGO", cargo())
+        .current_dir(&workspace.0);
+    command
+}
+
+#[test]
+fn binding_host_library_selection_keeps_custody_and_does_not_run_sibling_targets() {
+    let workspace = fixture();
+    write(
+        &workspace.0,
+        "managed/tests/sibling.rs",
+        "#[test] fn sibling_must_fail_if_selected() { panic!(\"sibling was selected\"); }\n",
+    );
+    let output = binding_selected_test(&workspace, &["--lib"])
+        .env("CARGO_TARGET_DIR", workspace.0.join("target-selected-lib"))
+        .output()
+        .expect("run exact host library suite");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("binding_is_present_and_runner_custody_is_closed")
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("sibling_must_fail_if_selected"));
+
+    let all = binding_test(&workspace)
+        .env("CARGO_TARGET_DIR", workspace.0.join("target-selected-lib"))
+        .output()
+        .expect("run unchanged all-target host scope");
+    assert!(!all.status.success());
+    assert!(String::from_utf8_lossy(&all.stdout).contains("sibling_must_fail_if_selected"));
+}
+
+#[test]
+fn binding_host_named_integration_selection_uses_the_same_closed_runner() {
+    let workspace = fixture();
+    write(
+        &workspace.0,
+        "managed/tests/reference.rs",
+        r#"#[test]
+fn exact_reference_target_has_compiler_binding() {
+    assert!(option_env!("FE2O3_CRATE_BINDING_ID_V1").is_some());
+    for (name, _) in std::env::vars_os() {
+        assert!(!name.to_string_lossy().starts_with("FE2O3_"));
+    }
+}
+"#,
+    );
+    write(
+        &workspace.0,
+        "managed/tests/sibling.rs",
+        "#[test] fn sibling_must_not_run() { panic!(\"unexpected sibling\"); }\n",
+    );
+    let output = binding_selected_test(&workspace, &["--test", "reference"])
+        .env(
+            "CARGO_TARGET_DIR",
+            workspace.0.join("target-selected-reference"),
+        )
+        .output()
+        .expect("run exact host integration suite");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("exact_reference_target_has_compiler_binding"));
+    assert!(!stdout.contains("sibling_must_not_run"));
+    assert!(!stdout.contains("binding_is_present_and_runner_custody_is_closed"));
+
+    let missing = binding_selected_test(&workspace, &["--test", "missing"])
+        .env(
+            "CARGO_TARGET_DIR",
+            workspace.0.join("target-selected-reference"),
+        )
+        .output()
+        .expect("refuse missing integration target");
+    assert!(!missing.status.success());
+}
+
+#[test]
+fn binding_host_selected_scopes_keep_config_and_selector_refusals() {
+    let workspace = fixture();
+    for selector in [
+        vec!["--lib", "--config=target.host.runner='hostile'"],
+        vec!["--lib", "--test", "reference"],
+        vec!["--test", "*"],
+        vec!["--lib", "--no-run"],
+        vec!["--test", "reference", "--doc"],
+        vec!["--lib", "-Zunstable-options"],
+    ] {
+        let output = binding_selected_test(&workspace, &selector)
+            .env(
+                "CARGO_TARGET_DIR",
+                workspace.0.join("target-selected-refusal"),
+            )
+            .output()
+            .expect("refuse malformed selected host scope");
+        assert!(!output.status.success(), "{selector:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("binding-only"));
+    }
+}

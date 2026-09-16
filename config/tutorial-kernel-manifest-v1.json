@@ -8563,7 +8563,7 @@
         "sourcePaths": [
           "examples/vecadd/src/lib.rs"
         ],
-        "sourceClosureSha256": "6f34b22f429cfab59da956529a18281e2078ba8b2a10833742119fd09c7db36c",
+        "sourceClosureSha256": "6aaff39873fcae52349273f25783a6d84e5bb206a103ec580780eaa52f5d11b7",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_vecadd",
@@ -8576,7 +8576,7 @@
         ],
         "cargoLockPath": "Cargo.lock",
         "cargoLockSha256": "f0950d120a5decc8e52cd1160c31820f7703e72448d70061852d044fa925bcfc",
-        "contractSha256": "d7c4f1f8122ea1aa865a89bb071f1000b8a04737525a518f5046f920e83ffc51"
+        "contractSha256": "85c141bc5edef684983900a2cc8b4488033aac01527ef5e2cb0c2c64baa736ac"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",

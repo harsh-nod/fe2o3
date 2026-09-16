@@ -823,10 +823,15 @@ for core_step in \
   device-copy-derive-ui \
   core-production-runtime-surface-ui \
   kernel-compile-matrix-shell-tests \
+  tutorial-cpu-reference-tests \
   s09-debug-checker; do
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_equals \
+  'python3 -B scripts/tests/tutorial_cpu_reference.py' \
+  "$(step_command tutorial-cpu-reference-tests)" \
+  'generic core did not gate the tutorial CPU runner protocols'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3" \
   "$(step_command cargo-fe2o3-tests)" \
@@ -960,6 +965,8 @@ assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
 assert_step_count rustc-codegen-lib-tests 1 \
   'serial generic gate did not run backend library tests exactly once'
+assert_step_count tutorial-cpu-reference-tests 1 \
+  'serial generic gate did not run tutorial CPU runner protocols exactly once'
 
 STEP_NAMES=()
 STEP_COMMANDS=()

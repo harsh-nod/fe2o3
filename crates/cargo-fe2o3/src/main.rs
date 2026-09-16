@@ -600,6 +600,102 @@ fn reject_binding_test_invocation_config(args: &[OsString]) -> Result<(), String
         .iter()
         .any(|argument| **argument == "--all-targets")
     {
+        reject_binding_selected_test_shape(&cargo_args)?;
+    }
+    Ok(())
+}
+
+fn reject_binding_selected_test_shape(args: &[&OsString]) -> Result<(), String> {
+    const VALUE_OPTIONS: &[&str] = &[
+        "--manifest-path",
+        "--package",
+        "-p",
+        "--target-dir",
+        "--message-format",
+        "--jobs",
+        "-j",
+        "--features",
+        "-F",
+        "--profile",
+        "--exclude",
+        "--color",
+        "--target",
+    ];
+    let mut selected = false;
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        let text = argument.to_str().ok_or_else(|| {
+            "binding-only selected host test requires UTF-8 option names".to_owned()
+        })?;
+        match text {
+            "--lib" | "--test" => {
+                if selected {
+                    return Err(
+                        "binding-only selected host test rejects mixed or duplicate selectors"
+                            .to_owned(),
+                    );
+                }
+                selected = true;
+                if text == "--test" {
+                    index += 1;
+                    let name = args
+                        .get(index)
+                        .and_then(|name| name.to_str())
+                        .ok_or_else(|| {
+                            "binding-only selected host test requires one literal test target"
+                                .to_owned()
+                        })?;
+                    if name.is_empty()
+                        || name.starts_with('-')
+                        || !name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                    {
+                        return Err(
+                            "binding-only selected host test requires one literal test target"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+            "--locked"
+            | "--offline"
+            | "--frozen"
+            | "--quiet"
+            | "-q"
+            | "--verbose"
+            | "-v"
+            | "--release"
+            | "--no-default-features"
+            | "--all-features" => {}
+            value_option if VALUE_OPTIONS.contains(&value_option) => {
+                index += 1;
+                let value = args.get(index).ok_or_else(|| {
+                    "binding-only selected host test option is missing its value".to_owned()
+                })?;
+                if value.is_empty() || os_bytes(value).starts_with(b"-") {
+                    return Err(
+                        "binding-only selected host test option has an invalid value".to_owned(),
+                    );
+                }
+            }
+            joined
+                if joined.split_once('=').is_some_and(|(key, value)| {
+                    key.starts_with("--")
+                        && VALUE_OPTIONS.contains(&key)
+                        && !value.is_empty()
+                        && !value.starts_with('-')
+                }) => {}
+            _ => {
+                return Err(
+                    "binding-only selected host test rejects unsupported Cargo arguments"
+                        .to_owned(),
+                );
+            }
+        }
+        index += 1;
+    }
+    if !selected {
         return Err(
             "binding-only host test requires exact --all-targets so rustdoc is never selected"
                 .to_owned(),
@@ -3976,6 +4072,61 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn binding_host_test_explicit_selectors_are_value_aware_and_component_only() {
+        for args in [
+            vec!["--locked", "--lib"],
+            vec!["--offline", "--test", "reference"],
+            vec![
+                "--manifest-path",
+                "path/Cargo.toml",
+                "--lib",
+                "--message-format=json",
+            ],
+            vec![
+                "--test",
+                "reference",
+                "--",
+                "-Z",
+                "unstable-options",
+                "--format=json",
+            ],
+            vec!["--all-targets", "--lib"],
+        ] {
+            let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(
+                reject_binding_test_invocation_config(&args).is_ok(),
+                "{args:?}"
+            );
+        }
+        for args in [
+            vec!["--lib", "--test", "reference"],
+            vec!["--lib", "--lib"],
+            vec!["--test"],
+            vec!["--test", ""],
+            vec!["--test", "*"],
+            vec!["--test", "ref?"],
+            vec!["--test", "[a]"],
+            vec!["--test=reference"],
+            vec!["--tests"],
+            vec!["--bin", "main"],
+            vec!["--package", "--lib"],
+            vec!["--unknown", "--lib"],
+            vec!["--", "--lib"],
+            vec!["--lib", "substring-filter"],
+            vec!["--lib", "--config", "a=b"],
+            vec!["--test", "reference", "-Zunstable-options"],
+            vec!["--lib", "--doc"],
+            vec!["--test", "reference", "--no-run"],
+        ] {
+            let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(
+                reject_binding_test_invocation_config(&args).is_err(),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]
