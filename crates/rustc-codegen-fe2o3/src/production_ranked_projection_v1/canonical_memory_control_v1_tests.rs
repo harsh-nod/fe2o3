@@ -1240,3 +1240,332 @@ fn conditional_control_actual_compare_index_cannot_drift_from_bounds_message() {
 fn conditional_control_actual_compare_extent_cannot_drift_to_another_slice() {
     conditional_compare_message_drift_rejects_v1(false);
 }
+
+const INVOCATION_MARKER_V1: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
+const INVOCATION_WITNESS_V1: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
+const INVOCATION_REFERENCE_V1: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
+
+fn invocation_coordinate_ssa_v1() -> ProductionSemanticSsaOwnerV1 {
+    let seed = genuine_dynamic_global_source_v1(GlobalWriteExpressionShapeV1::Parameter, 1);
+    let semantic = seed.semantic_ssa().source_semantic();
+    let old = &semantic.functions()[0];
+    let mut types = semantic.types().to_vec();
+    assert_eq!(types.len(), INVOCATION_MARKER_V1.index() as usize);
+    let raw = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+    );
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(239)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(239)),
+        SemanticTypeLayoutV1::aggregate(
+            Some(0),
+            1,
+            SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+    ));
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(240)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(240)),
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(raw),
+            false,
+            SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(
+            SemanticAggregateTypeV1::new(vec![A_U64, INVOCATION_MARKER_V1]).unwrap(),
+        ),
+    ));
+    types.push(
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(241)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(241)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                    SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    INVOCATION_WITNESS_V1,
+                    SemanticPointerKindV1::Reference,
+                    SemanticMutabilityV1::Immutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(
+                    SemanticAbiPointeeInfoV1::new(
+                        SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                        8,
+                        8,
+                    )
+                    .unwrap(),
+                ),
+                None,
+            ),
+        ),
+    );
+    let intrinsic = |tag, operation, inputs, output| {
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            inputs,
+            neutral_plain_direct_abi_value_v1(output),
+        )
+        .unwrap();
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(tag)),
+                SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag)),
+                SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag)),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag)),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(tag)),
+        }
+    };
+    let reference_argument = SemanticAbiValueV1::new(
+        INVOCATION_REFERENCE_V1,
+        SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(
+                    true,
+                    Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                    true,
+                    true,
+                    false,
+                    true,
+                ),
+                SemanticAbiExtensionV1::None,
+                8,
+                Some(8),
+            )
+            .unwrap(),
+        ),
+    );
+    let callables = vec![
+        SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+        intrinsic(
+            244,
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                index_witness: INVOCATION_WITNESS_V1,
+                raw_index: A_U64,
+            },
+            vec![],
+            INVOCATION_WITNESS_V1,
+        ),
+        intrinsic(
+            245,
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+                index_witness: INVOCATION_WITNESS_V1,
+                raw_index: A_U64,
+            },
+            vec![reference_argument],
+            A_U64,
+        ),
+    ];
+    let mut locals = old.locals().to_vec();
+    assert_eq!(locals.len(), 14);
+    locals.push(local(
+        114,
+        INVOCATION_WITNESS_V1,
+        SemanticLocalRoleV1::Temporary,
+    ));
+    locals.push(local(
+        115,
+        INVOCATION_REFERENCE_V1,
+        SemanticLocalRoleV1::Temporary,
+    ));
+    let call = |callee, destination, ty, target| {
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(callee),
+                if callee == 1 {
+                    vec![]
+                } else {
+                    vec![typed_operand(15, INVOCATION_REFERENCE_V1)]
+                },
+                Some(SemanticCallDestinationV1::new(
+                    whole(destination, ty),
+                    cfg_edge(SemanticEdgeRoleV1::CallReturn, target),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        )
+    };
+    let mut blocks = old.blocks().to_vec();
+    blocks[0] = block(201, vec![], call(1, 14, INVOCATION_WITNESS_V1, 3));
+    let guard = &blocks[2];
+    assert!(matches!(guard.statements()[0].kind(),
+        SemanticStatementKindV1::Assign(assignment)
+        if assignment.destination().local().index() == 8));
+    blocks[2] = SemanticBasicBlockV1::new(
+        guard.identity(),
+        guard.source(),
+        guard.statements()[1..].to_vec(),
+        guard.terminator().clone(),
+    )
+    .unwrap();
+    blocks.push(block(
+        204,
+        vec![typed_assignment(
+            15,
+            INVOCATION_REFERENCE_V1,
+            SemanticRvalueKindV1::Borrow {
+                kind: SemanticBorrowKindV1::Shared,
+                place: whole(14, INVOCATION_WITNESS_V1),
+            },
+        )],
+        call(2, 8, A_U64, 2),
+    ));
+    let function = ordinary_rebuild_v1(old, old.abi().clone(), locals, blocks);
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        callables,
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap(),
+        fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn with_invocation_coordinate_source_v1(
+    body: impl FnOnce(&ProductionPreRankedKirOwnerV1, &mut Budget<'_>),
+) {
+    let mut ssa = invocation_coordinate_ssa_v1();
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+    budget.reserve_storage(PREFIX).unwrap();
+    let capture = ssa
+        .try_capture_occurrences_with_budget_v1(&mut budget)
+        .unwrap();
+    budget.reserve_storage(capture.retained_storage()).unwrap();
+    let roots = [ranked_root_input_1d(A_NAME, 247, 1)];
+    let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &roots).unwrap();
+    let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+        ssa,
+        launch,
+        fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    )
+    .unwrap();
+    let bytes = source.executable_storage().retained_storage()
+        + source.assert_origin_storage().payload_storage();
+    budget.reserve_storage(bytes).unwrap();
+    let floor = budget.storage();
+    body(&source, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    drop(source);
+    budget.release_storage(bytes).unwrap();
+    budget.release_storage(capture.retained_storage()).unwrap();
+    assert_eq!(budget.storage(), PREFIX);
+}
+
+#[test]
+fn invocation_coordinate_fixture_authenticates_borrow_callreturn_and_actual_n() {
+    use fe2o3_pliron::{
+        ProductionSemanticSsaEventRoleV1 as Role, ProductionSemanticSsaOccurrenceSiteV1 as Site,
+        ProductionSemanticSsaOperandRoleV1 as Operand,
+    };
+    with_invocation_coordinate_source_v1(|source, _| {
+        let ssa = source.semantic_ssa();
+        let rows = ssa.occurrences_v1().unwrap().function(ROOT).unwrap();
+        assert!(std::ptr::eq(rows.owner(), ssa));
+        let borrow = rows
+            .events()
+            .iter()
+            .filter(|row| {
+                row.site()
+                    == Site::Statement {
+                        block: fe2o3_mir_model::SsaBlockIdV1::new(3),
+                        statement: 0,
+                    }
+                    && row.operand() == Operand::RvaluePlace
+                    && row.role() == Role::BaseUse
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(borrow.len(), 1);
+        assert!(borrow[0].is_reachable() && borrow[0].is_promoted());
+        assert!(
+            matches!(borrow[0].resolved(), Some(fe2o3_mir_model::SsaResolvedEventV1::Use {variable, ..})
+            if variable.get() == 14)
+        );
+        for (block, local) in [(0, 14), (3, 8)] {
+            let definitions = rows
+                .edge_definitions()
+                .iter()
+                .filter(|row| row.edge().source().get() == block && row.variable().get() == local)
+                .collect::<Vec<_>>();
+            assert_eq!(definitions.len(), 1);
+            assert!(definitions[0].is_reachable() && definitions[0].is_promoted());
+            assert!(definitions[0].value().is_some());
+            let successor = rows
+                .successors()
+                .iter()
+                .find(|edge| edge.id() == definitions[0].edge())
+                .unwrap();
+            assert_eq!(successor.edge().role(), SemanticEdgeRoleV1::CallReturn);
+        }
+        let body = source.executable().module().functions[0]
+            .body
+            .as_ref()
+            .unwrap();
+        let intrinsics = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(&operation.kind, fe2o3_kernel_ir::OperationKind::Intrinsic(value)
+                if value.kind == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d().kind)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(intrinsics.len(), 1);
+        assert_eq!(intrinsics[0].results.len(), 1);
+        assert_eq!(intrinsics[0].results[0].ty, fe2o3_kernel_ir::Type::INDEX);
+        assert!(
+            body.blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .any(|operation| {
+                    matches!(operation.kind, fe2o3_kernel_ir::OperationKind::Store { .. })
+                })
+        );
+    });
+}

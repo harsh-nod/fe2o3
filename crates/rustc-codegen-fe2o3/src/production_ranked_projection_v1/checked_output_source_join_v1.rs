@@ -18,6 +18,45 @@ struct SourceRankedRootCustodyV1<'scope> {
     ordinal: usize,
 }
 
+// B1 borrows original source inputs only. No R1 owner, O facts, wire codec or
+// independently constructible proof capability crosses this unit-returning API.
+pub(crate) fn with_source_export_inputs_v1(
+    custody: &SourceRankedCustodyV1<'_>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl for<'evidence> FnOnce(
+        &'evidence fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+        &'evidence [AuthenticatedRankedVerificationRootV1],
+        &'evidence [crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1],
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), SourceJoinPipelineErrorV1>,
+) -> Result<(), SourceJoinPipelineErrorV1> {
+    budget.charge_work(2).map_err(|error| {
+        SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error))
+    })?;
+    require_source_functional_roster_v1(custody.verification, custody.inputs.len(), budget)?;
+    let floor = budget.storage();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        next(
+            custody.materialized,
+            custody.verification.roots(),
+            custody.references.as_slice(),
+            budget,
+        )
+    }));
+    let released = budget.storage().checked_sub(floor).ok_or_else(|| {
+        SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting,
+        ))
+    })?;
+    budget.release_storage(released).map_err(|error| {
+        SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error))
+    })?;
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 fn source_join_resource_v1(
     error: fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1,
 ) -> ProductionRankedProjectionErrorV1 {
@@ -114,7 +153,7 @@ impl SourceRankedRootCustodyV1<'_> {
                 .partition
                 .get(self.ordinal)
                 .is_some_and(|item| std::ptr::eq(item, references))
-            || !root.is_some_and(|root| root.selected_root() == selection.root())
+            || root.is_none_or(|root| root.selected_root() != selection.root())
             || self.source.verification.root_count() != self.source.inputs.len()
         {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(

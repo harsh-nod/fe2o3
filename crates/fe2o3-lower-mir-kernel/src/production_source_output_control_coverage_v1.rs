@@ -715,13 +715,12 @@ fn source_output_control_literal_definition_v1(
                 SsaResolvedEventV1::Define {
                     variable: found,
                     value,
-                } if found == variable => {
-                    if index != block
+                } if found == variable
+                    && (index != block
                         || !matches!(value, SsaValueV1::Definition(_))
-                        || definition.replace(value).is_some()
-                    {
-                        return Err(Error::Invalid("literal SSA definition differs"));
-                    }
+                        || definition.replace(value).is_some()) =>
+                {
+                    return Err(Error::Invalid("literal SSA definition differs"));
                 }
                 SsaResolvedEventV1::Kill {
                     variable: found, ..
@@ -1368,10 +1367,9 @@ fn source_output_control_ranked_leaf_v1(
                         result,
                         value: bits,
                     } = operation
+                        && *result == value && literal.replace(*bits).is_some()
                     {
-                        if *result == value && literal.replace(*bits).is_some() {
-                            return None;
-                        }
+                        return None;
                     }
                 }
             }
@@ -2032,10 +2030,10 @@ fn source_output_control_calls_and_accesses_v1(
             ));
         }
         let location = (access.ranked_block, access.ranked_operation);
-        if let Some((block, last)) = previous {
-            if block == access.semantic_block && last >= location {
-                return Err(Error::Invalid("control source effect order differs"));
-            }
+        if let Some((block, last)) = previous
+            && block == access.semantic_block && last >= location
+        {
+            return Err(Error::Invalid("control source effect order differs"));
         }
         previous = Some((access.semantic_block, location));
     }

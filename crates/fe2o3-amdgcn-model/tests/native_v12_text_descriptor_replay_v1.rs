@@ -706,3 +706,357 @@ fn storage_denial_keeps_prior_floor_and_failure_history_on_same_ledger_retry() {
         assert_eq!(budget.storage(), floor);
     });
 }
+
+mod public_native_boundary_cases {
+    use super::*;
+    use fe2o3_amdgcn_model::LoweringDiagnosticCode;
+    use fe2o3_kernel_analysis::{CanonicalKirInventoryV1, check_kernel_ir_contract_catalog_v1};
+    use fe2o3_kernel_ir::{
+        FixedVectorTypeV12, FunctionId, ScalarType, VectorLayoutV12, VerificationContractKeyV12,
+        VerificationContractOperationV12, WorkgroupMemory, WorkgroupMemoryExtent,
+        WorkgroupPipelineEventKindV12,
+    };
+
+    fn with_admitted_module(
+        raw: &Module,
+        profile: Profile,
+        definitions: &[KernelIrPipelineContractDefinitionV1],
+        bindings: &[KernelIrPipelineStorageBindingV1],
+        markers: usize,
+        budget: &mut Budget<'_>,
+        body: impl FnOnce(&Owner, &Catalog, &mut Budget<'_>),
+    ) {
+        let floor = budget.storage();
+        let bound = bind_production_target_v1(raw, profile).unwrap();
+        let (owner, storage) =
+            Owner::from_module_ref_with_verification_budget_v12(bound.module(), budget).unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        let (catalog, catalog_storage) =
+            Catalog::from_rows_with_budget([7; 32], definitions, bindings, budget).unwrap();
+        budget
+            .reserve_storage(catalog_storage.retained_storage())
+            .unwrap();
+        // Establish that the public query reaches native lowering, not an
+        // earlier malformed-catalog refusal. These are real graph bindings.
+        let (inventory, inventory_storage) =
+            CanonicalKirInventoryV1::derive(&owner, budget).unwrap();
+        budget
+            .reserve_storage(inventory_storage.retained_storage())
+            .unwrap();
+        let binding_storage = {
+            let (checked, receipt) =
+                check_kernel_ir_contract_catalog_v1(&inventory, &catalog, budget).unwrap();
+            budget.reserve_storage(receipt.retained_storage()).unwrap();
+            assert_eq!(checked.marker_count(), markers);
+            receipt.retained_storage()
+        };
+        budget.release_storage(binding_storage).unwrap();
+        drop(inventory);
+        budget
+            .release_storage(inventory_storage.retained_storage())
+            .unwrap();
+        let live_floor = budget.storage();
+        body(&owner, &catalog, budget);
+        assert_eq!(budget.storage(), live_floor);
+        drop(catalog);
+        budget
+            .release_storage(catalog_storage.retained_storage())
+            .unwrap();
+        drop(owner);
+        budget.release_storage(storage.retained_storage()).unwrap();
+        drop(bound);
+        assert_eq!(budget.storage(), floor);
+    }
+
+    fn dormant_helper(parameters: Vec<Type>) -> Function {
+        let values = (0..parameters.len())
+            .map(|index| ValueId(u32::try_from(index).unwrap()))
+            .collect();
+        let mut block = BasicBlock::new(BlockId(7));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        Function::internal_helper(
+            "uncalled",
+            Signature::new(parameters, vec![]),
+            values,
+            vec![block],
+        )
+    }
+
+    #[test]
+    fn public_relation_rejects_dormant_vector_signature_and_dead_block_parameter() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_actual(profile, false, |_, scalar, _, budget| {
+                let descriptors = normal_table(profile, false);
+                // Supported scalar text is a well-framed input, not alleged
+                // native output for the unsupported module. Lowering must fail first.
+                let llvm = final_text(&prefix(scalar, profile), &descriptors);
+                for dead_block in [false, true] {
+                    let vector = Type::vector(FixedVectorTypeV12::new(
+                        ScalarType::F32,
+                        4,
+                        VectorLayoutV12::Contiguous,
+                    ));
+                    let helper = if dead_block {
+                        let mut helper = dormant_helper(vec![]);
+                        let mut block = BasicBlock::new(BlockId(99));
+                        block.parameters.push(ValueDef::new(ValueId(99), vector));
+                        block.terminator = Some(Terminator::Return { values: vec![] });
+                        helper.body.as_mut().unwrap().blocks.push(block);
+                        helper
+                    } else {
+                        dormant_helper(vec![vector])
+                    };
+                    assert_eq!(helper.id.as_str(), "uncalled");
+                    let mut raw = source(false);
+                    raw.functions.push(helper);
+                    with_admitted_module(
+                        &raw,
+                        profile,
+                        &[],
+                        &[],
+                        0,
+                        budget,
+                        |owner, catalog, budget| {
+                            let floor = budget.storage();
+                            let errors = match check(
+                                owner,
+                                catalog,
+                                owner.canonical().canonical_bytes(),
+                                profile,
+                                &descriptors,
+                                &llvm,
+                                budget,
+                            ) {
+                                Err(E::Lowering(errors)) => errors,
+                                Err(error) => panic!("wrong rejection stage: {error}"),
+                                Ok(_) => panic!("dormant vector syntax was accepted"),
+                            };
+                            assert!(errors.contains(LoweringDiagnosticCode::UnsupportedType));
+                            let location = &errors.diagnostics()[0].location;
+                            assert_eq!(location.function.as_ref().unwrap().as_str(), "uncalled");
+                            assert_eq!(location.block, dead_block.then_some(BlockId(99)));
+                            assert_eq!(location.operation, None);
+                            assert_eq!(budget.storage(), floor);
+                        },
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn public_relation_rejects_every_catalog_bound_dormant_contract_event() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_actual(profile, false, |_, scalar, _, budget| {
+                let descriptors = normal_table(profile, false);
+                let llvm = final_text(&prefix(scalar, profile), &descriptors);
+                for kind in [
+                    WorkgroupPipelineEventKindV12::Stage,
+                    WorkgroupPipelineEventKindV12::Commit,
+                    WorkgroupPipelineEventKindV12::Wait,
+                    WorkgroupPipelineEventKindV12::Consume,
+                    WorkgroupPipelineEventKindV12::Discard,
+                    WorkgroupPipelineEventKindV12::Release,
+                ] {
+                    let mut helper = dormant_helper(vec![]);
+                    helper.body.as_mut().unwrap().blocks[0].operations = vec![
+                        Operation::effect_free(
+                            ValueDef::new(
+                                ValueId(0),
+                                Type::pointer(
+                                    Type::Scalar(ScalarType::U32),
+                                    AddressSpace::Workgroup,
+                                    AccessMode::ReadWrite,
+                                ),
+                            ),
+                            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                                element: Type::Scalar(ScalarType::U32),
+                                extent: WorkgroupMemoryExtent::Static(16),
+                                alignment: 4,
+                            }),
+                        ),
+                        Operation::effect_free(
+                            ValueDef::new(ValueId(1), Type::INDEX),
+                            OperationKind::Constant(Constant::Index(0)),
+                        ),
+                        Operation::new(
+                            vec![],
+                            OperationKind::VerificationContract(
+                                VerificationContractOperationV12::WorkgroupPipelineEvent {
+                                    contract: VerificationContractKeyV12::new(0),
+                                    kind,
+                                    storage: ValueId(0),
+                                    epoch: ValueId(1),
+                                },
+                            ),
+                        ),
+                    ];
+                    let mut raw = source(false);
+                    raw.functions.push(helper);
+                    let definitions = [KernelIrPipelineContractDefinitionV1 {
+                        key: 0,
+                        semantic_pipeline_type: 1,
+                        semantic_payload_type: 2,
+                        buffers: 2,
+                        elements: 8,
+                        prefetch_distance: 1,
+                        packed_bits: 32,
+                        source_size_bytes: 4,
+                        source_alignment_bytes: 4,
+                    }];
+                    let bindings = [KernelIrPipelineStorageBindingV1 {
+                        function: 1,
+                        storage: 0,
+                        key: 0,
+                        block: 0,
+                        operation: 0,
+                    }];
+                    with_admitted_module(
+                        &raw,
+                        profile,
+                        &definitions,
+                        &bindings,
+                        1,
+                        budget,
+                        |owner, catalog, budget| {
+                            let floor = budget.storage();
+                            let errors = match check(
+                                owner,
+                                catalog,
+                                owner.canonical().canonical_bytes(),
+                                profile,
+                                &descriptors,
+                                &llvm,
+                                budget,
+                            ) {
+                                Err(E::Lowering(errors)) => errors,
+                                Err(error) => panic!("wrong rejection stage for {kind:?}: {error}"),
+                                Ok(_) => panic!("dormant contract event {kind:?} was accepted"),
+                            };
+                            assert!(errors.contains(LoweringDiagnosticCode::UnsupportedOperation));
+                            let location = &errors.diagnostics()[0].location;
+                            assert_eq!(location.function.as_ref().unwrap().as_str(), "uncalled");
+                            assert_eq!(location.block, Some(BlockId(7)));
+                            assert_eq!(location.operation, Some(2));
+                            assert_eq!(budget.storage(), floor);
+                        },
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn public_relation_handles_reachable_helper_before_kernel_entry() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_actual(profile, false, |_, _, _, budget| {
+                let mut raw = source(false);
+                let entry = &mut raw.functions[0].body.as_mut().unwrap().blocks[0];
+                entry.operations.insert(
+                    5,
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(99), Type::INDEX),
+                        OperationKind::Call {
+                            callee: FunctionId::new("identity_before_entry"),
+                            arguments: vec![ValueId(5)],
+                        },
+                    ),
+                );
+                let OperationKind::Store { value, .. } = &mut entry.operations[6].kind else {
+                    panic!("fixture Store moved");
+                };
+                assert_eq!(*value, ValueId(5));
+                *value = ValueId(99);
+                let mut block = BasicBlock::new(BlockId(19));
+                block.terminator = Some(Terminator::Return {
+                    values: vec![ValueId(0)],
+                });
+                raw.functions.insert(
+                    0,
+                    Function::internal_helper(
+                        "identity_before_entry",
+                        Signature::new(vec![Type::INDEX], vec![Type::INDEX]),
+                        vec![ValueId(0)],
+                        vec![block],
+                    ),
+                );
+                with_admitted_module(
+                    &raw,
+                    profile,
+                    &[],
+                    &[],
+                    0,
+                    budget,
+                    |input, catalog, budget| {
+                        let checked =
+                            optimize_checked_canonical_kernel_ir_policy3_v1(input, budget).unwrap();
+                        let retained = checked.storage().retained_storage();
+                        budget.reserve_storage(retained).unwrap();
+                        assert_eq!(
+                            checked.native_input_audit_bytes(),
+                            input.canonical().canonical_bytes()
+                        );
+                        let output = checked.owner();
+                        assert_ne!(
+                            output.canonical().canonical_bytes(),
+                            input.canonical().canonical_bytes()
+                        );
+                        assert_eq!(
+                            output.module().functions[0].id.as_str(),
+                            "identity_before_entry"
+                        );
+                        assert_eq!(output.module().functions[1].id.as_str(), "body_z");
+                        assert_eq!(output.module().kernels[0].entry.as_str(), "body_z");
+                        let helper = &output.module().functions[0];
+                        assert_eq!(helper.signature.parameters, vec![Type::INDEX]);
+                        assert_eq!(helper.signature.results, vec![Type::INDEX]);
+                        let helper_body = helper.body.as_ref().unwrap();
+                        assert!(matches!(&helper_body.blocks[0].terminator,
+                        Some(Terminator::Return { values }) if values == &helper_body.parameters));
+                        let entry_body = output.module().functions[1].body.as_ref().unwrap();
+                        let calls = entry_body
+                            .blocks
+                            .iter()
+                            .flat_map(|block| &block.operations)
+                            .filter(|op| {
+                                matches!(&op.kind, OperationKind::Call { callee, .. }
+                            if callee.as_str() == "identity_before_entry")
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(calls.len(), 1);
+                        assert_eq!(calls[0].results.len(), 1);
+                        assert_eq!(calls[0].results[0].ty, Type::INDEX);
+                        let call_result = calls[0].results[0].id;
+                        assert!(
+                            entry_body
+                                .blocks
+                                .iter()
+                                .flat_map(|block| &block.operations)
+                                .any(|op| matches!(&op.kind, OperationKind::Store { value, .. }
+                            if *value == call_result))
+                        );
+                        let descriptors = normal_table(profile, false);
+                        assert_eq!(descriptors.kernels().len(), 1);
+                        assert_eq!(descriptors.kernels()[0].entry_name().as_str(), "zeta");
+                        let text = prefix(output, profile);
+                        assert!(text.contains("define internal i64 @identity_before_entry("));
+                        assert!(text.contains("call i64 @identity_before_entry("));
+                        assert!(text.contains("!fe2o3.semantic_anchor.absence.v1"));
+                        assert!(text.contains("!\"multiple_defined_bodies\""));
+                        assert!(!text.contains("llvm.pseudoprobe"));
+                        accept(
+                            output,
+                            catalog,
+                            profile,
+                            &descriptors,
+                            &final_text(&text, &descriptors),
+                            budget,
+                        );
+                        drop(checked);
+                        budget.release_storage(retained).unwrap();
+                    },
+                );
+            });
+        }
+    }
+}

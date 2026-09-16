@@ -332,10 +332,10 @@ fn check_roster(
             if compare_names(export, row.entry_name().as_str(), budget)? != Ordering::Equal {
                 return Err(E::Invalid("descriptor entry bijection"));
             }
-            if let Some(old) = previous {
-                if compare_names(old, export, budget)? != Ordering::Less {
-                    return Err(E::Invalid("duplicate descriptor entry"));
-                }
+            if let Some(old) = previous
+                && compare_names(old, export, budget)? != Ordering::Less
+            {
+                return Err(E::Invalid("duplicate descriptor entry"));
             }
             // Pairwise binding: swapping two otherwise valid .kd names is not a bijection.
             budget.charge_work(

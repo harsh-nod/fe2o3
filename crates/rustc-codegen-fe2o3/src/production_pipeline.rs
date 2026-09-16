@@ -22,6 +22,7 @@ use crate::protected_rustc_invocation::{
 };
 
 include!("production_checked_output_pipeline_v1.rs");
+include!("production_checked_output_export_buffer_v1.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
@@ -50,6 +51,7 @@ pub(crate) enum ProductionPipelineError {
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     PreRankedMaterialization(fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1),
     CheckedOutputMemoryTarget(CheckedOutputMemoryTargetErrorV1),
+    CheckedOutputExport(CheckedOutputExportErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -129,6 +131,9 @@ impl fmt::Display for ProductionPipelineError {
             }
             Self::CheckedOutputMemoryTarget(error) => {
                 write!(formatter, "production compilation checked-output memory target failed: {error}")
+            }
+            Self::CheckedOutputExport(error) => {
+                write!(formatter, "production compilation inert checked-output export failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
@@ -286,6 +291,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetNeutralLowering(error) => Some(error),
             Self::PreRankedMaterialization(error) => Some(error),
             Self::CheckedOutputMemoryTarget(error) => Some(error),
+            Self::CheckedOutputExport(error) => Some(error),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
@@ -3581,6 +3587,25 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
         ) -> Result<T, Box<ProductionPipelineError>>,
     ) -> Result<T, Box<ProductionPipelineError>> {
+        self.with_materialized_capture_initialization_v1(
+            capture_occurrences,
+            |_budget| Ok(()),
+            |stage, (), budget| next(stage, budget),
+        )
+    }
+
+    fn with_materialized_capture_initialization_v1<Outer, T>(
+        self,
+        capture_occurrences: bool,
+        initialize: impl FnOnce(
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<Outer, Box<ProductionPipelineError>>,
+        next: impl FnOnce(
+            MaterializedNeutralProductionCompilation,
+            Outer,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, Box<ProductionPipelineError>>,
+    ) -> Result<T, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
             mut semantic_ssa,
             bindings,
@@ -3633,6 +3658,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        let outer = initialize(&mut budget)?;
         if capture_occurrences {
             let receipt = semantic_ssa
                 .try_capture_occurrences_with_budget_v1(&mut budget)
@@ -3670,6 +3696,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
                 ranked_roots,
                 bindings,
             },
+            outer,
             &mut budget,
         )
     }

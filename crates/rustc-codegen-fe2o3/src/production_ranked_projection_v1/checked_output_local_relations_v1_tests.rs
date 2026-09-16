@@ -43,8 +43,9 @@ mod checked_output_local_relations_tests {
         assert!(original.abi().source_input_types().is_empty());
         let mut types = semantic.types().to_vec();
         let array = SemanticTypeIdV1::from_index(u32::try_from(types.len()).unwrap());
+        // Preserve positional type IDs; the seed's identity range ends at 228.
         types.push(SemanticTypeDeclV1::new(
-            SemanticTypeIdentityV1::from_sha256(bytes(180)),
+            SemanticTypeIdentityV1::from_sha256(bytes(229)),
             SemanticLayoutIdentityV1::from_sha256(bytes(181)),
             SemanticTypeLayoutV1::with_exact_rustc_layout(
                 32,
@@ -89,12 +90,13 @@ mod checked_output_local_relations_tests {
         .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
         .unwrap();
         let mut locals = original.locals().to_vec();
+        // The seven seed locals have identities 235 through 241.
         locals.push(local(
-            182,
+            242,
             NEUTRAL_ELEMENT_TYPE,
             SemanticLocalRoleV1::Argument(0),
         ));
-        locals.push(local(183, array, SemanticLocalRoleV1::Temporary));
+        locals.push(local(243, array, SemanticLocalRoleV1::Temporary));
         let statements = vec![
             statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                 neutral_test_place_v1(6, NEUTRAL_ELEMENT_TYPE),
@@ -290,7 +292,7 @@ mod checked_output_local_relations_tests {
                     .reserve_storage(bound_storage.retained_storage())
                     .unwrap();
                 let checked =
-                    fe2o3_pliron::optimize_checked_canonical_kernel_ir_policy3_v1(&bound, budget)
+                    fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy3_v1(&bound, budget)
                         .unwrap();
                 let checked_storage = checked.storage().retained_storage();
                 budget.reserve_storage(checked_storage).unwrap();

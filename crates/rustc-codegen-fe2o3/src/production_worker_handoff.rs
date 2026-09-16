@@ -650,8 +650,37 @@ mod tests {
 
     #[test]
     fn borrowed_closed_ffi_matches_historical_checks_and_preserves_exp_identity() {
-        for name in ["gfx942:xnack-", "gfx950:xnack-"] {
+        use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
+
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            let name = profile.device_target();
             let target = DeviceTargetV1::parse(name).unwrap();
+            let text_for = |module: &Module| {
+                crate::compiler_module_contract::validate_exact_target_binding(target, module)
+                    .unwrap();
+                if name == "gfx950:xnack-" && !typed_ocml_imports(module).is_empty() {
+                    // The legacy test constructor deliberately recognizes only
+                    // gfx942 float contracts, even for a genuinely bound module.
+                    assert!(matches!(
+                        construct_inert_compiler_module_text_for_target_v1(module, Some(target)),
+                        Err(crate::kernel_ir_codegen::CompilerModuleConstructionError::UnsupportedFloatTarget(rejected))
+                            if rejected == name
+                    ));
+                }
+                // Use this same target-bound subject for native text, retained
+                // symbol closure and both envelope paths, including no imports.
+                let llvm = match profile {
+                    Profile::Gfx942 => {
+                        dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(module)
+                    }
+                    Profile::Gfx950 => {
+                        dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(module)
+                    }
+                }
+                .unwrap();
+                crate::kernel_ir_codegen::retain_production_compiler_module_text_v1(module, llvm)
+                    .unwrap()
+            };
             for (declared, called) in [
                 (vec![], vec![]),
                 (vec![F32MathFunction::Exp], vec![F32MathFunction::Exp]),
@@ -661,14 +690,15 @@ mod tests {
                     vec![F32MathFunction::Exp, F32MathFunction::Sin],
                 ),
             ] {
-                let module = math_module(&declared, &called);
-                let text =
-                    construct_inert_compiler_module_text_for_target_v1(&module, Some(target))
-                        .unwrap();
+                let raw = math_module(&declared, &called);
+                let bound = dialect_amdgcn::bind_production_target_v1(&raw, profile).unwrap();
+                assert_eq!(bound.profile(), profile);
+                let module = bound.module();
+                let text = text_for(module);
                 let old =
-                    derive_production_compiler_ffi_envelope(target, &module, &text, None, [41; 32]);
+                    derive_production_compiler_ffi_envelope(target, module, &text, None, [41; 32]);
                 let new = derive_checked_output_compiler_ffi_envelope_v1(
-                    target, &module, &text, None, [41; 32],
+                    target, module, &text, None, [41; 32],
                 );
                 match (old, new) {
                     (Ok(old), Ok(new)) => assert_eq!(old.canonical_bytes(), new.canonical_bytes()),
@@ -676,11 +706,13 @@ mod tests {
                     other => panic!("closed FFI factor changed outcome: {other:?}"),
                 }
             }
-            let module = math_module(&[F32MathFunction::Exp], &[F32MathFunction::Exp]);
-            let text =
-                construct_inert_compiler_module_text_for_target_v1(&module, Some(target)).unwrap();
+            let raw = math_module(&[F32MathFunction::Exp], &[F32MathFunction::Exp]);
+            let bound = dialect_amdgcn::bind_production_target_v1(&raw, profile).unwrap();
+            assert_eq!(bound.profile(), profile);
+            let module = bound.module();
+            let text = text_for(module);
             let output = derive_checked_output_compiler_ffi_envelope_v1(
-                target, &module, &text, None, [42; 32],
+                target, module, &text, None, [42; 32],
             )
             .unwrap();
             match name {
@@ -700,7 +732,7 @@ mod tests {
             let foreign = construct_production_gfx942_ocml_exp_envelope_v1([9; 32]).unwrap();
             let old = derive_production_compiler_ffi_envelope(
                 target,
-                &module,
+                module,
                 &text,
                 Some(foreign.clone()),
                 [42; 32],
@@ -708,7 +740,7 @@ mod tests {
             .unwrap_err();
             let new = derive_checked_output_compiler_ffi_envelope_v1(
                 target,
-                &module,
+                module,
                 &text,
                 Some(&foreign),
                 [42; 32],

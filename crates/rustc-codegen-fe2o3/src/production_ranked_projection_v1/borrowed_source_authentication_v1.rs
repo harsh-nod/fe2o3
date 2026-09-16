@@ -47,17 +47,16 @@ fn with_authenticated_borrowed_ranked_source_roster_v1<T>(
         .map_err(ProductionRankedVerificationErrorV1::Custody)?
 }
 
+type AuthenticatedRankedSourcePartsV1 = (
+    Box<[ProductionRankedVerifiedRootCandidateV1]>,
+    Box<[usize]>,
+    ProductionRankedKernelRosterIdentityV1,
+);
+
 fn authenticate_ranked_source_parts_v1(
     materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
-) -> Result<
-    (
-        Box<[ProductionRankedVerifiedRootCandidateV1]>,
-        Box<[usize]>,
-        ProductionRankedKernelRosterIdentityV1,
-    ),
-    ProductionRankedVerificationErrorV1,
-> {
+) -> Result<AuthenticatedRankedSourcePartsV1, ProductionRankedVerificationErrorV1> {
     materialized
         .semantic_ssa()
         .verify_replay()
