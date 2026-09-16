@@ -739,7 +739,9 @@ fn build_bounds_presburger_witness(
             if matches!(fact, SparseIndexFactV1::MachineOverflow(_)) {
                 return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
             }
-            let normalized_map = match presburger.map_for_facts_over_extents(&[fact], &launch_extents) {
+            let normalized_map = match presburger
+                .map_for_facts_over_extents(&[fact], &launch_extents)
+            {
                 Ok(map) => map,
                 Err(failure) => {
                     return Ok(SupportedWitnessBuildV1::Incomplete(format!(
