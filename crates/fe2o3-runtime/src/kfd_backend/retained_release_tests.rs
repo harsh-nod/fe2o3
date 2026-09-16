@@ -1,4 +1,4 @@
-//! Opt-in hardware test: public allocation workflow, no seeded native queue.
+//! Shutdown settlement tests and opt-in public native allocation workflow.
 
 use super::*;
 use crate::RuntimeOwnedShutdownBackendV1;
@@ -12,6 +12,67 @@ pub(super) fn observe_selection(retained: bool) {
             selection.set(Some(retained));
         }
     });
+}
+
+#[test]
+fn runtime_pool_trim_error_and_panic_terminalize_before_returning() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    #[derive(Debug)]
+    struct Payload(Arc<AtomicUsize>);
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for panic in [false, true] {
+        let mut backend = std::mem::ManuallyDrop::new(KfdRuntimeBackendV1::mock());
+        let drops = Arc::new(AtomicUsize::new(0));
+        let payload = Box::new(Payload(drops.clone()));
+        let pointer = core::ptr::from_ref(payload.as_ref());
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            backend.trim_sdma_pool_for_shutdown_v1(|_| {
+                if panic {
+                    std::panic::resume_unwind(payload);
+                }
+                Err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
+                    "trim fault",
+                ))
+            })
+        }));
+        assert!(backend.terminal && !backend.queue_retired && backend.primary_teardown.is_none());
+        assert!(matches!(
+            backend.require_live(),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(matches!(
+            backend.shutdown_owned_v1(),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(matches!(
+            backend.create_stream_v1(7),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        if panic {
+            let caught = result.unwrap_err().downcast::<Payload>().unwrap();
+            assert_eq!(core::ptr::from_ref(caught.as_ref()), pointer);
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            drop(caught);
+        } else {
+            assert!(matches!(
+                result.unwrap(),
+                Err(RuntimeBackendFailureV1::Terminal(_))
+            ));
+        }
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        // This fixture owns no native queue or allocations; disarm only its Drop guard.
+        assert!(backend.queue.is_none() && backend.allocations.is_empty());
+        backend.terminal = false;
+        drop(std::mem::ManuallyDrop::into_inner(backend));
+    }
 }
 
 #[test]
@@ -47,6 +108,15 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
     );
     backend.release_allocation_v1(allocation).unwrap();
     backend.destroy_stream_v1(stream).unwrap();
+    let pool = backend
+        .queue
+        .as_ref()
+        .unwrap()
+        .sdma_memory_pool_observation()
+        .unwrap();
+    assert_eq!(pool.checked_out_buffers, 0);
+    assert_eq!(pool.retained_free_buffers, 1);
+    assert_eq!(pool.retained_free_bytes, 4096);
     // Observe the real shutdown selector AFTER its own pool trim, without changing it.
     SELECTION.with(|selection| selection.set(Some(false)));
     backend.shutdown_owned_v1().unwrap();
@@ -74,6 +144,6 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
     )));
     drop(backend);
     println!(
-        "native_runtime_retained_directional_release=complete allocation_workflow=public selector=retained completed_root_drop=confirmed backend_drop=completed packets=0"
+        "native_runtime_retained_directional_release=complete allocation_workflow=public pooled_buffers=1 pooled_bytes=4096 selector=retained completed_root_drop=confirmed backend_drop=completed packets=0"
     );
 }

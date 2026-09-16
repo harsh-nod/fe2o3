@@ -36,6 +36,11 @@ impl ComputeAqlQueueSessionV1 {
     pub fn supports_retained_primary_release_v1(
         &self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma_pool_trim.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished SDMA pool trim",
+            ));
+        }
         if self.striped_sdma.is_some()
             || !self.sdma_pool_free.is_empty()
             || self.sdma_outstanding_buffers != 0

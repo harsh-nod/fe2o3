@@ -51,7 +51,7 @@ impl PristineAbortMemoryFixtureV1 {
         Self::new_configured(true)
     }
 
-    fn new_configured(configured: bool) -> Self {
+    pub(crate) fn new_configured(configured: bool) -> Self {
         let mut fixture = BackingConstructorFixture::new(
             configured.then(|| Gfx942DeviceBackingBudgetV1::new(65536, 16).unwrap()),
         );

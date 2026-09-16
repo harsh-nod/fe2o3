@@ -4215,13 +4215,12 @@ impl KfdRuntimeBackendV1 {
             })?;
         }
         if self.sdma_enabled {
-            let trimmed = self
-                .queue
-                .as_mut()
-                .expect("enabled SDMA pool retains queue")
-                .trim_sdma_memory_pool();
-            trimmed.map_err(|error| {
-                self.terminal_error(format!("KFD SDMA memory-pool trim: {error}"))
+            self.trim_sdma_pool_for_shutdown_v1(|backend| {
+                backend
+                    .queue
+                    .as_mut()
+                    .expect("enabled SDMA pool retains queue")
+                    .trim_sdma_memory_pool()
             })?;
         }
         for index in 0..self.native_compute_lanes.len() {
@@ -4313,6 +4312,23 @@ impl KfdRuntimeBackendV1 {
         self.native_compute_lanes.fill(None);
         self.queue_retired = true;
         Ok(())
+    }
+
+    pub(super) fn trim_sdma_pool_for_shutdown_v1(
+        &mut self,
+        trim: impl FnOnce(&mut Self) -> Result<usize, fe2o3_kfd::ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| trim(self))) {
+            Ok(result) => result.map(|_| ()).map_err(|error| {
+                self.terminal_error(format!("KFD SDMA memory-pool trim: {error}"))
+            }),
+            Err(payload) => {
+                core::mem::forget(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || self.terminal_error("KFD SDMA memory-pool trim panicked"),
+                )));
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     pub(super) fn observe_destroyed_compute_lane_v1(&mut self, logical_lane: Option<usize>) {

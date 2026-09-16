@@ -38,6 +38,15 @@ constructed-parent tests bring that cohort to twenty-one. See the R126 document 
 execution evidence and remaining qualification; this does not advance the
 accepted checkpoint or close A1/A2.
 
+The subsequent R126 pool-trim packet retains the active SDMA buffer and original
+metadata through borrowed cleanup and model retake, rejects terminal retries,
+guards unfinished queue Drop, and terminalizes runtime trim panics. GNU/musl
+each pass 27 constructed-parent tests, 274 shared-memory tests and all 745 runtime
+tests; the native public workflow confirms one cached 4096-byte buffer before
+successful shutdown. The [development receipt](evidence/dev-r126-pool-trim-2026-09-16/README.md)
+separates CPU fault coverage from packetless native success. Full qualification,
+native failure/accounting evidence and remaining R126 joins are still open.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

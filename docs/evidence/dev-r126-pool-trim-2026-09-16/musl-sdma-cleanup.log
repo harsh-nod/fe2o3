@@ -1,0 +1,11 @@
+
+running 6 tests
+test sdma::tests::sdma_cleanup_preserves_original_certificate_box_through_native_disposal ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_all_currentness_boundaries_retain_unsettled_disposal ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_all_native_failures_retain_exact_prefix_and_panic ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_exact_two_phase_order_and_account_refund ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_projection_and_commit_boundaries_keep_native_receipts_separate ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_requires_six_revision_headroom_before_native_effects ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1299 filtered out; finished in 0.33s
+

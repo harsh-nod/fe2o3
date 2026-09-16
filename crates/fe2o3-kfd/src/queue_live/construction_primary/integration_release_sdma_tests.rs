@@ -1,7 +1,7 @@
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
+pub(super) fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
     let (mut parent, t, gate) = constructed(dispatch);
     let engine = &mut parent.engine;
     let loan = engine

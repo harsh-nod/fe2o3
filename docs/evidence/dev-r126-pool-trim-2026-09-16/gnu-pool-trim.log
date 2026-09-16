@@ -1,0 +1,13 @@
+
+running 7 tests
+test queue::live::pool_trim::tests::unfinished_pool_trim_rejects_teardown_and_drop_aborts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_actual_reclaim_rejection_retains_disposed_receipt ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_empty_repeated_and_directional_teardown ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_opening_rejection_or_panic_keeps_original_input ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_cleanup_retake_matrix_preserves_receipts_and_first_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_currentness_and_projection_keep_exact_prefixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_native_errors_and_panics_keep_first_middle_last_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_native_errors_and_panics_keep_first_middle_last_owners ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1298 filtered out; finished in 66.26s
+

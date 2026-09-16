@@ -1,0 +1,40 @@
+
+running 27 tests
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_publication_commit_rejection_retains_engine_authority ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_failed_permanent_restore_keeps_authority_and_flag ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_after_pristine_abort_preserves_original_queue_and_refunds ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_corrupt_destroy_observation_retains_exact_native_receipt ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_actual_reclaim_rejection_retains_disposed_receipt ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_shared_lease_does_not_disable_other_constructed_queue ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_success_keeps_original_owners_and_completes_gate_last ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_empty_repeated_and_directional_teardown ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_destroy_outcomes_retain_full_parent ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_opening_rejection_or_panic_keeps_original_input ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_signal_failures_keep_refunds_and_gate_pending ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_orders_original_owners_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_currentness_failures_keep_destroy_receipt_and_memory ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_host_data_model_boundaries_retain_charge_truth ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_dispatch_failures_keep_signal_and_gate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_rejects_bad_second_owner_before_any_effect ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_platform_prefix_errors_and_panics_keep_suffixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_resource_failures_retain_exact_prefix_and_suffix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_data_currentness_keeps_disposal_receipts has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_data_native_failures_keep_original_suffix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_resource_model_boundaries_keep_native_and_model_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_cleanup_retake_matrix_preserves_receipts_and_first_panic has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_currentness_and_projection_keep_exact_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_native_errors_and_panics_keep_first_middle_last_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_failures_keep_prefix_and_do_not_complete_primary has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_failures_keep_prefix_and_do_not_complete_primary ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_resource_failures_retain_exact_prefix_and_suffix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_cleanup_retake_matrix_preserves_receipts_and_first_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_data_native_failures_keep_original_suffix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_data_currentness_keeps_disposal_receipts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_currentness_and_projection_keep_exact_prefixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_resource_model_boundaries_keep_native_and_model_prefixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::pool_trim_cases::constructed_pool_trim_native_errors_and_panics_keep_first_middle_last_owners ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 1278 filtered out; finished in 124.44s
+

@@ -11,6 +11,8 @@ use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV
 
 #[path = "integration_release_fault_tests.rs"]
 mod fault_cases;
+#[path = "integration_pool_trim_tests.rs"]
+mod pool_trim_cases;
 #[path = "integration_release_sdma_tests.rs"]
 mod sdma_cases;
 

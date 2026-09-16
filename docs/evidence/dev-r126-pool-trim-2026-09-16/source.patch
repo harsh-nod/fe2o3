@@ -1,0 +1,1167 @@
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index 510424018..d5c8a428c 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -259,0 +260,2 @@ pub(in crate::queue) mod persistent_bind;
++#[path = "queue_live/pool_trim.rs"]
++mod pool_trim;
+@@ -3748,0 +3751 @@ pub struct ComputeAqlQueueSessionV1 {
++    sdma_pool_trim: Option<pool_trim::SdmaPoolTrimCustodyV1>,
+@@ -10103,0 +10107,5 @@ impl ComputeAqlQueueSessionV1 {
++        if self.terminal_poisoned || self.sdma_pool_trim.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "terminal or unfinished SDMA pool trim",
++            ));
++        }
+@@ -10108,12 +10116 @@ impl ComputeAqlQueueSessionV1 {
+-        let mut released = 0_usize;
+-        while let Some(buffer) = self.sdma_pool_free.pop() {
+-            let result = self.with_live_queue_memory_model(|memory| {
+-                release_buffer(memory, buffer).map_err(Into::into)
+-            });
+-            if let Err(error) = result {
+-                self.poison_terminal();
+-                return Err(error);
+-            }
+-            released += 1;
+-        }
+-        Ok(released)
++        pool_trim::trim_in_place(self)
+@@ -12306 +12303 @@ impl ComputeAqlQueueSessionV1 {
+-        if !self.sdma_pool_free.is_empty() {
++        if !self.sdma_pool_free.is_empty() || self.sdma_pool_trim.is_some() {
+@@ -13785,0 +13783,4 @@ impl Drop for ComputeAqlQueueSessionV1 {
++        if self.sdma_pool_trim.is_some() {
++            // Failed trim retains native owners or disposed-but-unsettled receipts.
++            std::process::abort();
++        }
+@@ -14412 +14413,4 @@ mod tests {
+-            ("pub fn trim_sdma_memory_pool(", ".pop()"),
++            (
++                "pub fn trim_sdma_memory_pool(",
++                "pool_trim::trim_in_place(self)",
++            ),
+@@ -14466 +14470 @@ mod tests {
+-                    ".pop()"
++                    "pool_trim::trim_in_place(self)"
+@@ -16368,0 +16373 @@ mod tests {
++            sdma_pool_trim: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+index a255f9d0c..7335ac51e 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+@@ -95,0 +96 @@ impl ComputeAqlQueueSessionV1 {
++            sdma_pool_trim: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
+index 082355430..947656f03 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
+@@ -264,0 +265 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
++            sdma_pool_trim: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_pool_trim_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_pool_trim_tests.rs
+new file mode 100644
+index 000000000..c48d743d0
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_pool_trim_tests.rs
+@@ -0,0 +1,551 @@
++//! Real constructed-parent foundations and mapped tokens run the production trim driver.
++
++use super::*;
++use crate::queue::dispatch_binding::DispatchDataInputStorageV1;
++use crate::queue::live::pool_trim::{
++    PoolTrimContextV1, PoolTrimPartsV1, SdmaPoolTrimCustodyV1, trim_in_place,
++};
++use crate::sdma::Gfx942SdmaBufferStorageV1;
++use crate::shared_memory::{CleanupStageV1 as Stage, DataCleanupMetadataV1};
++
++#[derive(Clone, Copy, PartialEq)]
++enum Fault {
++    None,
++    Error,
++    Panic,
++    Regression,
++}
++
++struct TrimParent {
++    parent: Parent,
++    free: Vec<Gfx942SdmaBufferV1>,
++    custody: Option<SdmaPoolTrimCustodyV1>,
++    opening: Fault,
++    closing: Fault,
++    calls: Vec<&'static str>,
++}
++
++impl PoolTrimContextV1 for TrimParent {
++    type Memory = Memory;
++    fn parts(&mut self) -> Result<PoolTrimPartsV1<'_, Memory>, ComputeAqlQueueSessionErrorV1> {
++        Ok(PoolTrimPartsV1 {
++            memory: &mut self.parent.engine.backend.session,
++            free: &mut self.free,
++            custody: &mut self.custody,
++        })
++    }
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
++        self.calls.push("loan");
++        match self.opening {
++            Fault::Error => return Err(ComputeAqlQueueSessionErrorV1::Contract("trim loan")),
++            Fault::Panic => std::panic::panic_any("trim loan"),
++            _ => (),
++        }
++        let e = &mut self.parent.engine;
++        assert!(e.backend.foundation_in_engine);
++        let loan = e.backend.session.primary_loan(&mut e.foundation)?;
++        e.backend.foundation_in_engine = false;
++        Ok(loan)
++    }
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.calls.push("retake");
++        match self.closing {
++            Fault::Error => return Err(ComputeAqlQueueSessionErrorV1::Contract("trim retake")),
++            Fault::Panic => std::panic::panic_any("trim retake"),
++            Fault::Regression => self
++                .parent
++                .engine
++                .backend
++                .session
++                .primary_regress_loan_revision_v1(&loan),
++            Fault::None => (),
++        }
++        let e = &mut self.parent.engine;
++        assert!(!e.backend.foundation_in_engine);
++        e.backend.session.primary_reclaim(&mut e.foundation, loan)?;
++        e.backend.foundation_in_engine = true;
++        Ok(())
++    }
++    fn poison(&mut self) {
++        self.parent.poison_release();
++    }
++}
++
++impl TrimParent {
++    fn new(parent: Parent) -> Self {
++        Self {
++            parent,
++            free: Vec::new(),
++            custody: None,
++            opening: Fault::None,
++            closing: Fault::None,
++            calls: Vec::new(),
++        }
++    }
++
++    fn populate(&mut self, count: usize, host_first: bool) {
++        let loan = self.loan().unwrap();
++        for i in 0..count {
++            let memory = &mut self.parent.engine.backend.session;
++            let data = if i.is_multiple_of(2) == host_first {
++                memory.host(true)
++            } else {
++                memory.device(false)
++            };
++            let storage = match data.into_parts().storage {
++                DispatchDataInputStorageV1::HostVisible(token) => {
++                    Gfx942SdmaBufferStorageV1::Host(token)
++                }
++                DispatchDataInputStorageV1::Device(lease) => {
++                    Gfx942SdmaBufferStorageV1::Device(lease)
++                }
++            };
++            let mut buffer =
++                Gfx942SdmaBufferV1::from_bridge_parts(storage, self.parent.key, 1, 17 + i as u64);
++            buffer.advance_pool_generation().unwrap();
++            assert_eq!(buffer.pool_generation(), 2);
++            self.free.push(buffer);
++        }
++        self.retake(loan).unwrap();
++        self.calls.clear();
++    }
++
++    fn no_retry(&mut self) {
++        let before = self
++            .parent
++            .engine
++            .backend
++            .session
++            .data_release_snapshot_v1(&self.parent.engine.foundation);
++        let active = self
++            .custody
++            .as_ref()
++            .unwrap()
++            .active
++            .as_ref()
++            .unwrap()
++            .observation();
++        let count = self.custody.as_ref().unwrap().released;
++        let free: Vec<_> = self
++            .free
++            .iter()
++            .map(Gfx942SdmaBufferV1::cleanup_metadata)
++            .collect();
++        let calls = self.calls.clone();
++        assert!(matches!(
++            trim_in_place(self),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA pool trim"
++            ))
++        ));
++        assert_eq!(self.calls, calls);
++        assert_eq!(self.custody.as_ref().unwrap().released, count);
++        assert_eq!(
++            self.custody
++                .as_ref()
++                .unwrap()
++                .active
++                .as_ref()
++                .unwrap()
++                .observation(),
++            active
++        );
++        assert_eq!(
++            self.free
++                .iter()
++                .map(Gfx942SdmaBufferV1::cleanup_metadata)
++                .collect::<Vec<_>>(),
++            free
++        );
++        assert_eq!(
++            self.parent
++                .engine
++                .backend
++                .session
++                .data_release_snapshot_v1(&self.parent.engine.foundation),
++            before
++        );
++    }
++}
++
++#[test]
++fn constructed_pool_trim_empty_repeated_and_directional_teardown() {
++    let (parent, t, gate) = sdma_cases::with_sdma(false);
++    let mut f = TrimParent::new(parent);
++    assert_eq!(trim_in_place(&mut f).unwrap(), 0);
++    assert!(f.calls.is_empty() && f.custody.is_none());
++    for host_first in [false, true] {
++        f.populate(3, host_first);
++        let order: Vec<_> = f
++            .free
++            .iter()
++            .rev()
++            .map(Gfx942SdmaBufferV1::storage_identity)
++            .collect();
++        let before = f
++            .parent
++            .engine
++            .backend
++            .session
++            .data_release_snapshot_v1(&f.parent.engine.foundation);
++        assert_eq!(trim_in_place(&mut f).unwrap(), 3);
++        assert!(f.free.is_empty() && f.custody.is_none() && !f.parent.poisoned);
++        assert_eq!(
++            f.calls,
++            ["loan", "retake", "loan", "retake", "loan", "retake"]
++        );
++        before.assert_prepared_data_prefix_v1(
++            &f.parent.engine.backend.session,
++            &f.parent.engine.foundation,
++            &order,
++            3,
++            None,
++        );
++    }
++    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++    state.release_in_place(&mut f.parent).unwrap();
++    f.parent
++        .engine
++        .backend
++        .session
++        .primary_assert_all_released_v1();
++    assert!(state.complete && state.sdma.as_ref().unwrap().is_complete());
++    assert_eq!(gate.observation(), (false, false));
++    assert_no_retry(&mut f.parent, &mut state, &t);
++    state.sdma.as_mut().unwrap().cleanup_local_mappings();
++}
++
++#[derive(Clone, Copy, Debug)]
++enum CleanupFault {
++    Native(&'static str),
++    Currentness(usize),
++    Projection(Stage),
++}
++
++fn failure(index: usize, host_first: bool, fault: CleanupFault, panic: bool) {
++    let (parent, _, _) = constructed(false);
++    let mut f = TrimParent::new(parent);
++    f.populate(3, host_first);
++    let order: Vec<_> = f
++        .free
++        .iter()
++        .rev()
++        .map(Gfx942SdmaBufferV1::storage_identity)
++        .collect();
++    let metadata: Vec<_> = f
++        .free
++        .iter()
++        .map(Gfx942SdmaBufferV1::cleanup_metadata)
++        .collect();
++    let before = f
++        .parent
++        .engine
++        .backend
++        .session
++        .data_release_snapshot_v1(&f.parent.engine.foundation);
++    let memory = &mut f.parent.engine.backend.session;
++    match fault {
++        CleanupFault::Native(op) => memory.primary_arm_data_native_v1(index, op, panic),
++        CleanupFault::Currentness(offset) => {
++            memory.primary_arm_data_currentness_v1(index, offset, panic)
++        }
++        CleanupFault::Projection(stage) => {
++            memory.primary_arm_data_projection_v1(index, stage, panic)
++        }
++    }
++    let result = catch_unwind(AssertUnwindSafe(|| trim_in_place(&mut f)));
++    if panic {
++        let payload = result.unwrap_err();
++        match fault {
++            CleanupFault::Native(op) => assert_eq!(
++                payload.downcast_ref::<(&str, &str)>(),
++                Some(&("N2 native panic", op))
++            ),
++            CleanupFault::Currentness(_) => assert_eq!(
++                payload.downcast_ref::<(&str, &str)>(),
++                Some(&("N2 native panic", "currentness"))
++            ),
++            CleanupFault::Projection(stage) => assert_eq!(
++                payload.downcast_ref::<(&str, Stage)>(),
++                Some(&("control cleanup projection", stage))
++            ),
++        }
++    } else {
++        let expected = match fault {
++            CleanupFault::Native(op) => op,
++            CleanupFault::Currentness(_) => "currentness",
++            CleanupFault::Projection(_) => "control cleanup projection",
++        };
++        assert!(
++            matches!(result.unwrap(), Err(ComputeAqlQueueSessionErrorV1::Sdma(crate::sdma::Gfx942SdmaErrorV1::Memory(MemorySessionError::Injected(actual)))) if actual == expected)
++        );
++    }
++    assert!(f.parent.poisoned);
++    assert_eq!(f.calls.len(), 2 * (index + 1));
++    let root = f.custody.as_ref().unwrap();
++    assert_eq!(root.released, index);
++    let active = root.active.as_ref().unwrap().observation();
++    assert!(active.started && active.failed && !active.complete);
++    match fault {
++        CleanupFault::Native(op) => {
++            assert_eq!(
++                active.owner,
++                if op == "unmap_gpu" {
++                    "Mapped"
++                } else {
++                    "Unmapped"
++                }
++            );
++            assert!(!active.native_disposed);
++            assert_eq!(
++                active.stage,
++                if op == "unmap_gpu" {
++                    Stage::NativeUnmap
++                } else {
++                    Stage::NativeRelease
++                }
++            );
++        }
++        CleanupFault::Currentness(offset) => {
++            let host = index.is_multiple_of(2) == host_first;
++            let disposed = offset == if host { 6 } else { 5 };
++            assert_eq!(
++                active.owner,
++                if offset <= 2 {
++                    "Mapped"
++                } else if disposed {
++                    "NativeDisposed"
++                } else {
++                    "Unmapped"
++                }
++            );
++            assert_eq!(active.native_disposed, disposed);
++        }
++        CleanupFault::Projection(stage) => {
++            assert_eq!(active.stage, stage);
++            assert_eq!(active.native_disposed, stage == Stage::ReleaseCommit);
++        }
++    }
++    assert_eq!(
++        active.metadata,
++        DataCleanupMetadataV1::Sdma(metadata[2 - index].clone())
++    );
++    assert_eq!(
++        f.free
++            .iter()
++            .map(Gfx942SdmaBufferV1::cleanup_metadata)
++            .collect::<Vec<_>>(),
++        metadata[..2 - index]
++    );
++    before.assert_prepared_data_prefix_v1(
++        &f.parent.engine.backend.session,
++        &f.parent.engine.foundation,
++        &order,
++        index,
++        Some(&active),
++    );
++    f.no_retry();
++}
++
++#[test]
++fn constructed_pool_trim_native_errors_and_panics_keep_first_middle_last_owners() {
++    for host_first in [false, true] {
++        for index in 0_usize..3 {
++            let host = index.is_multiple_of(2) == host_first;
++            for op in ["unmap_gpu", "unmap_cpu", "free", "release_va_reservation"] {
++                if !host && op == "unmap_cpu" {
++                    continue;
++                }
++                for panic in [false, true] {
++                    failure(index, host_first, CleanupFault::Native(op), panic);
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_pool_trim_currentness_and_projection_keep_exact_prefixes() {
++    for host in [false, true] {
++        for offset in 1..=if host { 6 } else { 5 } {
++            for panic in [false, true] {
++                failure(1, !host, CleanupFault::Currentness(offset), panic);
++            }
++        }
++    }
++    for stage in [
++        Stage::UnmapProjection,
++        Stage::UnmapCommit,
++        Stage::ReleaseProjection,
++        Stage::ReleaseCommit,
++    ] {
++        for panic in [false, true] {
++            failure(1, false, CleanupFault::Projection(stage), panic);
++        }
++    }
++}
++
++#[test]
++fn constructed_pool_trim_opening_rejection_or_panic_keeps_original_input() {
++    for fault in [Fault::Error, Fault::Panic, Fault::Regression] {
++        let (parent, _, _) = constructed(false);
++        let mut f = TrimParent::new(parent);
++        f.populate(3, true);
++        if fault == Fault::Regression {
++            f.parent
++                .engine
++                .backend
++                .session
++                .primary_expire_loan_generation_v1();
++        }
++        f.opening = fault;
++        let before = f
++            .parent
++            .engine
++            .backend
++            .session
++            .data_release_snapshot_v1(&f.parent.engine.foundation);
++        let original = f.free.last().unwrap().cleanup_metadata();
++        let result = catch_unwind(AssertUnwindSafe(|| trim_in_place(&mut f)));
++        if fault == Fault::Panic {
++            assert_eq!(
++                result.unwrap_err().downcast_ref::<&str>(),
++                Some(&"trim loan")
++            );
++        } else {
++            assert!(result.unwrap().is_err());
++        }
++        assert_eq!(f.calls, ["loan"]);
++        assert!(f.parent.poisoned && f.parent.engine.backend.foundation_in_engine);
++        let root = f.custody.as_ref().unwrap();
++        assert_eq!(root.released, 0);
++        let active = root.active.as_ref().unwrap().observation();
++        assert_eq!(active.metadata, DataCleanupMetadataV1::Sdma(original));
++        assert_eq!(active.owner, "Original");
++        assert!(!active.started);
++        assert_eq!(
++            f.parent
++                .engine
++                .backend
++                .session
++                .data_release_snapshot_v1(&f.parent.engine.foundation),
++            before
++        );
++        f.no_retry();
++    }
++}
++
++#[test]
++fn constructed_pool_trim_cleanup_retake_matrix_preserves_receipts_and_first_panic() {
++    for host in [false, true] {
++        for cleanup in [Fault::None, Fault::Error, Fault::Panic] {
++            for closing in [Fault::None, Fault::Error, Fault::Panic] {
++                if cleanup == Fault::None && closing == Fault::None {
++                    continue;
++                }
++                let (parent, _, _) = constructed(false);
++                let mut f = TrimParent::new(parent);
++                f.populate(1, host);
++                let order = [f.free[0].storage_identity()];
++                let metadata = f.free[0].cleanup_metadata();
++                let before = f
++                    .parent
++                    .engine
++                    .backend
++                    .session
++                    .data_release_snapshot_v1(&f.parent.engine.foundation);
++                if cleanup != Fault::None {
++                    f.parent.engine.backend.session.primary_arm_data_native_v1(
++                        0,
++                        "free",
++                        cleanup == Fault::Panic,
++                    );
++                }
++                f.closing = closing;
++                let result = catch_unwind(AssertUnwindSafe(|| trim_in_place(&mut f)));
++                if cleanup == Fault::Panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, &str)>(),
++                        Some(&("N2 native panic", "free"))
++                    );
++                } else if closing == Fault::Panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<&str>(),
++                        Some(&"trim retake")
++                    );
++                } else if closing == Fault::Error {
++                    assert!(matches!(
++                        result.unwrap(),
++                        Err(ComputeAqlQueueSessionErrorV1::Contract("trim retake"))
++                    ));
++                } else {
++                    assert!(result.unwrap().is_err());
++                }
++                assert!(f.parent.poisoned && f.free.is_empty());
++                assert_eq!(f.calls, ["loan", "retake"]);
++                assert_eq!(
++                    f.parent.engine.backend.foundation_in_engine,
++                    closing == Fault::None
++                );
++                let root = f.custody.as_ref().unwrap();
++                assert_eq!(root.released, 0);
++                let active = root.active.as_ref().unwrap().observation();
++                assert_eq!(active.complete, cleanup == Fault::None);
++                assert_eq!(active.metadata, DataCleanupMetadataV1::Sdma(metadata));
++                before.assert_prepared_data_prefix_v1(
++                    &f.parent.engine.backend.session,
++                    &f.parent.engine.foundation,
++                    &order,
++                    usize::from(cleanup == Fault::None),
++                    (cleanup != Fault::None).then_some(&active),
++                );
++                f.no_retry();
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_pool_trim_actual_reclaim_rejection_retains_disposed_receipt() {
++    let (parent, _, _) = constructed(false);
++    let mut f = TrimParent::new(parent);
++    f.populate(1, true);
++    f.closing = Fault::Regression;
++    assert!(trim_in_place(&mut f).is_err());
++    assert!(
++        f.parent.poisoned && !f.parent.engine.backend.foundation_in_engine && f.free.is_empty()
++    );
++    let root = f.custody.as_ref().unwrap();
++    assert_eq!(root.released, 0);
++    let active = root.active.as_ref().unwrap().observation();
++    assert!(active.complete && active.native_disposed);
++    let before = f
++        .parent
++        .engine
++        .backend
++        .session
++        .control_release_loan_snapshot_v1();
++    assert!(trim_in_place(&mut f).is_err());
++    assert_eq!(f.calls, ["loan", "retake"]);
++    assert_eq!(
++        f.parent
++            .engine
++            .backend
++            .session
++            .control_release_loan_snapshot_v1(),
++        before
++    );
++    assert_eq!(
++        f.custody
++            .as_ref()
++            .unwrap()
++            .active
++            .as_ref()
++            .unwrap()
++            .observation(),
++        active
++    );
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs
+index 98c7a9bd0..47f6afbee 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs
+@@ -4 +4 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
+-fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
++pub(super) fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index 01e360d16..8294d3483 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -13,0 +14,2 @@ mod fault_cases;
++#[path = "integration_pool_trim_tests.rs"]
++mod pool_trim_cases;
+diff --git a/crates/fe2o3-kfd/src/queue_live/pool_trim.rs b/crates/fe2o3-kfd/src/queue_live/pool_trim.rs
+new file mode 100644
+index 000000000..00f2870ad
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/pool_trim.rs
+@@ -0,0 +1,228 @@
++//! Pool owners remain queue-rooted through native cleanup and model settlement.
++
++#![forbid(unsafe_code)]
++
++use super::*;
++use crate::shared_memory::{DataCleanupCustodyV1, DispatchDataReleaseV1};
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++pub(super) struct SdmaPoolTrimCustodyV1 {
++    pub(super) active: Option<DataCleanupCustodyV1>,
++    pub(super) released: usize,
++}
++
++pub(super) struct PoolTrimPartsV1<'a, M> {
++    pub(super) memory: &'a mut M,
++    pub(super) free: &'a mut Vec<Gfx942SdmaBufferV1>,
++    pub(super) custody: &'a mut Option<SdmaPoolTrimCustodyV1>,
++}
++
++pub(super) trait PoolTrimContextV1 {
++    type Memory: DispatchDataReleaseV1;
++    fn parts(&mut self)
++    -> Result<PoolTrimPartsV1<'_, Self::Memory>, ComputeAqlQueueSessionErrorV1>;
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1>;
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn poison(&mut self);
++}
++
++pub(super) fn trim_in_place<C: PoolTrimContextV1>(
++    context: &mut C,
++) -> Result<usize, ComputeAqlQueueSessionErrorV1> {
++    let parts = context.parts()?;
++    if parts.custody.is_some() {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "unfinished SDMA pool trim",
++        ));
++    }
++    *parts.custody = Some(SdmaPoolTrimCustodyV1 {
++        active: None,
++        released: 0,
++    });
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        loop {
++            let parts = context.parts()?;
++            let root = parts.custody.as_mut().expect("installed pool trim");
++            let Some(buffer) = parts.free.pop() else {
++                let released = root.released;
++                *parts.custody = None;
++                return Ok(released);
++            };
++            root.active = Some(DataCleanupCustodyV1::from_sdma(buffer));
++            let (lower, retake) = execute_live_model_custody_v1(
++                context,
++                C::loan,
++                |context| -> Result<(), ComputeAqlQueueSessionErrorV1> {
++                    let parts = context.parts()?;
++                    let active = parts
++                        .custody
++                        .as_mut()
++                        .expect("installed pool trim")
++                        .active
++                        .as_mut()
++                        .expect("rooted pool buffer");
++                    parts
++                        .memory
++                        .release_data(active)
++                        .map_err(crate::sdma::Gfx942SdmaErrorV1::from)?;
++                    if !active.is_complete() {
++                        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                            "incomplete SDMA pool cleanup",
++                        ));
++                    }
++                    Ok(())
++                },
++                C::retake,
++                C::poison,
++            )?;
++            retake?;
++            lower?;
++            // A disposed receipt is retired only after the original model loan closes.
++            let parts = context.parts()?;
++            let root = parts.custody.as_mut().expect("installed pool trim");
++            root.released += 1;
++            root.active = None;
++        }
++    }));
++    match result {
++        Ok(Ok(released)) => Ok(released),
++        Ok(Err(error)) => {
++            context.poison();
++            Err(error)
++        }
++        Err(payload) => {
++            // Preserve the first panic even if terminalization itself unwinds.
++            core::mem::forget(catch_unwind(AssertUnwindSafe(|| context.poison())));
++            resume_unwind(payload)
++        }
++    }
++}
++
++impl PoolTrimContextV1 for ComputeAqlQueueSessionV1 {
++    type Memory = SharedGttMemorySessionV1;
++
++    fn parts(
++        &mut self,
++    ) -> Result<PoolTrimPartsV1<'_, Self::Memory>, ComputeAqlQueueSessionErrorV1> {
++        let engine = self
++            .engine
++            .as_mut()
++            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++                "missing queue engine",
++            ))?;
++        Ok(PoolTrimPartsV1 {
++            memory: &mut engine.backend.session,
++            free: &mut self.sdma_pool_free,
++            custody: &mut self.sdma_pool_trim,
++        })
++    }
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
++        self.restore_model_ownership_for_live_mutation()
++    }
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.retake_model_ownership_after_live_mutation(loan)
++    }
++    fn poison(&mut self) {
++        self.poison_terminal();
++        permanently_poison_process_global_kfd_runtime_gate_v1();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn unfinished_pool_trim_rejects_teardown_and_drop_aborts() {
++        use std::os::unix::process::ExitStatusExt;
++        const CHILD: &str = "FE2O3_TEST_POOL_TRIM_DROP";
++        const TEST: &str =
++            "queue::live::pool_trim::tests::unfinished_pool_trim_rejects_teardown_and_drop_aborts";
++        if std::env::var_os(CHILD).is_none() {
++            let output = std::process::Command::new(std::env::current_exe().unwrap())
++                .args(["--exact", TEST, "--nocapture"])
++                .env(CHILD, "1")
++                .output()
++                .unwrap();
++            assert_eq!(
++                output.status.signal(),
++                Some(6),
++                "{}",
++                String::from_utf8_lossy(&output.stderr)
++            );
++            assert!(
++                String::from_utf8_lossy(&output.stderr)
++                    .contains("pool trim guards checked; dropping retained root")
++            );
++            assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked at"));
++            return;
++        }
++        rustix::process::setrlimit(
++            rustix::process::Resource::Core,
++            rustix::process::Rlimit {
++                current: Some(0),
++                maximum: Some(0),
++            },
++        )
++        .unwrap();
++        // No fabricated native owner: this isolates the public session's retention guard.
++        let mut session = std::mem::ManuallyDrop::new(
++            super::super::tests::persistent_compute_cancellation_test_session(
++                super::super::tests::test_queue_key(91, 1),
++                None,
++                None,
++            ),
++        );
++        session.sdma_pool_trim = Some(SdmaPoolTrimCustodyV1 {
++            active: None,
++            released: 1,
++        });
++        let ledger = (
++            session.sdma_device_pool.activity_started,
++            session.sdma_outstanding_buffers,
++            session.sdma_pool_reuse_count,
++        );
++        assert!(matches!(
++            session.trim_sdma_memory_pool(),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "terminal or unfinished SDMA pool trim"
++            ))
++        ));
++        assert_eq!(
++            (
++                session.sdma_device_pool.activity_started,
++                session.sdma_outstanding_buffers,
++                session.sdma_pool_reuse_count
++            ),
++            ledger
++        );
++        assert!(matches!(
++            session.supports_retained_primary_release_v1(),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA pool trim"
++            ))
++        ));
++        assert!(matches!(
++            session.preflight_primary_release_v1(),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA pool trim"
++            ))
++        ));
++        assert!(matches!(
++            session.destroy_queue_and_event(QueueDestroyModeV1::Release),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "the SDMA memory pool must be trimmed before queue destruction"
++            ))
++        ));
++        assert!(session.sdma_pool_trim.is_some() && session.sdma_pool_free.is_empty());
++        eprintln!("pool trim guards checked; dropping retained root");
++        drop(std::mem::ManuallyDrop::into_inner(session));
++        panic!("unfinished pool trim Drop returned");
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/primary_release.rs b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+index b525fb678..91a65ca79 100644
+--- a/crates/fe2o3-kfd/src/queue_live/primary_release.rs
++++ b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+@@ -38,0 +39,5 @@ impl ComputeAqlQueueSessionV1 {
++        if self.sdma_pool_trim.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA pool trim",
++            ));
++        }
+diff --git a/crates/fe2o3-kfd/src/sdma.rs b/crates/fe2o3-kfd/src/sdma.rs
+index f840fd073..4c335794d 100644
+--- a/crates/fe2o3-kfd/src/sdma.rs
++++ b/crates/fe2o3-kfd/src/sdma.rs
+@@ -364 +364 @@ pub(crate) enum Gfx942SdmaBufferStorageIdentityV1 {
+-#[derive(Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, Eq, PartialEq)]
+@@ -385,0 +386,11 @@ pub struct Gfx942SdmaBufferV1 {
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(crate) struct Gfx942SdmaBufferCleanupMetadataV1 {
++    identity: Gfx942SdmaBufferStorageIdentityV1,
++    owner: QueueKeyV1,
++    pool_generation: u64,
++    logical_bytes: u64,
++    physical_bytes: u64,
++    physical_alignment: u64,
++    host_content_certificate: Option<Box<Gfx942SdmaHostContentCertificateV1>>,
++}
++
+@@ -506,0 +518,28 @@ impl Gfx942SdmaBufferV1 {
++    pub(crate) fn into_cleanup_parts(
++        self,
++    ) -> (Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferCleanupMetadataV1) {
++        let metadata = Gfx942SdmaBufferCleanupMetadataV1 {
++            identity: self.storage_identity(),
++            owner: self.owner,
++            pool_generation: self.pool_generation,
++            logical_bytes: self.logical_bytes,
++            physical_bytes: self.physical_bytes(),
++            physical_alignment: self.physical_alignment(),
++            host_content_certificate: self.host_content_certificate,
++        };
++        (self.storage, metadata)
++    }
++
++    #[cfg(test)]
++    pub(crate) fn cleanup_metadata(&self) -> Gfx942SdmaBufferCleanupMetadataV1 {
++        Gfx942SdmaBufferCleanupMetadataV1 {
++            identity: self.storage_identity(),
++            owner: self.owner,
++            pool_generation: self.pool_generation,
++            logical_bytes: self.logical_bytes,
++            physical_bytes: self.physical_bytes(),
++            physical_alignment: self.physical_alignment(),
++            host_content_certificate: self.host_content_certificate.clone(),
++        }
++    }
++
+@@ -7008,0 +7048,63 @@ mod tests {
++    #[test]
++    fn sdma_cleanup_preserves_original_certificate_box_through_native_disposal() {
++        use crate::shared_memory::{
++            DataCleanupCustodyV1, DispatchDataReleaseV1, PristineAbortMemoryFixtureV1,
++        };
++        for configured in [false, true] {
++            for fault in [None, Some(false), Some(true)] {
++                let mut memory = PristineAbortMemoryFixtureV1::new_configured(configured);
++                let token = memory.host().into_token();
++                let mut buffer = Gfx942SdmaBufferV1::from_bridge_parts(
++                    Gfx942SdmaBufferStorageV1::Host(token),
++                    queue_key(7, 11, 13),
++                    3,
++                    17,
++                );
++                buffer.certify_full_host_content(Sha256::digest([0x5a; 17]).into());
++                let certificate =
++                    core::ptr::from_ref(buffer.host_content_certificate.as_deref().unwrap());
++                let metadata = buffer.cleanup_metadata();
++                let identity = buffer.storage_identity();
++                let before = memory.memory_snapshot();
++                let mut root = DataCleanupCustodyV1::from_sdma(buffer);
++                if let Some(panic) = fault {
++                    memory.fail_data(1, "free", panic);
++                }
++                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                    memory.release_data(&mut root)
++                }));
++                match fault {
++                    None => result.unwrap().unwrap(),
++                    Some(false) => assert!(result.unwrap().is_err()),
++                    Some(true) => assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, &str)>(),
++                        Some(&("N2 native panic", "free"))
++                    ),
++                }
++                assert_eq!(root.sdma_metadata(), Some(&metadata));
++                assert_eq!(
++                    core::ptr::from_ref(
++                        root.sdma_metadata()
++                            .unwrap()
++                            .host_content_certificate
++                            .as_deref()
++                            .unwrap()
++                    ),
++                    certificate
++                );
++                let observed = root.observation();
++                before.assert_data_prefix(
++                    &memory,
++                    &[],
++                    &[identity],
++                    usize::from(fault.is_none()),
++                    fault.map(|_| &observed),
++                );
++                let stable = memory.memory_snapshot();
++                assert!(memory.release_data(&mut root).is_err());
++                assert_eq!(memory.memory_snapshot(), stable);
++                assert_eq!(root.observation(), observed);
++            }
++        }
++    }
++
+diff --git a/crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs b/crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs
+index 2a4c2d4b6..4d48b8bbc 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/data_cleanup.rs
+@@ -7,0 +8,3 @@ use crate::queue::dispatch_binding::{
++use crate::sdma::{
++    Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
++};
+@@ -14,0 +18 @@ enum InputV1 {
++    Sdma(Gfx942SdmaBufferV1),
+@@ -26,0 +31 @@ pub(crate) enum DataCleanupMetadataV1 {
++    Sdma(Gfx942SdmaBufferCleanupMetadataV1),
+@@ -28,0 +34 @@ pub(crate) enum DataCleanupMetadataV1 {
++#[cfg(test)]
+@@ -43,0 +50 @@ impl InputV1 {
++            Self::Sdma(buffer) => DataCleanupMetadataV1::Sdma(buffer.cleanup_metadata()),
+@@ -91,0 +99,4 @@ impl DataCleanupCustodyV1 {
++    pub(crate) fn from_sdma(buffer: Gfx942SdmaBufferV1) -> Self {
++        Self::input(InputV1::Sdma(buffer))
++    }
++
+@@ -109 +119,0 @@ impl DataCleanupCustodyV1 {
+-        self.metadata = Some(input.metadata());
+@@ -112 +122,9 @@ impl DataCleanupCustodyV1 {
+-            InputV1::Fixed(data) => data.into_parts().storage,
++            InputV1::Fixed(data) => {
++                self.metadata = Some(DataCleanupMetadataV1::Fixed {
++                    identity: data.storage_identity(),
++                    layout: data.layout(),
++                    fully_initialized: data.is_fully_initialized(),
++                    initialized_content: data.initialized_content(),
++                });
++                data.into_parts().storage
++            }
+@@ -122,0 +141,12 @@ impl DataCleanupCustodyV1 {
++            InputV1::Sdma(buffer) => {
++                let (storage, metadata) = buffer.into_cleanup_parts();
++                self.metadata = Some(DataCleanupMetadataV1::Sdma(metadata));
++                match storage {
++                    Gfx942SdmaBufferStorageV1::Host(token) => {
++                        DispatchDataInputStorageV1::HostVisible(token)
++                    }
++                    Gfx942SdmaBufferStorageV1::Device(lease) => {
++                        DispatchDataInputStorageV1::Device(lease)
++                    }
++                }
++            }
+@@ -277,0 +308,7 @@ impl DataCleanupCustodyV1 {
++    pub(crate) fn sdma_metadata(&self) -> Option<&Gfx942SdmaBufferCleanupMetadataV1> {
++        match self.metadata.as_ref()? {
++            DataCleanupMetadataV1::Sdma(metadata) => Some(metadata),
++            _ => None,
++        }
++    }
++
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs
+index 164958108..bae22ba92 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort.rs
+@@ -54 +54 @@ impl PristineAbortMemoryFixtureV1 {
+-    fn new_configured(configured: bool) -> Self {
++    pub(crate) fn new_configured(configured: bool) -> Self {
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+index 675b0c4ed..f87386ddf 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+@@ -4218,7 +4218,6 @@ impl KfdRuntimeBackendV1 {
+-            let trimmed = self
+-                .queue
+-                .as_mut()
+-                .expect("enabled SDMA pool retains queue")
+-                .trim_sdma_memory_pool();
+-            trimmed.map_err(|error| {
+-                self.terminal_error(format!("KFD SDMA memory-pool trim: {error}"))
++            self.trim_sdma_pool_for_shutdown_v1(|backend| {
++                backend
++                    .queue
++                    .as_mut()
++                    .expect("enabled SDMA pool retains queue")
++                    .trim_sdma_memory_pool()
+@@ -4317,0 +4317,17 @@ impl KfdRuntimeBackendV1 {
++    pub(super) fn trim_sdma_pool_for_shutdown_v1(
++        &mut self,
++        trim: impl FnOnce(&mut Self) -> Result<usize, fe2o3_kfd::ComputeAqlQueueSessionErrorV1>,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| trim(self))) {
++            Ok(result) => result.map(|_| ()).map_err(|error| {
++                self.terminal_error(format!("KFD SDMA memory-pool trim: {error}"))
++            }),
++            Err(payload) => {
++                core::mem::forget(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
++                    || self.terminal_error("KFD SDMA memory-pool trim panicked"),
++                )));
++                std::panic::resume_unwind(payload)
++            }
++        }
++    }
++
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+index 48f81092d..9be20b1c1 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -1 +1 @@
+-//! Opt-in hardware test: public allocation workflow, no seeded native queue.
++//! Shutdown settlement tests and opt-in public native allocation workflow.
+@@ -16,0 +17,61 @@ pub(super) fn observe_selection(retained: bool) {
++#[test]
++fn runtime_pool_trim_error_and_panic_terminalize_before_returning() {
++    use std::panic::{AssertUnwindSafe, catch_unwind};
++    use std::sync::{
++        Arc,
++        atomic::{AtomicUsize, Ordering},
++    };
++    #[derive(Debug)]
++    struct Payload(Arc<AtomicUsize>);
++    impl Drop for Payload {
++        fn drop(&mut self) {
++            self.0.fetch_add(1, Ordering::SeqCst);
++        }
++    }
++    for panic in [false, true] {
++        let mut backend = std::mem::ManuallyDrop::new(KfdRuntimeBackendV1::mock());
++        let drops = Arc::new(AtomicUsize::new(0));
++        let payload = Box::new(Payload(drops.clone()));
++        let pointer = core::ptr::from_ref(payload.as_ref());
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.trim_sdma_pool_for_shutdown_v1(|_| {
++                if panic {
++                    std::panic::resume_unwind(payload);
++                }
++                Err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                    "trim fault",
++                ))
++            })
++        }));
++        assert!(backend.terminal && !backend.queue_retired && backend.primary_teardown.is_none());
++        assert!(matches!(
++            backend.require_live(),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        assert!(matches!(
++            backend.shutdown_owned_v1(),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        assert!(matches!(
++            backend.create_stream_v1(7),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        if panic {
++            let caught = result.unwrap_err().downcast::<Payload>().unwrap();
++            assert_eq!(core::ptr::from_ref(caught.as_ref()), pointer);
++            assert_eq!(drops.load(Ordering::SeqCst), 0);
++            drop(caught);
++        } else {
++            assert!(matches!(
++                result.unwrap(),
++                Err(RuntimeBackendFailureV1::Terminal(_))
++            ));
++        }
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        // This fixture owns no native queue or allocations; disarm only its Drop guard.
++        assert!(backend.queue.is_none() && backend.allocations.is_empty());
++        backend.terminal = false;
++        drop(std::mem::ManuallyDrop::into_inner(backend));
++    }
++}
++
+@@ -49,0 +111,9 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
++    let pool = backend
++        .queue
++        .as_ref()
++        .unwrap()
++        .sdma_memory_pool_observation()
++        .unwrap();
++    assert_eq!(pool.checked_out_buffers, 0);
++    assert_eq!(pool.retained_free_buffers, 1);
++    assert_eq!(pool.retained_free_bytes, 4096);
+@@ -77 +147 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
+-        "native_runtime_retained_directional_release=complete allocation_workflow=public selector=retained completed_root_drop=confirmed backend_drop=completed packets=0"
++        "native_runtime_retained_directional_release=complete allocation_workflow=public pooled_buffers=1 pooled_bytes=4096 selector=retained completed_root_drop=confirmed backend_drop=completed packets=0"

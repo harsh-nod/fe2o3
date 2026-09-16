@@ -5,6 +5,9 @@ use crate::queue::dispatch_binding::{
     DispatchDataAuthorityV1, DispatchDataInputStorageV1, Gfx942FixedDispatchDataLayoutV1,
     Gfx942FixedDispatchDataV1, Gfx942FixedDispatchStorageIdentityV1,
 };
+use crate::sdma::{
+    Gfx942SdmaBufferCleanupMetadataV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
+};
 use control_cleanup::{CleanupStageV1, NativeDisposalProgressV1};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use transitions::NativeTransitionProgressV1;
@@ -12,6 +15,7 @@ use transitions::NativeTransitionProgressV1;
 enum InputV1 {
     Fixed(Gfx942FixedDispatchDataV1),
     Authority(DispatchDataAuthorityV1),
+    Sdma(Gfx942SdmaBufferV1),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,8 +28,10 @@ pub(crate) enum DataCleanupMetadataV1 {
     },
     HostDispatch(SharedGttMappedResourceFactsV1),
     DeviceDispatch(Gfx942DeviceMemoryDispatchFactsV1),
+    Sdma(Gfx942SdmaBufferCleanupMetadataV1),
 }
 
+#[cfg(test)]
 impl InputV1 {
     fn metadata(&self) -> DataCleanupMetadataV1 {
         match self {
@@ -41,6 +47,7 @@ impl InputV1 {
             Self::Authority(DispatchDataAuthorityV1::Device(authority)) => {
                 DataCleanupMetadataV1::DeviceDispatch(*authority.facts())
             }
+            Self::Sdma(buffer) => DataCleanupMetadataV1::Sdma(buffer.cleanup_metadata()),
         }
     }
 }
@@ -89,6 +96,10 @@ impl DataCleanupCustodyV1 {
         Self::input(InputV1::Authority(data))
     }
 
+    pub(crate) fn from_sdma(buffer: Gfx942SdmaBufferV1) -> Self {
+        Self::input(InputV1::Sdma(buffer))
+    }
+
     fn input(input: InputV1) -> Self {
         Self {
             owner: Some(OwnerV1::Input(input)),
@@ -106,10 +117,17 @@ impl DataCleanupCustodyV1 {
         let Some(OwnerV1::Input(input)) = self.owner.take() else {
             unreachable!("unstarted data cleanup retains its original input")
         };
-        self.metadata = Some(input.metadata());
         // Decomposition is infallible and invokes neither allocation nor callbacks.
         let storage = match input {
-            InputV1::Fixed(data) => data.into_parts().storage,
+            InputV1::Fixed(data) => {
+                self.metadata = Some(DataCleanupMetadataV1::Fixed {
+                    identity: data.storage_identity(),
+                    layout: data.layout(),
+                    fully_initialized: data.is_fully_initialized(),
+                    initialized_content: data.initialized_content(),
+                });
+                data.into_parts().storage
+            }
             InputV1::Authority(DispatchDataAuthorityV1::Device(authority)) => {
                 let Gfx942DeviceMemoryDispatchAuthorityV1 { lease, facts } = authority;
                 self.metadata = Some(DataCleanupMetadataV1::DeviceDispatch(facts));
@@ -119,6 +137,18 @@ impl DataCleanupCustodyV1 {
                 let SharedGttQueueResourceAuthorityV1 { token, facts, .. } = authority;
                 self.metadata = Some(DataCleanupMetadataV1::HostDispatch(facts));
                 DispatchDataInputStorageV1::HostVisible(token)
+            }
+            InputV1::Sdma(buffer) => {
+                let (storage, metadata) = buffer.into_cleanup_parts();
+                self.metadata = Some(DataCleanupMetadataV1::Sdma(metadata));
+                match storage {
+                    Gfx942SdmaBufferStorageV1::Host(token) => {
+                        DispatchDataInputStorageV1::HostVisible(token)
+                    }
+                    Gfx942SdmaBufferStorageV1::Device(lease) => {
+                        DispatchDataInputStorageV1::Device(lease)
+                    }
+                }
             }
         };
         self.owner = Some(match storage {
@@ -275,6 +305,13 @@ pub(crate) struct DataCleanupObservationV1 {
 
 #[cfg(test)]
 impl DataCleanupCustodyV1 {
+    pub(crate) fn sdma_metadata(&self) -> Option<&Gfx942SdmaBufferCleanupMetadataV1> {
+        match self.metadata.as_ref()? {
+            DataCleanupMetadataV1::Sdma(metadata) => Some(metadata),
+            _ => None,
+        }
+    }
+
     pub(crate) fn observation(&self) -> DataCleanupObservationV1 {
         let (owner, host, device) = match self.owner.as_ref().unwrap() {
             OwnerV1::Input(_) => ("Original", None, None),

@@ -257,6 +257,8 @@ pub(in crate::queue) mod model_loan;
 use model_loan::execute_live_model_custody_v1;
 #[path = "queue_live/persistent_bind.rs"]
 pub(in crate::queue) mod persistent_bind;
+#[path = "queue_live/pool_trim.rs"]
+mod pool_trim;
 use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent_bind_inputs_v1};
 #[path = "queue_live/persistent_cancel.rs"]
 pub(in crate::queue) mod persistent_cancel;
@@ -3746,6 +3748,7 @@ pub struct ComputeAqlQueueSessionV1 {
     striped_sdma: Option<Gfx942SdmaQueueSetV1>,
     sdma_outstanding_buffers: usize,
     sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
+    sdma_pool_trim: Option<pool_trim::SdmaPoolTrimCustodyV1>,
     sdma_pool_reuse_count: u64,
     sdma_device_pool: SdmaDevicePoolConfigurationV1,
     // Both policies share sdma_device_pool's irreversible activity latch.
@@ -10101,22 +10104,16 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     pub fn trim_sdma_memory_pool(&mut self) -> Result<usize, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned || self.sdma_pool_trim.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal or unfinished SDMA pool trim",
+            ));
+        }
         self.sdma_device_pool.begin_activity();
         self.require_sdma_enabled()?;
         self.validate_configured_device_pool_v1()?;
         self.validate_configured_host_pool_v1()?;
-        let mut released = 0_usize;
-        while let Some(buffer) = self.sdma_pool_free.pop() {
-            let result = self.with_live_queue_memory_model(|memory| {
-                release_buffer(memory, buffer).map_err(Into::into)
-            });
-            if let Err(error) = result {
-                self.poison_terminal();
-                return Err(error);
-            }
-            released += 1;
-        }
-        Ok(released)
+        pool_trim::trim_in_place(self)
     }
 
     pub fn sdma_memory_pool_observation(
@@ -12303,7 +12300,7 @@ impl ComputeAqlQueueSessionV1 {
                 "auxiliary compute queues must be destroyed before the primary queue",
             ));
         }
-        if !self.sdma_pool_free.is_empty() {
+        if !self.sdma_pool_free.is_empty() || self.sdma_pool_trim.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "the SDMA memory pool must be trimmed before queue destruction",
             ));
@@ -13783,6 +13780,10 @@ fn validate_barrier_probe_success_snapshot(
 
 impl Drop for ComputeAqlQueueSessionV1 {
     fn drop(&mut self) {
+        if self.sdma_pool_trim.is_some() {
+            // Failed trim retains native owners or disposed-but-unsettled receipts.
+            std::process::abort();
+        }
         // Model ownership can be restored without native effects. There is
         // deliberately no ioctl, MMIO store, munmap, GPU unmap, or FREE here.
         let _ = self.restore_model_ownership();
@@ -14409,7 +14410,10 @@ mod tests {
         );
         for (function, mutation) in [
             ("fn checkout_sdma_pool(", "swap_remove("),
-            ("pub fn trim_sdma_memory_pool(", ".pop()"),
+            (
+                "pub fn trim_sdma_memory_pool(",
+                "pool_trim::trim_in_place(self)",
+            ),
         ] {
             let body = production.split_once(function).unwrap().1;
             assert!(
@@ -14463,7 +14467,7 @@ mod tests {
                 .find(if operation.starts_with("fn checkout") {
                     "swap_remove("
                 } else {
-                    ".pop()"
+                    "pool_trim::trim_in_place(self)"
                 })
                 .unwrap();
             assert!(
@@ -16366,6 +16370,7 @@ mod tests {
             striped_sdma: None,
             sdma_outstanding_buffers: 0,
             sdma_pool_free: Vec::new(),
+            sdma_pool_trim: None,
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
             sdma_host_pool_limits: None,

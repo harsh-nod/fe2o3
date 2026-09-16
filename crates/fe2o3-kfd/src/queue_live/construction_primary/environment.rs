@@ -262,6 +262,7 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
             striped_sdma: None,
             sdma_outstanding_buffers: 0,
             sdma_pool_free: Vec::new(),
+            sdma_pool_trim: None,
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
             sdma_host_pool_limits: None,

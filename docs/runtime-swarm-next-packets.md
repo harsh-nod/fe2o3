@@ -23,8 +23,13 @@ ordinary public native allocations on legacy teardown. It retains the original
 two-owner vector, native destroy/doorbell outcomes and three-token resource
 cleanup under the primary root. New genuine-owner CPU matrices and an opt-in
 public allocation/shutdown hardware test cover this route; execution evidence
-and remaining gaps are recorded in the R126 document. Other profiles, pool-trim
-failure retention and full qualification remain open.
+and remaining gaps are recorded in the R126 document. The subsequent pool-trim
+packet now retains each active buffer through cleanup and model retake and
+terminalizes runtime trim panics. Its focused GNU/musl matrices and nonempty-pool
+native success probe are recorded in the
+[development receipt](evidence/dev-r126-pool-trim-2026-09-16/README.md).
+Other profiles, public native fault/account observations and full qualification
+remain open; R125 remains the accepted checkpoint.
 
 Preceding Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each

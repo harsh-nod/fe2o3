@@ -361,7 +361,7 @@ pub(crate) enum Gfx942SdmaBufferStorageIdentityV1 {
     Device(Gfx942DeviceMemoryIdentityV1),
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Gfx942SdmaHostContentCertificateV1 {
     owner: QueueKeyV1,
     storage_identity: Gfx942SdmaBufferStorageIdentityV1,
@@ -380,6 +380,17 @@ pub struct Gfx942SdmaBufferV1 {
     owner: QueueKeyV1,
     pool_generation: u64,
     logical_bytes: u64,
+    host_content_certificate: Option<Box<Gfx942SdmaHostContentCertificateV1>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Gfx942SdmaBufferCleanupMetadataV1 {
+    identity: Gfx942SdmaBufferStorageIdentityV1,
+    owner: QueueKeyV1,
+    pool_generation: u64,
+    logical_bytes: u64,
+    physical_bytes: u64,
+    physical_alignment: u64,
     host_content_certificate: Option<Box<Gfx942SdmaHostContentCertificateV1>>,
 }
 
@@ -502,6 +513,34 @@ impl Gfx942SdmaBufferV1 {
             self.pool_generation,
             self.logical_bytes,
         )
+    }
+
+    pub(crate) fn into_cleanup_parts(
+        self,
+    ) -> (Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferCleanupMetadataV1) {
+        let metadata = Gfx942SdmaBufferCleanupMetadataV1 {
+            identity: self.storage_identity(),
+            owner: self.owner,
+            pool_generation: self.pool_generation,
+            logical_bytes: self.logical_bytes,
+            physical_bytes: self.physical_bytes(),
+            physical_alignment: self.physical_alignment(),
+            host_content_certificate: self.host_content_certificate,
+        };
+        (self.storage, metadata)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cleanup_metadata(&self) -> Gfx942SdmaBufferCleanupMetadataV1 {
+        Gfx942SdmaBufferCleanupMetadataV1 {
+            identity: self.storage_identity(),
+            owner: self.owner,
+            pool_generation: self.pool_generation,
+            logical_bytes: self.logical_bytes,
+            physical_bytes: self.physical_bytes(),
+            physical_alignment: self.physical_alignment(),
+            host_content_certificate: self.host_content_certificate.clone(),
+        }
     }
 
     pub(crate) fn from_bridge_parts(
@@ -7004,6 +7043,69 @@ mod tests {
         let (storage, owner, generation, logical_bytes) = host.into_bridge_parts();
         let host = Gfx942SdmaBufferV1::from_bridge_parts(storage, owner, generation, logical_bytes);
         assert_eq!(host.certified_full_host_content_sha256(4096), None);
+    }
+
+    #[test]
+    fn sdma_cleanup_preserves_original_certificate_box_through_native_disposal() {
+        use crate::shared_memory::{
+            DataCleanupCustodyV1, DispatchDataReleaseV1, PristineAbortMemoryFixtureV1,
+        };
+        for configured in [false, true] {
+            for fault in [None, Some(false), Some(true)] {
+                let mut memory = PristineAbortMemoryFixtureV1::new_configured(configured);
+                let token = memory.host().into_token();
+                let mut buffer = Gfx942SdmaBufferV1::from_bridge_parts(
+                    Gfx942SdmaBufferStorageV1::Host(token),
+                    queue_key(7, 11, 13),
+                    3,
+                    17,
+                );
+                buffer.certify_full_host_content(Sha256::digest([0x5a; 17]).into());
+                let certificate =
+                    core::ptr::from_ref(buffer.host_content_certificate.as_deref().unwrap());
+                let metadata = buffer.cleanup_metadata();
+                let identity = buffer.storage_identity();
+                let before = memory.memory_snapshot();
+                let mut root = DataCleanupCustodyV1::from_sdma(buffer);
+                if let Some(panic) = fault {
+                    memory.fail_data(1, "free", panic);
+                }
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    memory.release_data(&mut root)
+                }));
+                match fault {
+                    None => result.unwrap().unwrap(),
+                    Some(false) => assert!(result.unwrap().is_err()),
+                    Some(true) => assert_eq!(
+                        result.unwrap_err().downcast_ref::<(&str, &str)>(),
+                        Some(&("N2 native panic", "free"))
+                    ),
+                }
+                assert_eq!(root.sdma_metadata(), Some(&metadata));
+                assert_eq!(
+                    core::ptr::from_ref(
+                        root.sdma_metadata()
+                            .unwrap()
+                            .host_content_certificate
+                            .as_deref()
+                            .unwrap()
+                    ),
+                    certificate
+                );
+                let observed = root.observation();
+                before.assert_data_prefix(
+                    &memory,
+                    &[],
+                    &[identity],
+                    usize::from(fault.is_none()),
+                    fault.map(|_| &observed),
+                );
+                let stable = memory.memory_snapshot();
+                assert!(memory.release_data(&mut root).is_err());
+                assert_eq!(memory.memory_snapshot(), stable);
+                assert_eq!(root.observation(), observed);
+            }
+        }
     }
 
     #[test]

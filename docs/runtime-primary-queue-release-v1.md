@@ -284,9 +284,9 @@ queue. It checks completed-root/backend Drop, reuse rejection and the absence of
 false compute-lane profile events. The native execution result is recorded
 in the [passing one-device receipt](evidence/dev-r126-directional-release-native-2026-09-16/README.md),
 separately from CPU tests. This closes the packetless public allocation-path
-reachability example, not native fault qualification. Pool trimming still
-precedes retained-root installation and is outside this packet's
-destructive-failure custody guarantee.
+reachability example, not native fault qualification. That directional-release
+packet did not cover pool trimming before retained-primary-root installation;
+the subsequent pool-trim integration below addresses that ownership gap.
 
 Final development library regressions pass 1,297 KFD tests and 744 runtime tests
 on both GNU and musl. Each local runtime run ignores only the opt-in hardware
@@ -305,6 +305,51 @@ copies and passed. The earlier failed run remains separate history, not passing
 evidence. Source/documentation formatting checks pass; raw logs preserve their
 original libtest whitespace.
 
+## Retained Pool Trim
+
+The queue now installs `SdmaPoolTrimCustodyV1` before removing any free buffer.
+The original free vector retains the untouched suffix, and each active buffer
+moves into borrowed `DataCleanupCustodyV1` before the model loan or native
+cleanup. Reverse order and one loan/retake per buffer are unchanged. An active
+disposed receipt remains rooted until both cleanup and retake succeed; only
+then is the completed count advanced. Full success clears the root, allowing
+later independent trims. Failure rejects retries and prevents either teardown
+route from treating an empty free vector as a drained pool. Dropping a queue
+with unfinished trim custody aborts rather than silently discarding its owners.
+
+The SDMA-specific lower conversion preserves owner, generation, logical extent,
+original storage/layout and the original content-certificate box. It neither
+uses the certificate-invalidating dispatch bridge nor invents fixed-dispatch
+initialization authority. Decomposition performs no allocation. Fresh rejected
+trim attempts still close pool configuration; terminal retries leave the
+activity ledger unchanged. No second backing-byte ledger is introduced.
+
+Runtime shutdown now terminalizes trim errors and panics while retaining the
+original queue and account observers, then resumes the original panic payload.
+The shared driver retains normal retake-error priority and lower-panic priority.
+Six new genuine constructed-parent tests cover mixed host/device first/middle/
+last failures, native and currentness boundaries, host projection/commit joins,
+opening rejection, actual loan-generation/reclaim rejection, cleanup/retake
+error/panic combinations, exact metadata and refunds, inert retry, repeated
+success and subsequent directional teardown. The fixture constructs its valid
+free roster directly; it is not public recycle-admission evidence.
+
+Additional tests preserve the original certificate-box identity with actual
+initialized host bytes, check the concrete queue Drop guard in a subprocess,
+and verify runtime terminal settlement and panic identity. The runtime callback
+test has no native queue and does not establish native failure/accounting behavior.
+
+GNU/musl each pass all 27 constructed-parent release tests, 274 shared-memory
+tests, six SDMA-cleanup tests and 745 runtime tests (one hardware test ignored
+locally). Drop, activity-latch and pool-wiring checks pass on both targets;
+strict all-target Clippy and the unchanged unsafe-source policy also pass.
+A fresh MI300X public allocation/shutdown probe confirms a nonempty one-buffer,
+4096-byte pool before successful retained shutdown and backend Drop. See the
+[pool-trim development receipt](evidence/dev-r126-pool-trim-2026-09-16/README.md).
+These are focused KFD and full runtime library checks, not fresh full-KFD or
+workspace regressions, formal proof, native fault qualification or performance
+evidence. R125 remains the accepted checkpoint.
+
 ## Remaining Qualification
 
 1. Extend constructed-parent coverage to the remaining late queue-resource and
@@ -319,14 +364,10 @@ original libtest whitespace.
    destruction-profile events. A manually installed queue or scripted early
    shutdown return is not public-workflow evidence. Pending ordinary/XGMI/window
    owner matrices and remaining integrated resource/model joins need completion.
-4. Retain the pool-trim owner before queue teardown admission. The current trim
-   pops each buffer into consuming `release_buffer`; a native error/panic or
-   model-loan retake failure can lose its typed cleanup owner. Preserve the
-   original vector, active buffer, completed prefix, metadata and account
-   observations through borrowed lower cleanup and model settlement. Keep the
-   existing reverse order and reject retries after failure. Runtime shutdown
-   must also terminalize trim panics before resuming the original payload, so a
-   caller catching the panic cannot reuse the logical backend.
+4. Qualify pool-trim failure retention and account observations through public
+   native runtime workflows. Constructed-parent CPU matrices and the packetless
+   native success probe do not substitute for these fault paths. Other consuming
+   SDMA eviction/disposal routes remain outside the new trim root.
 5. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
    calibrations and independent evidence review before R126 acceptance.
 6. Qualify applicable additional queue profiles, native GPU execution, formal
