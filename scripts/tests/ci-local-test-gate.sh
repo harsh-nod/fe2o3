@@ -1259,6 +1259,10 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 staged_generative_providers_reject_without_export_authority -- --ignored --exact' \
   "$(step_command rocm-production-generative-provider-refusal)" \
   'ROCm compile omitted the exact generative-provider refusal regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_extraction_driver_v1 forged_capability_markers_cannot_gain_nominal_authority -- --ignored --exact' \
+  "$(step_command rocm-production-generative-provider-forgery)" \
+  'ROCm compile omitted the exact generative-provider forgery regression'
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"

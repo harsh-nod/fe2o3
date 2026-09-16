@@ -1373,6 +1373,12 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         staged_generative_providers_reject_without_export_authority -- \
         --ignored --exact
+  run_step rocm-production-generative-provider-forgery \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_extraction_driver_v1 \
+        forged_capability_markers_cannot_gain_nominal_authority -- \
+        --ignored --exact
   run_step rocm-production-simulation-sqrt \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
