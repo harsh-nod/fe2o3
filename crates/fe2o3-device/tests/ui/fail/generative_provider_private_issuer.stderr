@@ -1,0 +1,16 @@
+error[E0624]: method `__compiler_workgroup_capability_current` is private
+ --> tests/ui/fail/generative_provider_private_issuer.rs:4:21
+  |
+4 |       let _ = context.__compiler_workgroup_capability_current();
+  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/execution.rs
+  |
+  | /     fn __compiler_workgroup_capability_current<'workgroup>(
+  | |         &'workgroup mut self,
+  | |     ) -> WorkgroupCapability<
+  | |         'workgroup,
+  | |         KernelCapabilityBrand<'kernel, Kernel, Target, Launch>,
+  | |         InitialEpoch,
+  | |     > {
+  | |_____- private method defined here

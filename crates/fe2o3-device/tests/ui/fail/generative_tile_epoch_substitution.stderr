@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/generative_tile_epoch_substitution.rs:6:5
+  |
+3 | fn tile<'wg, K, A: SynchronizationEpoch, B: SynchronizationEpoch>(
+  |                 - found type parameter   - expected type parameter
+4 |     value: MaskedTile1D<'wg, u32, 1, 1, K, A>,
+5 | ) -> MaskedTile1D<'wg, u32, 1, 1, K, B> {
+  |      ---------------------------------- expected `MaskedTile1D<'wg, u32, 1, 1, K, B>` because of return type
+6 |     value
+  |     ^^^^^ expected `MaskedTile1D<'_, u32, 1, 1, K, B>`, found `MaskedTile1D<'_, u32, 1, 1, K, A>`
+  |
+  = note: expected struct `MaskedTile1D<'wg, u32, 1, 1, K, B>`
+             found struct `MaskedTile1D<'wg, u32, 1, 1, K, A>`
+  = note: a type parameter was expected, but a different one was found; you might be missing a type parameter or trait bound
+  = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/generative_tile_epoch_substitution.rs:12:5
+   |
+ 9 | fn fragment<'wg, K, A: SynchronizationEpoch, B: SynchronizationEpoch>(
+   |                     - found type parameter   - expected type parameter
+10 |     value: LaneFragment<'wg, u32, 1, 1, K, A>,
+11 | ) -> LaneFragment<'wg, u32, 1, 1, K, B> {
+   |      ---------------------------------- expected `LaneFragment<'wg, u32, 1, 1, K, B>` because of return type
+12 |     value
+   |     ^^^^^ expected `LaneFragment<'_, u32, 1, 1, K, B>`, found `LaneFragment<'_, u32, 1, 1, K, A>`
+   |
+   = note: expected struct `LaneFragment<'wg, u32, 1, 1, K, B>`
+              found struct `LaneFragment<'wg, u32, 1, 1, K, A>`
+   = note: a type parameter was expected, but a different one was found; you might be missing a type parameter or trait bound
+   = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters

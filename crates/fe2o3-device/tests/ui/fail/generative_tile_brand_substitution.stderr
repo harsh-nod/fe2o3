@@ -1,0 +1,44 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/generative_tile_brand_substitution.rs:4:5
+  |
+3 | fn workgroup<'wg, A, B>(value: WorkgroupCapability<'wg, A>) -> WorkgroupCapability<'wg, B> {
+  |                   -  - expected type parameter                 --------------------------- expected `WorkgroupCapability<'wg, B>` because of return type
+  |                   |
+  |                   found type parameter
+4 |     value
+  |     ^^^^^ expected `WorkgroupCapability<'_, B>`, found `WorkgroupCapability<'_, A>`
+  |
+  = note: expected struct `WorkgroupCapability<'wg, B>`
+             found struct `WorkgroupCapability<'wg, A>`
+  = note: a type parameter was expected, but a different one was found; you might be missing a type parameter or trait bound
+  = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters
+
+error[E0308]: mismatched types
+ --> tests/ui/fail/generative_tile_brand_substitution.rs:8:5
+  |
+7 | fn tile<'wg, A, B>(value: MaskedTile1D<'wg, u32, 1, 1, A>) -> MaskedTile1D<'wg, u32, 1, 1, B> {
+  |              -  - expected type parameter                     ------------------------------- expected `MaskedTile1D<'wg, u32, 1, 1, B>` because of return type
+  |              |
+  |              found type parameter
+8 |     value
+  |     ^^^^^ expected `MaskedTile1D<'_, u32, 1, 1, B>`, found `MaskedTile1D<'_, u32, 1, 1, A>`
+  |
+  = note: expected struct `MaskedTile1D<'wg, u32, 1, 1, B>`
+             found struct `MaskedTile1D<'wg, u32, 1, 1, A>`
+  = note: a type parameter was expected, but a different one was found; you might be missing a type parameter or trait bound
+  = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/generative_tile_brand_substitution.rs:12:5
+   |
+11 | fn fragment<'wg, A, B>(value: LaneFragment<'wg, u32, 1, 1, A>) -> LaneFragment<'wg, u32, 1, 1, B> {
+   |                  -  - expected type parameter                     ------------------------------- expected `LaneFragment<'wg, u32, 1, 1, B>` because of return type
+   |                  |
+   |                  found type parameter
+12 |     value
+   |     ^^^^^ expected `LaneFragment<'_, u32, 1, 1, B>`, found `LaneFragment<'_, u32, 1, 1, A>`
+   |
+   = note: expected struct `LaneFragment<'wg, u32, 1, 1, B>`
+              found struct `LaneFragment<'wg, u32, 1, 1, A>`
+   = note: a type parameter was expected, but a different one was found; you might be missing a type parameter or trait bound
+   = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters

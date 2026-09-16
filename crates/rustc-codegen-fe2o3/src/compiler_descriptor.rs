@@ -153,6 +153,14 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                         tcx.fn_sig(signature_def_id)
                             .instantiate(tcx, signature_args),
                     );
+                    // Match the importer's identity domain, including nested regions.
+                    let signature = tcx
+                        .try_normalize_erasing_regions(TypingEnv::fully_monomorphized(), signature)
+                        .map_err(|_| CompilerDescriptorError::InvalidArgumentCollection {
+                            kernel: function.export_name.clone(),
+                            reason: "typed descriptor signature failed monomorphic normalization"
+                                .to_owned(),
+                        })?;
                     if signature.inputs().len() != contract.arguments().len() {
                         return Err(CompilerDescriptorError::InvalidArgumentCollection {
                             kernel: function.export_name.clone(),

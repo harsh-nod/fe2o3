@@ -1,5 +1,21 @@
 #![no_std]
 
+#[cfg(any(
+    feature = "provider_context",
+    feature = "provider_context_alias",
+    feature = "provider_context_nested",
+    feature = "provider_context_reference",
+    feature = "provider_context_empty_array",
+    feature = "provider_context_helper_result",
+    feature = "provider_workgroup",
+    feature = "provider_tile",
+    feature = "provider_fragment",
+    feature = "provider_tile_chain",
+    feature = "provider_phantom",
+    feature = "provider_phantom_reference",
+))]
+mod capability_provider;
+
 #[cfg(feature = "rust_call")]
 mod rust_call;
 
@@ -109,6 +125,18 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "launch_wrapping_integer",
     feature = "rust_call",
     feature = "dynamic_local_array",
+    feature = "provider_context",
+    feature = "provider_context_alias",
+    feature = "provider_context_nested",
+    feature = "provider_context_reference",
+    feature = "provider_context_empty_array",
+    feature = "provider_context_helper_result",
+    feature = "provider_workgroup",
+    feature = "provider_tile",
+    feature = "provider_fragment",
+    feature = "provider_tile_chain",
+    feature = "provider_phantom",
+    feature = "provider_phantom_reference",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",

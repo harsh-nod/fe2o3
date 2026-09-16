@@ -1,0 +1,7 @@
+error[E0599]: no associated function or constant named `load_masked` found for struct `MaskedTile1D<'_, f32, 1, 1, ()>` in the current scope
+ --> tests/ui/fail/generative_tile_unsupported_element.rs:4:44
+  |
+4 |     let _ = MaskedTile1D::<f32, 1, 1, ()>::load_masked(context, &[1.0], 0);
+  |                                            ^^^^^^^^^^^ associated function or constant not found in `MaskedTile1D<'_, f32, 1, 1, ()>`
+  |
+  = note: the associated function or constant was found for `MaskedTile1D<'workgroup, u32, L, E, Brand, Epoch>`
