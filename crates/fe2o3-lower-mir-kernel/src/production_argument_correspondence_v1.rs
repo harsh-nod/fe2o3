@@ -86,21 +86,37 @@ fn validate_parameter_correspondence_v1(
     trace: ArgumentTraceV1<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    with_parameter_correspondence_v1(semantic, instance, target, trace, budget, |_| Ok(()))
+}
+
+fn with_parameter_correspondence_v1<'w, R>(
+    semantic: &AdmittedInertSemanticMirV1,
+    instance: &SemanticKirFunctionCorrespondenceV1,
+    target: &Function,
+    trace: ArgumentTraceV1<'_>,
+    budget: &mut ArgumentBudgetV1<'w>,
+    use_view: impl for<'s> FnOnce(
+        &mut ProductionArgumentViewV1<'s, 'w>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
     let floor = budget.storage();
-    let result = check_argument_trace_v1(semantic, instance, target, trace, budget);
+    let result = check_argument_trace_v1(semantic, instance, target, trace, budget, use_view);
     // All function-local owners have dropped on either Result path. Work and
     // peak history remain cumulative; this scope does not promise unwind cleanup.
     budget.release_storage(budget.storage() - floor)?;
     result
 }
 
-fn check_argument_trace_v1(
+fn check_argument_trace_v1<'w, R>(
     semantic: &AdmittedInertSemanticMirV1,
     instance: &SemanticKirFunctionCorrespondenceV1,
     target: &Function,
     trace: ArgumentTraceV1<'_>,
-    budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget: &mut ArgumentBudgetV1<'w>,
+    use_view: impl for<'s> FnOnce(
+        &mut ProductionArgumentViewV1<'s, 'w>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
     budget.charge_work(1)?;
     let function = semantic
@@ -109,6 +125,7 @@ fn check_argument_trace_v1(
         .ok_or_else(mismatch)?;
     let body = target.body.as_ref().ok_or_else(mismatch)?;
     let abi = function.abi();
+    check_argument_function_abi_v1(function, instance.semantic_function, instance.role)?;
     let count = argument_sum_v1(&[trace.direct.len(), trace.components.len()])?;
     if count != body.parameters.len()
         || count != target.signature.parameters.len()
@@ -138,6 +155,10 @@ fn check_argument_trace_v1(
                 + std::mem::size_of::<bool>(),
         )?,
         argument_product_v1(count, std::mem::size_of::<IndexedArgumentTraceV1<'_>>())?,
+        argument_product_v1(
+            abi.adjusted_arguments().len(),
+            std::mem::size_of::<AdjustedArgumentShapeV1>(),
+        )?,
     ])?;
     budget.charge_work(argument_sum_v1(&[
         argument_product_v1(locals, 4)?,
@@ -160,6 +181,7 @@ fn check_argument_trace_v1(
     let mut ignored = argument_vec_v1(locals)?;
     ignored.resize(locals, None);
     let mut physical = argument_vec_v1(count)?;
+    let mut shapes = argument_vec_v1(abi.adjusted_arguments().len())?;
     let exact_local = |owner, function_id, local: SemanticLocalIdV1| {
         owner == instance.correspondence_owner
             && function_id == instance.semantic_function
@@ -230,6 +252,7 @@ fn check_argument_trace_v1(
     let mut slot = 0;
     for mapped in arguments.adjusted_arguments() {
         let shape_floor = budget.storage();
+        let first = slot;
         prepay_argument_shape_v1(semantic, mapped.abi().ty(), budget)?;
         let mut check = |path: &[SemanticKirParameterProjectionV1], semantic_type, ty: &Type| {
             budget.charge_work(argument_sum_v1(&[40, path.len()])?)?;
@@ -271,7 +294,7 @@ fn check_argument_trace_v1(
             slot += 1;
             Ok(())
         };
-        match instance.role {
+        let atomic = match instance.role {
             SemanticKirFunctionRoleV1::KernelEntry => {
                 if mapped.tuple_field().is_some() {
                     return Err(mismatch());
@@ -282,16 +305,20 @@ fn check_argument_trace_v1(
                     mapped.source_argument(),
                     mapped.abi().ty(),
                 )? {
-                    KernelParameterShapeV1::Direct(ty) => check(&[], mapped.abi().ty(), &ty)?,
+                    KernelParameterShapeV1::Direct(ty) => {
+                        check(&[], mapped.abi().ty(), &ty)?;
+                        true
+                    }
                     KernelParameterShapeV1::Components(components) => {
                         for (path, semantic_type, ty, _, _) in &components {
                             check(path, *semantic_type, ty)?;
                         }
+                        false
                     }
                 }
             }
             SemanticKirFunctionRoleV1::InternalHelper => {
-                let (_, components) = helper_parameter_shape_v1(
+                let (shared_slice, components) = helper_parameter_shape_v1(
                     semantic.types(),
                     function,
                     instance.semantic_function,
@@ -300,8 +327,18 @@ fn check_argument_trace_v1(
                 for (path, semantic_type, ty) in &components {
                     check(path, *semantic_type, ty)?;
                 }
+                shared_slice
+                    || matches!(
+                        semantic.types()[mapped.abi().ty().index() as usize].shape(),
+                        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
+                    )
             }
-        }
+        };
+        shapes.push(AdjustedArgumentShapeV1 {
+            first,
+            end: slot,
+            atomic,
+        });
         budget.release_storage(budget.storage() - shape_floor)?;
     }
     budget.charge_work(argument_sum_v1(&[locals, count])?)?;
@@ -336,7 +373,20 @@ fn check_argument_trace_v1(
     if slot != count || physical.iter().any(|row| !row.used) {
         return Err(mismatch());
     }
-    Ok(())
+    let mut view = ProductionArgumentViewV1 {
+        data: ArgumentViewDataV1 {
+            semantic,
+            instance,
+            target,
+            logical: &arguments,
+            physical: &physical,
+            ignored: &ignored,
+            shapes: &shapes,
+        },
+        budget,
+    };
+    view.visit_nodes(|_| Ok(()))?;
+    use_view(&mut view)
 }
 
 fn prepay_argument_shape_v1(
@@ -367,7 +417,8 @@ fn prepay_argument_shape_v1(
     budget.reserve_storage(argument_sum_v1(&[
         argument_product_v1(
             paths,
-            2 * std::mem::size_of::<SemanticKirParameterProjectionV1>(),
+            std::mem::size_of::<SemanticKirParameterProjectionV1>()
+                + std::mem::size_of::<ProductionArgumentProjectionV1>(),
         )?,
         argument_product_v1(nodes, 512)?,
         2048,

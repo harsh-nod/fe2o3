@@ -1,5 +1,37 @@
 // Shared representation selection for emission and correspondence replay.
 
+fn check_argument_function_abi_v1(
+    function: &SemanticFunctionDeclV1,
+    function_id: SemanticFunctionIdV1,
+    role: SemanticKirFunctionRoleV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let abi = function.abi();
+    let detail = match role {
+        SemanticKirFunctionRoleV1::KernelEntry
+            if abi.extern_abi()
+                == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall =>
+        {
+            Some("kernel entry requires an ordinary source ABI")
+        }
+        SemanticKirFunctionRoleV1::InternalHelper
+            if function.role() != SemanticFunctionRoleV1::InternalHelper
+                || function.export().is_some() =>
+        {
+            Some("reachable helper has an exported or non-helper semantic role")
+        }
+        SemanticKirFunctionRoleV1::InternalHelper
+            if abi.can_unwind() || abi.c_variadic() || !abi.hidden_arguments().is_empty() =>
+        {
+            Some("helper does not have an exact non-unwinding direct scalar ABI")
+        }
+        _ => None,
+    };
+    match detail {
+        Some(detail) => Err(unsupported(function_id.index(), None, None, detail)),
+        None => Ok(()),
+    }
+}
+
 fn lower_parameter_scalar_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,

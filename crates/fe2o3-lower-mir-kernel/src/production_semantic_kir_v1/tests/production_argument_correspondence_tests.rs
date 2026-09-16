@@ -11,18 +11,64 @@ const ZERO: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
 const TUPLE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 
 fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemanticSsaOwnerV1 {
+    argument_owner_shape(
+        expanded,
+        if empty {
+            ArgumentTupleShape::EmptyUnit
+        } else {
+            ArgumentTupleShape::Mixed
+        },
+        shared,
+        false,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ArgumentTupleShape {
+    Mixed,
+    AllZero,
+    EmptyUnit,
+    EmptyTuple,
+}
+
+fn argument_owner_shape(
+    expanded: bool,
+    shape: ArgumentTupleShape,
+    shared: bool,
+    deep_zero: bool,
+) -> ProductionSemanticSsaOwnerV1 {
+    argument_owner_shape_with_fixed(expanded, shape, shared, deep_zero, true)
+}
+
+fn argument_owner_shape_with_fixed(
+    expanded: bool,
+    shape: ArgumentTupleShape,
+    shared: bool,
+    deep_zero: bool,
+    fixed: bool,
+) -> ProductionSemanticSsaOwnerV1 {
+    let empty = matches!(
+        shape,
+        ArgumentTupleShape::EmptyUnit | ArgumentTupleShape::EmptyTuple
+    );
+    let middle = if deep_zero { ZERO } else { UNIT };
+    let tuple_fields = match shape {
+        ArgumentTupleShape::Mixed => vec![PAIR, middle, U32],
+        ArgumentTupleShape::AllZero => vec![ZERO, UNIT],
+        _ => vec![],
+    };
     let source = SemanticSourceProvenanceV1::unavailable();
     let scalar = SemanticBackendScalarV1::initialized(
         SemanticBackendPrimitiveV1::integer(false, 32, 4),
         SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
     );
-    let tuple_type = |tag, fields, offsets, size, backend| {
+    let tuple_type = |tag, fields, offsets, size, alignment, backend| {
         SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([tag; 32]),
             SemanticLayoutIdentityV1::from_sha256([tag; 32]),
             SemanticTypeLayoutV1::aggregate_with_backend_repr(
                 Some(size),
-                if size == 0 { 1 } else { 4 },
+                alignment,
                 backend,
                 false,
                 SemanticAggregateLayoutV1::new(offsets, vec![]).unwrap(),
@@ -46,17 +92,27 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
             vec![U32, UNIT, U32],
             vec![0, 4, 4],
             8,
+            4,
             SemanticBackendReprV1::scalar_pair(scalar, scalar),
         ),
         tuple_type(
             11,
-            vec![UNIT, UNIT],
-            vec![0, 0],
+            if deep_zero {
+                vec![
+                    SemanticTypeIdV1::from_index(5),
+                    SemanticTypeIdV1::from_index(6),
+                    SemanticTypeIdV1::from_index(7),
+                ]
+            } else {
+                vec![UNIT, UNIT]
+            },
+            if deep_zero { vec![0, 0, 0] } else { vec![0, 0] },
             0,
+            if deep_zero { 4 } else { 1 },
             SemanticBackendReprV1::memory(true),
         ),
     ];
-    types.push(if empty {
+    types.push(if shape == ArgumentTupleShape::EmptyUnit {
         SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([12; 32]),
             SemanticLayoutIdentityV1::from_sha256([12; 32]),
@@ -66,12 +122,58 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
     } else {
         tuple_type(
             12,
-            vec![PAIR, UNIT, U32],
-            vec![0, 8, 8],
-            12,
+            tuple_fields.clone(),
+            if shape == ArgumentTupleShape::Mixed {
+                vec![0, 8, 8]
+            } else {
+                vec![0; tuple_fields.len()]
+            },
+            if shape == ArgumentTupleShape::Mixed {
+                12
+            } else {
+                0
+            },
+            if shape == ArgumentTupleShape::Mixed
+                || (shape == ArgumentTupleShape::AllZero && deep_zero)
+            {
+                4
+            } else {
+                1
+            },
             SemanticBackendReprV1::memory(true),
         )
     });
+    if deep_zero {
+        types.push(tuple_type(
+            13,
+            vec![UNIT, UNIT],
+            vec![0, 0],
+            0,
+            1,
+            SemanticBackendReprV1::memory(true),
+        ));
+        for (tag, element, length, stride, alignment) in [(14, UNIT, 2, 0, 1), (15, U32, 0, 4, 4)] {
+            types.push(SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([tag; 32]),
+                SemanticLayoutIdentityV1::from_sha256([tag; 32]),
+                SemanticTypeLayoutV1::with_exact_rustc_layout(
+                    0,
+                    alignment,
+                    SemanticFieldsShapeV1::array(stride, length),
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    None,
+                    false,
+                    None,
+                    alignment,
+                    0,
+                    SemanticTypeLayoutDetailsV1::None,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Array { element, length },
+            ));
+        }
+    }
     let attrs = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,
@@ -127,16 +229,15 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
         )
         .unwrap()
     };
-    let mut adjusted = vec![SemanticAbiArgumentV1::source(value(ZERO))];
+    let mut adjusted = if fixed {
+        vec![SemanticAbiArgumentV1::source(value(ZERO))]
+    } else {
+        vec![]
+    };
     if !empty {
-        adjusted.extend(
-            [PAIR, UNIT, U32]
-                .into_iter()
-                .enumerate()
-                .map(|(field, ty)| {
-                    SemanticAbiArgumentV1::rust_call_tuple_field(field as u32, value(ty))
-                }),
-        );
+        adjusted.extend(tuple_fields.iter().copied().enumerate().map(|(field, ty)| {
+            SemanticAbiArgumentV1::rust_call_tuple_field(field as u32, value(ty))
+        }));
     }
     let helper_abi = SemanticFunctionAbiV1::from_rustc_with_source_signature(
         SemanticAbiIdentityV1::from_sha256([20; 32]),
@@ -145,29 +246,43 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
         SemanticExternAbiV1::RustCall,
         false,
         false,
-        1,
-        vec![ZERO, TUPLE],
+        u32::from(fixed),
+        if fixed {
+            vec![ZERO, TUPLE]
+        } else {
+            vec![TUPLE]
+        },
         UNIT,
         adjusted,
         value(UNIT),
     )
     .unwrap()
-    .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue; 2])
+    .with_source_argument_ownership(vec![
+        SemanticSourceArgumentOwnershipV1::ByValue;
+        usize::from(fixed) + 1
+    ])
     .unwrap();
-    let mut helper_locals = vec![
-        local(21, UNIT, SemanticLocalRoleV1::Return),
-        local(22, ZERO, SemanticLocalRoleV1::Argument(0)),
-    ];
+    let mut helper_locals = vec![local(21, UNIT, SemanticLocalRoleV1::Return)];
+    if fixed {
+        helper_locals.push(local(22, ZERO, SemanticLocalRoleV1::Argument(0)));
+    }
     if !expanded {
-        helper_locals.push(local(23, TUPLE, SemanticLocalRoleV1::Argument(1)));
+        helper_locals.push(local(
+            23,
+            TUPLE,
+            SemanticLocalRoleV1::Argument(u32::from(fixed)),
+        ));
     } else if empty {
         helper_locals.push(local(23, UNIT, SemanticLocalRoleV1::Temporary));
     } else {
-        for (tag, field, ty) in [(23, 2, U32), (24, 1, UNIT), (25, 0, PAIR)] {
+        for (index, (field, ty)) in tuple_fields.iter().copied().enumerate().rev().enumerate() {
             helper_locals.push(local(
-                tag,
+                23 + index as u8,
                 ty,
-                SemanticLocalRoleV1::RustCallTupleField { argument: 1, field },
+                SemanticLocalRoleV1::RustCallTupleField {
+                    argument: u32::from(fixed),
+                    field: field as u32,
+                },
             ));
         }
     }
@@ -212,7 +327,7 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
                 }),
         );
         locals.push(local(tag + 6, TUPLE, SemanticLocalRoleV1::Temporary));
-        let tuple_value = if empty {
+        let tuple_value = if shape != ArgumentTupleShape::Mixed {
             SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(SemanticConstantV1::new(
                 TUPLE,
                 SemanticConstantValueV1::ZeroSized,
@@ -224,7 +339,7 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
                     vec![
                         SemanticOperandV1::Copy(place(2, PAIR)),
                         SemanticOperandV1::Constant(SemanticConstantV1::new(
-                            UNIT,
+                            middle,
                             SemanticConstantValueV1::ZeroSized,
                         )),
                         SemanticOperandV1::Copy(place(1, U32)),
@@ -242,10 +357,14 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
         );
         let call = SemanticDirectCallV1::new_callable(
             SemanticCallableIdV1::from_index(0),
-            vec![
-                SemanticOperandV1::Copy(place(4, ZERO)),
-                SemanticOperandV1::Copy(place(5, TUPLE)),
-            ],
+            if fixed {
+                vec![
+                    SemanticOperandV1::Copy(place(4, ZERO)),
+                    SemanticOperandV1::Copy(place(5, TUPLE)),
+                ]
+            } else {
+                vec![SemanticOperandV1::Copy(place(5, TUPLE))]
+            },
             Some(SemanticCallDestinationV1::new(
                 place(0, UNIT),
                 SemanticControlFlowEdgeV1::new(
@@ -315,10 +434,9 @@ fn argument_owner(expanded: bool, empty: bool, shared: bool) -> ProductionSemant
     .unwrap()
 }
 
-fn lower_argument_owner(
+fn argument_launch_roster(
     source: &ProductionSemanticSsaOwnerV1,
-    limits: ProductionSemanticKirLimitsV1,
-) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+) -> crate::ProductionSourceLaunchRosterV1 {
     let semantic = source.source_semantic();
     let inputs = semantic
         .roots()
@@ -334,10 +452,20 @@ fn lower_argument_owner(
             )
         })
         .collect::<Vec<_>>();
-    let roster = crate::ProductionSourceLaunchRosterV1::try_new(semantic, &inputs).unwrap();
+    crate::ProductionSourceLaunchRosterV1::try_new(semantic, &inputs).unwrap()
+}
+
+fn lower_argument_owner(
+    source: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    let roster = argument_launch_roster(source);
     let roots = materialization_launch_roots_v1(source, &roster)?;
     lower_module(source, limits, Some(&roots))
 }
+
+#[path = "production_argument_view_tests.rs"]
+mod complete_view_tests;
 
 #[test]
 fn exact_argument_correspondence_accepts_packed_expanded_empty_and_shared_owners() {

@@ -346,6 +346,41 @@ fn shared_slice_helper_length_preserves_carrier_and_exact_return_cast() {
             std::slice::from_ref(&slice)
         );
         assert_eq!(helper.signature.results, [Type::Scalar(ScalarType::U64)]);
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+        let mut budget =
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 100_000);
+        let mut nodes = 0;
+        lowered
+            .with_checked_arguments_v1(
+                SemanticFunctionIdV1::from_index(0),
+                SemanticFunctionIdV1::from_index(1),
+                &mut budget,
+                |view| {
+                    assert_eq!(view.adjusted_arguments()?.len(), 1);
+                    assert!(matches!(
+                        view.adjusted_arguments()?.next().unwrap().abi().mode(),
+                        SemanticAbiPassModeV1::Pair { .. }
+                    ));
+                    assert!(view.physical(1)?.is_none());
+                    view.visit_nodes(|node| {
+                        nodes += 1;
+                        assert_eq!(node.semantic_type(), ty(3));
+                        assert!(node.source_path().is_empty());
+                        let fe2o3_lower_mir_kernel::ProductionArgumentCoverageV1::Parameter(
+                            parameter,
+                        ) = node.coverage()
+                        else {
+                            panic!("a shared slice is one whole KIR parameter");
+                        };
+                        assert_eq!(parameter.slot(), 0);
+                        assert_eq!(parameter.ty(), &slice);
+                        Ok(())
+                    })
+                },
+            )
+            .unwrap();
+        assert_eq!(nodes, 1);
+        assert_eq!(budget.storage(), 0);
         let entry_body = entry.body.as_ref().unwrap();
         let helper_body = helper.body.as_ref().unwrap();
         let [call] = entry_body.blocks[0].operations.as_slice() else {

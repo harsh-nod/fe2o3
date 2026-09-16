@@ -109,12 +109,64 @@ Function-local scratch is released on success
 and ordinary error returns; no unwind or allocator/RSS guarantee is implied.
 The pre-ranked canonical ledger remains a separate accounting scope.
 
-This validates the **existing sparse emission trace**. It does not yet expose
-a complete typed record for every nested zero-sized field, nor a serialized
-entry/call/debug relation. For example, a packed partly ignored tuple has
-physical field bindings but no separate ignored-local binding for its unit
-field. Completing that relation remains required before proof replay can use
-it. No new executable graph or correspondence wire version is introduced.
+## Complete typed entry view
+
+Sparse emission records remain compact. Production validation derives a scoped
+typed view over those records, the admitted source argument map, and the actual
+KIR signature. Both `ProductionSemanticKirOwnerV1` and the immutable pre-ranked
+V12 owner expose `with_checked_arguments_v1(root, function, budget, callback)`.
+The owner resolves the complete root/function/physical-function/role association;
+callers cannot construct a checked view from unrelated MIR or KIR references.
+A selected kernel body need not have the same function identity as its root.
+
+`visit_nodes` walks source nodes in postorder. It includes tuple/aggregate/array
+parents, every nested zero-sized structural field, and the RustCall outer tuple
+even when there are no adjusted arguments. A zero-length array has a node, not
+an invented element. Source paths include the outer tuple field; expanded-local
+paths omit that prefix. Packed empty tuples retain an ignored local, while
+expanded empty tuples have neither a local nor a physical parameter.
+View projections retain `u64` array indices, including zero-sized marker arrays;
+they do not change the existing correspondence wire's scalar-component indices.
+
+For `(receiver, ((u32, (), u32), (), u32))`, the first nested unit appears at
+source path `Field(0), Field(1)` with `Zero` coverage. Its local path is the same
+when packed and `Field(1)` when expanded. The two neighboring scalar fields bind
+the exact physical slots 0 and 1. The outer source tuple has no adjusted ordinal
+and covers slots 0 through 2. None of these ordinals is a `ValueId` or byte offset.
+
+Coverage distinguishes four cases:
+
+- `Zero`: no physical parameter, including zero fields inside partly physical locals.
+- `Components`: a half-open range of KIR signature slots in source traversal order.
+- `Parameter`: one complete actual parameter, with its value, type and emission row.
+- `WithinAtomicParameter`: containment in a pointer/slice carrier, without an
+  independently extractable KIR value of the child's semantic type.
+
+Shared-slice helpers still expose one slice parameter despite LLVM's `Pair`
+transport. Authenticated pointer/slice wrappers retain their typed marker fields
+and carrier containment. Pointees and active enum/union variants are not inferred
+from entry types. Root/helper ABI restrictions are unchanged, including exact
+root Cast/Indirect aggregate transport and the narrower helper surface.
+Function-level ABI checks run even when the adjusted argument roster is empty.
+
+The same scoped constructor is used by production correspondence validation.
+Complete representation checking precedes consumer callbacks. Temporary indices
+stay charged throughout the callback, which exclusively borrows the resource
+ledger. Every traversal charges work and releases its scratch on ordinary success
+or error. Acquiring source/adjusted iterators prepays their traversal each time;
+physical and ignored-local lookups are also metered. Stable mappings and physical
+records can be joined across visits inside the callback. Each node borrows its
+source mapping, adjusted FnAbi mapping and applicable whole-local ignored row.
+Node paths are borrowed only for one visitor call; copied inert IDs may
+escape, but checked views and scratch-backed nodes may not. The by-value structural
+cap remains 256 nodes per adjusted shape, including zero nodes. Atomic carrier
+metadata uses a separately charged explicit stack rather than unbounded recursion.
+
+This is complete **entry identity for the currently admitted representations**,
+not current SSA provenance or ownership authority. Call-site/result correspondence,
+debug consumers and serialized/FULL/finalizer integration still need to consume
+the shared relation. No new executable graph, proof authority, or correspondence
+wire version is introduced by this view.
 
 ## Evidence boundary
 

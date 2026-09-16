@@ -85,6 +85,7 @@ include!("production_private_array_emission_v1.rs");
 include!("production_private_array_relation_v1.rs");
 include!("production_private_array_consumers_v1.rs");
 include!("production_argument_shapes_v1.rs");
+include!("production_argument_structure_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
@@ -8077,6 +8078,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
 }
 
 include!("production_argument_correspondence_v1.rs");
+include!("production_argument_view_v1.rs");
 
 fn validate_operation_correspondence_layout(
     expected: &[ExpectedSemanticKirBlockCoverageV1],
@@ -10018,16 +10020,11 @@ fn semantic_function_parameters_v1(
     function_id: SemanticFunctionIdV1,
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<(u32, usize, SemanticTypeIdV1)>, ProductionSemanticKirErrorV1> {
-    if function.abi().extern_abi()
-        == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
-    {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "kernel entry requires an ordinary source ABI",
-        ));
-    }
+    check_argument_function_abi_v1(
+        function,
+        function_id,
+        SemanticKirFunctionRoleV1::KernelEntry,
+    )?;
     let mut parameters = function
         .locals()
         .iter()
@@ -10133,23 +10130,12 @@ fn direct_scalar_helper_plan_v1(
         })?;
     let function = &semantic.functions()[function_id.index() as usize];
     let types = semantic.types();
-    if function.role() != SemanticFunctionRoleV1::InternalHelper || function.export().is_some() {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "reachable helper has an exported or non-helper semantic role",
-        ));
-    }
+    check_argument_function_abi_v1(
+        function,
+        function_id,
+        SemanticKirFunctionRoleV1::InternalHelper,
+    )?;
     let abi = function.abi();
-    if abi.can_unwind() || abi.c_variadic() || !abi.hidden_arguments().is_empty() {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper does not have an exact non-unwinding direct scalar ABI",
-        ));
-    }
     for argument in arguments.source_arguments() {
         if matches!(
             argument.binding(),
@@ -23520,197 +23506,6 @@ fn lower_by_value_parameter_components_v1(
     function: &SemanticFunctionDeclV1,
     abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1,
 ) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
-    fn append(
-        types: &[SemanticTypeDeclV1],
-        ty: SemanticTypeIdV1,
-        path: &mut Vec<SemanticKirParameterProjectionV1>,
-        output: &mut Vec<ByValueKernelParameterComponentV1>,
-        structural_nodes: &mut usize,
-        offset: u64,
-    ) -> Result<(), ProductionSemanticKirErrorV1> {
-        *structural_nodes = structural_nodes
-            .checked_add(1)
-            .ok_or_else(|| unsupported(0, None, None, "by-value argument structure overflows"))?;
-        if *structural_nodes > MAX_SSA_VALUE_COMPONENTS_V1
-            || output.len() > MAX_SSA_VALUE_COMPONENTS_V1
-        {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value argument exceeds the component limit",
-            ));
-        }
-        let declaration = types
-            .get(ty.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "by-value argument type is missing"))?;
-        if declaration.layout().is_uninhabited() || declaration.layout().size_bytes().is_none() {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value argument has an uninhabited or unsized layout",
-            ));
-        }
-        match declaration.shape() {
-            SemanticTypeShapeV1::Unit => Ok(()),
-            SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
-                let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr()
-                else {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value scalar leaf lacks exact scalar backend representation",
-                    ));
-                };
-                let mut retained_path = Vec::new();
-                retained_path.try_reserve_exact(path.len()).map_err(|_| {
-                    ProductionSemanticKirErrorV1::AllocationFailure {
-                        resource: ProductionSemanticKirResourceV1::DebugBindings,
-                    }
-                })?;
-                retained_path.extend_from_slice(path);
-                output.try_reserve(1).map_err(|_| {
-                    ProductionSemanticKirErrorV1::AllocationFailure {
-                        resource: ProductionSemanticKirResourceV1::DebugBindings,
-                    }
-                })?;
-                output.push((
-                    retained_path,
-                    ty,
-                    lower_scalar_type(types, ty)?,
-                    offset,
-                    *scalar,
-                ));
-                Ok(())
-            }
-            SemanticTypeShapeV1::Array { element, length } => {
-                let length = usize::try_from(*length).map_err(|_| {
-                    unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array length does not fit this host",
-                    )
-                })?;
-                if length > MAX_SSA_VALUE_COMPONENTS_V1 {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array exceeds the component limit",
-                    ));
-                }
-                let SemanticFieldsShapeV1::Array {
-                    stride_bytes,
-                    count,
-                } = declaration.layout().fields()
-                else {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array lacks exact rustc field-stride evidence",
-                    ));
-                };
-                if usize::try_from(*count) != Ok(length) {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array length disagrees with rustc layout",
-                    ));
-                }
-                for index in 0..length {
-                    path.try_reserve(1).map_err(|_| {
-                        ProductionSemanticKirErrorV1::AllocationFailure {
-                            resource: ProductionSemanticKirResourceV1::DebugBindings,
-                        }
-                    })?;
-                    path.push(SemanticKirParameterProjectionV1::ArrayIndex(
-                        u32::try_from(index).map_err(|_| {
-                            unsupported(0, None, None, "array index does not fit the wire")
-                        })?,
-                    ));
-                    let element_offset = stride_bytes
-                        .checked_mul(index as u64)
-                        .and_then(|relative| offset.checked_add(relative))
-                        .ok_or_else(|| {
-                            unsupported(0, None, None, "by-value array offset overflows")
-                        })?;
-                    append(
-                        types,
-                        *element,
-                        path,
-                        output,
-                        structural_nodes,
-                        element_offset,
-                    )?;
-                    path.pop();
-                }
-                Ok(())
-            }
-            SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
-                let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details()
-                else {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value aggregate lacks exact rustc field-offset evidence",
-                    ));
-                };
-                if layout.field_offsets().len() != fields.fields().len() {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value aggregate field count disagrees with rustc layout",
-                    ));
-                }
-                for (index, field) in fields.fields().iter().copied().enumerate() {
-                    path.try_reserve(1).map_err(|_| {
-                        ProductionSemanticKirErrorV1::AllocationFailure {
-                            resource: ProductionSemanticKirResourceV1::DebugBindings,
-                        }
-                    })?;
-                    path.push(SemanticKirParameterProjectionV1::Field(
-                        u32::try_from(index).map_err(|_| {
-                            unsupported(0, None, None, "aggregate field does not fit the wire")
-                        })?,
-                    ));
-                    let field_offset = offset
-                        .checked_add(layout.field_offsets()[index])
-                        .ok_or_else(|| {
-                            unsupported(0, None, None, "by-value field offset overflows")
-                        })?;
-                    append(types, field, path, output, structural_nodes, field_offset)?;
-                    path.pop();
-                }
-                Ok(())
-            }
-            SemanticTypeShapeV1::Enum { .. } => Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value enum kernel arguments require variant-aware packing evidence",
-            )),
-            SemanticTypeShapeV1::Pointer(_) => Err(unsupported(
-                0,
-                None,
-                None,
-                "embedded pointer kernel arguments have no owned region binding",
-            )),
-            _ => Err(unsupported(
-                0,
-                None,
-                None,
-                "kernel argument has no pointer-free aggregate component representation",
-            )),
-        }
-    }
-
     let ty = abi.ty();
     if abi.value().adjusted().is_some() {
         return Err(unsupported(
@@ -23728,7 +23523,15 @@ fn lower_by_value_parameter_components_v1(
         })?;
     let mut path = Vec::new();
     let mut structural_nodes = 0;
-    append(types, ty, &mut path, &mut output, &mut structural_nodes, 0)?;
+    append_parameter_structure_v1(
+        types,
+        ty,
+        &mut path,
+        &mut output,
+        &mut structural_nodes,
+        0,
+        &mut |_| Ok(()),
+    )?;
     let source_size = types[ty.index() as usize]
         .layout()
         .size_bytes()
