@@ -50,7 +50,7 @@ impl ComputeAqlQueueSessionV1 {
         &self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
         self.require_no_sdma_recycle_v1()?;
-        self.require_no_sdma_promotion_v1()?;
+        self.require_no_sdma_owner_transition_v1()?;
         if self.sdma_allocation.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "unfinished SDMA allocation",

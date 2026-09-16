@@ -110,6 +110,7 @@ pub use qualification_drain_capture::{
     KfdDrainCaptureCustodyObservationV1, KfdDrainCaptureObservationFailureV1,
 };
 mod kfd_backend_sdma_seam;
+mod sdma_demotion;
 mod sdma_host_write;
 mod sdma_promotion;
 mod sdma_recycle;
@@ -705,6 +706,18 @@ fn try_uninit_box_v1<T>() -> Result<Box<MaybeUninit<T>>, ()> {
 
 fn fill_restore_shell_v1<T>(shell: Box<MaybeUninit<T>>, value: T) -> Box<T> {
     Box::write(shell, value)
+}
+
+fn take_restore_shell_v1<T>(value: Box<T>) -> (T, Box<MaybeUninit<T>>) {
+    let raw = Box::into_raw(value);
+    // Safe Box APIs cannot move out T while retaining its allocation. The unique
+    // pointer is initialized and aligned; MaybeUninit<T> has T's layout (including
+    // ZSTs) but no destructor. No fallible operation occurs between these moves.
+    unsafe {
+        let value = raw.read();
+        let shell = Box::from_raw(raw.cast::<MaybeUninit<T>>());
+        (value, shell)
+    }
 }
 
 impl KfdRuntimeSdmaStorageV1 {
@@ -4585,7 +4598,7 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.normalize_h2d_ready_v1(allocation)?;
-        let storage = {
+        let (storage, kind) = {
             let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
                 Self::rejected(
                     KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -4604,42 +4617,19 @@ impl KfdRuntimeBackendV1 {
                     "persistent SDMA allocation is retained by pending work",
                 ));
             }
-            std::mem::replace(
-                &mut record.sdma_storage,
-                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
+            (
+                std::mem::replace(
+                    &mut record.sdma_storage,
+                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
+                ),
+                record.kind,
             )
         };
         let buffer = match storage {
             KfdRuntimeSdmaStorageV1::Host(buffer)
             | KfdRuntimeSdmaStorageV1::DemotedDevice(buffer) => buffer,
             KfdRuntimeSdmaStorageV1::Device(device) => {
-                match self.directional_sdma_ops_v1().demote(*device) {
-                    Ok(buffer) => buffer,
-                    Err(failure) => {
-                        return match failure {
-                            SdmaTransitionFailureV1::Retryable {
-                                detail,
-                                custody: device,
-                            } => {
-                                self.allocations
-                                    .get_mut(&allocation)
-                                    .expect("retryable demotion allocation remains indexed")
-                                    .sdma_storage =
-                                    KfdRuntimeSdmaStorageV1::Device(Box::new(device));
-                                Err(Self::quiescent_error(
-                                    KfdRuntimeBackendErrorKindV1::Native,
-                                    format!("KFD persistent device demotion: {detail}"),
-                                ))
-                            }
-                            SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
-                                self.retain_sdma_seam_terminal_v1(custody);
-                                Err(self.terminal_error(format!(
-                                    "KFD persistent device demotion: {detail}"
-                                )))
-                            }
-                        };
-                    }
-                }
+                self.demote_sdma_device_v1(allocation, device)?
             }
             KfdRuntimeSdmaStorageV1::Synthetic
             | KfdRuntimeSdmaStorageV1::H2dReady(_)
@@ -4649,11 +4639,6 @@ impl KfdRuntimeBackendV1 {
                 unreachable!("preflighted releasable SDMA storage")
             }
         };
-        let kind = self
-            .allocations
-            .get(&allocation)
-            .expect("released native allocation remains indexed")
-            .kind;
         self.recycle_sdma_owner_v1(
             buffer,
             sdma_recycle::SdmaRecycleTargetV1::Indexed { allocation, kind },
@@ -12763,6 +12748,7 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    mod sdma_demotion_tests;
     mod sdma_host_write_tests;
     mod sdma_promotion_tests;
     mod sdma_recycle_tests;

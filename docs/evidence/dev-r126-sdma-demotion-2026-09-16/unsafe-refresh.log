@@ -1,0 +1,12 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-semantic-query)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/cargo-fe2o3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.82s
+     Running tests/unsafe_source_policy.rs (target/debug/deps/unsafe_source_policy-9b4218cdd9dccd15)
+
+running 1 test
+test refresh_reviewed_unsafe_inventory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 16.09s
+

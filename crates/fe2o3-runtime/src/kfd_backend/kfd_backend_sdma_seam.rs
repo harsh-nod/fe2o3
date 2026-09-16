@@ -842,7 +842,10 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
     pub(super) fn demote(
         &mut self,
         device: DirectionalSdmaDeviceOwnerV1,
-    ) -> Result<SdmaBufferOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaDeviceOwnerV1>> {
+    ) -> Result<
+        SdmaBufferOwnerV1,
+        SdmaTransitionFailureV1<DirectionalSdmaDeviceOwnerV1, SdmaOwnerDiagnosticV1>,
+    > {
         match (self, device) {
             (Self::Native(queue), DirectionalSdmaDeviceOwnerV1::Native(device)) => queue
                 .demote_directional_persistent_allocation_to_sdma_device_buffer_v1(device)
@@ -852,14 +855,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     match custody {
                         Gfx942DirectionalPersistentSdmaDemotionCustodyV1::Retryable(device) => {
                             SdmaTransitionFailureV1::Retryable {
-                                detail: error.to_string(),
+                                detail: SdmaOwnerDiagnosticV1::Native(error),
                                 custody: DirectionalSdmaDeviceOwnerV1::Native(device),
                             }
                         }
                         Gfx942DirectionalPersistentSdmaDemotionCustodyV1::ProcessTeardown(
                             custody,
                         ) => SdmaTransitionFailureV1::ProcessTeardown {
-                            detail: error.to_string(),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                             custody: SdmaTerminalCustodyV1::Native(
                                 NativeDirectionalSdmaTerminalCustodyV1::Demotion(custody),
                             ),
@@ -868,11 +871,26 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                 }),
             #[cfg(test)]
             (Self::Scripted(driver), DirectionalSdmaDeviceOwnerV1::Scripted(device)) => {
-                driver.demote(device)
+                driver.demote(device).map_err(|failure| match failure {
+                    SdmaTransitionFailureV1::Retryable { detail, custody } => {
+                        SdmaTransitionFailureV1::Retryable {
+                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                            custody,
+                        }
+                    }
+                    SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
+                        SdmaTransitionFailureV1::ProcessTeardown {
+                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                            custody,
+                        }
+                    }
+                })
             }
             #[cfg(test)]
             (_, device) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-                detail: "directional SDMA owner/driver mismatch during demotion".to_owned(),
+                detail: SdmaOwnerDiagnosticV1::Scripted(
+                    "directional SDMA owner/driver mismatch during demotion".to_owned(),
+                ),
                 custody: scripted_mismatch_device(device, "demotion"),
             }),
         }
@@ -2074,6 +2092,7 @@ mod scripted {
         PromoteComputeReadyForeignQueue,
         PromoteComputeReadyForeignQueueTerminal,
         Demote(ScriptedFailureModeV1),
+        DemotePanic,
         Submit {
             direction: Gfx942PersistentSdmaDirectionV1,
             host_offset: u64,
@@ -2266,6 +2285,7 @@ mod scripted {
         steps: VecDeque<ScriptedSdmaStepV1>,
         ledger: Rc<RefCell<ScriptedCustodyLedgerV1>>,
         promotion_custody: Option<ScriptedBufferOwnerV1>,
+        demotion_custody: Option<ScriptedDeviceOwnerV1>,
         recycle_custody: Option<ScriptedBufferOwnerV1>,
     }
 
@@ -2286,6 +2306,7 @@ mod scripted {
                 steps: steps.into_iter().collect(),
                 ledger: Rc::new(RefCell::new(ScriptedCustodyLedgerV1::default())),
                 promotion_custody: None,
+                demotion_custody: None,
                 recycle_custody: None,
             }
         }
@@ -2310,6 +2331,12 @@ mod scripted {
 
         pub(crate) fn recycle_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
             self.recycle_custody.as_ref()
+        }
+
+        pub(crate) fn demotion_custody(&self) -> Option<(u64, &[u8])> {
+            self.demotion_custody
+                .as_ref()
+                .map(|device| (device.token.id, device.bytes.as_slice()))
         }
 
         pub(crate) fn live_owner_count(&self) -> usize {
@@ -2601,20 +2628,25 @@ mod scripted {
             device: ScriptedDeviceOwnerV1,
         ) -> Result<SdmaBufferOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaDeviceOwnerV1>>
         {
-            if !self.owns_device(&device) {
-                return Err(scripted_device_mismatch(
-                    device,
-                    "demotion owner belongs to another driver".to_owned(),
-                ));
+            if self.demotion_custody.is_some() {
+                std::process::abort();
             }
-            let outcome = match self.pop() {
-                Ok(ScriptedSdmaStepV1::Demote(outcome)) => outcome,
-                Ok(step) => {
-                    return Err(scripted_device_mismatch(
-                        device,
-                        format!("demotion mismatch: {step:?}"),
-                    ));
+            self.demotion_custody = Some(device);
+            let outcome = if !self.owns_device(self.demotion_custody.as_ref().unwrap()) {
+                Err("demotion owner belongs to another driver".to_owned())
+            } else {
+                match self.pop() {
+                    Ok(ScriptedSdmaStepV1::Demote(outcome)) => Ok(outcome),
+                    Ok(ScriptedSdmaStepV1::DemotePanic) => {
+                        std::panic::panic_any("scripted SDMA demotion panic")
+                    }
+                    Ok(step) => Err(format!("demotion mismatch: {step:?}")),
+                    Err(detail) => Err(detail),
                 }
+            };
+            let device = self.demotion_custody.take().unwrap();
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
                 Err(detail) => return Err(scripted_device_mismatch(device, detail)),
             };
             match outcome {

@@ -178,6 +178,7 @@ impl InitialBindingParentV1 for &mut ComputeAqlQueueSessionV1 {
             || self.sdma_pool_trim.is_some()
             || self.sdma_allocation.is_some()
             || self.sdma_promotion.is_some()
+            || self.sdma_demotion.is_some()
             || self.sdma_recycle.is_some()
             || !initial_dispatch_state_admitted_v1(
                 &self.unpublished_dispatch,

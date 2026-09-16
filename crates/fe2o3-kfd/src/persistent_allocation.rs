@@ -449,6 +449,23 @@ struct LedgerRecordV1 {
     state: LedgerStateV1,
 }
 
+#[cfg(test)]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PersistentOwnerSnapshotForTestV1 {
+    incarnation: usize,
+    local_native: Option<Gfx942DeviceMemoryIdentityV1>,
+    binding: Gfx942DeviceMemoryIdentityV1,
+    mapping: Gfx942PersistentMappingFormV1,
+    byte_len: u64,
+    ledger_address: usize,
+    ledger: [Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
+    next_generation: u64,
+    next_sequence: u64,
+    frontier_generation: u64,
+    frontier_sequence: Option<u64>,
+    quarantine: Option<Gfx942PersistentQuarantineReasonV1>,
+}
+
 /// Persistent owner for exactly one native mapped device-memory authority.
 ///
 /// The owner is non-cloneable and thread-affine. Dropping it performs no KFD
@@ -561,6 +578,26 @@ impl Gfx942PersistentDeviceAllocationV1 {
 
     pub const fn mapping_form(&self) -> Gfx942PersistentMappingFormV1 {
         self.mapping
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ownership_snapshot_for_test_v1(&self) -> PersistentOwnerSnapshotForTestV1 {
+        PersistentOwnerSnapshotForTestV1 {
+            incarnation: Rc::as_ptr(&self.incarnation) as usize,
+            local_native: self
+                .local_native_for_sdma()
+                .map(|lease| lease.storage_identity()),
+            binding: self.binding,
+            mapping: self.mapping,
+            byte_len: self.byte_len,
+            ledger_address: self.ledger.as_ptr() as usize,
+            ledger: *self.ledger,
+            next_generation: self.next_generation,
+            next_sequence: self.next_sequence,
+            frontier_generation: self.frontier_generation,
+            frontier_sequence: self.frontier_sequence,
+            quarantine: self.quarantine,
+        }
     }
 
     pub const fn byte_len(&self) -> u64 {

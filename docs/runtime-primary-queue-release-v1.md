@@ -572,8 +572,8 @@ after a caller catches a backend panic; the backend is already terminal and the
 next valid backend call seals the Context without native work. This packet does
 not change that facade policy, admit pending-compute allocation, qualify native
 partial writes, add executable/formal correspondence or establish performance.
-Directional promotion and recycle/release are now covered below. Demotion,
-synchronous copy and typed capacity disposition remain open, followed by
+Directional promotion, demotion and recycle/release are now covered below.
+Synchronous copy and typed capacity disposition remain open, followed by
 owner-roster preflight and pending-compute qualification.
 
 ## Directional Promotion Custody
@@ -593,7 +593,7 @@ promotion unwind. Native failures cross the adapter as typed errors without
 formatting. Returned custody is installed before the complete diagnostic is
 formatted; diagnostic panic retains it and seals the backend. A healthy retryable
 failure still follows existing recycling and rejection semantics after formatting.
-Recycle/release retention is now covered below; demotion and other copy
+Recycle/release and demotion retention are now covered below; copy phase
 transitions remain separate unfixed unwind boundaries.
 
 Constructed tests use actual fresh mapped leases, the original directional pair,
@@ -650,13 +650,46 @@ backing before shutdown. See the
 This is not formal correspondence, native recycler fault qualification or
 R126 acceptance.
 
+## Directional Demotion Custody
+
+Demotion now retains the original directional allocation before the model loan.
+Its borrowed admission order and mapped-memory validation are unchanged. Retake
+settles before the existing quiescent conversion; successful demotion advances
+the pool generation once without changing native backing or outstanding debit.
+Healthy opening/validation or active-use rejection returns the exact allocation.
+Retake errors take precedence over ordinary validation errors, and the first
+panic leaves the allocation rooted through secondary retake/poison failures.
+The new root participates in construction, enable/allocation/trim/release and
+Drop guards, and suppresses foreign-recycle activity after unfinished demotion.
+
+The runtime retains the device before selecting its driver and receives native
+errors without formatting. Returned custody is rooted before diagnostics, and
+healthy restoration requires the original DeviceLocal synchronous placeholder.
+It reuses the original device box through a small reviewed allocation-splitting
+helper, avoiding a new device-box allocation on successful demotion or retry
+restoration. Error-message formatting may still allocate.
+The helper transfers a unique initialized value and preserves the same allocation
+as MaybeUninit storage; tests cover drop order, unwind, over-alignment and ZSTs.
+Public release remains Quiescent on healthy demotion rejection because device
+scrubbing may already have occurred. Accounting and release profiling commit last.
+
+Eight constructed tests and nine new runtime tests cover retained native/ledger
+identity, real foreign mapping rejection, active-use cancellation, diagnostic
+unwind, original box/neighbor identity, authentic scrub invalidation, public
+Context credit settlement and subprocess Drop. Public lower guard tests use
+engine-less shells with genuine fixture mappings, not successful native parents.
+Execution and its qualification scope are recorded in the
+[development receipt](evidence/dev-r126-sdma-demotion-2026-09-16/README.md).
+This does not accept R126 or qualify native demotion faults, formal correspondence
+or matched HIP/HSA performance.
+
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
-   ownership changes with pending compute after completing demotion and
-   synchronous-copy custody. Lower fresh-allocation outputs now
+   ownership changes with pending compute after completing synchronous-copy
+   custody and typed capacity disposition. Lower fresh-allocation outputs now
    remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.

@@ -1,0 +1,1 @@
+owned_executable_query_exit=1

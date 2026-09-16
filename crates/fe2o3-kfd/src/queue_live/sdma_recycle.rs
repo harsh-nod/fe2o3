@@ -171,6 +171,7 @@ impl SdmaRecycleContextV1 for ComputeAqlQueueSessionV1 {
             && self.sdma_pool_trim.is_none()
             && self.sdma_allocation.is_none()
             && self.sdma_promotion.is_none()
+            && self.sdma_demotion.is_none()
             && self.sdma_recycle.is_none()
         {
             self.sdma_device_pool.begin_activity();
@@ -186,6 +187,7 @@ impl SdmaRecycleContextV1 for ComputeAqlQueueSessionV1 {
     }
 
     fn admit(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_no_sdma_owner_transition_v1()?;
         self.sdma_device_pool.begin_activity();
         self.require_sdma_enabled_state_v1()
     }

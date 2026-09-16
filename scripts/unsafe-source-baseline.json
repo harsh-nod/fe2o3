@@ -831,7 +831,7 @@
     "impl": 1
   },
   "crates/fe2o3-runtime/src/kfd_backend.rs": {
-    "block": 1,
+    "block": 2,
     "impl": 8,
     "trait": 2
   },

@@ -70,7 +70,14 @@ model retake and runtime diagnostics. GNU/musl each pass 1,344 KFD and 789 runti
 tests, and eight isolated MI300X probes pass, including zero-cache disposal
 before trim. The [recycler receipt](evidence/dev-r126-sdma-recycle-2026-09-16/README.md)
 separates injected CPU failures from native success and AUX budget rejection.
-Next are demotion/synchronous-copy custody plus typed capacity rejection.
+Directional demotion now retains input through model loan/retake and runtime
+diagnostics, with allocation-free restoration into the original device box.
+Eight constructed and nine new runtime tests cover exact mapping/ledger identity,
+healthy retry, error/panic settlement and public credit behavior; see the
+[demotion receipt](evidence/dev-r126-sdma-demotion-2026-09-16/README.md).
+GNU/musl each pass 1,352 KFD and 798 runtime tests; eight isolated MI300X
+regression probes pass and the private remote scratch is removed.
+Next are synchronous-copy custody and typed capacity rejection.
 Allocation during pending compute is still disabled. These are
 development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
 CPU/test checkpoint.
@@ -887,10 +894,10 @@ open.
 | Locally accepted Native packets | Primary + Native review | Replacement inputs, ordinary and pristine rebind | R103/R104/R105 retain their named CPU/shared-sequence acceptance; no original-engine or hardware qualification |
 | Locally accepted initializers | Primary + Native/Resources review | R106/N3-C coherent and R107/N3-D device initialization custody | Named CPU/shared-sequence acceptance only; reuse the accepted lower helpers, not a duplicate initializer |
 | Locally accepted live insertion | Primary + Native/Resources review | R109/N3-L1 initialized-device, R110/N3-L2 initialized coherent, R111/N3-L3-C uninitialized coherent and R112/N3-L3-D uninitialized device insertion | Named CPU/shared-sequencer and concrete public missing-engine boundaries: R109/R110 facades versus R111/R112 direct APIs. No native success or formal refinement claim |
-| Next Native packets | Native | Ordinary recycled detach and remaining N4-L live/control routes; applicable queue cleanup, then N5 DATA-ADOPT | R114/R115/R117/R119/R121 lower cleanup, R122 live data release/runtime outer-roster retention and R123 live retained persistent-control release are accepted at their CPU boundaries. Other live routes must retain custody through settlement; confirmed disposal alone does not permit slot reuse |
+| Next Native packets | Native | R126 synchronous-copy custody, typed capacity rejection and remaining queue-lifecycle qualification, then N5 DATA-ADOPT | R124 ordinary recycled detach and R125 live prepared cancellation are accepted at their CPU/test boundaries. R126 ownership/teardown extensions remain development; pending-compute allocation is disabled. Confirmed disposal alone does not permit slot reuse |
 | Locally accepted Admission packets | Admission | R118B C1 Context identity, C2 descriptor identity and C3 reply/custody tests | Eighteen added tests, full GNU/musl and 78 compiled negatives; existing validators and lifecycle machinery, with no native/formal/performance acceptance |
 | Next Admission packets | Admission | Joint I2 ISSUE, C4 COMPLETE, then C5 typed output and C6 GRAPH/DRAIN | N5 adoption, exact publication/completion custody and retained R118B regressions; no invented completion adapter |
-| First Resources packets | Resources | V4-J1 issuance proofs, then membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models; actual solver results and Rust/model correspondence remain pending |
+| First Resources packets | Resources | V4-J1 issuance proofs, then membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models. External V13-V15 development solver results are recorded in the current dispatch; integration, authenticated proof qualification and production Rust/model correspondence remain pending |
 | Next Resources packets | Resources | VER-1A.3 journal, .4/.5 hooks, complete VER-1B, then VER-2 leases | Exact Context IDs; complete mutation coverage, ordered writers and recovery before reuse |
 | Native/runtime integration | Primary + Native/Admission | N3/N4 -> DATA-ADOPT -> ISSUE -> CO-4/COMPLETE -> generated typed API -> GRAPH/DRAIN | C1/C2/C3 join ISSUE; real publication/completion identity, exact readback and custody; cross-run reuse also needs V7/V8 |
 | Resource closure | Resources + Native | Aggregate domains, native backing/control budgets, host/native residency and total retained memory | Charged bootstrap/terminal headroom, compound pre-effect admission and no double charging |

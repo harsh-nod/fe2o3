@@ -1,0 +1,30 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 48.54s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-6457f2b90c780e5d)
+
+running 6 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::demotion::constructed_sdma_demotion_opening_failure_never_validates_or_loses_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::demotion::constructed_sdma_demotion_rejects_active_uses_without_invalidating_their_leases ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::demotion::constructed_sdma_demotion_admission_and_quarantine_preserve_generation_and_debit ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::demotion::constructed_sdma_demotion_success_and_healthy_retries_preserve_mapping_then_refund ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::demotion::constructed_sdma_demotion_public_guards_preserve_root_and_drop_aborts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::demotion::constructed_sdma_demotion_validation_retake_matrix_retains_original_allocation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1344 filtered out; finished in 19.39s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-6da97149b4b59494)
+
+running 9 tests
+test kfd_backend::tests::scripted_sdma_demotion_and_recycle_recovery_are_retryable_without_loss ... ok
+test kfd_backend::tests::scripted_sdma_demotion_and_submit_teardown_retain_exact_runtime_custody ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_rejection_after_real_scrub_preserves_shadow_and_retries_scrub ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_driver_selection_panic_keeps_original_device ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_restore_shell_reuses_allocation_and_drops_exactly_once ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_retry_preserves_original_box_neighbor_and_refunds_once ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_restoration_rejects_missing_wrong_kind_and_occupied_slots ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_terminal_and_lower_panic_retain_exact_owner_and_charge ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_typed_diagnostic_panic_roots_both_failure_classes_before_format ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 793 filtered out; finished in 0.01s
+

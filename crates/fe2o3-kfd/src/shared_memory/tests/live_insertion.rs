@@ -169,6 +169,23 @@ impl PreparationMemoryFixtureV1 {
         })
     }
 
+    pub(crate) fn primary_validate_sdma_demotion_mapping_v1(
+        &self,
+        allocation: &crate::Gfx942DirectionalQueuePersistentAllocationV1,
+    ) -> Result<(), MemorySessionError> {
+        self.fixture
+            .engine
+            .mapped_device_memory_facts_v1(
+                allocation
+                    .owner
+                    .local_native_for_sdma()
+                    .expect("admitted local allocation"),
+                self.fixture.device.model_key(),
+                self.fixture.vm,
+            )
+            .map(|_| ())
+    }
+
     pub(crate) fn insertion_release_device_v1(
         &mut self,
         data: crate::Gfx942FixedDispatchDataV1,

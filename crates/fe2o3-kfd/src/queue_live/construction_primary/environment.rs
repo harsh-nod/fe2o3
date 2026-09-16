@@ -265,6 +265,7 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
             sdma_pool_trim: None,
             sdma_allocation: None,
             sdma_promotion: None,
+            sdma_demotion: None,
             sdma_recycle: None,
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
