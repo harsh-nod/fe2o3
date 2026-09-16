@@ -658,7 +658,7 @@ fn argument_call_owner_with_result(
     )
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
-    .unwrap_or_else(|error| panic!("helper result {result_shape:?}: {error:?}"));
+    .expect("admitted helper result fixture");
     ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
