@@ -739,7 +739,7 @@ fn build_bounds_presburger_witness(
             if matches!(fact, SparseIndexFactV1::MachineOverflow(_)) {
                 return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
             }
-            let normalized_map = match presburger.map_for_facts(&[fact]) {
+            let normalized_map = match presburger.map_for_facts_over_extents(&[fact], &launch_extents) {
                 Ok(map) => map,
                 Err(failure) => {
                     return Ok(SupportedWitnessBuildV1::Incomplete(format!(
@@ -822,11 +822,8 @@ fn raw_launch_extents(
                         "bounds witness V1 invocation dimension {dimension} extent {invocation_extent} is inconsistent with gpu.execution_layout extent {layout_extent}"
                     ));
                 }
-                None if layout_extent > 1 => {
-                    return Err(format!(
-                        "bounds witness V1 gpu.execution_layout has active axis {dimension} extent {layout_extent} without an invocation dimension"
-                    ));
-                }
+                // Layout axes define the execution domain even when the source
+                // does not materialize that coordinate in an index expression.
                 None => {}
             }
         }
