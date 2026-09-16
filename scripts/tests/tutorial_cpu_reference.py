@@ -624,5 +624,477 @@ class AdapterComponents(unittest.TestCase):
             self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
 
 
+class BatchComponents(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="cpu-batch-components-")
+        self.base = Path(self.temporary.name).resolve()
+        self.root = self.base / "source"
+        self.root.mkdir()
+        self.clock = 100.0
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def write(self, relative: str, payload: str = "component input") -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload)
+        return path
+
+    def prepare(self, count: int = 3) -> None:
+        self.apps = []
+        self.declaration = {"qualification": {"suites": []}, "compilerFixtures": []}
+        for index in range(count):
+            package = f"arbitrary_package_{index}"
+            manifest = self.write(f"examples/{package}/Cargo.toml", f'[package]\nname="{package}"\nversion="0.1.0"\n')
+            kind = "lib" if index % 2 == 0 else "test"
+            source = self.write(f"examples/{package}/" + ("src/lib.rs" if kind == "lib" else "tests/reference.rs"))
+            arguments = [str(manifest.relative_to(self.root)), kind, *([] if kind == "lib" else ["reference"])]
+            item = source_manifest(arguments)
+            item["qualification"]["suites"][0]["suiteId"] = f"cpu-{index}"
+            for fixture in item["compilerFixtures"]:
+                fixture["fixtureId"] += f"-{index}"
+            item["qualification"]["suites"][0]["coverage"][0]["fixtureIds"] = [
+                fixture["fixtureId"] for fixture in item["compilerFixtures"]]
+            self.declaration["qualification"]["suites"].extend(item["qualification"]["suites"])
+            self.declaration["compilerFixtures"].extend(item["compilerFixtures"])
+            target = {"name": package if kind == "lib" else "reference", "kind": [kind], "crate_types": [kind],
+                      "src_path": str(source), "test": True}
+            metadata = {"packages": [{"id": package, "manifest_path": str(manifest), "source": None,
+                                      "targets": [target]}],
+                        "resolve": {"nodes": [{"id": package, "features": []}]}}
+            self.apps.append((manifest, source, target, metadata))
+        self.tutorial = self.write("config/tutorial-kernel-manifest-v1.json", json.dumps(self.declaration))
+        self.validator_path = self.write("scripts/validate-tutorial-kernel-manifest.py")
+        self.write(adapter.WRAPPER)
+        self.write("scripts/tutorial_cpu_reference.py")
+        self.write("Cargo.toml")
+        self.lock = self.write("Cargo.lock")
+        self.write("rust-toolchain.toml", '[toolchain]\nchannel="nightly-2026-04-03"\n')
+        self.driver_manifest = self.write("crates/cargo-fe2o3/Cargo.toml")
+        self.driver_source = self.write("crates/cargo-fe2o3/src/main.rs")
+        self.tools = {name: self.write("tools/" + name) for name in ("cargo", "rustc", "rustup")}
+        self.cargo_home = self.base / "cargo-home"
+        self.cargo_home.mkdir()
+        self.output = self.base / "evidence"
+        self.output.mkdir(mode=0o700)
+        self.contracts = {path: adapter.digest(path.read_bytes()) for path in
+                          [self.lock, *[path for app in self.apps for path in app[:2]]]}
+        self.calls = []
+        self.alarms = []
+
+    def plans(self) -> list[dict]:
+        plans = adapter.batch_plans(self.declaration)
+        for plan in plans:
+            plan.update(manifestSha256=adapter.digest(self.tutorial.read_bytes()),
+                        validatorSha256=adapter.digest(self.validator_path.read_bytes()))
+        return plans
+
+    def run_batch(self, states: dict[int, list[str]] | None = None, mutate=None,
+                  persist=None, costs: dict[str, float] | None = None,
+                  cleanup=None, candidate=None, setup_delay: float = 0.0) -> dict:
+        states, costs = states or {}, costs or {}
+        plans = self.plans()
+        original_rmtree = adapter.shutil.rmtree
+        original_save = adapter.save_observation
+        original_candidates = adapter.configuration_candidates
+        original_mkdir = Path.mkdir
+        started = self.clock
+
+        def validate(root, manifest):
+            self.assertEqual(manifest, self.declaration)
+            for path, expected in self.contracts.items():
+                if adapter.digest(path.read_bytes()) != expected:
+                    raise SystemExit("component declared source/lock contract changed")
+
+        validator = SimpleNamespace(validate_manifest=validate,
+                                    effective_cargo_lock=lambda *args: self.lock)
+
+        def child(argv, cwd, env, directory, label, deadline, phases):
+            self.calls.append((label, list(argv), dict(env), deadline, directory))
+            self.assertLess(self.clock, deadline)
+            phase = {"label": label, "argv": argv, "returncode": 0, "completeLogs": True, "logs": []}
+            phases.append(phase)
+            index = int(directory.name[-2:]) if directory.name.startswith("suite-") else None
+            self.clock += costs.get(label, 1.0)
+            if label.startswith("locate-"):
+                data = (str(self.tools[label[7:]]) + "\n").encode()
+            elif label == "rustc-version":
+                data = b"rustc component\nhost: x86_64-unknown-linux-gnu\n"
+            elif label == "driver-metadata":
+                data = json.dumps({"packages": [{"id": "driver", "manifest_path": str(self.driver_manifest),
+                                                  "source": None}]}).encode()
+            elif label == "suite-metadata":
+                data = json.dumps(self.apps[index][3]).encode()
+                self.assertEqual(argv[argv.index("--manifest-path") + 1], str(self.apps[index][0]))
+            elif label == "driver-build":
+                self.assertEqual(argv, [str(self.tools["cargo"]), "build", "--locked", "--offline", "-p",
+                                       "cargo-fe2o3", "--bin", "cargo-fe2o3", "--message-format=json"])
+                self.assertEqual(env["RUSTC"], str(self.tools["rustc"]))
+                self.assertEqual(env["RUSTC_WORKSPACE_WRAPPER"], "")
+                binary = Path(env["CARGO_TARGET_DIR"]) / "driver-component"
+                binary.write_bytes(b"unexecuted driver component")
+                binary.chmod(0o700)
+                data = (json.dumps({"reason": "compiler-artifact", "package_id": "driver",
+                                   "target": {"name": "cargo-fe2o3", "kind": ["bin"], "crate_types": ["bin"],
+                                              "src_path": str(self.driver_source)},
+                                   "profile": {"test": False, "opt_level": "0"}, "executable": str(binary)}) + "\n" +
+                        json.dumps({"reason": "build-finished", "success": True}) + "\n").encode()
+            else:
+                self.assertEqual(label, "suite")
+                manifest, _, target, metadata = self.apps[index]
+                selector = ["--lib"] if target["kind"] == ["lib"] else ["--test", "reference"]
+                self.assertEqual(argv, [str(self.output / "common/driver/cargo-fe2o3"), "test", "--locked", "--offline",
+                                       "--manifest-path", str(manifest), *selector, "--message-format=json", "--",
+                                       "-Z", "unstable-options", "--format=json", "--test-threads=1"])
+                self.assertNotIn("RUSTC", env)
+                self.assertNotIn("FE2O3_HIP_SYS_DISABLE", env)
+                self.assertEqual(env["CARGO_BUILD_JOBS"], "1")
+                self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+                executable = Path(env["CARGO_TARGET_DIR"]) / "test-component"
+                executable.write_bytes(b"unexecuted test component")
+                executable.chmod(0o700)
+                outcomes = states.get(index, ["ok"])
+                events = [{"reason": "compiler-artifact", "package_id": metadata["packages"][0]["id"],
+                           "target": target, "features": [], "profile": {"test": True}, "executable": str(executable)},
+                          {"reason": "build-finished", "success": True},
+                          {"type": "suite", "event": "started", "test_count": len(outcomes)}]
+                for ordinal, result in enumerate(outcomes):
+                    events.extend([{"type": "test", "event": "started", "name": f"case-{ordinal}"},
+                                   {"type": "test", "event": result, "name": f"case-{ordinal}"}])
+                events.append({"type": "suite", "event": "failed" if "failed" in outcomes else "ok",
+                               "passed": outcomes.count("ok"), "failed": outcomes.count("failed"),
+                               "ignored": outcomes.count("ignored"), "measured": 0, "filtered_out": 0})
+                phase["returncode"] = 101 if "failed" in outcomes else 0
+                data = b"\n".join(json.dumps(event).encode() for event in events) + b"\n"
+            if mutate is not None:
+                changed = mutate(label, index, data, phase)
+                if changed is not None:
+                    data = changed
+            return data
+
+        def save(directory, record):
+            result = original_save(directory, record)
+            if persist is not None:
+                persist(directory, record)
+            return result
+
+        def remove(path):
+            if cleanup is not None:
+                cleanup(path)
+            return original_rmtree(path)
+
+        def candidates(root, env):
+            result = original_candidates(root, env)
+            return candidate(result) if candidate is not None else result
+
+        def mkdir(path, *args, **kwargs):
+            if path.name.startswith("suite-"):
+                self.clock += setup_delay
+            return original_mkdir(path, *args, **kwargs)
+
+        observation = {"schema": "fe2o3-tutorial-cpu-reference-batch-observation-v1", **adapter.NO_AUTHORITY,
+                       "outcome": "invalid", "phases": [], "errors": []}
+        with patch.dict(os.environ, {"HOME": str(self.base), "PATH": "/usr/bin", "CARGO_HOME": str(self.cargo_home)}, clear=True), \
+                patch.object(adapter, "load_batch_plans", return_value=(plans, validator)), \
+                patch.object(adapter.shutil, "which", return_value=str(self.tools["rustup"])), \
+                patch.object(adapter, "child", side_effect=child), \
+                patch.object(adapter.time, "monotonic", side_effect=lambda: self.clock), \
+                patch.object(adapter.signal, "setitimer", side_effect=lambda kind, delay: self.alarms.append(delay)), \
+                patch.object(adapter, "save_observation", side_effect=save), \
+                patch.object(adapter.shutil, "rmtree", side_effect=remove), \
+                patch.object(Path, "mkdir", new=mkdir), \
+                patch.object(adapter, "configuration_candidates", side_effect=candidates):
+            adapter.execute_batch(self.root, self.output, started, observation)
+        return observation
+
+    def records(self, observation) -> list[dict]:
+        result = []
+        for item in observation["suites"]:
+            payload = Path(item["observation"]["path"]).read_bytes()
+            self.assertEqual(adapter.digest(payload), item["observation"]["sha256"])
+            result.append(json.loads(payload))
+        return result
+
+    def test_generic_twelve_suite_batch_builds_one_driver_and_fresh_suite_dirs(self) -> None:
+        self.prepare(12)
+        observation = self.run_batch()
+        self.assertEqual(observation["outcome"], "passed")
+        self.assertEqual(len(self.calls), 29)
+        self.assertEqual([call[0] for call in self.calls].count("driver-build"), 1)
+        self.assertEqual([call[0] for call in self.calls].count("suite-metadata"), 12)
+        suites = [call for call in self.calls if call[0] == "suite"]
+        self.assertEqual(len({call[2]["CARGO_TARGET_DIR"] for call in suites}), 12)
+        self.assertTrue(all(call[2]["CARGO_TARGET_DIR"] != str(self.output / "common/build") for call in suites))
+        records = self.records(observation)
+        for record in records:
+            self.assertEqual(record["commonElapsedSeconds"], 5.0)
+            self.assertEqual(record["ownElapsedSeconds"], 2.0)
+            self.assertEqual(record["chargedElapsedSeconds"], 7.0)
+            self.assertEqual(record["executionMode"], "batch-shared-private-driver")
+            self.assertEqual(record["commonObservation"], observation["common"])
+            self.assertEqual(record["tests"]["executable"]["digestScope"], "post-execution-on-disk-artifact-only")
+            self.assertTrue(all(record[key] is False for key in adapter.NO_AUTHORITY))
+            self.assertFalse((Path(record["evidenceDirectory"]) / "build").exists())
+        self.assertEqual(len({call[3] - (105 + 2 * index) for index, call in enumerate(suites)}), 1)
+        self.assertFalse((self.output / "common/build").exists())
+        self.assertFalse((self.output / "common/driver").exists())
+        self.assertTrue(observation["finalSharedInputsUnchanged"])
+        self.assertEqual(self.alarms[-1], 0)
+
+    def test_empty_duplicate_overcap_and_foreign_batch_plans_refuse(self) -> None:
+        self.prepare(1)
+        for mutation in ("empty", "duplicate-id", "duplicate-command", "overcap", "foreign", "environment"):
+            manifest = copy.deepcopy(self.declaration)
+            suite = manifest["qualification"]["suites"][0]
+            if mutation == "empty":
+                manifest["qualification"]["suites"] = []
+            elif mutation == "overcap":
+                manifest["qualification"]["suites"] *= 13
+            elif mutation.startswith("duplicate"):
+                extra = copy.deepcopy(suite)
+                if mutation == "duplicate-command":
+                    extra["suiteId"] = "different"
+                manifest["qualification"]["suites"].append(extra)
+            elif mutation == "foreign":
+                suite["command"]["executable"] = "cargo"
+            else:
+                suite["command"]["environment"] = ["RUSTFLAGS=override"]
+            with self.subTest(mutation=mutation), self.assertRaises(adapter.ObservationError):
+                adapter.batch_plans(manifest)
+
+    def test_suite_directory_setup_time_is_part_of_its_own_budget(self) -> None:
+        self.prepare(2)
+        observation = self.run_batch(setup_delay=3.0)
+        self.assertEqual(observation["outcome"], "passed")
+        self.assertEqual([record["ownElapsedSeconds"] for record in self.records(observation)], [5.0, 5.0])
+        self.assertEqual([record["chargedElapsedSeconds"] for record in self.records(observation)], [10.0, 10.0])
+
+    def test_failed_ignored_and_empty_suites_are_retained_not_aggregate_pass(self) -> None:
+        self.prepare(3)
+        observation = self.run_batch(states={0: ["failed"], 1: ["ignored"], 2: []})
+        self.assertEqual(observation["outcome"], "failed")
+        self.assertEqual([record["outcome"] for record in self.records(observation)], ["failed", "partial", "empty"])
+        self.assertEqual(len(self.calls), 11)
+
+    def test_bad_suite_events_abort_reuse_and_preserve_remaining_ids(self) -> None:
+        self.prepare(3)
+        observation = self.run_batch(mutate=lambda label, index, data, phase: b"{}\n" if label == "suite" else None)
+        records = self.records(observation)
+        self.assertEqual([record["plan"]["suiteId"] for record in records], ["cpu-0", "cpu-1", "cpu-2"])
+        self.assertEqual([record["outcome"] for record in records], ["invalid", "unavailable", "unavailable"])
+        self.assertEqual([record["attempted"] for record in records], [True, False, False])
+        self.assertEqual(len([call for call in self.calls if call[0] == "suite"]), 1)
+
+    def test_common_budget_is_fully_charged_and_later_suites_do_not_pay_previous_runs(self) -> None:
+        self.assertEqual(adapter.suite_deadline(10, 7, 12, 100), 15)
+        self.assertEqual(adapter.suite_deadline(40, 7, 12, 100), 45)
+        self.assertEqual(adapter.suite_deadline(40, 7, 12, 43), 43)
+        for common in (12, 13):
+            with self.assertRaisesRegex(adapter.ObservationError, "common setup exhausted"):
+                adapter.suite_deadline(10, common, 12, 100)
+        self.prepare(2)
+        observation = self.run_batch(costs={"driver-build": 1196})
+        self.assertNotEqual(observation["outcome"], "passed")
+        self.assertTrue(all(not record["attempted"] for record in self.records(observation)))
+        self.assertNotIn("suite-metadata", [call[0] for call in self.calls])
+
+    def test_suite_exact_deadline_is_not_late_success(self) -> None:
+        self.prepare(2)
+        observation = self.run_batch(costs={"suite": 1194})
+        records = self.records(observation)
+        self.assertEqual(records[0]["chargedElapsedSeconds"], 1200)
+        self.assertNotEqual(records[0]["outcome"], "passed")
+        self.assertFalse(records[1]["attempted"])
+
+    def test_source_contract_mutation_during_metadata_does_not_become_baseline(self) -> None:
+        self.prepare(2)
+        def mutate(label, index, data, phase):
+            if label == "suite-metadata":
+                self.apps[0][1].write_text("changed during metadata")
+        observation = self.run_batch(mutate=mutate)
+        self.assertNotEqual(observation["outcome"], "passed")
+        self.assertNotIn("suite", [call[0] for call in self.calls])
+        self.assertFalse(self.records(observation)[1]["attempted"])
+
+    def test_between_suite_driver_drift_aborts_before_next_metadata(self) -> None:
+        self.prepare(3)
+        def persist(directory, record):
+            if directory.name == "suite-00":
+                driver = self.output / "common/driver/cargo-fe2o3"
+                driver.chmod(0o700)
+                driver.write_bytes(b"changed copied driver")
+        observation = self.run_batch(persist=persist)
+        self.assertNotEqual(observation["outcome"], "passed")
+        self.assertEqual([record["attempted"] for record in self.records(observation)], [True, False, False])
+        self.assertEqual(len([call for call in self.calls if call[0] == "suite-metadata"]), 1)
+        self.assertFalse(observation["finalSharedInputsUnchanged"])
+
+    def test_final_configuration_creation_is_not_hidden_by_prior_success(self) -> None:
+        self.prepare(1)
+        def persist(directory, record):
+            if directory.name == "suite-00":
+                (self.cargo_home / "config").write_text("# introduced after suite postflight")
+        observation = self.run_batch(persist=persist)
+        self.assertEqual(self.records(observation)[0]["outcome"], "passed")
+        self.assertEqual(observation["outcome"], "invalid")
+        self.assertFalse(observation["finalSharedInputsUnchanged"])
+
+    def test_cleanup_failure_poison_and_interrupt_leave_explicit_unavailable_records(self) -> None:
+        self.prepare(2)
+        def cleanup(path):
+            if path.parent.name == "suite-00":
+                raise OSError("component cleanup denied")
+        observation = self.run_batch(cleanup=cleanup)
+        self.assertEqual([record["outcome"] for record in self.records(observation)], ["invalid", "unavailable"])
+        self.assertFalse((self.output / "common/driver").exists())
+
+    def test_interruption_retains_phases_and_cleans_private_scratch(self) -> None:
+        self.prepare(2)
+        def mutate(label, index, data, phase):
+            if label == "suite":
+                phase["returncode"] = -9
+                raise KeyboardInterrupt
+        observation = self.run_batch(mutate=mutate)
+        records = self.records(observation)
+        self.assertEqual(records[0]["outcome"], "interrupted")
+        self.assertEqual(records[0]["phases"][-1]["returncode"], -9)
+        self.assertEqual(records[1]["outcome"], "unavailable")
+        self.assertFalse((self.output / "common/driver").exists())
+
+    def test_original_common_files_and_tools_cannot_be_refreshed_after_metadata(self) -> None:
+        for name in ("tutorial", "validator", "lock", "toolchain", "cargo", "rustc"):
+            with self.subTest(name=name):
+                self.temporary.cleanup()
+                self.setUp()
+                self.prepare(2)
+                path = {"tutorial": self.tutorial, "validator": self.validator_path, "lock": self.lock,
+                        "toolchain": self.root / "rust-toolchain.toml", **self.tools}[name]
+                def mutate(label, index, data, phase):
+                    if label == "driver-metadata":
+                        with path.open("a") as stream:
+                            stream.write("\n# drift\n")
+                observation = self.run_batch(mutate=mutate)
+                self.assertNotIn("driver-build", [call[0] for call in self.calls])
+                self.assertTrue(all(not record["attempted"] for record in self.records(observation)))
+                self.assertNotEqual(observation["outcome"], "passed")
+
+    def test_shared_bootstrap_config_presence_precedence_and_candidates_are_rechecked(self) -> None:
+        for location in ("ancestor", "cargo-home"):
+            for change in ("create", "remove", "precedence"):
+                with self.subTest(location=location, change=change):
+                    self.temporary.cleanup()
+                    self.setUp()
+                    self.prepare(2)
+                    folder = self.root / ".cargo" if location == "ancestor" else self.cargo_home
+                    folder.mkdir(exist_ok=True)
+                    target = folder / "config.toml"
+                    if change != "create":
+                        target.write_text("# original\n")
+                    if change == "precedence":
+                        target = folder / "config"
+                    def mutate(label, index, data, phase):
+                        if label == "driver-build":
+                            if change == "remove":
+                                target.unlink()
+                            else:
+                                target.write_text("# changed\n")
+                    observation = self.run_batch(mutate=mutate)
+                    self.assertTrue(all(not record["attempted"] for record in self.records(observation)))
+                    self.assertNotEqual(observation["outcome"], "passed")
+                    self.assertFalse((self.output / "common/driver").exists())
+
+    def test_configuration_candidate_roster_drift_refuses_before_bootstrap(self) -> None:
+        self.prepare(2)
+        visits = 0
+        def candidate(paths):
+            nonlocal visits
+            visits += 1
+            return paths if visits == 1 else [*paths, self.base / "new-config"]
+        observation = self.run_batch(candidate=candidate)
+        self.assertNotIn("driver-build", [call[0] for call in self.calls])
+        self.assertNotEqual(observation["outcome"], "passed")
+
+    def test_wrong_bootstrap_package_source_or_profile_never_enters_any_suite(self) -> None:
+        for field in ("package", "source", "profile"):
+            with self.subTest(field=field):
+                self.temporary.cleanup()
+                self.setUp()
+                self.prepare(2)
+                def mutate(label, index, data, phase):
+                    if label != "driver-build":
+                        return None
+                    events = [json.loads(line) for line in data.splitlines()]
+                    if field == "package":
+                        events[0]["package_id"] = "foreign"
+                    elif field == "source":
+                        events[0]["target"]["src_path"] = "/proc/self/fd/9/main.rs"
+                    else:
+                        events[0]["profile"]["test"] = True
+                    return b"\n".join(json.dumps(event).encode() for event in events) + b"\n"
+                observation = self.run_batch(mutate=mutate)
+                self.assertNotIn("suite-metadata", [call[0] for call in self.calls])
+                self.assertNotEqual(observation["outcome"], "passed")
+
+    def test_one_unit_before_deadline_passes_without_discounting_common_cost(self) -> None:
+        self.prepare(2)
+        observation = self.run_batch(costs={"suite": 1193})
+        self.assertEqual(observation["outcome"], "passed")
+        self.assertEqual([record["chargedElapsedSeconds"] for record in self.records(observation)], [1199, 1199])
+        self.assertEqual(observation["schedulerLimitSeconds"], 2400)
+
+    def test_overall_scheduler_and_child_timeout_never_create_passed_aggregate(self) -> None:
+        self.prepare(2)
+        def timeout(label, index, data, phase):
+            if label == "suite":
+                phase.update(returncode=-9, completeLogs=False)
+                raise adapter.ObservationError("component child deadline", "unavailable")
+        observation = self.run_batch(mutate=timeout)
+        self.assertEqual([record["outcome"] for record in self.records(observation)], ["unavailable", "unavailable"])
+        self.assertEqual(self.records(observation)[0]["phases"][-1]["returncode"], -9)
+        self.temporary.cleanup()
+        self.setUp()
+        self.prepare(1)
+        def persist(directory, record):
+            if directory.name == "suite-00":
+                self.clock = 1300
+        observation = self.run_batch(persist=persist)
+        self.assertEqual(observation["outcome"], "unavailable")
+        self.assertIn("batch scheduler deadline exhausted", observation["errors"])
+
+    def test_batch_loader_and_current_manifest_enumeration_remain_generic(self) -> None:
+        self.prepare(2)
+        self.validator_path.write_text("def validate_manifest(root, manifest):\n    assert manifest['qualification']['suites']\n")
+        plans, _ = adapter.load_batch_plans(self.root)
+        self.assertEqual([plan["suiteId"] for plan in plans], ["cpu-0", "cpu-1"])
+        self.assertTrue(all("manifestSha256" in plan and "validatorSha256" in plan for plan in plans))
+        source = Path(__file__).resolve().parents[2] / "config/tutorial-kernel-manifest-v1.json"
+        manifest = adapter.decode_json(source.read_bytes())
+        expected = [suite["suiteId"] for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
+        self.assertEqual(len(expected), 12)
+        self.assertEqual([plan["suiteId"] for plan in adapter.batch_plans(manifest)], expected)
+
+    def test_main_batch_selector_is_exact_and_restores_handlers_and_timer(self) -> None:
+        previous = {number: adapter.signal.getsignal(number) for number in
+                    (adapter.signal.SIGINT, adapter.signal.SIGTERM, adapter.signal.SIGALRM)}
+        for arguments in (["--batch", "external-driver"], ["--batch"]):
+            def execute(root, output, started, observation):
+                observation["outcome"] = "passed"
+            captured = io.StringIO()
+            with patch.dict(os.environ, {"FE2O3_TUTORIAL_CPU_OUTPUT_ROOT": str(self.base)}, clear=True), \
+                    patch.object(adapter, "execute_batch", side_effect=execute) as batch, \
+                    patch.object(adapter, "execute") as standalone, \
+                    contextlib.redirect_stdout(captured):
+                result = adapter.main(arguments)
+            observation = json.loads(captured.getvalue())
+            self.assertEqual(result, 0 if arguments == ["--batch"] else 1)
+            self.assertEqual(batch.call_count, int(arguments == ["--batch"]))
+            standalone.assert_not_called()
+            self.assertEqual(observation["schema"], "fe2o3-tutorial-cpu-reference-batch-observation-v1")
+            self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
+            self.assertEqual(adapter.signal.getitimer(adapter.signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertEqual({number: adapter.signal.getsignal(number) for number in previous}, previous)
+
+
 if __name__ == "__main__":
     unittest.main()

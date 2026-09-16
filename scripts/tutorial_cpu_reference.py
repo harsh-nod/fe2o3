@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe one manifest-selected host suite; never grant tutorial qualification.
+"""Observe manifest-selected host suites; never grant tutorial qualification.
 
 Workspace tests and Cargo configuration remain trusted, as in cargo-fe2o3's
 binding-only host path. Input-after checks are not a hostile-code sandbox or
@@ -33,6 +33,7 @@ MAX_INPUT_BYTES = 256 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_MANIFEST = 1024 * 1024
 MAX_SECONDS = 1200
+MAX_BATCH_SUITES = 12
 # Match the existing managed runner's pinned_executable::MAX_EXECUTABLE_BYTES.
 # This is an on-disk observation limit, not executed-image provenance.
 MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024
@@ -210,6 +211,46 @@ def selected_target(root: Path, metadata: dict[str, Any], manifest: Path,
     return {"packageId": package["id"], "name": target["name"], "kind": [kind],
             "crateTypes": target["crate_types"], "features": sorted(nodes[0]["features"]),
             "source": str(source), "manifest": str(manifest), "companionTargets": companions}
+
+
+def batch_plans(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    suites = [suite for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
+    require(1 <= len(suites) <= MAX_BATCH_SUITES, "batch requires between 1 and 12 declared CPU suites")
+    plans = []
+    identities: set[str] = set()
+    commands: set[tuple[str, ...]] = set()
+    for suite in suites:
+        arguments = suite["command"]["arguments"]
+        plan = select_suite(manifest, arguments)
+        require(isinstance(plan["suiteId"], str) and plan["suiteId"] not in identities
+                and tuple(arguments) not in commands, "duplicate batch suite or command")
+        identities.add(plan["suiteId"])
+        commands.add(tuple(arguments))
+        plans.append(plan)
+    return plans
+
+
+def load_batch_plans(root: Path) -> tuple[list[dict[str, Any]], Any]:
+    validator_path = root / "scripts/validate-tutorial-kernel-manifest.py"
+    read_regular(validator_path)
+    spec = importlib.util.spec_from_file_location("tutorial_source_contract", validator_path)
+    require(spec is not None and spec.loader is not None, "missing source validator")
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    manifest_path = root / "config/tutorial-kernel-manifest-v1.json"
+    payload = read_regular(manifest_path, MAX_MANIFEST)
+    manifest = decode_json(payload)
+    try:
+        validator.validate_manifest(root, manifest)
+    except SystemExit as error:
+        raise ObservationError(f"source contract refused: {error}") from error
+    require(read_regular(manifest_path, MAX_MANIFEST) == payload, "manifest changed during validation")
+    plans = batch_plans(manifest)
+    validator_hash = digest(read_regular(validator_path))
+    for plan in plans:
+        plan.update(manifestSha256=digest(payload), validatorSha256=validator_hash)
+        relative_file(root, plan["declaredCommand"]["arguments"][0])
+    return plans, validator
 
 
 def count(value: Any, label: str) -> int:
@@ -511,19 +552,8 @@ def require_child_success(phases: list[dict[str, Any]], label: str) -> None:
         raise ObservationError(f"{label} failed; see retained process status/logs", "unavailable")
 
 
-def execute(root: Path, arguments: list[str], output: Path, started: float,
-            observation: dict[str, Any]) -> None:
-    plan, validator = load_plan(root, arguments)
-    observation["plan"] = plan
-    deadline = started + plan["declaredCommand"]["timeoutSeconds"]
-    env = environment()
-    config_paths = configuration_candidates(root, env)
-    configs = configuration_snapshot(config_paths, deadline)
-    observation["configurationInputs"] = configs
-    target_dir = output / "build"
-    target_dir.mkdir(mode=0o700)
-    env["CARGO_TARGET_DIR"] = str(target_dir)
-    env["TMPDIR"] = str(output)
+def discover_tools(root: Path, env: dict[str, str], output: Path, deadline: float,
+                   phases: list[dict[str, Any]], plan: dict[str, Any]) -> tuple[dict[str, Path], str]:
     toolchain = tomllib.loads(read_regular(root / "rust-toolchain.toml").decode("utf-8"))["toolchain"]["channel"]
     require(re.fullmatch(r"nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}", toolchain) is not None, "unsupported toolchain pin")
     rustup = shutil.which("rustup", path=env.get("PATH"))
@@ -531,7 +561,6 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
     rustup_path = Path(rustup).resolve(strict=True)
     tools: dict[str, Path] = {}
     plan["tools"] = {}
-    phases = observation["phases"]
     for name in ("cargo", "rustc"):
         data = child([str(rustup_path), "which", "--toolchain", toolchain, name], root, env,
                      output, "locate-" + name, deadline, phases)
@@ -546,35 +575,12 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
     require(len(hosts) == 1, "missing pinned rustc host")
     require(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*", hosts[0]) is not None, "invalid host triple")
     env["PATH"] = str(tools["cargo"].parent) + os.pathsep + env.get("PATH", "")
-    manifest = relative_file(root, arguments[0])
-    metadata_records = []
-    for label, path in (("driver", root / "Cargo.toml"), ("suite", manifest)):
-        data = child([str(tools["cargo"]), "metadata", "--locked", "--offline", "--format-version", "1",
-                      "--manifest-path", str(path), "--filter-platform", hosts[0]],
-                     root, env, output, label + "-metadata", deadline, phases)
-        require_child_success(phases, label + " metadata")
-        metadata_records.append(decode_json(data))
-    driver_metadata, suite_metadata = metadata_records
-    expected = selected_target(root, suite_metadata, manifest, arguments[1:])
-    plan["selectedTarget"] = expected
-    plan["host"] = hosts[0]
-    for name, path in tools.items():
-        require(digest(read_regular(path, MAX_INPUT_BYTES)) == plan["tools"][name]["sha256"],
-                "tool changed before baseline")
-    local_roots = sorted({Path(package["manifest_path"]).parent for metadata in metadata_records
-                          for package in metadata["packages"] if package.get("source") is None})
-    require(all(path.is_relative_to(root) for path in local_roots), "local dependency escapes repository")
-    files = [root / "config/tutorial-kernel-manifest-v1.json", root / "rust-toolchain.toml",
-             root / "scripts/validate-tutorial-kernel-manifest.py", root / WRAPPER,
-             root / "scripts/tutorial_cpu_reference.py", root / "Cargo.toml", root / "Cargo.lock"]
-    files.append(validator.effective_cargo_lock(root, manifest.parent, "CPU reference"))
-    files.extend(Path(path) for path, value in configs.items() if value is not None)
-    require(configuration_snapshot(config_paths, deadline) == configs, "configuration drift during metadata")
-    before = footprint(local_roots, files, deadline)
-    revalidate_plan(root, arguments, plan, validator)
-    require(configuration_snapshot(config_paths, deadline) == configs
-            and footprint(local_roots, files, deadline) == before, "input drift during baseline validation")
-    observation["inputs"] = before
+    return tools, hosts[0]
+
+
+def bootstrap_driver(root: Path, env: dict[str, str], output: Path, target_dir: Path,
+                     tools: dict[str, Path], driver_metadata: dict[str, Any], deadline: float,
+                     phases: list[dict[str, Any]], plan: dict[str, Any]) -> Path:
     packages = [package for package in driver_metadata["packages"]
                 if package["manifest_path"] == str(root / "crates/cargo-fe2o3/Cargo.toml")]
     require(len(packages) == 1, "driver package is not exact source")
@@ -617,6 +623,55 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
     driver.chmod(0o500)
     driver_dir.chmod(0o500)
     plan["driverSha256"] = digest(driver_bytes)
+    return driver
+
+
+def execute(root: Path, arguments: list[str], output: Path, started: float,
+            observation: dict[str, Any]) -> None:
+    plan, validator = load_plan(root, arguments)
+    observation["plan"] = plan
+    deadline = started + plan["declaredCommand"]["timeoutSeconds"]
+    env = environment()
+    config_paths = configuration_candidates(root, env)
+    configs = configuration_snapshot(config_paths, deadline)
+    observation["configurationInputs"] = configs
+    target_dir = output / "build"
+    target_dir.mkdir(mode=0o700)
+    env["CARGO_TARGET_DIR"] = str(target_dir)
+    env["TMPDIR"] = str(output)
+    phases = observation["phases"]
+    tools, host = discover_tools(root, env, output, deadline, phases, plan)
+    manifest = relative_file(root, arguments[0])
+    metadata_records = []
+    for label, path in (("driver", root / "Cargo.toml"), ("suite", manifest)):
+        data = child([str(tools["cargo"]), "metadata", "--locked", "--offline", "--format-version", "1",
+                      "--manifest-path", str(path), "--filter-platform", host],
+                     root, env, output, label + "-metadata", deadline, phases)
+        require_child_success(phases, label + " metadata")
+        metadata_records.append(decode_json(data))
+    driver_metadata, suite_metadata = metadata_records
+    expected = selected_target(root, suite_metadata, manifest, arguments[1:])
+    plan["selectedTarget"] = expected
+    plan["host"] = host
+    for name, path in tools.items():
+        require(digest(read_regular(path, MAX_INPUT_BYTES)) == plan["tools"][name]["sha256"],
+                "tool changed before baseline")
+    local_roots = sorted({Path(package["manifest_path"]).parent for metadata in metadata_records
+                          for package in metadata["packages"] if package.get("source") is None})
+    require(all(path.is_relative_to(root) for path in local_roots), "local dependency escapes repository")
+    files = [root / "config/tutorial-kernel-manifest-v1.json", root / "rust-toolchain.toml",
+             root / "scripts/validate-tutorial-kernel-manifest.py", root / WRAPPER,
+             root / "scripts/tutorial_cpu_reference.py", root / "Cargo.toml", root / "Cargo.lock"]
+    files.append(validator.effective_cargo_lock(root, manifest.parent, "CPU reference"))
+    files.extend(Path(path) for path, value in configs.items() if value is not None)
+    require(configuration_snapshot(config_paths, deadline) == configs, "configuration drift during metadata")
+    before = footprint(local_roots, files, deadline)
+    revalidate_plan(root, arguments, plan, validator)
+    require(configuration_snapshot(config_paths, deadline) == configs
+            and footprint(local_roots, files, deadline) == before, "input drift during baseline validation")
+    observation["inputs"] = before
+    driver = bootstrap_driver(root, env, output, target_dir, tools, driver_metadata,
+                              deadline, phases, plan)
     selector = ["--lib"] if arguments[1] == "lib" else ["--test", arguments[2]]
     command = [str(driver), "test", "--locked", "--offline", "--manifest-path", str(manifest),
                *selector, "--message-format=json", "--", "-Z", "unstable-options", "--format=json", "--test-threads=1"]
@@ -642,6 +697,261 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
             require(digest(read_regular(path, MAX_INPUT_BYTES)) == plan["tools"][name]["sha256"], "tool changed")
     if error is not None:
         raise error
+
+
+def arm_deadline(deadline: float) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ObservationError("batch execution deadline exceeded", "unavailable")
+    signal.setitimer(signal.ITIMER_REAL, remaining)
+
+
+def suite_deadline(started: float, common: float, limit: int, overall: float) -> float:
+    if common >= limit:
+        raise ObservationError("common setup exhausted declared suite budget", "unavailable")
+    return min(overall, started + limit - common)
+
+
+def remove_scratch(directory: Path, observation: dict[str, Any]) -> None:
+    for name in ("build", "driver"):
+        path = directory / name
+        if path.exists() or path.is_symlink():
+            try:
+                require(not path.is_symlink() and path.resolve(strict=True) == path and path.is_dir(),
+                        "scratch directory identity changed")
+                path.chmod(0o700)
+                shutil.rmtree(path)
+            except (OSError, ObservationError) as error:
+                observation["errors"].append(f"scratch cleanup: {error}")
+                observation["outcome"] = "invalid"
+
+
+def save_observation(directory: Path, observation: dict[str, Any]) -> dict[str, str]:
+    path = directory / "observation.json"
+    payload = (json.dumps(observation, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    require(len(payload) <= MAX_INPUT_BYTES, "observation exceeds bound")
+    with path.open("xb") as stream:
+        stream.write(payload)
+    return {"path": str(path), "sha256": digest(payload)}
+
+
+def execute_batch(root: Path, output: Path, started: float, observation: dict[str, Any]) -> None:
+    plans, validator = load_batch_plans(root)
+    limits = [plan["declaredCommand"]["timeoutSeconds"] for plan in plans]
+    overall = started + sum(limits)
+    deadline = min(overall, started + min(limits))
+    observation.update(executionMode="batch-shared-private-driver", suites=[],
+                       declaredSuiteCount=len(plans), schedulerLimitSeconds=sum(limits))
+    common_dir = output / "common"
+    common_dir.mkdir(mode=0o700)
+    common_observation: dict[str, Any] = {"schema": "fe2o3-tutorial-cpu-reference-common-observation-v1",
+        **NO_AUTHORITY, "outcome": "invalid", "phases": [], "errors": [], "plan": {}}
+    common_reference: dict[str, str] | None = None
+    common_seconds = 0.0
+    abort: BaseException | None = None
+    final_shared_check = None
+    try:
+        arm_deadline(deadline)
+        base_env = environment()
+        env = dict(base_env)
+        config_paths = configuration_candidates(root, base_env)
+        configs = configuration_snapshot(config_paths, deadline)
+        common_observation["configurationInputs"] = configs
+        files = [root / "config/tutorial-kernel-manifest-v1.json", root / "rust-toolchain.toml",
+                 root / "scripts/validate-tutorial-kernel-manifest.py", root / WRAPPER,
+                 root / "scripts/tutorial_cpu_reference.py", root / "Cargo.toml", root / "Cargo.lock"]
+        files.extend(Path(path) for path, value in configs.items() if value is not None)
+        initial_files = footprint([], files, deadline)
+        target_dir = common_dir / "build"
+        target_dir.mkdir(mode=0o700)
+        env.update(CARGO_TARGET_DIR=str(target_dir), TMPDIR=str(common_dir))
+        shared_plan = common_observation["plan"]
+        tools, host = discover_tools(root, env, common_dir, deadline, common_observation["phases"], shared_plan)
+        shared_plan["host"] = host
+        data = child([str(tools["cargo"]), "metadata", "--locked", "--offline", "--format-version", "1",
+                      "--manifest-path", str(root / "Cargo.toml"), "--filter-platform", host],
+                     root, env, common_dir, "driver-metadata", deadline, common_observation["phases"])
+        require_child_success(common_observation["phases"], "driver metadata")
+        driver_metadata = decode_json(data)
+        common_roots = sorted({Path(package["manifest_path"]).parent for package in driver_metadata["packages"]
+                               if package.get("source") is None})
+        require(all(path.is_relative_to(root) for path in common_roots), "local dependency escapes repository")
+
+        def check_configuration(until: float) -> None:
+            require(environment() == base_env, "batch environment changed")
+            require(configuration_candidates(root, base_env) == config_paths,
+                    "configuration candidate paths changed")
+            require(configuration_snapshot(config_paths, until) == configs, "configuration input drift")
+            for name, path in tools.items():
+                require(digest(read_regular(path, MAX_INPUT_BYTES)) == shared_plan["tools"][name]["sha256"],
+                        "tool changed")
+
+        def check_plans() -> None:
+            # One full fresh validator pass covers all fixture contracts. The
+            # other selections are compared against those same original bytes.
+            first = plans[0]
+            revalidate_plan(root, first["declaredCommand"]["arguments"], first, validator)
+            payload = read_regular(root / "config/tutorial-kernel-manifest-v1.json", MAX_MANIFEST)
+            require(digest(payload) == first["manifestSha256"], "original tutorial manifest changed")
+            checked = batch_plans(decode_json(payload))
+            require(len(checked) == len(plans) and all(
+                all(plan[key] == value for key, value in item.items()) for plan, item in zip(plans, checked)),
+                "batch contract roster changed")
+
+        check_configuration(deadline)
+        require(footprint([], files, deadline) == initial_files, "common inputs changed during discovery/metadata")
+        common_before = footprint(common_roots, files, deadline)
+        check_plans()
+        check_configuration(deadline)
+        require(footprint(common_roots, files, deadline) == common_before, "input drift during batch baseline")
+        common_observation["inputs"] = common_before
+        driver = bootstrap_driver(root, env, common_dir, target_dir, tools, driver_metadata,
+                                  deadline, common_observation["phases"], shared_plan)
+
+        def check_shared(until: float) -> None:
+            arm_deadline(until)
+            check_configuration(until)
+            require(footprint(common_roots, files, until) == common_before, "shared source/config input drift")
+            check_plans()
+            check_configuration(until)
+            require(footprint(common_roots, files, until) == common_before, "shared input drift during validation")
+            require(digest(read_regular(driver, MAX_INPUT_BYTES)) == shared_plan["driverSha256"],
+                    "driver custody changed")
+            require(time.monotonic() < until, "shared postflight deadline exceeded")
+
+        final_shared_check = check_shared
+        check_shared(deadline)
+        common_observation.update(outcome="passed", inputsUnchanged=True, configurationInputsUnchanged=True,
+                                  evidenceScope="common-setup-and-post-bootstrap-custody-only")
+        common_reference = save_observation(common_dir, common_observation)
+        common_seconds = time.monotonic() - started
+        observation["common"] = common_reference
+        observation["commonElapsedSeconds"] = common_seconds
+        for current, original_plan in enumerate(plans):
+            own_started = time.monotonic()
+            suite_dir = output / f"suite-{current:02d}"
+            suite_dir.mkdir(mode=0o700)
+            plan = dict(original_plan)
+            plan.update(tools=shared_plan["tools"], host=host, driverSha256=shared_plan["driverSha256"])
+            record: dict[str, Any] = {"schema": "fe2o3-tutorial-cpu-reference-observation-v1",
+                **NO_AUTHORITY, "executionMode": "batch-shared-private-driver", "plan": plan,
+                "commonObservation": common_reference, "commonElapsedSeconds": common_seconds,
+                "outcome": "invalid", "phases": [], "errors": [], "attempted": False}
+            suite_error: BaseException | None = None
+            try:
+                until = suite_deadline(own_started, common_seconds, limits[current], overall)
+                check_shared(until)
+                suite_target = suite_dir / "build"
+                suite_target.mkdir(mode=0o700)
+                suite_env = dict(env)
+                suite_env.update(CARGO_TARGET_DIR=str(suite_target), TMPDIR=str(suite_dir))
+                arguments = plan["declaredCommand"]["arguments"]
+                manifest = relative_file(root, arguments[0])
+                record["attempted"] = True
+                data = child([str(tools["cargo"]), "metadata", "--locked", "--offline", "--format-version", "1",
+                              "--manifest-path", str(manifest), "--filter-platform", host],
+                             root, suite_env, suite_dir, "suite-metadata", until, record["phases"])
+                require_child_success(record["phases"], "suite metadata")
+                metadata = decode_json(data)
+                expected = selected_target(root, metadata, manifest, arguments[1:])
+                plan["selectedTarget"] = expected
+                local_roots = sorted({Path(package["manifest_path"]).parent for package in metadata["packages"]
+                                      if package.get("source") is None})
+                require(all(path.is_relative_to(root) for path in local_roots), "local dependency escapes repository")
+                suite_files = [*files, validator.effective_cargo_lock(root, manifest.parent, "CPU reference")]
+                check_shared(until)
+                before = footprint(local_roots, suite_files, until)
+                require(all(common_before[path] == value for path, value in before.items() if path in common_before),
+                        "suite baseline disagrees with common inputs")
+                revalidate_plan(root, arguments, plan, validator)
+                check_configuration(until)
+                require(footprint(local_roots, suite_files, until) == before, "input drift during baseline validation")
+                record.update(inputs=before, configurationInputs=configs)
+                selector = ["--lib"] if arguments[1] == "lib" else ["--test", arguments[2]]
+                command = [str(driver), "test", "--locked", "--offline", "--manifest-path", str(manifest),
+                           *selector, "--message-format=json", "--", "-Z", "unstable-options", "--format=json", "--test-threads=1"]
+                try:
+                    data = child(command, root, suite_env, suite_dir, "suite", until, record["phases"])
+                    record["tests"] = test_observation(data, expected, suite_target)
+                    record["outcome"] = record["tests"]["outcome"] if record["phases"][-1]["returncode"] == 0 else "failed"
+                except BaseException as error:
+                    record["errors"].append(str(error))
+                    raise
+                finally:
+                    check_configuration(until)
+                    record["configurationInputsUnchanged"] = True
+                    record["inputsUnchanged"] = footprint(local_roots, suite_files, until) == before
+                    require(record["inputsUnchanged"], "source/config input drift")
+                    revalidate_plan(root, arguments, plan, validator)
+                    check_configuration(until)
+                    require(footprint(local_roots, suite_files, until) == before, "input drift during postflight validation")
+                    check_shared(until)
+            except BaseException as error:
+                suite_error = error
+                record["outcome"] = (error.outcome if isinstance(error, ObservationError) else
+                                     "interrupted" if isinstance(error, KeyboardInterrupt) else "invalid")
+                if str(error) not in record["errors"]:
+                    record["errors"].append(str(error) or "interrupted")
+            finally:
+                # Cleanup still runs after an expired/interrupting alarm. It
+                # cannot turn an exhausted suite into successful evidence.
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                remove_scratch(suite_dir, record)
+                own_seconds = time.monotonic() - own_started
+                record.update(ownElapsedSeconds=own_seconds, chargedElapsedSeconds=common_seconds + own_seconds,
+                              evidenceDirectory=str(suite_dir))
+                if common_seconds + own_seconds >= limits[current]:
+                    record["outcome"] = "unavailable"
+                    record["errors"].append("charged suite deadline exhausted")
+                if record["errors"] and suite_error is None:
+                    suite_error = ObservationError("suite cleanup or deadline failed")
+                reference = save_observation(suite_dir, record)
+                observation["suites"].append({"suiteId": plan["suiteId"], "outcome": record["outcome"],
+                                              "observation": reference})
+            if suite_error is not None:
+                raise suite_error
+        observation["outcome"] = "passed" if all(item["outcome"] == "passed" for item in observation["suites"]) else "failed"
+    except BaseException as error:
+        abort = error
+        observation["outcome"] = (error.outcome if isinstance(error, ObservationError) else
+                                  "interrupted" if isinstance(error, KeyboardInterrupt) else "invalid")
+        observation["errors"].append(str(error) or "interrupted")
+    finally:
+        try:
+            if final_shared_check is not None:
+                try:
+                    final_shared_check(overall)
+                    observation["finalSharedInputsUnchanged"] = True
+                except BaseException as error:
+                    observation["finalSharedInputsUnchanged"] = False
+                    observation["outcome"] = "invalid"
+                    observation["errors"].append(f"final shared postflight: {error}")
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            if common_reference is None:
+                common_observation["errors"].append(str(abort) if abort is not None else "common setup incomplete")
+                common_seconds = time.monotonic() - started
+                common_observation["elapsedSeconds"] = common_seconds
+                observation["common"] = save_observation(common_dir, common_observation)
+                observation["commonElapsedSeconds"] = common_seconds
+            for original_plan in plans[len(observation["suites"]):]:
+                index = len(observation["suites"])
+                suite_dir = output / f"suite-{index:02d}"
+                suite_dir.mkdir(mode=0o700, exist_ok=True)
+                record = {"schema": "fe2o3-tutorial-cpu-reference-observation-v1", **NO_AUTHORITY,
+                          "executionMode": "batch-shared-private-driver", "outcome": "unavailable", "attempted": False,
+                          "plan": original_plan, "commonObservation": observation["common"], "phases": [],
+                          "commonElapsedSeconds": common_seconds, "ownElapsedSeconds": 0.0,
+                          "chargedElapsedSeconds": common_seconds,
+                          "errors": ["not started: batch setup/reuse aborted"]}
+                reference = save_observation(suite_dir, record)
+                observation["suites"].append({"suiteId": original_plan["suiteId"], "outcome": "unavailable",
+                                              "observation": reference})
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            remove_scratch(common_dir, observation)
+            if time.monotonic() >= overall:
+                observation["errors"].append("batch scheduler deadline exhausted")
+                observation["outcome"] = "unavailable"
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -677,7 +987,13 @@ def main(arguments: list[str] | None = None) -> int:
         require(not parent.is_relative_to(root), "output directory must be outside the source checkout")
         output = Path(tempfile.mkdtemp(prefix="fe2o3-tutorial-cpu-", dir=parent))
         output.chmod(0o700)
-        execute(root, list(sys.argv[1:] if arguments is None else arguments), output, started, observation)
+        selected = list(sys.argv[1:] if arguments is None else arguments)
+        if selected and selected[0] == "--batch":
+            observation["schema"] = "fe2o3-tutorial-cpu-reference-batch-observation-v1"
+            require(selected == ["--batch"], "--batch accepts no trailing arguments")
+            execute_batch(root, output, started, observation)
+        else:
+            execute(root, selected, output, started, observation)
     except (ObservationError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         observation["outcome"] = error.outcome if isinstance(error, ObservationError) else "invalid"
         if str(error) not in observation["errors"]:
