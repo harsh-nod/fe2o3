@@ -15,12 +15,13 @@ struct Token(usize);
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn slice_metadata_arguments(
     input: &[u32],
-    ordinary: usize,
+    ordinary: u64,
     mut scalar: DisjointSlice<u64>,
     mut repeated: DisjointSlice<u64>,
     mut mixed: DisjointSlice<u64>,
     mut closure: DisjointSlice<u64>,
 ) {
+    let ordinary = ordinary as usize;
     let length = input.len();
     let a = increment(length);
     let b = combine((length, (), length));
