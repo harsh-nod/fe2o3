@@ -93,6 +93,8 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
+
     fn slice_access(
         &mut self,
         site: super::ProjectedSemanticAccessSiteV1,
@@ -207,6 +209,10 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
+        self.budget.charge_work(amount).map_err(resource)
+    }
+
     fn slice_access(
         &mut self,
         site: super::ProjectedSemanticAccessSiteV1,

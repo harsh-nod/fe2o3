@@ -23,6 +23,19 @@ use pliron::{
 const MAX_FIXTURE_BYTES: u64 = 64 * 1024;
 
 #[test]
+fn layout_only_execution_domain_textual_pliron_fixtures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/production_analysis/tests/lit");
+    for fixture in [
+        "race_layout_only_shared_read.pliron",
+        "race_layout_only_constant_write.pliron",
+        "race_layout_only_oob_read.pliron",
+        "race_missing_domain_constant_write.pliron",
+    ] {
+        run_fixture(&root.join(fixture));
+    }
+}
+
+#[test]
 fn native_data_textual_pliron_fixtures_v3() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/production_analysis/tests/lit");
     for fixture in [

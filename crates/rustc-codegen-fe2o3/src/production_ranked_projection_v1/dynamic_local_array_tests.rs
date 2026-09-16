@@ -439,7 +439,10 @@ fn dynamic_local_array_access_is_guarded_private_and_readonly() {
                     items: vec![ProjectedBlockItemV1::Guarded(guarded[0].access.clone())],
                 };
                 assert!(block.has_memory_access());
-                assert!(!block.requires_invocation_index());
+                assert!(!operations.iter().any(|operation| matches!(
+                    operation,
+                    ProductionRankedOperationV1::InvocationIndex { .. }
+                )));
                 assert!(sources.is_empty());
             }
         }

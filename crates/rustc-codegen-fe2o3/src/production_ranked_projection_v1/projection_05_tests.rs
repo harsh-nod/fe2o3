@@ -696,7 +696,7 @@
     }
 
     #[test]
-    fn compatible_atomic_effect_does_not_require_an_invocation_derived_coordinate() {
+    fn atomic_and_ordinary_effects_both_require_memory_analysis() {
         let effect_source = ProjectedEffectSourceV1 {
             access: AccessKindAttr::AtomicReadModifyWrite,
             memory_space: MemorySpaceAttr::Global,
@@ -715,7 +715,7 @@
                 source: Some(effect_source),
             }],
         };
-        assert!(!atomic.requires_invocation_index());
+        assert!(atomic.has_memory_access());
 
         let ordinary = ProjectedSemanticBlockV1 {
             items: vec![ProjectedBlockItemV1::Effect {
@@ -730,7 +730,7 @@
                 }),
             }],
         };
-        assert!(ordinary.requires_invocation_index());
+        assert!(ordinary.has_memory_access());
     }
 
     #[test]

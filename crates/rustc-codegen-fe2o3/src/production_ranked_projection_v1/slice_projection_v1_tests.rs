@@ -9,6 +9,13 @@ struct RecordingFacts {
 }
 
 impl ProjectedAssertionFactsV1 for RecordingFacts {
+    fn charge_private_array_work(
+        &mut self,
+        _: usize,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        panic!("slice census fixtures must not charge private-array work")
+    }
+
     fn is_materialized_block(
         &mut self,
         _: usize,

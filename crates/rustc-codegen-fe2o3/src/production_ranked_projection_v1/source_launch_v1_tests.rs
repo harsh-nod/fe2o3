@@ -204,10 +204,27 @@ fn source_launch_materialized_two_roots_reject_reordering_and_duplicate_labels()
     for (root, source) in baseline.roots.iter().zip(&source_rows) {
         assert_eq!(root.semantic_root, source.selected_root());
         assert_eq!(root.kernel_binding, source.kernel_binding());
-        // This tests ranked roster custody, not private-array attachment.
-        // Private accesses still lack attachment rows, covered by the exact
-        // old/new attachment refusal in the canonical assertion tests.
-        assert!(root.access_sources.is_empty());
+        // Keep each root's indexed-write row with its authenticated roster.
+        // Final private-array attachment is exercised by the assertion tests.
+        assert_eq!(root.access_sources.len(), 1);
+        let row = root.access_sources[0];
+        assert_eq!(
+            (
+                row.semantic_block(),
+                row.semantic_statement(),
+                row.semantic_access_ordinal(),
+            ),
+            (0, Some(1), 0)
+        );
+        assert!(matches!(
+            &root.lowering.kernel().blocks()[row.ranked_block() as usize].operations()
+                [row.ranked_operation() as usize],
+            ProductionRankedOperationV1::Access {
+                kind: AccessKindAttr::Write,
+                indices,
+                ..
+            } if indices.len() == 1
+        ));
     }
 
     for (reorder, expected) in [

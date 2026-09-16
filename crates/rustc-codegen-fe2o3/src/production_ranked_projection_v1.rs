@@ -64,7 +64,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
+    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
 };
 #[cfg(test)]
@@ -693,28 +693,6 @@ impl ProjectedSemanticBlockV1 {
                 )
             }
             ProjectedBlockItemV1::Effect { .. } => false,
-        })
-    }
-
-    fn requires_invocation_index(&self) -> bool {
-        self.items.iter().any(|item| match item {
-            ProjectedBlockItemV1::Effect {
-                operation:
-                    ProductionRankedOperationV1::AtomicAccess { .. }
-                    | ProductionRankedOperationV1::AtomicValueAccess { .. },
-                ..
-            } => false,
-            ProjectedBlockItemV1::Effect {
-                source: Some(source),
-                ..
-            } => source.memory_space != MemorySpaceAttr::Private,
-            ProjectedBlockItemV1::Guarded(access) => {
-                access.memory_space != MemorySpaceAttr::Private
-            }
-            ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
-            ProjectedBlockItemV1::Pipeline(_) => false,
-            ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
-            ProjectedBlockItemV1::Effect { source: None, .. } => false,
         })
     }
 }
@@ -3517,18 +3495,10 @@ fn project_and_verify_ranked_root_v1(
             "a kernel without a statically ranked indexed memory access",
         ));
     }
-    if projected_blocks
-        .iter()
-        .any(ProjectedSemanticBlockV1::requires_invocation_index)
-        && !entry_operations.iter().any(|operation| {
-            matches!(
-                operation,
-                ProductionRankedOperationV1::InvocationIndex { .. }
-            )
-        })
-    {
+    // The launch layout defines the domain even when source never reads a coordinate.
+    if entry_operations.first() != Some(&ranked_execution_layout_v1(source_root.layout())) {
         incomplete.get_or_insert(ProductionRankedProjectionErrorV1::Incomplete(
-            "a concurrent memory effect before exact invocation-index projection is available",
+            "ranked execution domain differs from the authenticated source launch",
         ));
     }
     let (blocks, sources, executable_effect_sources) = build_ranked_cfg(
@@ -3549,7 +3519,13 @@ fn project_and_verify_ranked_root_v1(
         &blocks,
         &sources,
     )?;
-    let access_sources = production_access_sources(&blocks, &sources)?;
+    let access_sources = production_access_sources(
+        semantic.types(),
+        function,
+        &blocks,
+        &sources,
+        assertion_facts,
+    )?;
     slice_queries.validate(&blocks, &access_sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
@@ -4367,6 +4343,78 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     }
 }
 
+fn private_indexed_write_source_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    source: &ProjectedAccessSourceV1,
+) -> bool {
+    let Some(site) = source.semantic_site else {
+        return false;
+    };
+    let Some(statement) = site.statement.and_then(|statement| {
+        function
+            .blocks()
+            .get(site.block)?
+            .statements()
+            .get(statement)
+    }) else {
+        return false;
+    };
+    let (destination, value) = match statement.kind() {
+        SemanticStatementKindV1::Assign(assignment) => {
+            let SemanticRvalueKindV1::Use(value) = assignment.value().kind() else {
+                return false;
+            };
+            (assignment.destination(), value)
+        }
+        SemanticStatementKindV1::Store(store)
+            if store.volatility() == SemanticVolatilityV1::NonVolatile
+                && store.atomic().is_none() =>
+        {
+            (store.destination(), store.value())
+        }
+        _ => return false,
+    };
+    // Private-array reads and whole initialization still lack an exact
+    // attachment recipe. Keep this metadata subset closed independently of
+    // the general RHS-before-destination projection order.
+    let value_type = match value {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+            if !place.projections().is_empty() {
+                return false;
+            }
+            place.ty()
+        }
+        SemanticOperandV1::Constant(constant) => constant.ty(),
+    };
+    let [projection] = destination.projections() else {
+        return false;
+    };
+    if !matches!(
+        projection.kind(),
+        SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::ConstantIndex { .. }
+    ) {
+        return false;
+    }
+    let Some(local) = function.locals().get(destination.local().index() as usize) else {
+        return false;
+    };
+    let Some(SemanticTypeShapeV1::Array { element, .. }) =
+        types.get(local.ty().index() as usize).map(|ty| ty.shape())
+    else {
+        return false;
+    };
+    !local.role().is_entry_argument()
+        && matches!(
+            types.get(element.index() as usize).map(|ty| ty.shape()),
+            Some(SemanticTypeShapeV1::Scalar(_))
+        )
+        && value_type == *element
+        && destination.ty() == *element
+        && projection.result_type() == *element
+        && source.access == AccessKindAttr::Write
+}
+
 fn retained_ranked_access_source_v1(
     memory_space: MemorySpaceAttr,
     operation: &ProductionRankedOperationV1,
@@ -4392,8 +4440,11 @@ fn retained_ranked_access_source_v1(
 }
 
 fn production_access_sources(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<Vec<ProductionRankedAccessSourceV1>, ProductionRankedProjectionErrorV1> {
     let mut ordinals = HashMap::<(usize, Option<usize>), u32>::new();
     let mut retained = Vec::new();
@@ -4409,11 +4460,26 @@ fn production_access_sources(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "ranked access correspondence is outside the projected graph",
             ))?;
-        // Ordinary private-local accesses remain in the ranked graph so that
-        // bounds and initialization checks see them. They are not observable
-        // memory effects and the executable KIR may promote them to SSA.
         if !retained_ranked_access_source_v1(source.memory_space, operation) {
-            continue;
+            // Only a final scalar-valued indexed destination is added here.
+            // It cannot precede an RHS slice query using the shared census.
+            if source.memory_space != MemorySpaceAttr::Private
+                || !matches!(
+                    operation,
+                    ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Write,
+                        ..
+                    }
+                )
+            {
+                continue;
+            }
+            // Fixed source/statement/local/type/projection checks only;
+            // no projection, ancestry or value-definition walk.
+            facts.charge_private_array_work(40)?;
+            if !private_indexed_write_source_v1(types, function, source) {
+                continue;
+            }
         }
         let site = source
             .semantic_site
@@ -22203,6 +22269,8 @@ fn project_statement_accesses(
     let source = statement.source();
     match statement.kind() {
         SemanticStatementKindV1::Assign(assignment) => {
+            // Match executable lowering: evaluate every RHS read before the
+            // destination write, including when both refer to one allocation.
             project_rvalue_reads(
                 types,
                 function,
@@ -24303,6 +24371,14 @@ mod tests {
     struct ComponentDynamicAssertionFactsV1;
 
     impl ProjectedAssertionFactsV1 for ComponentDynamicAssertionFactsV1 {
+        fn charge_private_array_work(
+            &mut self,
+            _: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            // Explicitly inert component facts, never a production budget.
+            Ok(())
+        }
+
         fn is_materialized_block(
             &mut self,
             _: usize,
@@ -24324,6 +24400,14 @@ mod tests {
     }
 
     impl ProjectedAssertionFactsV1 for canonical_assertion_facts_v1::ProjectedAssertionConditionV1 {
+        fn charge_private_array_work(
+            &mut self,
+            _: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            // Explicitly inert component facts, never a production budget.
+            Ok(())
+        }
+
         fn is_materialized_block(
             &mut self,
             _: usize,
