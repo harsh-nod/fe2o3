@@ -1,7 +1,7 @@
 # Execution Capability Integration Contract
 
-Status: allocated implementation contract for #272/#275, not an admitted wire
-format or executable feature. M0 and M1 remain incomplete. The production
+Status: the inert semantic MIR V29 types and callable codec are implemented;
+executable capability integration is not complete. M0 and M1 remain incomplete. The production
 importer still rejects staged context/tile terminals. The implementation must
 use the one production graph and existing verification and launch gates.
 
@@ -17,7 +17,8 @@ These versions do not activate intermediate historical formats. Semantic MIR
 V16-V26, held numerical V27 and historical KIR V13/V14 remain separate. Match
 explicit supported schemas, not a numeric range that admits those drafts.
 
-The following tags are reserved together; codecs are not yet implemented.
+The following tags are allocated together. Only the five callable MIR encodings
+and four semantic MIR roles are implemented here; KIR/SO codecs remain pending.
 
 | Operation | MIR intrinsic | KIR operation | Execution opcode |
 | --- | --- | --- | --- |
@@ -29,10 +30,30 @@ The following tags are reserved together; codecs are not yet implemented.
 | LaneFragmentIntoPartsU32 | 86 | 37 | 6 |
 
 KIR type tags 9/10/11/12 denote context/workgroup/masked-u32-tile/u32-fragment.
-All four are non-storable. Semantic type payload tags, trusted source terminal
-identities and checked-transformation receipt versions require their own closed
-inventories and allocations. In particular, source CombinedV4 tags through 121
+All four are non-storable. Semantic MIR type tags 14/15/16/17 respectively carry
+those roles alongside their unchanged aggregate fields, rustc layout and ABI.
+Tile and fragment roles carry L:u16 and E:u16. Tag 13 remains str. Trusted source
+terminal identities and checked-transformation receipt versions require their
+own closed inventories and allocations. Source CombinedV4 tags through 121
 and semantic intrinsic 68 are occupied. ScopeEnd has no public Rust terminal.
+
+MIR callable payloads are exact type IDs: ContextIssue(C), WorkgroupDerive(C,W),
+MaskedTileLoadU32(W,T), MaskedTileIntoFragmentU32(T,F), and
+LaneFragmentIntoPartsU32(F,P). Geometry comes from the exact role types rather
+than a duplicate operation field. Signatures require the actual mutable context
+borrow, shared workgroup and u32 slice borrows, usize base, matching geometry,
+and ordinary ([u32;E],[bool;E]) result tuple. The callable decoder rejects
+69-80 and 83. ScopeEnd is generated in checked KIR callback materialization,
+not inserted into the original authenticated source MIR or given a fake ABI.
+
+Role layout and signatures are inert checks, not authentication. A bounded
+request-wide containment map rejects constant fabrication through owned nested
+carriers; references and function signatures stop ownership propagation.
+Ordinary wrappers may transport existing roles, and borrowed closure captures
+remain representable. Affine moves, actual borrow provenance, scope closure,
+effects and schedule correctness still require canonical graph validation.
+Current-production MIR admission/decoding and executable lowering reject V29
+until that integration exists. Ordinary aggregate/ZST lowering cannot erase it.
 
 ## Ownership And Effects
 

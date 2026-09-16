@@ -490,6 +490,21 @@ fn rust_call_schema_inherits_complete_public_v15_bf16_documents() {
 }
 
 #[test]
+fn capability_schema_inherits_complete_public_v15_bf16_documents() {
+    let limits = SemanticMirLimitsV1::default();
+    for constructor in [true, false] {
+        let mut expected = admitted(constructor).canonical_encoding().to_vec();
+        expected[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&29u16.to_le_bytes());
+        let inherited = request(constructor).admit_exact_v29(limits).unwrap();
+        assert_eq!(inherited.canonical_encoding(), expected);
+        let decoded =
+            AdmittedInertSemanticMirV1::decode_exact_v29_canonical(&expected, limits).unwrap();
+        assert_eq!(decoded.canonical_encoding(), expected);
+        assert_eq!(decoded.callables(), inherited.callables());
+    }
+}
+
+#[test]
 fn full_v15_documents_reject_future_intrinsics_and_invalid_column_major_contracts() {
     let limits = SemanticMirLimitsV1::default();
     let constructor = admitted(true);

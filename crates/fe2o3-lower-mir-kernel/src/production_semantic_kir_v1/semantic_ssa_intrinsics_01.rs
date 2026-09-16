@@ -613,6 +613,17 @@ fn require_current_production_intrinsic_v1(
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     if matches!(
         operation,
+        SemanticCompilerIntrinsicOperationV1::Execution(_)
+    ) {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "execution capabilities require checked canonical KIR materialization",
+        ));
+    }
+    if matches!(
+        operation,
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
     ) {
         Err(unsupported(

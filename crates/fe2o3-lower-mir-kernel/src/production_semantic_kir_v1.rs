@@ -10690,6 +10690,16 @@ fn lower_module_with_call_budget_inner_v1(
     call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
+    // Admission binds every execution role (including nested/ignored carriers) to V29.
+    // Never flatten those roles through the ordinary aggregate/ZST lowering path.
+    if semantic.wire_version() == fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V29 {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "execution capabilities require checked canonical KIR materialization",
+        ));
+    }
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
         let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
             unsupported(
@@ -15286,6 +15296,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.prepare_call_destination_v1(block, destination.place(), operations)?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::Execution(_) => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "execution capabilities require checked canonical KIR materialization",
+                ));
+            }
             SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
                 self.require_call_argument_count(block, call, 0)?;
                 if destination.place().ty() != *scope {
