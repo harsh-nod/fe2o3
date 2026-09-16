@@ -6223,6 +6223,8 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let ranked = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let public_effect_counts = public_effect_counts_by_call_v1(&kir, &semantic_sites, &mut budget)?;
+    let mut conditional_reads = BTreeMap::new();
     if let Some(location) = kir.unmodeled_memory_effects.first().copied() {
         return Err(
             ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect { location },
@@ -6509,6 +6511,34 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
         }
         if first_logical_use {
+            let operation = kir.operations.get(&consumer.location).copied().ok_or(
+                ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                    location: consumer.location,
+                },
+            )?;
+            if let Some(witness) = authenticate_conditional_total_read_v1(
+                semantic,
+                semantic_function,
+                site,
+                logical_site,
+                *consumer,
+                operation,
+                public_effect_counts
+                    .get(&(site.block, site.statement))
+                    .copied()
+                    .unwrap_or(0),
+            ) {
+                let key = witness
+                    .key()
+                    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+                if conditional_reads.insert(key, witness).is_some() {
+                    return Err(
+                        ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                            location: consumer.location,
+                        },
+                    );
+                }
+            }
             effect_locations.push((
                 logical_site,
                 consumer.location,
@@ -6550,7 +6580,13 @@ fn validate_mir_pliron_translation_with_semantic_v1(
             });
         }
     }
-    validate_effect_control_flow_v1(body, lowering.kernel(), &effect_locations, &mut budget)?;
+    validate_effect_control_flow_v1(
+        body,
+        lowering.kernel(),
+        &effect_locations,
+        &conditional_reads,
+        &mut budget,
+    )?;
 
     let kir_synchronization = kir_synchronization_contracts_v1(body)?;
     let ranked_synchronization = ranked_synchronization_contracts_v1(lowering.kernel())?;
@@ -6808,6 +6844,8 @@ struct NormalizedEffectFlowV1 {
     next_effects: BTreeSet<(SemanticAccessSiteV1, SemanticAccessSiteV1)>,
 }
 
+include!("production_semantic_kir_v1/conditional_read_flow_v1.rs");
+
 fn validate_effect_control_flow_v1(
     body: &FunctionBody,
     ranked: &fe2o3_pliron::ProductionRankedKernelV1,
@@ -6817,6 +6855,7 @@ fn validate_effect_control_flow_v1(
         u32,
         (u32, u32),
     )],
+    conditional_reads: &BTreeMap<(u32, u64), AuthenticatedConditionalReadV1>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Result<(), ProductionMirPlironTranslationErrorV1> {
     let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
@@ -6884,10 +6923,22 @@ fn validate_effect_control_flow_v1(
         .first()
         .map(|block| block.id.0)
         .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
-    let kir_flow = effect_flow_signature_v1(kir_entry, &kir_events, &kir_successors, budget)
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let ranked_flow = effect_flow_signature_v1(0, &ranked_events, &ranked_successors, budget)
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let kir_flow = effect_flow_signature_v1(
+        kir_entry,
+        &kir_events,
+        &kir_successors,
+        conditional_reads,
+        budget,
+    )
+    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let ranked_flow = effect_flow_signature_v1(
+        0,
+        &ranked_events,
+        &ranked_successors,
+        &BTreeMap::new(),
+        budget,
+    )
+    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     if kir_flow == ranked_flow {
         return Ok(());
     }
@@ -6928,19 +6979,26 @@ fn effect_flow_signature_v1(
     entry: u32,
     events: &BTreeMap<u32, Vec<(u64, SemanticAccessSiteV1)>>,
     successors: &BTreeMap<u32, Vec<u32>>,
+    conditional_reads: &BTreeMap<(u32, u64), AuthenticatedConditionalReadV1>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<NormalizedEffectFlowV1> {
     if !successors.contains_key(&entry) {
         return None;
     }
-    let entry_effects = first_reachable_effects_v1(entry, None, events, successors, budget)?;
+    let entry_effects =
+        first_reachable_effects_v1(entry, None, events, successors, conditional_reads, budget)?;
     let mut next_effects = BTreeSet::new();
     for (&block, block_events) in events {
         for &(operation, site) in block_events {
             budget.charge()?;
-            for next in
-                first_reachable_effects_v1(block, Some(operation), events, successors, budget)?
-            {
+            for next in first_reachable_effects_v1(
+                block,
+                Some(operation),
+                events,
+                successors,
+                conditional_reads,
+                budget,
+            )? {
                 budget.charge()?;
                 next_effects.insert((site, next));
             }
@@ -6957,17 +7015,21 @@ fn first_reachable_effects_v1(
     after_operation: Option<u64>,
     events: &BTreeMap<u32, Vec<(u64, SemanticAccessSiteV1)>>,
     successors: &BTreeMap<u32, Vec<u32>>,
+    conditional_reads: &BTreeMap<(u32, u64), AuthenticatedConditionalReadV1>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<BTreeSet<SemanticAccessSiteV1>> {
     budget.charge()?;
-    if let Some((_, site)) = events.get(&block).and_then(|events| {
-        events
-            .iter()
-            .find(|(operation, _)| after_operation.is_none_or(|after| *operation > after))
-    }) {
-        return Some(BTreeSet::from([*site]));
-    }
     let mut found = BTreeSet::new();
+    if !append_effect_prefix_v1(
+        block,
+        after_operation,
+        events,
+        conditional_reads,
+        &mut found,
+        budget,
+    )? {
+        return Some(found);
+    }
     let mut visited = BTreeSet::new();
     let mut pending = VecDeque::new();
     pending.extend(successors.get(&block)?.iter().copied());
@@ -6976,8 +7038,7 @@ fn first_reachable_effects_v1(
         if !visited.insert(current) {
             continue;
         }
-        if let Some((_, site)) = events.get(&current).and_then(|events| events.first()) {
-            found.insert(*site);
+        if !append_effect_prefix_v1(current, None, events, conditional_reads, &mut found, budget)? {
             continue;
         }
         pending.extend(successors.get(&current)?.iter().copied());
@@ -26132,6 +26193,8 @@ mod resource_tests {
         include!("production_semantic_kir_v1/dynamic_local_array_tests.rs");
     }
     include!("production_semantic_kir_v1/resource_01_tests.rs");
+    include!("production_semantic_kir_v1/guarded_effect_flow_v1_tests.rs");
+    include!("production_semantic_kir_v1/conditional_total_read_replay_v1_tests.rs");
     mod private_array_resource_tests {
         include!("production_semantic_kir_v1/tests/production_private_array_resource_tests.rs");
     }
