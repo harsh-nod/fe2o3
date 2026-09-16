@@ -4,7 +4,7 @@ use crate::{
     TargetCapabilityRefV1, Type, VerificationDiagnosticLocationV1, VerificationFunctionPassV1,
     WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, scope_can_observe_address_space,
     target_capability_is_supported_with_budget_v1, valid_failure_ordering,
-    valid_synchronization_semantics, verification_type_nodes_v1,
+    valid_synchronization_semantics, verification_type_facts_v15,
 };
 
 impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
@@ -113,8 +113,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         location: &VerificationDiagnosticLocationV1<'_>,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
         self.budget.charge_work(3)?;
-        verification_type_nodes_v1(&memory.element, self.budget)?;
-        if !memory.element.is_storable() {
+        if !verification_type_facts_v15(&memory.element, self.budget)?.storable {
             self.emit_fixed(
                 location,
                 DiagnosticCode::InvalidWorkgroupMemory,

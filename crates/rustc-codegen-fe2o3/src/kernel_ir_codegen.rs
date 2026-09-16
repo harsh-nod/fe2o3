@@ -103,6 +103,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorSourceAlreadyBound,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
+    UnsupportedExecutionType,
     #[cfg(test)]
     UnsupportedFloatTarget(String),
     #[cfg(test)]
@@ -126,6 +127,8 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::DescriptorSymbolClosureMismatch => {
                 formatter.write_str("compiler descriptor symbols do not match the module closure")
             }
+            Self::UnsupportedExecutionType => formatter
+                .write_str("execution roles have no admitted compiler-module representation"),
             #[cfg(test)]
             Self::UnsupportedFloatTarget(target) => write!(
                 formatter,
@@ -310,6 +313,36 @@ fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClo
 mod production_symbol_closure_tests {
     use super::*;
     use fe2o3_kernel_ir::{Function, Signature};
+
+    #[test]
+    fn compiler_module_refuses_direct_and_nested_execution_types() {
+        use fe2o3_kernel_ir::{AccessMode, AddressSpace, ExecutionRoleV15 as Role};
+        assert_eq!(check_type_depth(&Type::INDEX, 0), Ok(()));
+        for role in [
+            Role::Context,
+            Role::Workgroup,
+            Role::MaskedTileU32 {
+                lanes: 64,
+                elements: 4,
+            },
+            Role::LaneFragmentU32 {
+                lanes: 64,
+                elements: 4,
+            },
+        ] {
+            let direct = Type::Execution(role);
+            for ty in [
+                direct.clone(),
+                Type::pointer(direct.clone(), AddressSpace::Global, AccessMode::ReadOnly),
+                Type::slice(direct, AddressSpace::Global, AccessMode::ReadOnly),
+            ] {
+                assert_eq!(
+                    check_type_depth(&ty, 0),
+                    Err(CompilerModuleConstructionError::UnsupportedExecutionType),
+                );
+            }
+        }
+    }
 
     #[test]
     fn gfx942_diagnostic_intrinsics_are_not_link_imports() {
@@ -649,6 +682,7 @@ fn check_type_depth(ty: &Type, depth: usize) -> Result<(), CompilerModuleConstru
         });
     }
     match ty {
+        Type::Execution(_) => Err(CompilerModuleConstructionError::UnsupportedExecutionType),
         Type::Pointer(pointer) => check_type_depth(&pointer.pointee, depth + 1),
         Type::Slice(slice) => check_type_depth(&slice.element, depth + 1),
         Type::Unit | Type::Scalar(_) | Type::Vector(_) => Ok(()),

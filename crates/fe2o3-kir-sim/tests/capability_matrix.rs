@@ -133,6 +133,24 @@ fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
 }
 
 #[test]
+fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
+    assert_eq!(SimulationOperationSurfaceV1::Execution as u8, 37);
+    let matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.operation == SimulationOperationSurfaceV1::Execution)
+        .collect();
+    assert_eq!(rows.len(), 16);
+    assert!(rows.iter().all(|row| matches!(
+        &row.capability,
+        SimulationCapabilityDispositionV1::Unsupported {
+            reason: SimulationUnsupportedReasonCodeV1::InertExecutionV15,
+        }
+    )));
+}
+
+#[test]
 fn memory_intrinsic_ownership_is_explicitly_additive_v10() {
     let matrix = semantic_capability_matrix_v1();
     for profile in matrix

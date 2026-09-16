@@ -290,7 +290,8 @@ pub(super) fn transfer(
                     .map_or(Value::Dynamic, |bits| constant(to, bits)),
             )
         }
-        OperationKind::VerificationContract(_)
+        OperationKind::Execution(_)
+        | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)

@@ -11,9 +11,18 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, IndexKind, IntrinsicKind, IntrinsicOperation, MemoryEffect,
-    OperationKind, ScalarType, TargetCapability, Type, ValueDef, ValueId,
+    AccessMode, AddressSpace, Axis, ExecutionOperationErrorV15, ExecutionOperationV15,
+    ExecutionRoleV15, IndexKind, IntrinsicKind, IntrinsicOperation, MemoryEffect, OperationKind,
+    ScalarType, TargetCapability, Type, ValueDef, ValueId,
 };
+
+#[path = "semantic_operations/execution_v3.rs"]
+mod execution_v3;
+pub use execution_v3::SemanticExecutionInstancePayloadV3;
+use execution_v3::{decode_execution_payload_v3, encode_execution_payload_v3};
+#[path = "semantic_operations/verification_execution_v3.rs"]
+mod verification_execution_v3;
+pub(crate) use verification_execution_v3::try_verify_execution_operation_with_sink_v3;
 
 #[path = "semantic_operations/verification_sink_01.rs"]
 mod verification_sink_01;
@@ -37,6 +46,8 @@ pub const SEMANTIC_OPERATION_INSTANCE_MAGIC_V1: [u8; 8] = *b"FE2O3SI\0";
 pub const SEMANTIC_OPERATION_VERSION_V1: u16 = 1;
 /// V2 adds I128/U128 memory-element tags without changing any V1 bytes.
 pub const SEMANTIC_OPERATION_VERSION_V2: u16 = 2;
+/// V3 adds only the closed Execution family, preserving V1/V2 identities.
+pub const SEMANTIC_OPERATION_VERSION_V3: u16 = 3;
 pub const SEMANTIC_OPERATION_SCHEMA_BYTES_V1: usize = 16;
 pub const SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1: usize = 20;
 pub const MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1: usize = 4096;
@@ -50,6 +61,7 @@ pub enum SemanticOperationFamily {
     /// Launch queries and declarative launch constraints.
     Launch,
     Matrix,
+    Execution,
 }
 
 impl SemanticOperationFamily {
@@ -60,6 +72,7 @@ impl SemanticOperationFamily {
             Self::Debug => 3,
             Self::Launch => 4,
             Self::Matrix => 5,
+            Self::Execution => 6,
         }
     }
 
@@ -70,6 +83,7 @@ impl SemanticOperationFamily {
             3 => Some(Self::Debug),
             4 => Some(Self::Launch),
             5 => Some(Self::Matrix),
+            6 => Some(Self::Execution),
             _ => None,
         }
     }
@@ -84,6 +98,12 @@ pub enum SemanticOperationKind {
     CopyNonOverlapping,
     LaunchInvocationIndex,
     LaunchExtent,
+    ExecutionContextIssue,
+    ExecutionWorkgroupDerive,
+    ExecutionScopeEnd,
+    ExecutionMaskedTileLoadU32,
+    ExecutionTileIntoFragmentU32,
+    ExecutionFragmentIntoPartsU32,
 }
 
 impl SemanticOperationKind {
@@ -94,6 +114,12 @@ impl SemanticOperationKind {
             | Self::VolatileStore
             | Self::CopyNonOverlapping => SemanticOperationFamily::MemoryIntrinsic,
             Self::LaunchInvocationIndex | Self::LaunchExtent => SemanticOperationFamily::Launch,
+            Self::ExecutionContextIssue
+            | Self::ExecutionWorkgroupDerive
+            | Self::ExecutionScopeEnd
+            | Self::ExecutionMaskedTileLoadU32
+            | Self::ExecutionTileIntoFragmentU32
+            | Self::ExecutionFragmentIntoPartsU32 => SemanticOperationFamily::Execution,
         }
     }
 
@@ -105,6 +131,12 @@ impl SemanticOperationKind {
             Self::CopyNonOverlapping => 4,
             Self::LaunchInvocationIndex => 1,
             Self::LaunchExtent => 2,
+            Self::ExecutionContextIssue => 1,
+            Self::ExecutionWorkgroupDerive => 2,
+            Self::ExecutionScopeEnd => 3,
+            Self::ExecutionMaskedTileLoadU32 => 4,
+            Self::ExecutionTileIntoFragmentU32 => 5,
+            Self::ExecutionFragmentIntoPartsU32 => 6,
         }
     }
 
@@ -116,6 +148,12 @@ impl SemanticOperationKind {
             (SemanticOperationFamily::MemoryIntrinsic, 4) => Some(Self::CopyNonOverlapping),
             (SemanticOperationFamily::Launch, 1) => Some(Self::LaunchInvocationIndex),
             (SemanticOperationFamily::Launch, 2) => Some(Self::LaunchExtent),
+            (SemanticOperationFamily::Execution, 1) => Some(Self::ExecutionContextIssue),
+            (SemanticOperationFamily::Execution, 2) => Some(Self::ExecutionWorkgroupDerive),
+            (SemanticOperationFamily::Execution, 3) => Some(Self::ExecutionScopeEnd),
+            (SemanticOperationFamily::Execution, 4) => Some(Self::ExecutionMaskedTileLoadU32),
+            (SemanticOperationFamily::Execution, 5) => Some(Self::ExecutionTileIntoFragmentU32),
+            (SemanticOperationFamily::Execution, 6) => Some(Self::ExecutionFragmentIntoPartsU32),
             _ => None,
         }
     }
@@ -476,7 +514,21 @@ pub struct SemanticOperationSchema {
 }
 
 impl SemanticOperationSchema {
-    pub const fn v1(kind: SemanticOperationKind) -> Self {
+    /// Constructs a legacy schema. This formerly infallible API now rejects
+    /// Execution kinds instead of assigning them a noncanonical V1 identity.
+    pub const fn v1(
+        kind: SemanticOperationKind,
+    ) -> Result<Self, SemanticOperationSchemaDecodeError> {
+        if matches!(kind.family(), SemanticOperationFamily::Execution) {
+            return Err(SemanticOperationSchemaDecodeError::NonCanonicalVersion {
+                version: SEMANTIC_OPERATION_VERSION_V1,
+                kind,
+            });
+        }
+        Ok(Self::legacy_v1(kind))
+    }
+
+    const fn legacy_v1(kind: SemanticOperationKind) -> Self {
         Self {
             version: SEMANTIC_OPERATION_VERSION_V1,
             kind,
@@ -536,7 +588,9 @@ pub fn decode_semantic_operation_schema(
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
     if !matches!(
         version,
-        SEMANTIC_OPERATION_VERSION_V1 | SEMANTIC_OPERATION_VERSION_V2
+        SEMANTIC_OPERATION_VERSION_V1
+            | SEMANTIC_OPERATION_VERSION_V2
+            | SEMANTIC_OPERATION_VERSION_V3
     ) {
         return Err(SemanticOperationSchemaDecodeError::UnknownVersion(version));
     }
@@ -551,8 +605,9 @@ pub fn decode_semantic_operation_schema(
     let opcode = u16::from_le_bytes([bytes[12], bytes[13]]);
     let kind = SemanticOperationKind::from_parts(family, opcode)
         .ok_or(SemanticOperationSchemaDecodeError::UnknownOperation { family, opcode })?;
-    if version == SEMANTIC_OPERATION_VERSION_V2
-        && family != SemanticOperationFamily::MemoryIntrinsic
+    if (version == SEMANTIC_OPERATION_VERSION_V3) != (family == SemanticOperationFamily::Execution)
+        || (version == SEMANTIC_OPERATION_VERSION_V2
+            && family != SemanticOperationFamily::MemoryIntrinsic)
     {
         return Err(SemanticOperationSchemaDecodeError::NonCanonicalVersion { version, kind });
     }
@@ -618,9 +673,10 @@ impl fmt::Display for SemanticOperationSchemaDecodeError {
 
 impl Error for SemanticOperationSchemaDecodeError {}
 
-/// Canonical payload represented by a V1 or additive wide-element V2 identity.
+/// Canonical payload for legacy V1/V2 operations or the closed V3 Execution family.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SemanticOperationInstancePayloadV1 {
+    Execution(SemanticExecutionInstancePayloadV3),
     PointerDistance {
         kind: PointerDistanceKind,
         unit: PointerDistanceUnit,
@@ -746,14 +802,16 @@ impl SemanticOperationInstanceId {
 
     pub const fn launch_invocation_index(kind: IndexKind, axis: Axis) -> Self {
         Self {
-            schema: SemanticOperationSchema::v1(SemanticOperationKind::LaunchInvocationIndex),
+            schema: SemanticOperationSchema::legacy_v1(
+                SemanticOperationKind::LaunchInvocationIndex,
+            ),
             payload: SemanticOperationInstancePayloadV1::LaunchInvocationIndex { kind, axis },
         }
     }
 
     pub const fn launch_extent(axis: Axis) -> Self {
         Self {
-            schema: SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent),
+            schema: SemanticOperationSchema::legacy_v1(SemanticOperationKind::LaunchExtent),
             payload: SemanticOperationInstancePayloadV1::LaunchExtent { axis },
         }
     }
@@ -777,13 +835,16 @@ const fn memory_schema(
     ) {
         SemanticOperationSchema::v2(kind)
     } else {
-        SemanticOperationSchema::v1(kind)
+        SemanticOperationSchema::legacy_v1(kind)
     }
 }
 
 /// Encodes the full canonical semantic instance, including operation payload.
 pub fn encode_semantic_operation_instance_id(id: SemanticOperationInstanceId) -> Vec<u8> {
     let payload = match id.payload {
+        SemanticOperationInstancePayloadV1::Execution(payload) => {
+            encode_execution_payload_v3(payload)
+        }
         SemanticOperationInstancePayloadV1::PointerDistance {
             kind,
             unit,
@@ -872,6 +933,7 @@ pub(crate) const fn semantic_operation_instance_encoded_len_v1(
     id: SemanticOperationInstanceId,
 ) -> usize {
     let payload = match id.payload {
+        SemanticOperationInstancePayloadV1::Execution(payload) => payload.encoded_len(),
         SemanticOperationInstancePayloadV1::PointerDistance { .. } => 9 + 12,
         SemanticOperationInstancePayloadV1::VolatileLoad { .. }
         | SemanticOperationInstancePayloadV1::VolatileStore { .. } => 7 + 12,
@@ -922,7 +984,9 @@ pub fn decode_semantic_operation_instance_id(
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
     if !matches!(
         version,
-        SEMANTIC_OPERATION_VERSION_V1 | SEMANTIC_OPERATION_VERSION_V2
+        SEMANTIC_OPERATION_VERSION_V1
+            | SEMANTIC_OPERATION_VERSION_V2
+            | SEMANTIC_OPERATION_VERSION_V3
     ) {
         return Err(SemanticOperationInstanceDecodeError::UnknownVersion(
             version,
@@ -946,6 +1010,10 @@ pub fn decode_semantic_operation_instance_id(
     let opcode = u16::from_le_bytes([bytes[12], bytes[13]]);
     let kind = SemanticOperationKind::from_parts(family, opcode)
         .ok_or(SemanticOperationInstanceDecodeError::UnknownOperation { family, opcode })?;
+    if (version == SEMANTIC_OPERATION_VERSION_V3) != (family == SemanticOperationFamily::Execution)
+    {
+        return Err(SemanticOperationInstanceDecodeError::NonCanonicalVersion { version });
+    }
     let payload_length = u16::from_le_bytes([bytes[14], bytes[15]]) as usize;
     if payload_length > MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1 {
         return Err(SemanticOperationInstanceDecodeError::PayloadLimitExceeded {
@@ -959,6 +1027,12 @@ pub fn decode_semantic_operation_instance_id(
         SemanticOperationKind::CopyNonOverlapping => 22,
         SemanticOperationKind::LaunchInvocationIndex => 2,
         SemanticOperationKind::LaunchExtent => 1,
+        SemanticOperationKind::ExecutionContextIssue
+        | SemanticOperationKind::ExecutionWorkgroupDerive => 0,
+        SemanticOperationKind::ExecutionScopeEnd
+        | SemanticOperationKind::ExecutionMaskedTileLoadU32
+        | SemanticOperationKind::ExecutionTileIntoFragmentU32
+        | SemanticOperationKind::ExecutionFragmentIntoPartsU32 => 4,
     };
     if payload_length != expected_payload_length {
         return Err(SemanticOperationInstanceDecodeError::InvalidPayloadLength {
@@ -982,12 +1056,16 @@ pub fn decode_semantic_operation_instance_id(
         });
     }
     let payload = &bytes[SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1..];
+    if family == SemanticOperationFamily::Execution {
+        return decode_execution_payload_v3(kind, payload);
+    }
     let element_tag = match kind {
         SemanticOperationKind::PointerDistance => Some(payload[2]),
         SemanticOperationKind::VolatileLoad
         | SemanticOperationKind::VolatileStore
         | SemanticOperationKind::CopyNonOverlapping => Some(payload[0]),
         SemanticOperationKind::LaunchInvocationIndex | SemanticOperationKind::LaunchExtent => None,
+        _ => return Err(SemanticOperationInstanceDecodeError::InvalidContract { kind }),
     };
     if version == SEMANTIC_OPERATION_VERSION_V2 && !matches!(element_tag, Some(15 | 16)) {
         return Err(SemanticOperationInstanceDecodeError::NonCanonicalVersion { version });
@@ -1088,6 +1166,7 @@ pub fn decode_semantic_operation_instance_id(
             let axis = decode_axis(payload[0])?;
             Ok(SemanticOperationInstanceId::launch_extent(axis))
         }
+        _ => Err(SemanticOperationInstanceDecodeError::InvalidContract { kind }),
     }
 }
 

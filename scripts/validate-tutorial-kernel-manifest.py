@@ -1182,6 +1182,35 @@ def source_item_contract_sha256(lesson_id: str, tab: dict[str, Any]) -> str:
 
 def source_item_fragments(repo_root: Path, tab: dict[str, Any], label: str) -> list[str]:
     item = tab["sourceItem"]
+    if tab["sourceDigestScope"] == "file":
+        if tab["sourceFragmentsSha256"] is not None:
+            fail(f"{label} whole-file source cannot carry fragment digests")
+        require_digest(tab["sourceCommit"], f"{label}.sourceCommit", 40)
+        require_digest(tab["sourceSha256"], f"{label}.sourceSha256")
+        require_digest(tab["displayedSha256"], f"{label}.displayedSha256")
+        path = checked_path(repo_root, tab["sourcePath"], f"{label}.sourcePath")
+        source_path = repo_root / path
+        if source_path.stat().st_size > MAX_ATTRIBUTED_SOURCE_BYTES:
+            fail(f"{label} attributed source exceeds its bound")
+        source = source_path.read_bytes()
+        ranges = bounded_list(item["sourceRanges"], f"{label}.sourceRanges", 64)
+        if len(ranges) != 1:
+            fail(f"{label} whole-file source requires exactly one full byte range")
+        selected = require_object(ranges[0], "source range")
+        require_exact_keys(selected, {"byteOffset", "byteLength"}, "source range")
+        offset, size = selected["byteOffset"], selected["byteLength"]
+        if type(offset) is not int or type(size) is not int or offset != 0 or size != len(source):
+            fail(f"{label} whole-file range must cover every source byte")
+        if type(tab["displayedUtf8Bytes"]) is not int or tab["displayedUtf8Bytes"] != len(source):
+            fail(f"{label} whole-file displayed byte count differs")
+        try:
+            text = source.decode("utf-8")
+        except UnicodeError:
+            fail(f"{label} whole-file source is not valid UTF-8")
+        digest = hashlib.sha256(source).hexdigest()
+        if tab["sourceSha256"] != digest or tab["displayedSha256"] != digest:
+            fail(f"{label} whole-file source or displayed digest is stale")
+        return [text]
     if tab["sourceDigestScope"] != "displayed" or not tab["sourceFragmentsSha256"]:
         fail(f"{label} requires exact displayed fragments")
     path = checked_path(repo_root, tab["sourcePath"], f"{label}.sourcePath")

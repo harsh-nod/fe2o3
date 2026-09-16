@@ -752,7 +752,8 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                         }
                     }
                 }
-                OperationKind::VerificationContract(_)
+                OperationKind::Execution(_)
+                | OperationKind::VerificationContract(_)
                 | OperationKind::VectorLoad(_)
                 | OperationKind::VectorStore(_)
                 | OperationKind::VectorLayoutConvert(_)

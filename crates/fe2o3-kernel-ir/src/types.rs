@@ -129,6 +129,8 @@ impl SliceType {
 pub enum Type {
     Unit,
     Scalar(ScalarType),
+    /// Non-storable execution role available only in canonical Kernel IR V15.
+    Execution(crate::ExecutionRoleV15),
     /// A first-class fixed-lane vector available in canonical Kernel IR V12.
     Vector(FixedVectorTypeV12),
     Pointer(PointerType),
@@ -160,8 +162,24 @@ impl Type {
         }
     }
 
-    pub const fn is_storable(&self) -> bool {
-        !matches!(self, Self::Unit | Self::Slice(_))
+    pub fn is_storable(&self) -> bool {
+        match self {
+            Self::Unit | Self::Slice(_) | Self::Execution(_) => false,
+            Self::Pointer(pointer) => !pointer.pointee.contains_execution_role_v15(),
+            Self::Scalar(_) | Self::Vector(_) => true,
+        }
+    }
+
+    pub fn contains_execution_role_v15(&self) -> bool {
+        let mut ty = self;
+        loop {
+            match ty {
+                Self::Execution(_) => return true,
+                Self::Pointer(pointer) => ty = &pointer.pointee,
+                Self::Slice(slice) => ty = &slice.element,
+                Self::Unit | Self::Scalar(_) | Self::Vector(_) => return false,
+            }
+        }
     }
 }
 

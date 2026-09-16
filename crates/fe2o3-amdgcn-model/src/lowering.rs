@@ -4463,6 +4463,13 @@ impl<'a> FunctionLowerer<'a> {
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
         let scalar = match ty {
+            Type::Execution(_) => {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedType,
+                    "AMDGPU LLVM lowering does not support V15 execution types",
+                ));
+            }
             Type::Scalar(scalar) => Some(*scalar),
             Type::Pointer(pointer) => pointer.pointee.as_scalar(),
             Type::Slice(slice) => slice.element.as_scalar(),
@@ -4832,6 +4839,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(_)
             | OperationKind::Alloca { .. }
+            | OperationKind::Execution(_)
             | OperationKind::VerificationContract(_)
             | OperationKind::VectorLoad(_)
             | OperationKind::VectorStore(_)
@@ -9374,7 +9382,7 @@ fn llvm_type(ty: &Type) -> &'static str {
             "ptr addrspace(5)"
         }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
-        Type::Unit | Type::Slice(_) | Type::Vector(_) => {
+        Type::Unit | Type::Slice(_) | Type::Vector(_) | Type::Execution(_) => {
             unreachable!("type is not a first-class G1 LLVM value")
         }
     }

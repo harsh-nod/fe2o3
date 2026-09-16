@@ -236,6 +236,11 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         add_value_def(resident, result)?;
     }
     match &operation.kind {
+        OperationKind::Execution(fe2o3_kernel_ir::ExecutionOperationV15::ScopeEnd {
+            discarded,
+            ..
+        }) => resident.add_vec::<fe2o3_kernel_ir::ValueId>(discarded.capacity()),
+        OperationKind::Execution(_) => Some(()),
         OperationKind::Intrinsic(intrinsic) => add_type_boxes(resident, &intrinsic.result_type),
         OperationKind::Cast { to, .. } => add_type_boxes(resident, to),
         OperationKind::Call { callee, arguments } => {
@@ -286,7 +291,7 @@ fn add_type_boxes(resident: &mut ResidentLedger, ty: &Type) -> Option<()> {
                 resident.add_box::<Type>()?;
                 &slice.element
             }
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) => return Some(()),
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => return Some(()),
         };
     }
 }
@@ -395,6 +400,29 @@ mod tests {
         let mut string = String::with_capacity(capacity);
         string.push_str(value);
         string
+    }
+
+    #[test]
+    fn execution_scope_end_accounts_for_discard_capacity_before_refusal() {
+        let mut discarded = Vec::with_capacity(257);
+        discarded.push(ValueId(1));
+        let expected = discarded.capacity() * size_of::<ValueId>();
+        let operation = Operation::new(
+            vec![],
+            OperationKind::Execution(fe2o3_kernel_ir::ExecutionOperationV15::ScopeEnd {
+                workgroup: ValueId(0),
+                discarded,
+            }),
+        );
+        let mut resident = ResidentLedger::new(0);
+        assert_eq!(add_operation(&mut resident, &operation), Some(()));
+        assert_eq!(resident.bytes(), expected);
+        let mut overflow = ResidentLedger::new(usize::MAX - expected + 1);
+        assert_eq!(add_operation(&mut overflow, &operation), None);
+        assert_eq!(
+            type_retained_heap_bytes(&Type::Execution(fe2o3_kernel_ir::ExecutionRoleV15::Context)),
+            Some(0),
+        );
     }
 
     #[test]

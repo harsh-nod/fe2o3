@@ -469,6 +469,7 @@ fn preflight_terminator(
 
 fn operation_name(kind: &OperationKind) -> &'static str {
     match kind {
+        OperationKind::Execution(_) => "execution",
         OperationKind::VerificationContract(_) => "verification-contract",
         OperationKind::VectorLoad(_) => "vector-load",
         OperationKind::VectorStore(_) => "vector-store",

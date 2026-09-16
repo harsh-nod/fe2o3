@@ -3581,6 +3581,71 @@ fn pure_helper_with_workitem_source_is_not_a_uniform_call_summary() {
 }
 
 #[test]
+fn execution_v15_lifecycle_operations_prevent_uniform_helper_summaries() {
+    use fe2o3_kernel_ir::ExecutionOperationV15 as Execution;
+    for execution in [
+        Execution::ContextIssue,
+        Execution::WorkgroupDerive {
+            context: ValueId(10),
+        },
+        Execution::ScopeEnd {
+            workgroup: ValueId(10),
+            discarded: vec![],
+        },
+        Execution::MaskedTileLoadU32 {
+            workgroup: ValueId(10),
+            input: ValueId(10),
+            base: ValueId(10),
+            lanes: 3,
+            elements: 2,
+        },
+        Execution::TileIntoFragmentU32 {
+            tile: ValueId(10),
+            lanes: 3,
+            elements: 2,
+        },
+        Execution::FragmentIntoPartsU32 {
+            fragment: ValueId(10),
+            lanes: 3,
+            elements: 2,
+        },
+    ] {
+        let mut helper_block = returning(0);
+        helper_block.operations = vec![
+            constant(10, Constant::Index(1)),
+            Operation::new(vec![], OperationKind::Execution(execution)),
+        ];
+        helper_block.terminator = Some(Terminator::Return {
+            values: vec![ValueId(10)],
+        });
+        let helper = Function::internal_helper(
+            "execution_helper",
+            Signature::new(vec![], vec![Type::INDEX]),
+            vec![],
+            vec![helper_block],
+        );
+        let mut entry = returning(0);
+        entry.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(0), Type::INDEX),
+            OperationKind::Call {
+                callee: helper.id.clone(),
+                arguments: vec![],
+            },
+        ));
+        let kernel = function(vec![], vec![entry]);
+        let mut module = Module::new("execution_v15_summary_refusal");
+        module.functions = vec![kernel.clone(), helper.clone()];
+        let report = analyze_kernel_entry(&module, &kernel);
+        assert_eq!(report.value(ValueId(0)), Variation::Varying);
+        assert!(report.diagnostics().contains(&Diagnostic::Unsupported {
+            block: Some(BlockId(0)),
+            operation_index: Some(0),
+            reason: UnsupportedReason::CallWithoutSummary { callee: helper.id },
+        }));
+    }
+}
+
+#[test]
 fn pure_helper_with_workgroup_source_is_not_a_uniform_call_summary() {
     let mut helper_block = returning(0);
     helper_block.operations.push(intrinsic(

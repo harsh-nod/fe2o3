@@ -39,6 +39,7 @@ pub const MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1: usize = 1 << 20;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UnsupportedFeatureV1 {
     InertV12Carrier,
+    InertExecutionV15,
     FloatType(ScalarType),
     UnsupportedType,
     MemoryIntrinsic,
@@ -1618,6 +1619,7 @@ fn scan_operation(
         }
     }
     match &operation.kind {
+        OperationKind::Execution(_) => reject!(UnsupportedFeatureV1::InertExecutionV15),
         OperationKind::Constant(constant) => {
             if matches!(constant, Constant::Index(value) if target.index_width() == IndexWidthV1::Bits32 && *value > u64::from(u32::MAX))
             {
@@ -1959,6 +1961,9 @@ fn scan_terminator(
 }
 
 fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<UnsupportedFeatureV1> {
+    if ty.contains_execution_role_v15() {
+        return Some(UnsupportedFeatureV1::InertExecutionV15);
+    }
     match ty {
         Type::Unit => Some(UnsupportedFeatureV1::UnsupportedType),
         Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some() => None,
@@ -2291,6 +2296,108 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_v15_raw_preflight_has_no_execution_plan() {
+        use fe2o3_kernel_ir::ExecutionOperationV15 as Execution;
+        for execution in [
+            Execution::ContextIssue,
+            Execution::WorkgroupDerive {
+                context: ValueId(0),
+            },
+            Execution::ScopeEnd {
+                workgroup: ValueId(0),
+                discarded: vec![ValueId(1)],
+            },
+            Execution::MaskedTileLoadU32 {
+                workgroup: ValueId(0),
+                input: ValueId(1),
+                base: ValueId(2),
+                lanes: 3,
+                elements: 2,
+            },
+            Execution::TileIntoFragmentU32 {
+                tile: ValueId(0),
+                lanes: 3,
+                elements: 2,
+            },
+            Execution::FragmentIntoPartsU32 {
+                fragment: ValueId(0),
+                lanes: 3,
+                elements: 2,
+            },
+        ] {
+            let mut module = Module::new("execution_v15_refusal");
+            let mut function = call_depth_test_function("entry", &[], true);
+            function.body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::new(vec![], OperationKind::Execution(execution)));
+            module.functions.push(function);
+            let mut kernel = fe2o3_kernel_ir::Kernel::new(
+                "entry",
+                "entry",
+                fe2o3_kernel_ir::LaunchDomain::D1 {
+                    x: LaunchExtent::Static(1),
+                },
+            );
+            kernel.workgroup_size = Some(fe2o3_kernel_ir::WorkgroupSize::new(1, 1, 1));
+            module.kernels.push(kernel);
+            let request = SimulationRequestV1::new("entry", [1, 1, 1], [1, 1, 1], vec![]);
+            let error = match preflight(
+                &module,
+                0,
+                &request,
+                None,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("Execution V15 cannot produce a simulation plan"),
+            };
+            let SimulationPreflightErrorV1::Unsupported(report) = error else {
+                panic!("expected explicit Execution refusal, got {error:?}");
+            };
+            assert_eq!(report.total_findings(), 1);
+            assert_eq!(
+                report.findings()[0].feature,
+                UnsupportedFeatureV1::InertExecutionV15
+            );
+            assert_eq!(report.findings()[0].operation, Some(0));
+        }
+    }
+
+    #[test]
+    fn execution_v15_roles_are_unsupported_through_memory_wrappers() {
+        use fe2o3_kernel_ir::ExecutionRoleV15 as Role;
+        for role in [
+            Role::Context,
+            Role::Workgroup,
+            Role::MaskedTileU32 {
+                lanes: 3,
+                elements: 2,
+            },
+            Role::LaneFragmentU32 {
+                lanes: 3,
+                elements: 2,
+            },
+        ] {
+            let direct = Type::Execution(role);
+            for ty in [
+                direct.clone(),
+                Type::pointer(direct.clone(), AddressSpace::Private, AccessMode::ReadWrite),
+                Type::slice(
+                    Type::pointer(direct, AddressSpace::Global, AccessMode::ReadOnly),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+            ] {
+                assert_eq!(
+                    unsupported_type(&ty, SimulationTargetV1::amdgpu_64()),
+                    Some(UnsupportedFeatureV1::InertExecutionV15),
+                );
+            }
+        }
+    }
 
     #[test]
     fn inert_v12_raw_preflight_has_no_execution_plan() {

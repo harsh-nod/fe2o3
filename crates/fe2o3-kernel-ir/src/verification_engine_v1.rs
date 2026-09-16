@@ -7,7 +7,7 @@ use crate::{
     OperationKind, TargetCapability, Type, VerificationDiagnosticCollectorV1,
     VerificationDiagnosticLocationV1, VerificationErrors, VerificationModuleStateV1,
     VerifiedKernelIrModuleV1, target_capability_is_supported_owned_with_budget_v1,
-    verification_invalid_vector_type_v12_v1,
+    verification_type_facts_v15,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -265,7 +265,15 @@ fn verify_function_header_v1(
         .iter()
         .chain(&function.signature.results)
     {
-        verify_type_v12_with_budget_v1(ty, &location, diagnostics, budget)?;
+        if verify_type_v12_with_budget_v1(ty, &location, diagnostics, budget)? {
+            emit_fixed_v1(
+                diagnostics,
+                clone_diagnostic_location_v1(&location, budget)?,
+                DiagnosticCode::InvalidSemanticOperation,
+                "execution roles cannot cross a function signature",
+                budget,
+            )?;
+        }
     }
 
     // Reserved declaration checks are allocation-free in the shared
@@ -741,8 +749,18 @@ pub(crate) fn verify_type_v12_with_budget_v1(
     location: &VerificationDiagnosticLocationV1<'_>,
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
-    if let Some(error) = verification_invalid_vector_type_v12_v1(ty, budget)? {
+) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
+    let facts = verification_type_facts_v15(ty, budget)?;
+    if facts.invalid_execution_role {
+        emit_fixed_v1(
+            diagnostics,
+            clone_diagnostic_location_v1(location, budget)?,
+            DiagnosticCode::InvalidSemanticOperation,
+            "execution roles must have valid geometry and cannot be nested in memory types",
+            budget,
+        )?;
+    }
+    if let Some(error) = facts.vector_error {
         emit_dynamic_v1(
             diagnostics,
             clone_diagnostic_location_v1(location, budget)?,
@@ -752,7 +770,7 @@ pub(crate) fn verify_type_v12_with_budget_v1(
             budget,
         )?;
     }
-    Ok(())
+    Ok(facts.contains_execution_role)
 }
 
 pub(crate) fn emit_fixed_v1(

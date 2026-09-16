@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_788_969;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_791_249;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -164,10 +164,11 @@ pub enum SimulationOperationSurfaceV1 {
     VectorStore = 34,
     VectorLayoutConvert = 35,
     VerificationContract = 36,
+    Execution = 37,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 37] = [
+    const ALL: [Self; 38] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -205,8 +206,9 @@ impl SimulationOperationSurfaceV1 {
         Self::VectorStore,
         Self::VectorLayoutConvert,
         Self::VerificationContract,
+        Self::Execution,
     ];
-    const COUNT: usize = Self::VerificationContract as usize + 1;
+    const COUNT: usize = Self::Execution as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -260,11 +262,13 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     DynamicWorkgroupMemoryAuthenticatedMinimum,
     DynamicWorkgroupMemoryExtentLayout,
     InertV12Carrier,
+    InertExecutionV15,
 }
 
 impl UnsupportedFeatureV1 {
     pub const fn reason_code(&self) -> SimulationUnsupportedReasonCodeV1 {
         match self {
+            Self::InertExecutionV15 => SimulationUnsupportedReasonCodeV1::InertExecutionV15,
             Self::InertV12Carrier => SimulationUnsupportedReasonCodeV1::InertV12Carrier,
             Self::FloatType(_) => SimulationUnsupportedReasonCodeV1::FloatType,
             Self::UnsupportedType => SimulationUnsupportedReasonCodeV1::UnsupportedType,
@@ -637,6 +641,7 @@ fn top_level_capability(
         }
         Surface::Wave => owned(Owner::WaveCooperative, &[]),
         Surface::InlineAssembly => unsupported(Reason::InlineAssembly),
+        Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::VectorLoad
         | Surface::VectorStore
         | Surface::VectorLayoutConvert
@@ -654,6 +659,7 @@ fn top_level_capability(
 
 pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOperationSurfaceV1 {
     match operation {
+        OperationKind::Execution(_) => SimulationOperationSurfaceV1::Execution,
         OperationKind::VectorLoad(_) => SimulationOperationSurfaceV1::VectorLoad,
         OperationKind::VectorStore(_) => SimulationOperationSurfaceV1::VectorStore,
         OperationKind::VectorLayoutConvert(_) => SimulationOperationSurfaceV1::VectorLayoutConvert,

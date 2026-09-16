@@ -80,6 +80,99 @@ mod local_bound_tests {
     }
 
     #[test]
+    fn affine_maximum_requires_extents_only_for_used_axes() {
+        for axis in 0..MAX_RANKED_MEMORY_RANK {
+            let expression = SparseAffineIndexV1::invocation(axis)
+                .checked_scale(2)
+                .unwrap()
+                .checked_add(&SparseAffineIndexV1::constant(1))
+                .unwrap();
+            let mut extents = vec![0; MAX_RANKED_MEMORY_RANK];
+            extents[axis] = 3;
+            assert_eq!(expression.maximum(&extents), Some(5));
+            assert_eq!(expression.maximum(&extents[..=axis]), Some(5));
+            assert_eq!(expression.maximum(&extents[..axis]), None);
+            extents[axis] = 1;
+            assert_eq!(expression.maximum(&extents), Some(1));
+            extents[axis] = 0;
+            assert_eq!(expression.maximum(&extents), None);
+        }
+        for constant in [0, 7, u64::MAX] {
+            let expression = SparseAffineIndexV1::constant(constant);
+            assert_eq!(expression.maximum(&[]), Some(constant));
+            assert_eq!(
+                expression.maximum(&[0; MAX_RANKED_MEMORY_RANK]),
+                Some(constant)
+            );
+        }
+    }
+
+    #[test]
+    fn affine_maximum_checks_products_sums_and_every_active_dimension() {
+        let scaled = SparseAffineIndexV1::invocation(0)
+            .checked_scale(u64::MAX)
+            .unwrap();
+        assert_eq!(scaled.maximum(&[1]), Some(0));
+        assert_eq!(scaled.maximum(&[2]), Some(u64::MAX));
+        assert_eq!(scaled.maximum(&[3]), None);
+        let shifted = scaled
+            .checked_add(&SparseAffineIndexV1::constant(1))
+            .unwrap();
+        assert_eq!(shifted.maximum(&[2]), None);
+        let two_axes = scaled
+            .checked_add(&SparseAffineIndexV1::invocation(2))
+            .unwrap();
+        assert_eq!(two_axes.maximum(&[2, 0, 1]), Some(u64::MAX));
+        assert_eq!(two_axes.maximum(&[2, 0, 2]), None);
+        assert_eq!(two_axes.maximum(&[1, 0, 3]), Some(2));
+        assert_eq!(two_axes.maximum(&[1]), None);
+        assert_eq!(two_axes.maximum(&[0, 0, 3]), None);
+    }
+
+    #[test]
+    fn affine_maximum_matches_exhaustive_bounded_domains() {
+        for a in 0..=2 {
+            for b in 0..=2 {
+                for c in 0..=2 {
+                    let coefficients = [a, b, c];
+                    let mut expression = SparseAffineIndexV1::constant(5);
+                    for (axis, coefficient) in coefficients.into_iter().enumerate() {
+                        expression = expression
+                            .checked_add(
+                                &SparseAffineIndexV1::invocation(axis)
+                                    .checked_scale(coefficient)
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                    }
+                    for x in 1..=3 {
+                        for y in 1..=3 {
+                            for z in 1..=3 {
+                                let mut expected = 0;
+                                for i in 0..x {
+                                    for j in 0..y {
+                                        for k in 0..z {
+                                            expected = expected.max(5 + a * i + b * j + c * k);
+                                        }
+                                    }
+                                }
+                                let mut extents = [x, y, z];
+                                assert_eq!(expression.maximum(&extents), Some(expected));
+                                for (axis, coefficient) in coefficients.into_iter().enumerate() {
+                                    if coefficient == 0 {
+                                        extents[axis] = 0;
+                                    }
+                                }
+                                assert_eq!(expression.maximum(&extents), Some(expected));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn differing_overflow_witnesses_are_not_replaced_by_unknown_at_the_ceiling() {
         let first = derive_binary(
             Some(IndexBinaryKindAttr::Add),

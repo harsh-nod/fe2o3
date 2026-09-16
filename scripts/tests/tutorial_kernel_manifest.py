@@ -796,6 +796,122 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "fragment digest"):
                 self.validator.source_item_fragments(root, tab, "test")
 
+    def whole_file_source_fixture(self, root):
+        package = root / "fixture"
+        (package / "src").mkdir(parents=True)
+        source = "// Retained tutorial header: \u03bb.\n#[kernel]\nfn selected() {}\n".encode("utf-8")
+        (package / "src/lib.rs").write_bytes(source)
+        manifest = package / "Cargo.toml"
+        manifest.write_text('[package]\nname = "source-fixture"\nversion = "0.1.0"\nbuild = false\n[workspace]\n')
+        lock = package / "Cargo.lock"
+        lock.write_text("version = 4\n")
+        driver = root / "crates/test-driver"
+        (driver / "tests").mkdir(parents=True)
+        (driver / "Cargo.toml").write_text('[package]\nname = "test-driver"\nversion = "0.1.0"\n[workspace]\n')
+        (driver / "tests/selection.rs").write_text('#[test]\n#[ignore = "source compilation"]\nfn export_selected() {}\n')
+        sources = self.validator.package_rust_sources(root, "fixture/Cargo.toml", "test")
+        digest = hashlib.sha256(source).hexdigest()
+        tab = copy.deepcopy(self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0])
+        tab.update(
+            sourcePath="fixture/src/lib.rs", sourceDigestScope="file", sourceFragmentsSha256=None,
+            sourceCommit="1" * 40, sourceSha256=digest, displayedSha256=digest,
+            displayedUtf8Bytes=len(source),
+        )
+        tab["sourceItem"] = {
+            "kind": "source-driver",
+            "compilerInput": {
+                "packageManifest": "fixture/Cargo.toml",
+                "packageManifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "cargoLockPath": "fixture/Cargo.lock",
+                "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+                "sourcePaths": [tab["sourcePath"]],
+                "sourceClosureSha256": self.validator.package_source_closure_sha256(root, sources),
+                "cargoTarget": {"kind": "lib", "name": "source_fixture", "sourcePath": "src/lib.rs"},
+                "defaultFeatures": True,
+            },
+            "driver": {"package": "test-driver", "target": "selection", "path": "crates/test-driver/tests/selection.rs"},
+            "sourceRanges": [{"byteOffset": 0, "byteLength": len(source)}],
+            "cases": [{
+                "features": [], "kernelSymbol": "selected", "target": "gfx942",
+                "displayedFragmentOrdinal": 0, "testFunction": "export_selected",
+                "expectation": {"kind": "verified-bundle-export", "bundleVersion": 5},
+            }],
+        }
+        tab["sourceItem"]["contractSha256"] = self.validator.source_item_contract_sha256("whole-file", tab)
+        return tab, source
+
+    def test_whole_file_source_driver_retains_header_and_existing_case_scanner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tab, source = self.whole_file_source_fixture(root)
+            self.assertEqual(self.validator.source_item_fragments(root, tab, "test"), [source.decode("utf-8")])
+            self.assertTrue(source.startswith(b"// Retained tutorial header:"))
+            self.assertGreater(len(source), len(source.decode("utf-8")))
+            self.assertEqual(self.validator.validate_source_item(root, "whole-file", tab, {}), tab["sourcePath"])
+            self.validator.validate_curriculum_tab(tab, 0, "whole-file", "executable", source_items=True)
+            with self.assertRaisesRegex(SystemExit, "pending source-item"):
+                self.validator.validate_curriculum_tab(tab, 0, "whole-file", "executable")
+            self.assertEqual(tab["sourceItemStatus"], "contract-bound")
+
+    def test_rehashed_whole_file_sources_reject_partial_or_mixed_byte_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original, source = self.whole_file_source_fixture(root)
+            size = len(source)
+            header_end = source.index(b"\n") + 1
+            mutations = [
+                ("omitted header", lambda tab: tab["sourceItem"].update(sourceRanges=[{"byteOffset": header_end, "byteLength": size - header_end}])),
+                ("shifted", lambda tab: tab["sourceItem"]["sourceRanges"][0].update(byteOffset=1)),
+                ("truncated", lambda tab: tab["sourceItem"]["sourceRanges"][0].update(byteLength=size - 1)),
+                ("long", lambda tab: tab["sourceItem"]["sourceRanges"][0].update(byteLength=size + 1)),
+                ("duplicate", lambda tab: tab["sourceItem"]["sourceRanges"].append(copy.deepcopy(tab["sourceItem"]["sourceRanges"][0]))),
+                ("missing range", lambda tab: tab["sourceItem"].update(sourceRanges=[])),
+                ("Boolean offset", lambda tab: tab["sourceItem"]["sourceRanges"][0].update(byteOffset=False)),
+                ("Boolean length", lambda tab: tab["sourceItem"]["sourceRanges"][0].update(byteLength=True)),
+                ("extra range field", lambda tab: tab["sourceItem"]["sourceRanges"][0].update(unknown=0)),
+                ("fragment metadata", lambda tab: tab.update(sourceFragmentsSha256=[tab["sourceSha256"]])),
+                ("empty fragments", lambda tab: tab.update(sourceFragmentsSha256=[])),
+                ("mixed scope", lambda tab: tab.update(sourceDigestScope="displayed")),
+                ("missing commit", lambda tab: tab.update(sourceCommit=None)),
+                ("invalid commit", lambda tab: tab.update(sourceCommit="1" * 39)),
+                ("missing source hash", lambda tab: tab.update(sourceSha256=None)),
+                ("wrong source hash", lambda tab: tab.update(sourceSha256="0" * 64)),
+                ("wrong displayed hash", lambda tab: tab.update(displayedSha256="0" * 64)),
+                ("both wrong hashes", lambda tab: tab.update(sourceSha256="0" * 64, displayedSha256="0" * 64)),
+                ("displayed count", lambda tab: tab.update(displayedUtf8Bytes=size - 1)),
+                ("character count", lambda tab: tab.update(displayedUtf8Bytes=len(source.decode("utf-8")))),
+                ("Boolean count", lambda tab: tab.update(displayedUtf8Bytes=True)),
+                ("missing case", lambda tab: tab["sourceItem"].update(cases=[])),
+                ("wrong fragment ordinal", lambda tab: tab["sourceItem"]["cases"][0].update(displayedFragmentOrdinal=1)),
+            ]
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    tab = copy.deepcopy(original)
+                    mutate(tab)
+                    tab["sourceItem"]["contractSha256"] = self.validator.source_item_contract_sha256("whole-file", tab)
+                    with self.assertRaises(SystemExit):
+                        self.validator.validate_source_item(root, "whole-file", tab, {})
+            tab = copy.deepcopy(original)
+            body_digest = hashlib.sha256(source[header_end:]).hexdigest()
+            tab.update(sourceSha256=body_digest, displayedSha256=body_digest, displayedUtf8Bytes=size - header_end)
+            tab["sourceItem"]["sourceRanges"] = [{"byteOffset": header_end, "byteLength": size - header_end}]
+            tab["sourceItem"]["contractSha256"] = self.validator.source_item_contract_sha256("whole-file", tab)
+            with self.assertRaisesRegex(SystemExit, "every source byte"):
+                self.validator.validate_source_item(root, "whole-file", tab, {})
+
+    def test_whole_file_source_rejects_invalid_utf8_even_with_matching_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tab, source = self.whole_file_source_fixture(root)
+            source = b"\xff" + source
+            (root / tab["sourcePath"]).write_bytes(source)
+            digest = hashlib.sha256(source).hexdigest()
+            tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source))
+            tab["sourceItem"]["sourceRanges"] = [{"byteOffset": 0, "byteLength": len(source)}]
+            tab["sourceItem"]["contractSha256"] = self.validator.source_item_contract_sha256("whole-file", tab)
+            with self.assertRaisesRegex(SystemExit, "not valid UTF-8"):
+                self.validator.validate_source_item(root, "whole-file", tab, {})
+
 
 if __name__ == "__main__":
     unittest.main()

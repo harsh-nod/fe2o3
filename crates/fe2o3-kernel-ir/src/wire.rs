@@ -58,6 +58,11 @@ pub const KERNEL_IR_VERSION_V10: u16 = 10;
 pub const KERNEL_IR_VERSION_V11: u16 = 11;
 /// Kernel IR V12 adds vectors and ordered, physically inert verification events.
 pub const KERNEL_IR_VERSION_V12: u16 = 12;
+/// Execution roles and lifecycle operations; historical V13/V14 remain unallocated here.
+pub const KERNEL_IR_VERSION_V15: u16 = 15;
+
+#[path = "wire_execution_v15.rs"]
+mod execution_v15;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
@@ -320,6 +325,11 @@ pub fn encode_module_v12(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V12)
 }
 
+/// Encodes execution carriers without granting source, schedule or launch authority.
+pub fn encode_module_v15(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V15)
+}
+
 /// Authority-free storage extents observed through the V12 encoding schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelIrV12WireExtentV1 {
@@ -500,6 +510,12 @@ pub fn decode_module_v12(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V12, true)
 }
 
+/// Decodes V1 through V12 and V15; V13/V14 are explicitly rejected.
+/// Successful decoding establishes wire structure, not execution lifecycle validity.
+pub fn decode_module_v15(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V15, true)
+}
+
 pub(crate) fn decode_module_v12_with_work_v1(
     bytes: &[u8],
     budget: &mut CanonicalKernelIrWorkBudgetV1,
@@ -536,7 +552,10 @@ fn decode_module_impl_v1(
         return Err(KernelIrDecodeError::InvalidMagic);
     }
     let version = reader.u16()?;
-    if version > maximum_version || (!accept_older && version != maximum_version) || version == 0 {
+    if version > maximum_version
+        || (!accept_older && version != maximum_version)
+        || !matches!(version, 1..=12 | KERNEL_IR_VERSION_V15)
+    {
         return Err(KernelIrDecodeError::UnknownVersion(version));
     }
     reader.version = version;
@@ -945,6 +964,7 @@ fn encode_operation_kind(
     operation: &OperationKind,
 ) -> Result<(), KernelIrEncodeError> {
     match operation {
+        OperationKind::Execution(operation) => execution_v15::encode_operation(writer, operation)?,
         OperationKind::VerificationContract(
             VerificationContractOperationV12::WorkgroupPipelineEvent {
                 contract,
@@ -1162,6 +1182,9 @@ fn decode_operation_kind(
     reader: &mut Reader<'_, '_>,
 ) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
+        tag @ 32..=37 if reader.version == KERNEL_IR_VERSION_V15 => {
+            OperationKind::Execution(execution_v15::decode_operation(reader, tag)?)
+        }
         30 if reader.version >= KERNEL_IR_VERSION_V12 => {
             let family = reader.u8()?;
             if family != 1 {
@@ -1443,7 +1466,8 @@ fn decode_memory_intrinsic(
             layout,
             contract,
         },
-        SemanticOperationInstancePayloadV1::LaunchInvocationIndex { .. }
+        SemanticOperationInstancePayloadV1::Execution(_)
+        | SemanticOperationInstancePayloadV1::LaunchInvocationIndex { .. }
         | SemanticOperationInstancePayloadV1::LaunchExtent { .. } => {
             return Err(KernelIrDecodeError::InvalidSemanticOperationInstance);
         }
@@ -1646,6 +1670,7 @@ fn encode_type(
         });
     }
     match ty {
+        Type::Execution(role) => execution_v15::encode_role(writer, *role)?,
         Type::Unit => writer.u8(1)?,
         Type::Scalar(scalar) => {
             if matches!(scalar, ScalarType::I128 | ScalarType::U128)
@@ -1687,6 +1712,9 @@ fn decode_type(reader: &mut Reader<'_, '_>, depth: usize) -> Result<Type, Kernel
         });
     }
     Ok(match reader.u8()? {
+        tag @ 9..=12 if reader.version == KERNEL_IR_VERSION_V15 => {
+            Type::Execution(execution_v15::decode_role(reader, tag)?)
+        }
         1 => Type::Unit,
         2 => {
             let tag = reader.u8()?;

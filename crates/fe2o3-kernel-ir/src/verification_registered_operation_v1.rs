@@ -277,7 +277,10 @@ pub(crate) fn try_verify_registered_operation_with_resources_v1<'module>(
     budget.charge_work(1)?;
     if !matches!(
         operation.kind,
-        OperationKind::Intrinsic(_) | OperationKind::MemoryIntrinsic(_) | OperationKind::Matrix(_)
+        OperationKind::Intrinsic(_)
+            | OperationKind::MemoryIntrinsic(_)
+            | OperationKind::Matrix(_)
+            | OperationKind::Execution(_)
     ) {
         return Ok(false);
     }

@@ -88,6 +88,7 @@ const _: () = assert!(MAX_CLI_EXPLORATION_ENVELOPE_BYTES < MAX_SUCCESS_BYTES);
 #[serde(rename_all = "snake_case")]
 enum UnsupportedFeatureCode {
     InertV12Carrier,
+    InertExecutionV15,
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
@@ -3385,6 +3386,7 @@ fn wave_mask(width: WaveWidth, mask: u64) -> String {
 fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
     match feature {
         UnsupportedFeatureV1::InertV12Carrier => UnsupportedFeatureCode::InertV12Carrier,
+        UnsupportedFeatureV1::InertExecutionV15 => UnsupportedFeatureCode::InertExecutionV15,
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,
@@ -5385,6 +5387,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(UnsupportedFeatureCode::InlineAssembly).unwrap(),
             "inline_assembly"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(&UnsupportedFeatureV1::InertExecutionV15))
+                .unwrap(),
+            "inert_execution_v15"
         );
         assert_eq!(
             serde_json::to_value(unsupported_code(&UnsupportedFeatureV1::Gfx950LdsTranspose))

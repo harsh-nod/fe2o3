@@ -206,6 +206,46 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
             )
     }
 
+    fn constant_layout_source(
+        name: &str,
+        global: [u64; 3],
+        coordinates: &[(usize, u64)],
+        index: u64,
+        accesses: usize,
+    ) -> String {
+        let [x, y, z] = global;
+        let mut source = format!(
+            r#"
+builtin.func @{name}: builtin.function <() -> ()>
+{{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent {x}, gpu_execution_global_y: gpu.execution_extent {y}, gpu_execution_global_z: gpu.execution_extent {z}, gpu_execution_workgroup_x: gpu.execution_extent 1, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 1, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[16]>)>;
+"#
+        );
+        for (ordinal, (dimension, extent)) in coordinates.iter().enumerate() {
+            source.push_str(&format!("    coordinate_{ordinal} = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension {dimension}, kernel_launch_extent: kernel.launch_extent {extent}]: <() -> (kernel.index )>;\n"));
+        }
+        source.push_str(&format!("    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value {index}]: <() -> (kernel.index )>;\n"));
+        for _ in 0..accesses {
+            source.push_str("    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[16]>, kernel.index ) -> ()>;\n");
+        }
+        source.push_str("    kernel.return () [] []: <() -> ()>\n}\n");
+        source
+    }
+
+    fn assert_layout_obligation(
+        obligation: &BoundsPresburgerObligationV1,
+        extents: [u64; 3],
+        checked: u64,
+    ) {
+        assert_eq!(obligation.checked_invocations, checked);
+        let domain = obligation.normalized_map.domain();
+        assert!(domain.constraints().is_empty());
+        assert_eq!(domain.domain().lower(), &[0, 0, 0]);
+        assert_eq!(domain.domain().upper_exclusive(), &extents.map(i128::from));
+    }
+
     #[test]
     fn affine_bounds_witness_replays_every_access_dimension() {
         let context = &mut setup();
@@ -407,15 +447,358 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
     }
 
     #[test]
-    fn execution_layout_active_axes_require_invocation_dimensions() {
+    fn no_layout_constant_witness_uses_the_zero_rank_raw_domain() {
+        let context = &mut setup();
+        let coordinate = "v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 8]: <() -> (kernel.index )>;";
+        assert_eq!(SAFE_AFFINE.matches(coordinate).count(), 1);
+        let source = SAFE_AFFINE
+            .replace("@bounds_witness_safe", "@bounds_witness_no_coordinates")
+            .replace(coordinate, "v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 3]: <() -> (kernel.index )>;");
+        assert!(!source.contains("kernel.invocation_index"));
+        assert!(!source.contains("gpu.execution_layout"));
+        let function = parse_source(context, &source);
+        let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("real no-layout constant read passes normal policy checks");
+        assert!(report.is_clean());
+        let (stage, envelope) = bounds_envelope(&report);
+        assert!(envelope.coverage().is_complete());
+        assert_eq!(
+            stage.independent_validation_status(),
+            KernelCheckStatusV1::Clean
+        );
+        assert!(
+            !report
+                .report_validation()
+                .all_reports_independently_validated()
+        );
+        assert!(!envelope.grants_lowering_or_launch_authority());
+        let ProductionAnalysisWitnessPayloadV1::Bounds(witness) = envelope.payload else {
+            panic!("bounds payload");
+        };
+        assert_eq!(witness.obligations.len(), 1);
+        let obligation = &witness.obligations[0];
+        assert_eq!(obligation.extent, 16);
+        assert_eq!(obligation.checked_invocations, 1);
+        let domain = obligation.normalized_map.domain();
+        assert!(domain.constraints().is_empty());
+        assert!(domain.domain().lower().is_empty());
+        assert!(domain.domain().upper_exclusive().is_empty());
+        assert_eq!(obligation.normalized_map.evaluate(&[]).unwrap(), vec![7]);
+    }
+
+    #[test]
+    fn no_layout_nonconsecutive_coordinates_keep_singleton_holes_and_raw_axes() {
+        for x_extent in [1_u64, 3] {
+            let context = &mut setup();
+            let mut source = SAFE_AFFINE
+                .replace(
+                    "@bounds_witness_safe",
+                    &format!("@bounds_witness_sparse_{x_extent}"),
+                )
+                .replace(
+                    "kernel.invocation_dimension 0",
+                    "kernel.invocation_dimension 2",
+                )
+                .replace("kernel.launch_extent 8", "kernel.launch_extent 2");
+            if x_extent != 1 {
+                source = source.replace("  ^entry_block1v1():", &format!(
+                    "  ^entry_block1v1():\n    unused_x = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent {x_extent}]: <() -> (kernel.index )>;"
+                ));
+            }
+            // The existing remainder rule proves the primary bound without
+            // requiring a complete sparse coordinate roster. Replay still
+            // interprets the actual affine z DAG and the remainder operation.
+            let access = "    kernel.access (v0, v5)";
+            assert_eq!(source.matches(access).count(), 1);
+            source = source.replace(access,
+                "    modulus = kernel.index_constant () [] [kernel_index_value: kernel.index_value 16]: <() -> (kernel.index )>;\n    wrapped = kernel.index_binary (v5, modulus) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;\n    kernel.access (v0, wrapped)");
+            assert!(!source.contains("gpu.execution_layout"));
+            assert_eq!(
+                source.matches("kernel.invocation_index").count(),
+                if x_extent == 1 { 1 } else { 2 }
+            );
+            let function = parse_source(context, &source);
+            let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+                .expect("real no-layout remainder read passes normal policy checks");
+            assert!(report.is_clean());
+            let (stage, envelope) = bounds_envelope(&report);
+            assert!(envelope.coverage().is_complete());
+            assert_eq!(
+                stage.independent_validation_status(),
+                KernelCheckStatusV1::Clean
+            );
+            assert!(
+                !report
+                    .report_validation()
+                    .all_reports_independently_validated()
+            );
+            assert!(!envelope.grants_lowering_or_launch_authority());
+            let ProductionAnalysisWitnessPayloadV1::Bounds(witness) = envelope.payload else {
+                panic!("bounds payload");
+            };
+            assert_eq!(witness.obligations.len(), 1);
+            let obligation = &witness.obligations[0];
+            assert_eq!(obligation.extent, 16);
+            assert_layout_obligation(obligation, [x_extent, 1, 2], x_extent * 2);
+            for x in 0..i128::from(x_extent) {
+                for z in 0..2 {
+                    assert_eq!(
+                        obligation.normalized_map.evaluate(&[x, 0, z]).unwrap(),
+                        vec![2 * z + 1]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn execution_layout_supplies_active_axes_without_coordinate_operations() {
         let context = &mut setup();
         let source =
             affine_source_with_execution_layout("bounds_witness_missing_active_axis", [8, 4, 1]);
+        let function = parse_source(context, &source);
+        let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("read-only affine access is safe across the declared layout");
+        let (_, envelope) = bounds_envelope(&report);
+        let ProductionAnalysisWitnessPayloadV1::Bounds(witness) = envelope.payload else {
+            panic!("static layout must supply the complete raw bounds domain");
+        };
+        assert_eq!(witness.obligations.len(), 1);
+        assert_layout_obligation(&witness.obligations[0], [8, 4, 1], 32);
+        assert_eq!(
+            witness.obligations[0]
+                .normalized_map
+                .evaluate(&[7, 3, 0])
+                .unwrap(),
+            vec![15]
+        );
+    }
 
+    #[test]
+    fn layout_constant_reads_complete_with_absent_or_sparse_coordinates() {
+        let mut normalized = None;
+        for (ordinal, coordinates) in [vec![], vec![(2, 2)], vec![(0, 8), (2, 2)]]
+            .into_iter()
+            .enumerate()
+        {
+            let context = &mut setup();
+            let source = constant_layout_source(
+                &format!("layout_constant_{ordinal}"),
+                [8, 4, 2],
+                &coordinates,
+                3,
+                1,
+            );
+            let function = parse_source(context, &source);
+            let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+                .expect("real constant read must pass normal policy checks");
+            assert!(report.is_clean());
+            let (stage, envelope) = bounds_envelope(&report);
+            assert!(envelope.coverage().is_complete());
+            assert_eq!(
+                stage.independent_validation_status(),
+                KernelCheckStatusV1::Clean
+            );
+            assert!(
+                !report
+                    .report_validation()
+                    .all_reports_independently_validated()
+            );
+            assert!(!envelope.grants_lowering_or_launch_authority());
+            let ProductionAnalysisWitnessPayloadV1::Bounds(witness) = envelope.payload else {
+                panic!("bounds payload");
+            };
+            assert_eq!(witness.obligations.len(), 1);
+            let obligation = &witness.obligations[0];
+            assert_eq!(obligation.extent, 16);
+            assert_layout_obligation(obligation, [8, 4, 2], 64);
+            assert_eq!(
+                obligation.normalized_map.evaluate(&[7, 3, 1]).unwrap(),
+                vec![3]
+            );
+            if let Some(expected) = &normalized {
+                assert_eq!(&obligation.normalized_map, expected);
+            } else {
+                normalized = Some(obligation.normalized_map.clone());
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_coordinate_dag_keeps_its_actual_axis_in_the_full_layout_domain() {
+        let context = &mut setup();
+        let source = affine_source_with_execution_layout("layout_sparse_z", [8, 4, 2])
+            .replace(
+                "kernel.invocation_dimension 0",
+                "kernel.invocation_dimension 2",
+            )
+            .replace("kernel.launch_extent 8", "kernel.launch_extent 2");
+        let function = parse_source(context, &source);
+        let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("z-dependent affine read is safe");
+        let (_, envelope) = bounds_envelope(&report);
+        let ProductionAnalysisWitnessPayloadV1::Bounds(witness) = envelope.payload else {
+            panic!("bounds payload");
+        };
+        assert_eq!(witness.obligations.len(), 1);
+        let obligation = &witness.obligations[0];
+        assert_layout_obligation(obligation, [8, 4, 2], 64);
+        for x in 0..8 {
+            for y in 0..4 {
+                for z in 0..2 {
+                    assert_eq!(
+                        obligation.normalized_map.evaluate(&[x, y, z]).unwrap(),
+                        vec![2 * z + 1]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn layout_raw_replay_rejects_constant_and_sparse_axis_counterexamples() {
+        let context = &mut setup();
+        let constant = constant_layout_source("layout_constant_oob", [8, 4, 2], &[], 16, 1);
+        assert!(
+            matches!(replay_with_clean_bounds_report(context, &constant),
+                Err(ProductionAnalysisWitnessValidationErrorV1::BoundsCounterexample {
+                    invocation, index: 16, extent: 16, ..
+                }) if invocation == vec![0, 0, 0]
+            )
+        );
+        let sparse = affine_source_with_execution_layout("layout_sparse_oob", [8, 4, 2])
+            .replace(
+                "kernel.invocation_dimension 0",
+                "kernel.invocation_dimension 2",
+            )
+            .replace("kernel.launch_extent 8", "kernel.launch_extent 2")
+            .replace("[16]", "[3]");
+        assert!(matches!(replay_with_clean_bounds_report(context, &sparse),
+            Err(ProductionAnalysisWitnessValidationErrorV1::BoundsCounterexample {
+                invocation, index: 3, extent: 3, ..
+            }) if invocation == vec![0, 0, 1]
+        ));
+    }
+
+    #[test]
+    fn layout_coordinate_declarations_remain_exact_for_constant_accesses() {
+        for (name, coordinates, reason) in [
+            (
+                "conflicting",
+                vec![(0, 4)],
+                "inconsistent with gpu.execution_layout",
+            ),
+            (
+                "duplicate",
+                vec![(0, 8), (0, 8)],
+                "duplicate invocation dimension 0",
+            ),
+            (
+                "out_of_range",
+                vec![(3, 1)],
+                "outside the three-dimensional gpu.execution_layout",
+            ),
+        ] {
+            let context = &mut setup();
+            let source = constant_layout_source(name, [8, 4, 2], &coordinates, 3, 1);
+            expect_incomplete_bounds_replay(
+                replay_with_clean_bounds_report(context, &source),
+                reason,
+            );
+        }
+    }
+
+    #[test]
+    fn layout_absent_coordinates_keep_dynamic_domain_and_replay_caps() {
+        let context = &mut setup();
+        let exact = constant_layout_source("layout_exact_cap", [65_536, 1, 1], &[], 0, 1);
+        let SupportedWitnessBuildV1::Complete(witness) =
+            replay_with_clean_bounds_report(context, &exact).expect("exact replay cap")
+        else {
+            panic!("the exact static cap remains supported");
+        };
+        assert_eq!(witness.obligations.len(), 1);
+        assert_layout_obligation(&witness.obligations[0], [65_536, 1, 1], 65_536);
+        for (name, extents, accesses, reason) in [
+            (
+                "dynamic",
+                [0, 1, 1],
+                1,
+                "cannot enumerate dynamic gpu.execution_layout axis 0",
+            ),
+            (
+                "domain_cap",
+                [65_536, 2, 1],
+                1,
+                "needs 131072 invocations, exceeding its exhaustive replay cap",
+            ),
+            (
+                "cardinality_overflow",
+                [2, u64::MAX, 1],
+                1,
+                "launch-domain cardinality overflows u64",
+            ),
+            (
+                "work_cap",
+                [65_536, 1, 1],
+                17,
+                "raw-index evaluation exceeded its deterministic work cap",
+            ),
+        ] {
+            let source = constant_layout_source(name, extents, &[], 0, accesses);
+            expect_incomplete_bounds_replay(
+                replay_with_clean_bounds_report(context, &source),
+                reason,
+            );
+        }
+    }
+
+    #[test]
+    fn layout_does_not_extend_the_single_block_witness_fragment() {
+        let context = &mut setup();
+        let source = constant_layout_source("layout_multiblock", [8, 4, 2], &[], 0, 1).replace(
+            "\n}\n",
+            "\n  ^unreachable_block():\n    kernel.return () [] []: <() -> ()>\n}\n",
+        );
         expect_incomplete_bounds_replay(
             replay_with_clean_bounds_report(context, &source),
-            "active axis 1 extent 4 without an invocation dimension",
+            "cannot yet enumerate exhaustive CFG path domains",
         );
+    }
+
+    #[test]
+    fn raw_constant_evaluator_still_requires_its_initial_stack_frame() {
+        let context = &mut setup();
+        let zero = IndexConstantOp::new(context, 0).result(context);
+        let mut steps = 0;
+        assert!(matches!(
+            evaluate_raw_index_iterative(
+                context,
+                zero,
+                &[7, 3, 1],
+                &mut HashMap::new(),
+                &mut HashSet::new(),
+                &mut steps,
+                0,
+            ),
+            Err(RawIndexEvaluationFailureV1::Incomplete(
+                "raw-index evaluation exceeded its deterministic stack cap"
+            ))
+        ));
+        assert_eq!(steps, 0);
+        assert!(matches!(
+            evaluate_raw_index_iterative(
+                context,
+                zero,
+                &[7, 3, 1],
+                &mut HashMap::new(),
+                &mut HashSet::new(),
+                &mut steps,
+                1,
+            ),
+            Ok(0)
+        ));
+        assert_eq!(steps, 1);
     }
 
     #[test]

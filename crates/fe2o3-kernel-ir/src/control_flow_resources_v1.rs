@@ -175,6 +175,11 @@ pub(crate) struct MeteredIndexedControlFlowV1 {
 }
 
 impl MeteredIndexedControlFlowV1 {
+    /// Borrows the existing CFG. Callers charge every lookup, edge and state visit.
+    pub(crate) fn indexed_v15(&self) -> &IndexedControlFlow {
+        &self.flow
+    }
+
     pub(crate) fn dominates(
         &self,
         definition: BlockId,

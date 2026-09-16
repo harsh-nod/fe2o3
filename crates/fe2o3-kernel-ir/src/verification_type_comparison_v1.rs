@@ -14,6 +14,7 @@ pub(crate) fn verification_types_equal_v1(
     Ok(match (left, right) {
         (Type::Unit, Type::Unit) => true,
         (Type::Scalar(left), Type::Scalar(right)) => left == right,
+        (Type::Execution(left), Type::Execution(right)) => left == right,
         (Type::Vector(left), Type::Vector(right)) => left == right,
         (Type::Pointer(left), Type::Pointer(right)) => {
             left.address_space == right.address_space
@@ -58,18 +59,68 @@ pub(crate) fn verification_type_nodes_v1(
     }
 }
 
-/// Validates nested fixed-vector nodes while charging each inspected type node
-/// before reading it. Exact V12 decoding has already bounded this recursion.
-pub(crate) fn verification_invalid_vector_type_v12_v1(
+#[derive(Default)]
+pub(crate) struct VerificationTypeFactsV15 {
+    pub(crate) vector_error: Option<FixedVectorTypeErrorV12>,
+    pub(crate) invalid_execution_role: bool,
+    pub(crate) contains_execution_role: bool,
+    pub(crate) storable: bool,
+}
+
+/// Validates vector and execution nodes in one traversal, charging each type
+/// node before reading it, including ordinary legacy scalar terminals.
+pub(crate) fn verification_type_facts_v15(
+    mut ty: &Type,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<VerificationTypeFactsV15, CanonicalKernelIrVerificationResourceErrorV1> {
+    let mut nested = false;
+    let mut storable = false;
+    loop {
+        budget.charge_work(1)?;
+        if !nested {
+            storable = matches!(ty, Type::Scalar(_) | Type::Vector(_) | Type::Pointer(_));
+        }
+        match ty {
+            Type::Vector(vector) => {
+                return Ok(VerificationTypeFactsV15 {
+                    vector_error: vector.validate().err(),
+                    storable,
+                    ..VerificationTypeFactsV15::default()
+                });
+            }
+            Type::Execution(role) => {
+                return Ok(VerificationTypeFactsV15 {
+                    vector_error: None,
+                    invalid_execution_role: nested || role.validate().is_err(),
+                    contains_execution_role: true,
+                    storable: false,
+                });
+            }
+            Type::Pointer(pointer) => ty = &pointer.pointee,
+            Type::Slice(slice) => ty = &slice.element,
+            Type::Unit | Type::Scalar(_) => {
+                return Ok(VerificationTypeFactsV15 {
+                    storable,
+                    ..VerificationTypeFactsV15::default()
+                });
+            }
+        }
+        nested = true;
+    }
+}
+
+/// The caller's fixed operation charge covers the root tag; pointer descendants
+/// need their own paid traversal before recursive storability can be decided.
+pub(crate) fn verification_type_is_storable_v15(
     ty: &Type,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-) -> Result<Option<FixedVectorTypeErrorV12>, CanonicalKernelIrVerificationResourceErrorV1> {
-    budget.charge_work(1)?;
+) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
     match ty {
-        Type::Vector(vector) => Ok(vector.validate().err()),
-        Type::Pointer(pointer) => verification_invalid_vector_type_v12_v1(&pointer.pointee, budget),
-        Type::Slice(slice) => verification_invalid_vector_type_v12_v1(&slice.element, budget),
-        Type::Unit | Type::Scalar(_) => Ok(None),
+        Type::Unit | Type::Slice(_) | Type::Execution(_) => Ok(false),
+        Type::Scalar(_) | Type::Vector(_) => Ok(true),
+        Type::Pointer(pointer) => {
+            Ok(!verification_type_facts_v15(&pointer.pointee, budget)?.contains_execution_role)
+        }
     }
 }
 

@@ -4387,8 +4387,44 @@ fn simulation_export_command_for_feature(
     )
 }
 
+#[derive(Clone, Copy)]
+struct SimulationExportPackageV1<'a> {
+    manifest_path: &'a str,
+    package: &'a str,
+    rustc_crate: &'a str,
+    default_features: bool,
+}
+
+const RANKED_BOUNDS_EXPORT_PACKAGE_V1: SimulationExportPackageV1<'static> =
+    SimulationExportPackageV1 {
+        manifest_path: "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
+        package: "fe2o3-production-ranked-bounds-fixture",
+        rustc_crate: "fe2o3_production_ranked_bounds_fixture",
+        default_features: true,
+    };
+
 fn simulation_export_command_for_feature_with_exporter(
     exporter: &Path,
+    target: &str,
+    output: &Path,
+    target_dir: &Path,
+    bundle_version: Option<u16>,
+    feature: &str,
+) -> Command {
+    simulation_export_command_for_package_with_exporter(
+        exporter,
+        RANKED_BOUNDS_EXPORT_PACKAGE_V1,
+        target,
+        output,
+        target_dir,
+        bundle_version,
+        feature,
+    )
+}
+
+fn simulation_export_command_for_package_with_exporter(
+    exporter: &Path,
+    source: SimulationExportPackageV1<'_>,
     target: &str,
     output: &Path,
     target_dir: &Path,
@@ -4421,7 +4457,7 @@ fn simulation_export_command_for_feature_with_exporter(
         .env_remove("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1")
         .env_remove("FE2O3_EXTRACT_CRATE_BINDING_PATH_V1")
         .arg("--crate")
-        .arg("fe2o3_production_ranked_bounds_fixture")
+        .arg(source.rustc_crate)
         .arg("--output")
         .arg(output)
         .arg("--target")
@@ -4431,12 +4467,17 @@ fn simulation_export_command_for_feature_with_exporter(
     }
     command.arg("--target-dir").arg(target_dir).args([
         "--",
+        "--manifest-path",
+        source.manifest_path,
         "--package",
-        "fe2o3-production-ranked-bounds-fixture",
+        source.package,
         "--features",
         feature,
         "--lib",
     ]);
+    if !source.default_features {
+        command.arg("--no-default-features");
+    }
     command
 }
 
