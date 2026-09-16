@@ -1,0 +1,15 @@
+crates/fe2o3-kfd/src/persistent_allocation.rs: OK
+crates/fe2o3-kfd/src/persistent_directional_sdma.rs: OK
+crates/fe2o3-kfd/src/queue.rs: OK
+crates/fe2o3-kfd/src/queue_live.rs: OK
+crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs: OK
+crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs: OK
+crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_promotion_tests.rs: OK
+crates/fe2o3-kfd/src/queue_live/initial_bind.rs: OK
+crates/fe2o3-kfd/src/queue_live/sdma_recycle.rs: OK
+crates/fe2o3-kfd/src/sdma.rs: OK
+crates/fe2o3-kfd/src/shared_memory.rs: OK
+crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs: OK
+crates/fe2o3-kfd/src/queue_live/sdma_synchronous.rs: OK
+crates/fe2o3-kfd/src/sdma/single_copy.rs: OK
+crates/fe2o3-kfd/src/shared_memory/tests/sdma_single.rs: OK

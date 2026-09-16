@@ -1,0 +1,58 @@
+
+
+============================ ROCm System Management Interface ============================
+======================================= Unique ID ========================================
+GPU[0]		: Unique ID: 0x6ced1647a296545c
+GPU[1]		: Unique ID: 0xab83d2ffef0d3cdf
+GPU[2]		: Unique ID: 0xd2e26fef80cf5c33
+GPU[3]		: Unique ID: 0x189ca857de1ef2fb
+GPU[4]		: Unique ID: 0x54f88318ca05093d
+GPU[5]		: Unique ID: 0xb7baafd0fb173d8e
+GPU[6]		: Unique ID: 0x10a254ce4987e716
+GPU[7]		: Unique ID: 0x53691ef168a0147d
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]		: GPU use (%): 0
+GPU[1]		: GPU use (%): 0
+GPU[2]		: GPU use (%): 0
+GPU[3]		: GPU use (%): 0
+GPU[4]		: GPU use (%): 0
+GPU[5]		: GPU use (%): 0
+GPU[6]		: GPU use (%): 0
+GPU[7]		: GPU use (%): 0
+==========================================================================================
+=================================== Current Memory Use ===================================
+GPU[0]		: GPU Memory Allocated (VRAM%): 44
+GPU[0]		: GPU Memory Read/Write Activity (%): 0
+GPU[0]		: Memory Activity: N/A
+GPU[0]		: Not supported on the given system
+GPU[1]		: GPU Memory Allocated (VRAM%): 0
+GPU[1]		: GPU Memory Read/Write Activity (%): 0
+GPU[1]		: Memory Activity: N/A
+GPU[1]		: Not supported on the given system
+GPU[2]		: GPU Memory Allocated (VRAM%): 0
+GPU[2]		: GPU Memory Read/Write Activity (%): 0
+GPU[2]		: Memory Activity: N/A
+GPU[2]		: Not supported on the given system
+GPU[3]		: GPU Memory Allocated (VRAM%): 0
+GPU[3]		: GPU Memory Read/Write Activity (%): 0
+GPU[3]		: Memory Activity: N/A
+GPU[3]		: Not supported on the given system
+GPU[4]		: GPU Memory Allocated (VRAM%): 0
+GPU[4]		: GPU Memory Read/Write Activity (%): 0
+GPU[4]		: Memory Activity: N/A
+GPU[4]		: Not supported on the given system
+GPU[5]		: GPU Memory Allocated (VRAM%): 0
+GPU[5]		: GPU Memory Read/Write Activity (%): 0
+GPU[5]		: Memory Activity: N/A
+GPU[5]		: Not supported on the given system
+GPU[6]		: GPU Memory Allocated (VRAM%): 0
+GPU[6]		: GPU Memory Read/Write Activity (%): 0
+GPU[6]		: Memory Activity: N/A
+GPU[6]		: Not supported on the given system
+GPU[7]		: GPU Memory Allocated (VRAM%): 0
+GPU[7]		: GPU Memory Read/Write Activity (%): 0
+GPU[7]		: Memory Activity: N/A
+GPU[7]		: Not supported on the given system
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

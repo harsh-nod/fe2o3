@@ -1930,6 +1930,31 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)
     }
 
+    fn mapped_resource_facts_v1<P, S>(
+        &self,
+        token: &SharedGttAllocationV1<P, S>,
+        vm: VmKeyV1,
+    ) -> Result<SharedGttMappedResourceFactsV1, MemorySessionError>
+    where
+        P: GttProfileV1,
+        S: GpuMappedGttStateV1,
+    {
+        let index = self.index(token, S::PHASE)?;
+        let record = &self.allocations[index];
+        let (_, _, mapping) = model_keys(vm, record.id, record.generation);
+        Ok(SharedGttMappedResourceFactsV1 {
+            gpu_va: record.gpu_va,
+            logical_bytes: record.layout.requested_bytes,
+            cpu_mapping_bytes: record.layout.cpu_mapping_bytes,
+            gpu_va_bytes: record.layout.gpu_va_bytes,
+            mapping,
+            publication: MemoryPublicationKeyV1 {
+                mapping,
+                id: MemoryPublicationIdV1(record.id),
+            },
+        })
+    }
+
     fn mapped_device_memory_facts_v1(
         &self,
         lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
@@ -6441,20 +6466,7 @@ impl SharedGttMemorySessionV1 {
         P: GttProfileV1,
         S: GpuMappedGttStateV1,
     {
-        let index = self.engine.index(token, S::PHASE)?;
-        let record = &self.engine.allocations[index];
-        let (_, _, mapping) = model_keys(self.vm, record.id, record.generation);
-        Ok(SharedGttMappedResourceFactsV1 {
-            gpu_va: record.gpu_va,
-            logical_bytes: record.layout.requested_bytes,
-            cpu_mapping_bytes: record.layout.cpu_mapping_bytes,
-            gpu_va_bytes: record.layout.gpu_va_bytes,
-            mapping,
-            publication: MemoryPublicationKeyV1 {
-                mapping,
-                id: MemoryPublicationIdV1(record.id),
-            },
-        })
+        self.engine.mapped_resource_facts_v1(token, self.vm)
     }
 
     #[allow(dead_code)]
@@ -6842,6 +6854,7 @@ mod tests {
     pub(super) mod primary_projection;
     pub(super) mod pristine_abort;
     pub(super) mod queue_construction;
+    mod sdma_single;
     mod transitions;
     use super::*;
     use core::cell::Cell;
@@ -6882,6 +6895,7 @@ mod tests {
         corrupt_readback: bool,
         readback_calls: Cell<usize>,
         panic_access: Option<&'static str>,
+        sdma_bytes: bool,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7027,6 +7041,32 @@ mod tests {
         };
     }
 
+    fn fake_sdma_bytes<'a>(
+        mapping: &'a mut FakeMapping,
+        requested: usize,
+        operation: &'static str,
+        unsupported: &'static str,
+    ) -> Result<&'a mut [u8], MemorySessionError> {
+        if mapping.panic_access == Some(operation) {
+            std::panic::panic_any(("N1 mapped panic", operation));
+        }
+        if !mapping.sdma_bytes {
+            return Err(MemorySessionError::KernelResultMalformed(unsupported));
+        }
+        if !mapping.active || !mapping.writable {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "fake SDMA mapping state",
+            ));
+        }
+        let end = mapping
+            .byte_offset
+            .checked_add(requested)
+            .ok_or(MemorySessionError::SizeOverflow)?;
+        mapping.bytes.get_mut(mapping.byte_offset..end).ok_or(
+            MemorySessionError::KernelResultMalformed("fake SDMA mapping extent"),
+        )
+    }
+
     impl MemoryBackend for FakeBackend {
         type Reservation = (u64, usize);
         type Mapping = FakeMapping;
@@ -7138,6 +7178,7 @@ mod tests {
                 corrupt_readback: self.corrupt_readback,
                 readback_calls: Cell::new(0),
                 panic_access: self.panic_operation,
+                sdma_bytes: false,
             };
             self.prepare_cpu_mapping(&mut mapping)?;
             Ok(mapping)
@@ -7206,6 +7247,7 @@ mod tests {
                 corrupt_readback: self.corrupt_readback,
                 readback_calls: Cell::new(0),
                 panic_access: self.panic_operation,
+                sdma_bytes: false,
             })
         }
         fn mapping_address(mapping: &Self::Mapping) -> u64 {
@@ -7363,10 +7405,87 @@ mod tests {
                 ))?;
             Ok(i64::from_le_bytes(bytes))
         }
-        fake_host_scope_operation!(observe_aql_counters() -> (u64, u64), "AQL mapped counter backend");
+        fn observe_aql_counters(
+            mapping: &mut Self::Mapping,
+            requested_bytes: usize,
+        ) -> Result<(u64, u64), MemorySessionError> {
+            let bytes = fake_sdma_bytes(
+                mapping,
+                requested_bytes,
+                "observe_aql_counters",
+                "AQL mapped counter backend",
+            )?;
+            let read = |offset: usize| -> Result<u64, MemorySessionError> {
+                let value: [u8; 8] = bytes
+                    .get(offset..offset + 8)
+                    .and_then(|v| v.try_into().ok())
+                    .ok_or(MemorySessionError::KernelResultMalformed(
+                        "fake SDMA counter range",
+                    ))?;
+                Ok(u64::from_le_bytes(value))
+            };
+            Ok((
+                read(crate::queue_resources::AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1)?,
+                read(crate::queue_resources::AMD_AQL_READ_DISPATCH_ID_OFFSET_V1)?,
+            ))
+        }
         fake_host_scope_operation!(fetch_add_aql_write(_increment: u64) -> u64, "AQL mapped write backend");
-        fake_host_scope_operation!(publish_sdma_write_release(_expected: u64, _new: u64) -> (), "SDMA visible write-pointer backend");
-        fake_host_scope_operation!(write_sdma_slot(_slot_index: u32, _packet: &[u8; 64]) -> (), "SDMA mapped slot backend");
+        fn publish_sdma_write_release(
+            mapping: &mut Self::Mapping,
+            requested_bytes: usize,
+            expected: u64,
+            new: u64,
+        ) -> Result<(), MemorySessionError> {
+            if new <= expected {
+                return Err(MemorySessionError::KernelResultMalformed(
+                    "SDMA write-pointer progression",
+                ));
+            }
+            let bytes = fake_sdma_bytes(
+                mapping,
+                requested_bytes,
+                "publish_sdma_write_release",
+                "SDMA visible write-pointer backend",
+            )?;
+            let offset = crate::queue_resources::AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1;
+            let target = bytes.get_mut(offset..offset + 8).ok_or(
+                MemorySessionError::KernelResultMalformed("fake SDMA write range"),
+            )?;
+            if target != expected.to_le_bytes() {
+                return Err(MemorySessionError::KernelResultMalformed(
+                    "fake SDMA expected write",
+                ));
+            }
+            target.copy_from_slice(&new.to_le_bytes());
+            Ok(())
+        }
+        fn write_sdma_slot(
+            mapping: &mut Self::Mapping,
+            requested_bytes: usize,
+            slot_index: u32,
+            packet: &[u8; 64],
+        ) -> Result<(), MemorySessionError> {
+            let bytes = fake_sdma_bytes(
+                mapping,
+                requested_bytes,
+                "write_sdma_slot",
+                "SDMA mapped slot backend",
+            )?;
+            let start = usize::try_from(slot_index)
+                .ok()
+                .and_then(|slot| slot.checked_mul(64))
+                .ok_or(MemorySessionError::SizeOverflow)?;
+            let end = start
+                .checked_add(64)
+                .ok_or(MemorySessionError::SizeOverflow)?;
+            bytes
+                .get_mut(start..end)
+                .ok_or(MemorySessionError::KernelResultMalformed(
+                    "fake SDMA packet range",
+                ))?
+                .copy_from_slice(packet);
+            Ok(())
+        }
         fake_host_scope_operation!(write_aql_slot(_slot_index: u32, _packet: &[u8; 64]) -> (), "AQL mapped slot backend");
         fake_host_scope_operation!(publish_aql_header(_slot_index: u32, _header: u16) -> (), "AQL mapped publication backend");
         fake_host_scope_operation!(observe_aql_packet_header_acquire(_packet_id: u64) -> (u32, u16, u16), "AQL packet observation backend");

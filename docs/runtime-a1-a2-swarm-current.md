@@ -77,7 +77,14 @@ healthy retry, error/panic settlement and public credit behavior; see the
 [demotion receipt](evidence/dev-r126-sdma-demotion-2026-09-16/README.md).
 GNU/musl each pass 1,352 KFD and 798 runtime tests; eight isolated MI300X
 regression probes pass and the private remote scratch is removed.
-Next are synchronous-copy custody and typed capacity rejection.
+The lower synchronous-copy driver now retains allocation, buffer and lease
+custody through preparation, publication, wait and model retake. Fourteen new
+constructed tests exercise shared mapped operations and actual failure prefixes;
+GNU/musl each pass 1,366 KFD and 798 runtime tests, and eight MI300X regression
+probes pass. The [development receipt](evidence/dev-r126-sdma-synchronous-2026-09-16/README.md)
+records final regression status separately from milestone acceptance.
+Next are runtime outer synchronous-copy normalization/retirement/readback
+custody and typed capacity rejection.
 Allocation during pending compute is still disabled. These are
 development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
 CPU/test checkpoint.

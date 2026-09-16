@@ -3,6 +3,8 @@
 use super::*;
 #[path = "integration_sdma_demotion_tests.rs"]
 mod demotion;
+#[path = "integration_sdma_synchronous_tests.rs"]
+mod synchronous;
 use crate::persistent_directional_sdma::{
     Gfx942DirectionalPersistentSdmaPromotionCustodyV1 as Custody,
     Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1 as Root,

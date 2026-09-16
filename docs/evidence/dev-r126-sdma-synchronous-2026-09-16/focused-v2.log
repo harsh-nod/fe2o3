@@ -1,0 +1,64 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: trait `shared_memory::GpuMappedGttStateV1` is more private than the item `sdma_single::<impl shared_memory::tests::preparation::PreparationMemoryFixtureV1>::sdma_resource_bytes_v1`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/sdma_single.rs:91:5
+    |
+ 91 | /     pub(crate) fn sdma_resource_bytes_v1<R: SharedGttQueueResourceRoleV1, P: GttProfileV1, S: GpuMappedGttStateV1>(
+ 92 | |         &self,
+ 93 | |         authority: &SharedGttQueueResourceAuthorityV1<R, P, S>,
+ 94 | |     ) -> Vec<u8> {
+    | |________________^ method `sdma_single::<impl shared_memory::tests::preparation::PreparationMemoryFixtureV1>::sdma_resource_bytes_v1` is reachable at visibility `pub(crate)`
+    |
+note: but trait `shared_memory::GpuMappedGttStateV1` is only usable at visibility `pub(self)`
+   --> crates/fe2o3-kfd/src/shared_memory.rs:912:1
+    |
+912 | trait GpuMappedGttStateV1: GttAllocationStateV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_bounds)]` on by default
+
+warning: trait `shared_memory::GpuMappedGttStateV1` is more private than the item `sdma_single::<impl shared_memory::tests::preparation::PreparationMemoryFixtureV1>::sdma_mapped_bytes_v1`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/sdma_single.rs:98:5
+    |
+ 98 | /     pub(crate) fn sdma_mapped_bytes_v1<P: GttProfileV1, S: GpuMappedGttStateV1>(
+ 99 | |         &self,
+100 | |         token: &SharedGttAllocationV1<P, S>,
+101 | |     ) -> Vec<u8> {
+    | |________________^ method `sdma_single::<impl shared_memory::tests::preparation::PreparationMemoryFixtureV1>::sdma_mapped_bytes_v1` is reachable at visibility `pub(crate)`
+    |
+note: but trait `shared_memory::GpuMappedGttStateV1` is only usable at visibility `pub(self)`
+   --> crates/fe2o3-kfd/src/shared_memory.rs:912:1
+    |
+912 | trait GpuMappedGttStateV1: GttAllocationStateV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `fe2o3-kfd` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.57s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-112524bc719a0748)
+
+running 5 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_healthy_preparation_retries_cancel_then_succeed ... FAILED
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_final_currentness_and_retake_have_distinct_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_success_uses_exact_mappings_and_two_model_loans ... FAILED
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_timeout_returns_published_lease_and_queue_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_publication_faults_retain_exact_queue_records ... ok
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_healthy_preparation_retries_cancel_then_succeed stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_healthy_preparation_retries_cancel_then_succeed' (3666289) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:260:10:
+called `Result::unwrap()` on an `Err` value: (OutstandingUses, Gfx942DirectionalQueuePersistentAllocationV1 { byte_len: 17, physical_byte_len: 4096, .. })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_success_uses_exact_mappings_and_two_model_loans stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_success_uses_exact_mappings_and_two_model_loans' (3666357) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:260:10:
+called `Result::unwrap()` on an `Err` value: (OutstandingUses, Gfx942DirectionalQueuePersistentAllocationV1 { byte_len: 17, physical_byte_len: 4096, .. })
+
+
+failures:
+    queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_healthy_preparation_retries_cancel_then_succeed
+    queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_success_uses_exact_mappings_and_two_model_loans
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 1352 filtered out; finished in 3.19s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

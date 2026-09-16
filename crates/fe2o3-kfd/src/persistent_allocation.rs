@@ -466,6 +466,23 @@ pub(crate) struct PersistentOwnerSnapshotForTestV1 {
     quarantine: Option<Gfx942PersistentQuarantineReasonV1>,
 }
 
+#[cfg(test)]
+impl PersistentOwnerSnapshotForTestV1 {
+    pub(crate) fn same_allocation(&self, other: &Self) -> bool {
+        self.incarnation == other.incarnation
+            && self.binding == other.binding
+            && self.mapping == other.mapping
+            && self.byte_len == other.byte_len
+            && self.ledger_address == other.ledger_address
+    }
+    pub(crate) fn reservation_history(&self) -> (u64, u64) {
+        (self.next_generation, self.next_sequence)
+    }
+    pub(crate) fn local_native(&self) -> Option<Gfx942DeviceMemoryIdentityV1> {
+        self.local_native
+    }
+}
+
 /// Persistent owner for exactly one native mapped device-memory authority.
 ///
 /// The owner is non-cloneable and thread-affine. Dropping it performs no KFD

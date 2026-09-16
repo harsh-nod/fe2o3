@@ -683,6 +683,24 @@ Execution and its qualification scope are recorded in the
 This does not accept R126 or qualify native demotion faults, formal correspondence
 or matched HIP/HSA performance.
 
+## Lower Synchronous Copy Custody
+
+The ordinary directional single-copy path now roots its original allocation,
+host buffer and typed use lease before opening currentness. Borrowed preparation
+keeps the request through native callbacks; publication installs actual queue
+records before writes. Completed data is rooted before retake, and returned
+leases survive failed completion/quarantine transitions. Separate opening and
+fused prepare/publish/wait loans, error precedence and session-only versus
+process-wide poisoning are preserved without new success-path allocation.
+
+Fourteen constructed tests cover real mapping/model transitions, callback and
+backend failures, exact packet/owner identity, timeout and public reentry/Drop.
+Eight isolated MI300X regression probes pass, including patterned device copies
+in both directions. See the [development receipt](evidence/dev-r126-sdma-synchronous-2026-09-16/README.md)
+for final regression status and limitations. The runtime outer normalization,
+retirement and readback paths remain the next ownership work; this does not
+accept R126, A1/A2, formal correspondence or HIP/HSA performance.
+
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native

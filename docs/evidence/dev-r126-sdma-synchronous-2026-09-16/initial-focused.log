@@ -1,0 +1,53 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0599]: no associated function or constant named `PHASE` found for type parameter `S` in the current scope
+   --> crates/fe2o3-kfd/src/shared_memory/tests/sdma_single.rs:100:86
+    |
+ 91 |     pub(crate) fn sdma_mapped_bytes_v1<P: GttProfileV1, S: GttAllocationStateV1>(
+    |                                                         - associated function or constant `PHASE` not found for this type parameter
+...
+100 |             .find(|record| engine.shared_allocation_record_matches(record, token, S::PHASE))
+    |                                                                                      ^^^^^ associated function or constant not found in `S`
+    |
+    = help: items from traits can only be used if the type parameter is bounded by the trait
+help: the following trait defines an item `PHASE`, perhaps you need to restrict type parameter `S` with it:
+    |
+ 91 |     pub(crate) fn sdma_mapped_bytes_v1<P: GttProfileV1, S: GttAllocationStateV1 + shared_memory::GpuMappedGttStateV1>(
+    |                                                                                 ++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no method named `error` found for enum `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1` in the current scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:380:88
+    |
+380 |                 execute(&mut f, input).unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    |                                                                                        ^^^^^ method not found in `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:629:1
+    |
+629 | pub enum Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1 {
+    | --------------------------------------------------------------------- method `error` not found for this enum
+
+error[E0599]: no method named `error` found for enum `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1` in the current scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:475:58
+    |
+475 |         .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
+    |                                                          ^^^^^ method not found in `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:629:1
+    |
+629 | pub enum Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1 {
+    | --------------------------------------------------------------------- method `error` not found for this enum
+
+error[E0616]: field `token` of struct `shared_memory::SharedGttQueueResourceAuthorityV1` is private
+   --> crates/fe2o3-kfd/src/sdma/single_copy.rs:215:81
+    |
+215 |                 ring: memory.sdma_mapped_bytes_v1(&owner.ring.as_ref().unwrap().token),
+    |                                                                                 ^^^^^ private field
+
+error[E0616]: field `token` of struct `shared_memory::SharedGttQueueResourceAuthorityV1` is private
+   --> crates/fe2o3-kfd/src/sdma/single_copy.rs:216:87
+    |
+216 |                 control: memory.sdma_mapped_bytes_v1(&owner.control.as_ref().unwrap().token),
+    |                                                                                       ^^^^^ private field
+
+Some errors have detailed explanations: E0599, E0616.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `fe2o3-kfd` (lib test) due to 5 previous errors

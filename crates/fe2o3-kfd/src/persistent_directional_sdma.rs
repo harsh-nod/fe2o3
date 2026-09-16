@@ -405,10 +405,17 @@ pub enum Gfx942DirectionalPersistentSdmaTerminalStageV1 {
     PreparedQueueRetained,
     PublishedQueueRetained,
     CompletedUnrestored,
+    /// A synchronous transition could not settle its retained use lease.
+    SynchronousUnsettled,
 }
 
 #[allow(dead_code)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub(crate) enum Gfx942DirectionalPersistentSdmaTerminalStateV1 {
+    Synchronous(crate::queue::SdmaSynchronousCustodyV1),
     AdmissionRestored {
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
         host: Gfx942SdmaBufferV1,
@@ -452,7 +459,8 @@ impl Gfx942DirectionalPersistentSdmaTerminalCustodyV1 {
     }
 
     pub const fn stage(&self) -> Gfx942DirectionalPersistentSdmaTerminalStageV1 {
-        match self.state {
+        match &self.state {
+            Gfx942DirectionalPersistentSdmaTerminalStateV1::Synchronous(root) => root.stage,
             Gfx942DirectionalPersistentSdmaTerminalStateV1::AdmissionRestored { .. } => {
                 Gfx942DirectionalPersistentSdmaTerminalStageV1::AdmissionRestored
             }
@@ -529,6 +537,26 @@ pub struct Gfx942DirectionalPersistentSdmaCompletedV1 {
 }
 
 impl Gfx942DirectionalPersistentSdmaCompletedV1 {
+    pub(crate) fn from_settled_v1(
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+        frontier: Gfx942PersistentDependencyFrontierV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+    ) -> Self {
+        Self {
+            allocation,
+            host,
+            frontier,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+        }
+    }
+
     pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
         self.direction
     }
@@ -570,6 +598,10 @@ pub enum Gfx942DirectionalPersistentSdmaCopyPollV1 {
 }
 
 #[must_use = "a timeout returns the submission; terminal custody requires teardown"]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub enum Gfx942DirectionalPersistentSdmaExecutionCustodyV1 {
     Pending(Gfx942DirectionalPersistentSdmaSubmissionV1),
     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
@@ -941,6 +973,10 @@ pub(crate) enum DirectionalPersistentSdmaPublicationObservationV1 {
     Confirmed(Gfx942SdmaCopyTicketV1),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub(crate) enum DirectionalPersistentSdmaPublicationTransitionV1 {
     Retryable {
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
@@ -958,6 +994,10 @@ pub(crate) enum DirectionalPersistentSdmaCompletionObservationV1 {
     Completed(Gfx942SdmaCompletedCopyV1),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub(crate) enum DirectionalPersistentSdmaCompletionTransitionV1 {
     Pending(Gfx942DirectionalPersistentSdmaSubmissionV1),
     Timeout(Gfx942DirectionalPersistentSdmaSubmissionV1),
@@ -2975,16 +3015,17 @@ mod tests {
         assert!(!promotion_driver.contains("checked_gpu_subrange"));
         assert!(!promotion.contains("checked_gpu_subrange"));
 
-        let request_preparation = live
-            .split("fn prepare_directional_persistent_sdma_request_v1")
-            .nth(1)
+        let synchronous = include_str!("queue_live/sdma_synchronous.rs");
+        let opening_scope = synchronous
+            .split("fn opening(&mut self)")
+            .nth(2)
             .unwrap()
-            .split("pub fn submit_directional_persistent_sdma_copy_v1")
+            .split("fn loan(&mut self)")
             .next()
             .unwrap();
         assert_eq!(
-            request_preparation
-                .matches("check_directional_persistent_sdma_operational_currentness")
+            opening_scope
+                .matches("check_queue_operational_currentness")
                 .count(),
             1
         );
@@ -2992,7 +3033,7 @@ mod tests {
             .split("fn prepare_admitted_directional_persistent_sdma_request_v1")
             .nth(1)
             .unwrap()
-            .split("fn prepare_directional_persistent_sdma_request_v1")
+            .split("pub fn submit_directional_persistent_sdma_copy_v1")
             .next()
             .unwrap();
         assert!(admitted_preparation.contains("allocation.owner.reserve("));
@@ -3174,20 +3215,6 @@ mod tests {
     #[test]
     fn synchronous_single_path_fuses_publication_and_bounded_completion_scope() {
         let live = include_str!("queue_live.rs");
-        let request_preparation = live
-            .split("fn prepare_directional_persistent_sdma_request_v1")
-            .nth(1)
-            .unwrap()
-            .split("pub fn submit_directional_persistent_sdma_copy_v1")
-            .next()
-            .unwrap();
-        let opening_scope = live
-            .split("fn check_directional_persistent_sdma_operational_currentness")
-            .nth(1)
-            .unwrap()
-            .split("fn finish_directional_persistent_sdma_publication_transition")
-            .next()
-            .unwrap();
         let fused = live
             .split("pub fn execute_synchronous_directional_persistent_sdma_copy_for_v1")
             .nth(1)
@@ -3195,66 +3222,85 @@ mod tests {
             .split("pub fn poll_directional_persistent_sdma_copy_v1")
             .next()
             .unwrap();
+        assert!(fused.contains("admit_directional_persistent_sdma_request_v1"));
         assert_eq!(
-            request_preparation
-                .matches("check_directional_persistent_sdma_operational_currentness")
+            fused.matches("sdma_synchronous::execute_in_place").count(),
+            1
+        );
+        let driver = include_str!("queue_live/sdma_synchronous.rs");
+        let opening_scope = driver
+            .split("fn opening(&mut self)")
+            .nth(2)
+            .unwrap()
+            .split("fn loan(&mut self)")
+            .next()
+            .unwrap();
+        assert_eq!(
+            opening_scope
+                .matches("execute_live_model_custody_v1")
                 .count(),
             1
         );
-        assert_eq!(
-            fused
-                .matches("check_directional_persistent_sdma_operational_currentness")
-                .count(),
-            0
-        );
-        assert_eq!(opening_scope.matches("with_sdma_owner_memory").count(), 1);
         assert_eq!(
             opening_scope
                 .matches("check_queue_operational_currentness")
                 .count(),
             1
         );
-        assert!(!request_preparation.contains("with_sdma_owner_memory"));
-        assert_eq!(fused.matches("with_sdma_owner_memory").count(), 1);
-        let preparation_envelope = fused
-            .find("prepare_directional_persistent_sdma_request_v1")
+        let execution = driver
+            .split("pub(super) fn execute_in_place")
+            .nth(1)
+            .unwrap()
+            .split("impl SdmaSynchronousContextV1")
+            .next()
             .unwrap();
-        let loan = fused.find("with_sdma_owner_memory").unwrap();
-        let preparation = fused
-            .find("prepare_directional_persistent_single_recoverable")
+        assert_eq!(
+            execution.matches("execute_live_model_custody_v1").count(),
+            1
+        );
+        let installed = execution.find("*context.root() = Some").unwrap();
+        let opening = execution.find("context.opening()").unwrap();
+        let preparation_envelope = execution.find(".prepare_request()").unwrap();
+        let loan = execution.find("execute_live_model_custody_v1").unwrap();
+        assert!(
+            installed < opening && opening < preparation_envelope && preparation_envelope < loan
+        );
+        let run = driver
+            .split("pub(super) fn run_in_place")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) trait SdmaSynchronousContextV1")
+            .next()
             .unwrap();
-        let prepublication = fused
+        let preparation = run.find("prepare_directional_single_in_place").unwrap();
+        let prepublication = run
             .find("if let Err(error) = memory.check_queue_operational_currentness()")
             .unwrap();
-        let handoff = fused
-            .find("DirectionalPersistentSdmaSinglePreparedHandoffV1")
-            .unwrap();
-        let publication = fused.find("handoff.publish(owner, memory)").unwrap();
-        let wait = fused
+        let publication = run.find("owner.publish_single_in_place").unwrap();
+        let wait = run
             .find("wait_for_in_current_scope_with_final_currentness")
             .unwrap();
-        let retained_publication = fused
-            .find("PreparedSingleSdmaPublicationFailureV1::Retained")
-            .unwrap();
-        let ticket_mismatch = fused.find("if ticket != planned_ticket").unwrap();
-        assert!(preparation_envelope < loan);
-        assert!(loan < preparation);
+        let ticket_mismatch = run.find("ticket != planned").unwrap();
         assert!(preparation < prepublication);
-        assert!(prepublication < handoff);
-        assert!(handoff < publication);
+        assert!(prepublication < publication);
         assert!(publication < wait);
-        let handoff_to_publication = &fused[handoff..publication];
-        assert!(!handoff_to_publication.contains("return Err"));
-        assert!(!handoff_to_publication.contains('?'));
-        assert!(!handoff_to_publication.contains("check_"));
-        assert!(!fused.contains("wait_directional_persistent_sdma_copy_for_v1"));
+        assert!(!driver.contains("wait_directional_persistent_sdma_copy_for_v1"));
+        assert!(!driver.contains("submit_directional_persistent_sdma_copy_v1"));
         assert!(
-            fused[retained_publication..ticket_mismatch]
+            run[publication..ticket_mismatch]
                 .contains("memory.check_queue_operational_currentness()")
         );
         assert!(
-            fused[ticket_mismatch..wait].contains("memory.check_queue_operational_currentness()")
+            run[ticket_mismatch..wait].contains("memory.check_queue_operational_currentness()")
         );
+        let completed = run
+            .find("SingleSdmaWaitInCurrentScopeV1::Completed(completed)")
+            .unwrap();
+        let rooted = run[completed..]
+            .find("root.data = Some(SingleSdmaCopyCustodyV1::Completed(completed))")
+            .unwrap();
+        let outcome = run[completed..].find("OutcomeV1::Published").unwrap();
+        assert!(rooted < outcome);
 
         let sdma = include_str!("sdma.rs");
         let failure_close = sdma

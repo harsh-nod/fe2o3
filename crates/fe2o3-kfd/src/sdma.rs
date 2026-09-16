@@ -49,6 +49,7 @@ pub(crate) use host_pool_policy::{
 
 mod multi_queue;
 pub(crate) mod retained_release;
+mod single_copy;
 use multi_queue::next_striped_owner;
 pub use multi_queue::{
     GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_PER_NATIVE_QUEUE_V2,
@@ -70,6 +71,9 @@ pub(crate) use multi_queue::{
     MultiQueueSdmaSubmitFailureV1, combined_striped_sdma_queue_count_is_admitted,
     gfx942_sdma_logical_mux_lane_count_is_admitted_v2, striped_sdma_queue_count_is_admitted,
 };
+#[cfg(test)]
+pub(crate) use single_copy::SingleQueueSnapshotV1;
+pub(crate) use single_copy::{SdmaSingleMemoryV1, SingleSdmaCopyCustodyV1};
 
 pub const GFX942_SDMA_COPY_PACKET_BYTES_V1: usize = 7 * 4;
 pub const GFX942_SDMA_FENCE_PACKET_BYTES_V1: usize = 4 * 4;
@@ -178,17 +182,17 @@ const SDMA_OP_FENCE: u32 = 5;
 const SDMA_SUBOP_COPY_LINEAR: u32 = 0;
 const SDMA_FENCE_SYSTEM_SNOOP_HEADER_V1: u32 = (1 << 22) | (1 << 20) | (3 << 16) | SDMA_OP_FENCE;
 
-type SdmaRingAuthorityV1 = SharedGttQueueResourceAuthorityV1<
+pub(crate) type SdmaRingAuthorityV1 = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
     AqlQueueGttV1,
     GttGpuAccessibleMutableV1,
 >;
-type SdmaControlAuthorityV1 = SharedGttQueueResourceAuthorityV1<
+pub(crate) type SdmaControlAuthorityV1 = SharedGttQueueResourceAuthorityV1<
     AqlControlResourceRoleV1,
     UserptrAqlControlGttV1,
     GttGpuAccessibleMutableV1,
 >;
-type MappedHostBufferV1 =
+pub(crate) type MappedHostBufferV1 =
     SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -561,7 +565,7 @@ impl Gfx942SdmaBufferV1 {
 
     pub(crate) fn checked_gpu_subrange(
         &self,
-        memory: &SharedGttMemorySessionV1,
+        memory: &impl SdmaSingleMemoryV1,
         offset: u64,
         byte_len: u64,
     ) -> Result<u64, Gfx942SdmaErrorV1> {
@@ -574,11 +578,11 @@ impl Gfx942SdmaBufferV1 {
         }
         match &self.storage {
             Gfx942SdmaBufferStorageV1::Host(token) => memory
-                .mapped_resource_facts(token)?
+                .single_host_facts(token)?
                 .checked_gpu_subrange(offset, byte_len, 1)
                 .ok_or(Gfx942SdmaErrorV1::Contract("host buffer copy range")),
             Gfx942SdmaBufferStorageV1::Device(lease) => memory
-                .mapped_gfx942_device_memory_facts(lease)?
+                .single_device_facts(lease)?
                 .checked_gpu_subrange(offset, byte_len, 1)
                 .ok_or(Gfx942SdmaErrorV1::Contract("device buffer copy range")),
         }
@@ -949,6 +953,29 @@ pub(crate) struct PreparedSingleSdmaV1 {
     request: Gfx942SdmaCopyRequestV1,
 }
 
+#[derive(Clone, Copy)]
+struct PreparedSingleSdmaPlanV1 {
+    queue_id: u32,
+    write: u64,
+    write_end: u64,
+    copy: PreparedSdmaCopyV1,
+    ticket: Gfx942SdmaCopyTicketV1,
+}
+
+impl PreparedSingleSdmaPlanV1 {
+    fn attach(self, request: Gfx942SdmaCopyRequestV1) -> PreparedSingleSdmaV1 {
+        PreparedSingleSdmaV1 {
+            directional_persistent: false,
+            queue_id: self.queue_id,
+            write: self.write,
+            write_end: self.write_end,
+            copy: self.copy,
+            ticket: self.ticket,
+            request,
+        }
+    }
+}
+
 /// One persistent host/device owner pair prepared as a bounded packet window.
 pub(crate) struct PreparedPersistentSdmaWindowV1 {
     queue_id: u32,
@@ -1027,7 +1054,7 @@ pub(crate) enum SingleSdmaWaitInCurrentScopeV1 {
 }
 
 fn close_single_sdma_wait_failure_currentness(
-    memory: &mut SharedGttMemorySessionV1,
+    memory: &mut impl SdmaSingleMemoryV1,
     error: Gfx942SdmaErrorV1,
 ) -> SingleSdmaWaitInCurrentScopeV1 {
     match memory.check_queue_operational_currentness() {
@@ -1741,7 +1768,7 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     fn observe_batch_start(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         count: usize,
     ) -> Result<u64, Gfx942SdmaErrorV1> {
         if count == 0 || count > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
@@ -2266,65 +2293,67 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         request: Gfx942SdmaCopyRequestV1,
     ) -> Result<PreparedSingleSdmaV1, (Gfx942SdmaErrorV1, Gfx942SdmaCopyRequestV1)> {
-        let prepared = (|| {
-            self.require_live()?;
-            let write = self.observe_batch_start(memory, 1)?;
-            let write_end = checked_sdma_write_end(
-                write,
-                GFX942_SDMA_SUBMISSION_BYTES_V1 as u64,
-                &mut self.poisoned,
-            )?;
-            let (source_address, destination_address) = Self::checked_copy_addresses(
-                memory,
-                &request.source,
-                request.source_offset,
-                &request.destination,
-                request.destination_offset,
-                request.copy_bytes,
-            )?;
-            let slot = batch_ring_slot(write, 0)?;
-            let generation =
-                next_sdma_ticket_generation(self.generations[slot], &mut self.poisoned)?;
-            let completion_address = memory
-                .mapped_resource_facts(
-                    self.completions
-                        .as_ref()
-                        .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
-                )?
-                .gpu_va()
-                .checked_add((slot * 8) as u64)
-                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA completion address"))?;
-            let copy = PreparedSdmaCopyV1 {
-                packet: Gfx942SdmaCopySubmissionV1::new(
-                    source_address,
-                    destination_address,
-                    request.copy_bytes,
-                    completion_address,
-                    generation,
-                )?,
-                slot,
-                generation,
-                completion_value: generation,
-            };
-            Ok((write, write_end, copy, slot, generation))
-        })();
-        match prepared {
-            Ok((write, write_end, copy, slot, generation)) => Ok(PreparedSingleSdmaV1 {
-                directional_persistent: false,
-                queue_id: self.queue_id,
-                write,
-                write_end,
-                copy,
-                ticket: Gfx942SdmaCopyTicketV1 {
-                    owner: self.owner,
-                    queue_id: self.queue_id,
-                    slot: slot as u16,
-                    generation,
-                },
-                request,
-            }),
+        match self.prepare_single_plan(memory, &request) {
+            Ok(plan) => Ok(plan.attach(request)),
             Err(error) => Err((error, request)),
         }
+    }
+
+    fn prepare_single_plan(
+        &mut self,
+        memory: &mut impl SdmaSingleMemoryV1,
+        request: &Gfx942SdmaCopyRequestV1,
+    ) -> Result<PreparedSingleSdmaPlanV1, Gfx942SdmaErrorV1> {
+        self.require_live()?;
+        let write = self.observe_batch_start(memory, 1)?;
+        let write_end = checked_sdma_write_end(
+            write,
+            GFX942_SDMA_SUBMISSION_BYTES_V1 as u64,
+            &mut self.poisoned,
+        )?;
+        let (source_address, destination_address) = Self::checked_copy_addresses(
+            memory,
+            &request.source,
+            request.source_offset,
+            &request.destination,
+            request.destination_offset,
+            request.copy_bytes,
+        )?;
+        let slot = batch_ring_slot(write, 0)?;
+        let generation = next_sdma_ticket_generation(self.generations[slot], &mut self.poisoned)?;
+        let completion_address = memory
+            .single_host_facts(
+                self.completions
+                    .as_ref()
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
+            )?
+            .gpu_va()
+            .checked_add((slot * 8) as u64)
+            .ok_or(Gfx942SdmaErrorV1::Contract("SDMA completion address"))?;
+        let copy = PreparedSdmaCopyV1 {
+            packet: Gfx942SdmaCopySubmissionV1::new(
+                source_address,
+                destination_address,
+                request.copy_bytes,
+                completion_address,
+                generation,
+            )?,
+            slot,
+            generation,
+            completion_value: generation,
+        };
+        Ok(PreparedSingleSdmaPlanV1 {
+            queue_id: self.queue_id,
+            write,
+            write_end,
+            copy,
+            ticket: Gfx942SdmaCopyTicketV1 {
+                owner: self.owner,
+                queue_id: self.queue_id,
+                slot: slot as u16,
+                generation,
+            },
+        })
     }
 
     #[allow(clippy::result_large_err)]
@@ -2333,39 +2362,63 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         prepared: PreparedSingleSdmaV1,
     ) -> Result<Gfx942SdmaCopyTicketV1, PreparedSingleSdmaPublicationFailureV1> {
+        let mut custody = Some(SingleSdmaCopyCustodyV1::Prepared(prepared));
+        match self.publish_single_in_place(memory, &mut custody) {
+            Ok(ticket) => Ok(ticket),
+            Err(error) => match custody.expect("publication preserves custody") {
+                SingleSdmaCopyCustodyV1::Prepared(prepared) => {
+                    Err(PreparedSingleSdmaPublicationFailureV1::Recoverable { error, prepared })
+                }
+                SingleSdmaCopyCustodyV1::QueueRetained(ticket) => {
+                    Err(PreparedSingleSdmaPublicationFailureV1::Retained { error, ticket })
+                }
+                _ => unreachable!("publication input or queue-retained output"),
+            },
+        }
+    }
+
+    fn publish_single_in_place(
+        &mut self,
+        memory: &mut impl SdmaSingleMemoryV1,
+        custody: &mut Option<SingleSdmaCopyCustodyV1>,
+    ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1> {
+        let Some(SingleSdmaCopyCustodyV1::Prepared(prepared)) = custody.as_ref() else {
+            return Err(Gfx942SdmaErrorV1::Contract("single SDMA prepared custody"));
+        };
         if prepared.queue_id != self.queue_id {
-            return Err(PreparedSingleSdmaPublicationFailureV1::Recoverable {
-                error: Gfx942SdmaErrorV1::Contract("SDMA prepared single queue"),
-                prepared,
-            });
+            return Err(Gfx942SdmaErrorV1::Contract("SDMA prepared single queue"));
         }
-        if let Err(error) = admit_sdma_batch_publication_plan(prepared.write, prepared.write_end, 1)
-        {
-            return Err(PreparedSingleSdmaPublicationFailureV1::Recoverable { error, prepared });
-        }
+        admit_sdma_batch_publication_plan(prepared.write, prepared.write_end, 1)?;
         if self.completions.is_none()
             || self.ring.is_none()
             || self.control.is_none()
             || self.doorbell.is_none()
         {
-            return Err(PreparedSingleSdmaPublicationFailureV1::Recoverable {
-                error: Gfx942SdmaErrorV1::Contract("missing SDMA publication authority"),
-                prepared,
-            });
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "missing SDMA publication authority",
+            ));
         }
-        let prepared_slot_is_free = self.records[prepared.copy.slot].is_none()
-            && self.xgmi_records[prepared.copy.slot].is_none()
-            && self.persistent_window_slots[prepared.copy.slot].is_none()
-            && self.generations[prepared.copy.slot]
-                .checked_add(1)
+        let slot = prepared.copy.slot;
+        let prepared_slot_is_free = self.records.get(slot).is_some_and(Option::is_none)
+            && self.xgmi_records.get(slot).is_some_and(Option::is_none)
+            && self
+                .persistent_window_slots
+                .get(slot)
+                .is_some_and(Option::is_none)
+            && self
+                .generations
+                .get(slot)
+                .and_then(|generation| generation.checked_add(1))
                 .filter(|generation| *generation != 0)
                 == Some(prepared.copy.generation);
         if !prepared_slot_is_free {
-            return Err(PreparedSingleSdmaPublicationFailureV1::Recoverable {
-                error: Gfx942SdmaErrorV1::Contract("SDMA prepared single slot occupancy"),
-                prepared,
-            });
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "SDMA prepared single slot occupancy",
+            ));
         }
+        let Some(SingleSdmaCopyCustodyV1::Prepared(prepared)) = custody.take() else {
+            unreachable!("borrowed publication preflight preserves prepared custody");
+        };
         let PreparedSingleSdmaV1 {
             directional_persistent,
             write,
@@ -2388,6 +2441,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             source_offset: request.source_offset,
             destination_offset: request.destination_offset,
         });
+        *custody = Some(SingleSdmaCopyCustodyV1::QueueRetained(ticket));
         self.poisoned = true;
         let publication = (|| {
             memory.overwrite_mapped_host_visible_subrange_in_current_scope(
@@ -2405,18 +2459,17 @@ impl Gfx942SdmaQueueOwnerV1 {
                 write,
                 write_end,
             )?;
-            self.doorbell
-                .as_mut()
-                .expect("checked SDMA doorbell")
-                .store_packet_id_release(write_end)
-                .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA doorbell operation failed"))
+            memory.single_doorbell(
+                self.doorbell.as_mut().expect("checked SDMA doorbell"),
+                write_end,
+            )
         })();
         match publication {
             Ok(()) => {
                 self.poisoned = false;
                 Ok(ticket)
             }
-            Err(error) => Err(PreparedSingleSdmaPublicationFailureV1::Retained { error, ticket }),
+            Err(error) => Err(error),
         }
     }
 
@@ -3009,7 +3062,7 @@ impl Gfx942SdmaQueueOwnerV1 {
     }
 
     fn checked_copy_addresses(
-        memory: &SharedGttMemorySessionV1,
+        memory: &impl SdmaSingleMemoryV1,
         source: &Gfx942SdmaBufferV1,
         source_offset: u64,
         destination: &Gfx942SdmaBufferV1,
@@ -3126,7 +3179,7 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     fn wait_for_in_current_scope_with_final_currentness(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         ticket: Gfx942SdmaCopyTicketV1,
         timeout: Duration,
     ) -> SingleSdmaWaitInCurrentScopeV1 {
@@ -6018,7 +6071,7 @@ impl Gfx942SdmaQueueSetV1 {
 
     pub(crate) fn wait_for_in_current_scope_with_final_currentness(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         ticket: Gfx942SdmaCopyTicketV1,
         timeout: Duration,
     ) -> SingleSdmaWaitInCurrentScopeV1 {

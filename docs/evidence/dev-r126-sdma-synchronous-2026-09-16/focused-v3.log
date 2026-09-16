@@ -1,0 +1,56 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.98s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-112524bc719a0748)
+
+running 10 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_final_currentness_and_retake_have_distinct_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data ... FAILED
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_healthy_preparation_retries_cancel_then_succeed ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs ... FAILED
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_publication_faults_retain_exact_queue_records ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_retake_error_precedes_lower_error_without_changing_cause ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_preparation_panics_preserve_original_payload_and_request ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_timeout_returns_published_lease_and_queue_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_wrong_completion_is_terminal_completion_indeterminate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_success_uses_exact_mappings_and_two_model_loans ... ok
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data' (3680633) panicked at crates/fe2o3-kfd/src/shared_memory.rs:7051:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data' (3680633) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs:247:13:
+allocation poison
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data' (3680633) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs:247:13:
+allocation poison
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data' (3680633) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:958:9:
+assertion failed: f.promotion.base.parent.engine.backend.session.primary_is_quarantined_v1()
+
+---- queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs' (3680634) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs:202:29:
+allocation loan
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs' (3680634) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs:247:13:
+allocation poison
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs' (3680634) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs:247:13:
+allocation poison
+
+thread 'queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs' (3680634) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:828:17:
+assertion `left == right` failed
+  left: Some("allocation poison")
+ right: Some("allocation loan")
+
+
+failures:
+    queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_mapped_backend_panics_quarantine_memory_and_retain_data
+    queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::synchronous::constructed_sdma_synchronous_opening_and_fused_loan_failures_keep_inputs
+
+test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 1352 filtered out; finished in 7.92s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

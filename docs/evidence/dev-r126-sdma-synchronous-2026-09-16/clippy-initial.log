@@ -1,0 +1,289 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: large size difference between variants
+   --> crates/fe2o3-kfd/src/persistent_directional_sdma.rs:413:1
+    |
+413 | /  pub(crate) enum Gfx942DirectionalPersistentSdmaTerminalStateV1 {
+414 | |      Synchronous(crate::queue::SdmaSynchronousCustodyV1),
+    | |      --------------------------------------------------- the largest variant contains at least 1352 bytes
+415 | |      AdmissionRestored {
+416 | |          allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+...   |
+423 | |/     PreparedUnrestored {
+424 | ||         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+425 | ||         request: Gfx942SdmaCopyRequestV1,
+426 | ||     },
+    | ||_____- the second-largest variant contains at least 736 bytes
+...   |
+438 | |      },
+439 | |  }
+    | |__^ the entire enum is at least 1352 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+414 -     Synchronous(crate::queue::SdmaSynchronousCustodyV1),
+414 +     Synchronous(Box<crate::queue::SdmaSynchronousCustodyV1>),
+    |
+
+error: large size difference between variants
+   --> crates/fe2o3-kfd/src/persistent_directional_sdma.rs:597:1
+    |
+597 | / pub enum Gfx942DirectionalPersistentSdmaExecutionCustodyV1 {
+598 | |     Pending(Gfx942DirectionalPersistentSdmaSubmissionV1),
+    | |     ---------------------------------------------------- the second-largest variant contains at least 712 bytes
+599 | |     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+    | |     ----------------------------------------------------------------- the largest variant contains at least 1376 bytes
+600 | | }
+    | |_^ the entire enum is at least 1376 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+599 -     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+599 +     ProcessTeardown(Box<Gfx942DirectionalPersistentSdmaTerminalCustodyV1>),
+    |
+
+error: large size difference between variants
+   --> crates/fe2o3-kfd/src/persistent_directional_sdma.rs:968:1
+    |
+968 | / pub(crate) enum DirectionalPersistentSdmaPublicationTransitionV1 {
+969 | |     Retryable {
+970 | |         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+971 | |         host: Gfx942SdmaBufferV1,
+972 | |     },
+973 | |     Published(Gfx942DirectionalPersistentSdmaSubmissionV1),
+    | |     ------------------------------------------------------ the second-largest variant contains at least 712 bytes
+974 | |     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+    | |     ----------------------------------------------------------------- the largest variant contains at least 1376 bytes
+975 | | }
+    | |_^ the entire enum is at least 1376 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+974 -     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+974 +     ProcessTeardown(Box<Gfx942DirectionalPersistentSdmaTerminalCustodyV1>),
+    |
+
+error: large size difference between variants
+   --> crates/fe2o3-kfd/src/persistent_directional_sdma.rs:985:1
+    |
+985 | / pub(crate) enum DirectionalPersistentSdmaCompletionTransitionV1 {
+986 | |     Pending(Gfx942DirectionalPersistentSdmaSubmissionV1),
+    | |     ---------------------------------------------------- the second-largest variant contains at least 712 bytes
+987 | |     Timeout(Gfx942DirectionalPersistentSdmaSubmissionV1),
+988 | |     Completed(Gfx942DirectionalPersistentSdmaCompletedV1),
+989 | |     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+    | |     ----------------------------------------------------------------- the largest variant contains at least 1376 bytes
+990 | | }
+    | |_^ the entire enum is at least 1376 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+989 -     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+989 +     ProcessTeardown(Box<Gfx942DirectionalPersistentSdmaTerminalCustodyV1>),
+    |
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-kfd/src/queue_live/sdma_synchronous.rs:488:6
+    |
+488 | ) -> ExecutionResult {
+    |      ^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-kfd/src/queue_live/sdma_synchronous.rs:527:6
+    |
+527 | ) -> ExecutionResult {
+    |      ^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: large size difference between variants
+    --> crates/fe2o3-kfd/src/queue_live.rs:1590:1
+     |
+1590 | /  enum DirectionalPersistentSdmaAsynchronousSingleOutcomeV1 {
+1591 | |      OpeningCurrentnessLost {
+1592 | |          admitted: DirectionalPersistentSdmaAdmittedRequestV1,
+1593 | |          error: ComputeAqlQueueSessionErrorV1,
+1594 | |      },
+1595 | |      RequestPreparationRejected(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+     | |      ------------------------------------------------------------------------------ the largest variant contains at least 1464 bytes
+...    |
+1602 | |/     Publication {
+1603 | ||         custody: DirectionalPersistentSdmaPreparedCustodyV1,
+1604 | ||         observation: DirectionalPersistentSdmaPublicationObservationV1,
+1605 | ||         error: ComputeAqlQueueSessionErrorV1,
+1606 | ||         preparation_succeeded: bool,
+1607 | ||         closing_currentness_succeeded: bool,
+1608 | ||     },
+     | ||_____- the second-largest variant contains at least 1146 bytes
+1609 | |  }
+     | |__^ the entire enum is at least 1464 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+1595 -     RequestPreparationRejected(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+1595 +     RequestPreparationRejected(Box<Gfx942DirectionalPersistentSdmaSubmissionFailureV1>),
+     |
+
+error: could not compile `fe2o3-kfd` (lib) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:398:6
+    |
+398 |   ) -> Result<
+    |  ______^
+399 | |     Gfx942DirectionalPersistentSdmaCompletedV1,
+400 | |     Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1,
+401 | | > {
+    | |_^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |       Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |       -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |       Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |       ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:600:56
+    |
+600 |             let result = catch_unwind(AssertUnwindSafe(|| execute(&mut f, input)));
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:703:56
+    |
+703 |             let result = catch_unwind(AssertUnwindSafe(|| execute(&mut f, input)));
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:833:59
+    |
+833 |                 let panic = catch_unwind(AssertUnwindSafe(|| execute(&mut f, input)))
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:882:56
+    |
+882 |             let result = catch_unwind(AssertUnwindSafe(|| execute(&mut f, input)));
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:998:51
+    |
+998 |         let panic = catch_unwind(AssertUnwindSafe(|| execute(&mut f, input)))
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_synchronous_tests.rs:1277:56
+     |
+1277 |             let result = catch_unwind(AssertUnwindSafe(|| execute(&mut f, input)));
+     |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+     |
+ 630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+     |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+ 631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+     |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+     |
+     = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-kfd/src/queue_live/sdma_synchronous.rs:488:6
+    |
+488 | ) -> ExecutionResult {
+    |      ^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-kfd/src/persistent_directional_sdma.rs:630:5
+    |
+630 |     Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    |     -------------------------------------------------------------- the largest variant contains at least 1464 bytes
+631 |     Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
+    |     ------------------------------------------------------------ the variant `Execution` contains at least 1464 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-kfd` (lib test) due to 14 previous errors

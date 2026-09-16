@@ -1,0 +1,8 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::native_runtime_auxiliary_budget_failure_retains_initialized_prefix ... before_auxiliary=Gfx942HostVisibleBackingUsageV1 { budget: Gfx942HostVisibleBackingBudgetV1 { max_backing_bytes: 38797312, max_allocations: 128 }, used_backing_bytes: 38281216, used_allocation_records: 12, reserved_records: 0, retained_records: 12, quarantined_records: 0, poisoned: false } retained_materialization=MaterializationRetention { calls: 1, spec_count: 3, retained_count: 0, layouts: [None, None, None], failure_usage: Some(Gfx942HostVisibleBackingUsageV1 { budget: Gfx942HostVisibleBackingBudgetV1 { max_backing_bytes: 38797312, max_allocations: 128 }, used_backing_bytes: 38281216, used_allocation_records: 12, reserved_records: 0, retained_records: 12, quarantined_records: 0, poisoned: false }) } terminal_error=KfdRuntimeBackendErrorV1 { kind: Terminal, detail: "KFD host-visible initialization: host-visible backing resource credits: runtime resource credit error: Capacity" }
+native_auxiliary_budget_failure=retained initialized_prefix=0 unpublished_auxiliary=confirmed retry=inert reclamation=process_exit_only
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 803 filtered out; finished in 3.92s
+
