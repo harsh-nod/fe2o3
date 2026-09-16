@@ -70,11 +70,44 @@ fn run_feature(target: &Path, feature: &str) -> String {
         .output()
         .expect("run reference-binding extraction fixture");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    if feature.starts_with("reference-write-only-") {
+        eprintln!(
+            "write-only reference {feature} compiler subprocess status: {}",
+            output.status
+        );
+        eprintln!("write-only reference {feature} compiler stderr:\n{stderr}");
+    }
     assert!(
         !output.status.success(),
         "reference fixture {feature} unexpectedly gained artifact authority:\n{stderr}",
     );
     stderr
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn write_only_reference_output_abi_reaches_existing_proof_boundary() {
+    let target = ScratchTarget::new();
+    let stderr = run_feature(&target.0, "reference-write-only-positive");
+    assert!(
+        stderr.contains("functional-refinement proof runtime unavailable")
+            && stderr.contains("compilation stopped before proof admission or artifact emission")
+            && !stderr.contains("has no reference ABI relation"),
+        "write-only output did not complete the existing source-to-reference join:\n{stderr}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn write_only_reference_output_coordinate_read_fails_closed() {
+    let target = ScratchTarget::new();
+    let stderr = run_feature(&target.0, "reference-write-only-coordinate-read");
+    assert!(
+        stderr.contains("reference effect scalar operand uses unsupported place projection")
+            && !stderr.contains("has no reference ABI relation")
+            && !stderr.contains("functional-refinement proof runtime unavailable"),
+        "write-only reference output read was not rejected at its existing boundary:\n{stderr}",
+    );
 }
 
 #[test]

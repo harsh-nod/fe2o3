@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 include!("production_ranked_bounds_driver_v1/dynamic_local_array_tests.rs");
 include!("production_ranked_bounds_driver_v1/generative_provider_tests.rs");
+include!("production_ranked_bounds_driver_v1/context_entry_tests.rs");
 
 fn run_typed_layout_runtime_fixture(
     target: &ScratchTarget,

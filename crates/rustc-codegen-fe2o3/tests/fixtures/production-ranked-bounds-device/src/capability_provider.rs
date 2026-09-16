@@ -8,6 +8,38 @@ type Workgroup = fe2o3_device::WorkgroupCapability<'static, ()>;
 type Tile = MaskedTile1D<'static, u32, 64, 2, ()>;
 type Fragment = fe2o3_device::LaneFragment<'static, u32, 64, 2, ()>;
 
+#[cfg(feature = "provider_context_entry")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn provider_context_entry(_context: KernelContext<'_>, mut output: DisjointSlice<u32>) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = 7;
+    }
+}
+
+#[cfg(feature = "provider_context_entry_result")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn provider_context_entry_result(
+    _context: KernelContext<'_>,
+    mut output: DisjointSlice<u32>,
+) -> fe2o3_device::KernelResult {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = 7;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "provider_context_helper_issue")]
+#[kernel(typed)]
+pub fn provider_context_helper_issue(_context: KernelContext<'_>, _output: DisjointSlice<u32>) {
+    let _: Context = KernelContext::__compiler_issue();
+}
+
+#[cfg(feature = "provider_context_unregistered_issue")]
+#[kernel(typed)]
+pub fn provider_context_unregistered_issue(_output: DisjointSlice<u32>) {
+    let _: Context = KernelContext::__compiler_issue();
+}
+
 #[cfg(feature = "provider_phantom_reference")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn provider_phantom_reference(
