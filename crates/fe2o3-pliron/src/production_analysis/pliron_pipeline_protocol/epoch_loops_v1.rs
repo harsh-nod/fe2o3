@@ -183,9 +183,7 @@ fn discover_epoch_loops(
             .copied()
             .filter(|block| *block != header_index)
             .collect::<HashSet<_>>();
-        let Some(body) = acyclic_loop_body_order_v1(&body_members, &cfg_successors) else {
-            continue;
-        };
+        let body = acyclic_loop_body_order_v1(&body_members, &cfg_successors).unwrap_or_default();
         let mut prologue = vec![*entry];
         let mut current = *entry;
         while let [predecessor] = predecessors[current].as_slice() {
@@ -221,6 +219,10 @@ fn discover_epoch_loops(
         }
         inductions.remove(&header_index);
         loops.push(CanonicalEpochLoopV1 {
+            entry: *entry,
+            body_start,
+            latch: *latch,
+            exit,
             prologue,
             header: header_index,
             body,
@@ -229,8 +231,12 @@ fn discover_epoch_loops(
             inductions,
             header_induction: induction,
             bound: branch.rhs(context),
+            finite_inner_loops: Vec::new(),
         });
     }
+    let loops = admit_finite_nested_epoch_loops_v1(
+        context, inventory, loops, &cfg_successors, equivalence_resources,
+    );
     EpochLoopDiscoveryV1 {
         loops,
         dominators,

@@ -4910,6 +4910,7 @@ fn exact_slice_length_source_v1(
 }
 
 fn project_authenticated_capabilities_v1(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
@@ -4937,6 +4938,7 @@ fn project_authenticated_capabilities_v1(
         &mut work,
     )?;
     let pipeline_payloads = collect_workgroup_pipeline_payloads_v1(
+        types,
         callables,
         function,
         enum_payload_dominance,
@@ -5194,6 +5196,7 @@ fn propagate_capability_dataflow_v1(
 }
 
 fn collect_workgroup_pipeline_payloads_v1(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
@@ -5202,6 +5205,7 @@ fn collect_workgroup_pipeline_payloads_v1(
     work: &mut usize,
 ) -> Result<HashMap<usize, ProjectedMfmaOperandV1>, ProductionRankedProjectionErrorV1> {
     let mut payloads = HashMap::new();
+    let mut element_types = HashMap::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
@@ -5241,6 +5245,31 @@ fn collect_workgroup_pipeline_payloads_v1(
             .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline write lacks one compiler-owned origin",
             ))?;
+        if element_types
+            .insert(owner, *element)
+            .is_some_and(|existing| existing != *element)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one workgroup pipeline receives inconsistent semantic payload types",
+            ));
+        }
+        // Plain scalar values do not carry MFMA provenance. Their exact value
+        // typing and storage transport remain checked by semantic/KIR lowering;
+        // indexed accesses and phase lifetime remain checked by ranked effects.
+        // Never invent a capability origin for a scalar pipeline read.
+        if matches!(
+            types
+                .get(element.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(
+                SemanticScalarTypeV1::Integer {
+                    bits: 8 | 16 | 32 | 64,
+                    ..
+                } | SemanticScalarTypeV1::Float { bits: 16 | 32 | 64 }
+            ))
+        ) {
+            continue;
+        }
         let Some(ProjectedCapabilityOriginV1::Operand(payload)) =
             capability_known_origin_v1(&state, value)
         else {
@@ -7345,6 +7374,7 @@ fn project_intrinsic_contracts(
     )?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let capability_effects = project_authenticated_capabilities_v1(
+        types,
         callables,
         function,
         &enum_payload_dominance,
@@ -12734,6 +12764,8 @@ struct SemanticAssertProofsV1<'a> {
     work: usize,
 }
 
+include!("production_ranked_projection_v1/scalar_literal_range_v1.rs");
+
 impl<'a> SemanticAssertProofsV1<'a> {
     fn new(
         types: &'a [SemanticTypeDeclV1],
@@ -13760,12 +13792,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
                                     )?;
                                 }
                                 Some(_) | None => {
+                                    let range =
+                                        self.reaching_scalar_literal_range_v1(local, use_site)?;
                                     self.schedule_assertion_local_narrowing_v1(
                                         &mut frames,
                                         local,
                                         use_site.block,
                                         maximum,
-                                        None,
+                                        range,
                                     )?;
                                 }
                             }
@@ -16926,6 +16960,28 @@ impl<'a> SemanticAssertProofsV1<'a> {
         Ok(match operation {
             SemanticBinaryOpV1::Equal => Some(false_target),
             SemanticBinaryOpV1::NotEqual => Some(true_target),
+            SemanticBinaryOpV1::GreaterThan | SemanticBinaryOpV1::LessOrEqual
+                if left_is_tested
+                    && left.ty() == right.ty()
+                    && self.unsigned_integer_bits(left.ty()).is_some() =>
+            {
+                Some(if *operation == SemanticBinaryOpV1::GreaterThan {
+                    true_target
+                } else {
+                    false_target
+                })
+            }
+            SemanticBinaryOpV1::LessThan | SemanticBinaryOpV1::GreaterOrEqual
+                if right_is_tested
+                    && left.ty() == right.ty()
+                    && self.unsigned_integer_bits(right.ty()).is_some() =>
+            {
+                Some(if *operation == SemanticBinaryOpV1::LessThan {
+                    true_target
+                } else {
+                    false_target
+                })
+            }
             _ => None,
         })
     }
@@ -23994,6 +24050,8 @@ mod cold_compile_error_tests;
 #[cfg(test)]
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
+    include!("production_ranked_projection_v1/scalar_literal_range_v1_tests.rs");
+    include!("production_ranked_projection_v1/scalar_pipeline_payload_v1_tests.rs");
 
     // Isolated CFG tests retain synthetic facts; full-entry tests below use
     // genuine materialized owners and the production assertion query.
@@ -37661,8 +37719,8 @@ mod tests {
                 .range_at_operand(&typed_operand(1, U64_TYPE), 4, 0)
                 .unwrap(),
             Some(UnsignedRangeProofV1 {
-                minimum: 0,
-                maximum: u128::from(u64::MAX),
+                minimum: 200,
+                maximum: 200,
             })
         );
     }
@@ -38901,6 +38959,7 @@ mod tests {
         let local_allocations = vec![None; function.locals().len()];
         let constants = constant_locals(&function).unwrap();
         project_authenticated_capabilities_v1(
+            &types,
             &[],
             &function,
             &enum_payload_dominance,

@@ -97,15 +97,30 @@ fn gpu_aggregate_index_requires_one_in_bounds_unsigned_value_v2() {
 }
 
 #[test]
-fn gpu_aggregate_index_escape_and_changed_history_reject_v2() {
+fn gpu_aggregate_index_uses_latest_literal_but_rejects_escape_v2() {
     let types = aggregate_types_v2();
     let index = SemanticProjectionV1::new(
         SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(2)),
         SCALAR_TYPE,
     )
     .unwrap();
-    for invalidation in [
+    let overwritten = aggregate_function_v2(vec![
+        aggregate_assignment_v2(1, ARRAY_TYPE, aggregate_array_v2([11, 17, 23, 29])),
+        aggregate_assignment_v2(2, SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(1))),
         aggregate_assignment_v2(2, SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(2))),
+        aggregate_output_v2(aggregate_copy_v2(1, SCALAR_TYPE, vec![index])),
+    ]);
+    assert_eq!(
+        aggregate_last_value_v2(&types, &overwritten),
+        Ok(aggregate_expected_v2(23))
+    );
+    // Unknown writes and address exposure still cannot freeze an index value.
+    for invalidation in [
+        aggregate_assignment_v2(
+            2,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(aggregate_copy_v2(0, SCALAR_TYPE, vec![])),
+        ),
         aggregate_assignment_v2(
             3,
             POINTER_TYPE,

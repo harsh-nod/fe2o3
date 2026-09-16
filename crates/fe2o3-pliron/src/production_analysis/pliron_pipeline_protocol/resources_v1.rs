@@ -58,7 +58,44 @@ fn pipeline_equivalence_query_upper_bound_v1(
         checked_pipeline_product_v1(census.pipeline_creates, census.ranked_accesses)?,
         7,
     )?;
+    // Finite-loop reauthentication checks every edge, then each pipeline
+    // checks phase epochs, slots, lane/cast coordinates and each candidate
+    // inner induction for each read. Reserve the full bounded scalar cursor
+    // allowance as query units too: these cursors do not expand memo pairs.
+    let finite_edges = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(
+            checked_pipeline_sum_v1(&[census.index_lt_branch_candidates, census.pipeline_creates])?,
+            census.successors,
+        )?,
+        3,
+    )?;
+    let finite_values = checked_pipeline_product_v1(
+        census.pipeline_creates,
+        checked_pipeline_sum_v1(&[
+            checked_pipeline_product_v1(
+                checked_pipeline_sum_v1(&[census.pipeline_events, census.ranked_accesses])?,
+                16,
+            )?,
+            checked_pipeline_product_v1(
+                checked_pipeline_product_v1(
+                    census.ranked_accesses,
+                    census.index_lt_branch_candidates,
+                )?,
+                4,
+            )?,
+        ])?,
+    )?;
+    let finite_queries = checked_pipeline_product_v1(
+        checked_pipeline_sum_v1(&[finite_edges, finite_values])?,
+        MAX_EQUIVALENCE_WORK_V1,
+    )?;
+    let finite_queries = if census.index_lt_branch_candidates == 0 {
+        0
+    } else {
+        finite_queries
+    };
     checked_pipeline_sum_v1(&[
+        finite_queries,
         coordinate_queries,
         loop_queries,
         loop_scalar_queries,
@@ -198,7 +235,66 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
     ])?;
     let uniformity_work =
         checked_pipeline_product_v1(census.pipeline_creates, uniformity_work_per_pipeline)?;
+    // The finite route uses linear topological queues. Nested candidate
+    // membership/copying is bounded by H^2*B, with H<=B; no trip-count unroll.
+    let finite_discovery_work = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(census.index_lt_branch_candidates, 32)?,
+        checked_pipeline_sum_v1(&[
+            census.operations,
+            census.blocks,
+            census.successors,
+            census.operands,
+            checked_pipeline_product_v1(census.index_lt_branch_candidates, census.blocks)?,
+        ])?,
+    )?;
+    let finite_phase_work = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(census.pipeline_creates, 64)?,
+        checked_pipeline_sum_v1(&[
+            census.blocks,
+            census.successors,
+            census.operations,
+            census.operands,
+            checked_pipeline_product_v1(census.ranked_accesses, census.max_operation_arity)?,
+            1,
+        ])?,
+    )?;
+    // Each preheader control dependency may demand one independent memoized
+    // uniformity query. Their total count cannot exceed the operand census.
+    let finite_uniformity_work = checked_pipeline_product_v1(uniformity_work, census.operands)?;
+    let finite_pairs =
+        checked_pipeline_product_v1(census.index_lt_branch_candidates, census.blocks)?;
+    let finite_headers_squared = checked_pipeline_product_v1(
+        census.index_lt_branch_candidates,
+        census.index_lt_branch_candidates,
+    )?;
+    let finite_retained = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(finite_pairs, 8)?,
+        checked_pipeline_product_v1(finite_headers_squared, 8)?,
+    ])?;
+    let finite_temporary = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(finite_pairs, 8)?,
+        checked_pipeline_product_v1(finite_headers_squared, 12)?,
+        checked_pipeline_product_v1(census.blocks, 32)?,
+        checked_pipeline_product_v1(census.successors, 8)?,
+        checked_pipeline_product_v1(census.operations, 8)?,
+        checked_pipeline_product_v1(census.operands, 8)?,
+        checked_pipeline_product_v1(
+            checked_pipeline_product_v1(census.ranked_accesses, census.max_operation_arity)?,
+            16,
+        )?,
+    ])?;
+    // With no authenticated index-argument loop header this route cannot run;
+    // preserve the existing concrete-only envelope exactly.
+    let (finite_phase_work, finite_uniformity_work, finite_temporary) =
+        if census.index_lt_branch_candidates == 0 {
+            (0, 0, 0)
+        } else {
+            (finite_phase_work, finite_uniformity_work, finite_temporary)
+        };
     let work = checked_pipeline_sum_v1(&[
+        finite_discovery_work,
+        finite_phase_work,
+        finite_uniformity_work,
         checked_pipeline_product_v1(census.operations, 8)?,
         checked_pipeline_product_v1(census.block_arguments, 2)?,
         checked_pipeline_product_v1(census.successors, census.blocks.max(1))?,
@@ -215,6 +311,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         .ok_or_else(pipeline_resource_overflow_v1)?
         .min(MAX_PLIRON_PIPELINE_FINDINGS_V1 + 1);
     let retained = checked_pipeline_sum_v1(&[
+        finite_retained,
         // Dominators and every retained loop summary: prologue/body/drain,
         // body membership, induction key/value pairs, and fixed metadata.
         checked_pipeline_product_v1(blocks_squared, 8)?,
@@ -233,6 +330,7 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         checked_pipeline_product_v1(findings, MAX_PLIRON_PIPELINE_DIAGNOSTIC_BYTES_V1 + 32)?,
     ])?;
     let temporary = checked_pipeline_sum_v1(&[
+        finite_temporary,
         concrete_temporary,
         // Dominator fixed points overlap CFG inventories and the current loop
         // candidate's predecessor/member/frontier construction.
