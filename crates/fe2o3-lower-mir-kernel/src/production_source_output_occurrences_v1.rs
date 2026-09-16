@@ -653,5 +653,7 @@ include!("production_source_output_memory_operands_v1.rs");
 include!("production_source_output_store_values_v1.rs");
 include!("production_source_output_control_rows_v1.rs");
 include!("production_source_output_control_coverage_v1.rs");
+include!("production_source_output_physical_address_v1.rs");
 include!("production_source_output_canonical_store_analysis_v1.rs");
 include!("production_source_output_formal_complete_v1.rs");
+include!("production_source_output_formal_module_v1.rs");

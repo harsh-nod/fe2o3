@@ -126,6 +126,7 @@ pub struct ProductionConditionalMemoryControlCoverageV1<'scope> {
     budget_identity: *const (),
     live_floor: usize,
     output: &'scope fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    inventory: &'scope fe2o3_kernel_analysis::CanonicalKirInventoryV1<'scope>,
     candidates: &'scope [SourceOutputControlCandidateIdentityV1<'scope>],
     arguments: &'scope [SourceOutputProjectionArgumentV1],
     literal_uses: &'scope [SourceOutputProjectionLiteralUseV1],
@@ -291,41 +292,48 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<Option<ProductionConditionalMemoryIndexLeafV1<'_>>, ProductionSourceOutputErrorV1>
     {
-        use ProductionSourceOutputErrorV1 as Error;
         let ordinal = self.candidate_ordinal_v1(view, candidate, budget)?;
-        budget.charge_work(1).map_err(Error::Resource)?;
-        let arguments = self
-            .arguments
-            .get(self.candidates[ordinal].arguments.clone())
-            .ok_or(Error::Invalid("control argument span absent"))?;
-        let ordinal = assert_origin_find_v1(arguments, budget, |row, budget| {
-            budget.charge_work(1)?;
-            Ok(row.ranked_value.cmp(&ranked_value))
-        })
-        .map_err(Error::SourceOrigin)?;
-        let Some(ordinal) = ordinal else {
-            return Ok(None);
-        };
-        let row = &arguments[ordinal];
-        Ok(Some(match &row.origin {
-            SourceOutputProjectionLeafOriginV1::Formal(formal) => {
-                ProductionConditionalMemoryIndexLeafV1::Formal(
-                    ProductionConditionalMemoryArgumentV1 { row, formal },
-                )
-            }
-            SourceOutputProjectionLeafOriginV1::Literal(literal) => {
-                ProductionConditionalMemoryIndexLeafV1::Literal(
-                    ProductionConditionalMemoryLiteralV1 {
-                        row,
-                        literal,
-                        uses: self
-                            .literal_uses
-                            .get(literal.first_use..literal.end_use)
-                            .ok_or(Error::Invalid("literal guard-use span absent"))?,
-                    },
-                )
-            }
-        }))
+        source_output_control_leaf_rows_v1(
+            self.arguments,
+            self.literal_uses,
+            self.candidates[ordinal].arguments.clone(),
+            ranked_value,
+            budget,
+        )
+    }
+
+    fn address_leaf_v1(
+        &self,
+        view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+        candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+        ordinal: usize,
+        ranked_value: ProductionRankedValueV1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<Option<ProductionConditionalMemoryIndexLeafV1<'_>>, ProductionSourceOutputErrorV1>
+    {
+        self.require_candidate_at_v1(view, candidate, ordinal, budget)?;
+        source_output_control_leaf_rows_v1(
+            self.arguments,
+            self.literal_uses,
+            self.candidates[ordinal].arguments.clone(),
+            ranked_value,
+            budget,
+        )
+    }
+
+    fn address_inventory_v1(
+        &self,
+        view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+        candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+        ordinal: usize,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<&fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>, ProductionSourceOutputErrorV1>
+    {
+        self.require_candidate_at_v1(view, candidate, ordinal, budget)?;
+        budget
+            .charge_work(1)
+            .map_err(ProductionSourceOutputErrorV1::Resource)?;
+        Ok(self.inventory)
     }
 
     fn candidate_ordinal_v1(
@@ -2206,6 +2214,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 budget_identity: std::ptr::from_ref(budget).cast::<()>(),
                 live_floor: budget.storage(),
                 output: self.output(),
+                inventory: &inventory,
                 candidates: &identities,
                 arguments: &arguments,
                 literal_uses: &literal_uses,
@@ -2463,4 +2472,44 @@ fn source_output_control_segment_edges_v1(
             "control live source has no executable successor",
         )),
     }
+}
+
+fn source_output_control_leaf_rows_v1<'a>(
+    arguments: &'a [SourceOutputProjectionArgumentV1],
+    literal_uses: &'a [SourceOutputProjectionLiteralUseV1],
+    range: std::ops::Range<usize>,
+    ranked_value: ProductionRankedValueV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<Option<ProductionConditionalMemoryIndexLeafV1<'a>>, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(1).map_err(Error::Resource)?;
+    let arguments = arguments
+        .get(range)
+        .ok_or(Error::Invalid("control argument span absent"))?;
+    let ordinal = assert_origin_find_v1(arguments, budget, |row, budget| {
+        budget.charge_work(1)?;
+        Ok(row.ranked_value.cmp(&ranked_value))
+    })
+    .map_err(Error::SourceOrigin)?;
+    let Some(ordinal) = ordinal else {
+        return Ok(None);
+    };
+    let row = &arguments[ordinal];
+    Ok(Some(match &row.origin {
+        SourceOutputProjectionLeafOriginV1::Formal(formal) => {
+            ProductionConditionalMemoryIndexLeafV1::Formal(ProductionConditionalMemoryArgumentV1 {
+                row,
+                formal,
+            })
+        }
+        SourceOutputProjectionLeafOriginV1::Literal(literal) => {
+            ProductionConditionalMemoryIndexLeafV1::Literal(ProductionConditionalMemoryLiteralV1 {
+                row,
+                literal,
+                uses: literal_uses
+                    .get(literal.first_use..literal.end_use)
+                    .ok_or(Error::Invalid("literal guard-use span absent"))?,
+            })
+        }
+    }))
 }

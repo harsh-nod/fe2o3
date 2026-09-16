@@ -1037,7 +1037,9 @@ fn canonical_store_same_typed_call_result_swap_is_refused_before_output_view_aut
 }
 
 include!("canonical_memory_control_v1_tests.rs");
+include!("physical_address_v1_tests.rs");
 include!("source_output_formal_complete_v1_tests.rs");
+include!("checked_output_module_join_v1_tests.rs");
 
 mod canonical_source_guard_components_v1 {
     use super::*;

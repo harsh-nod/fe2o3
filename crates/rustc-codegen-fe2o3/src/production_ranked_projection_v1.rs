@@ -40007,3 +40007,4 @@ mod canonical_memory_control_v1 {
     include!("production_ranked_projection_v1/canonical_memory_control_v1.rs");
 }
 include!("production_ranked_projection_v1/canonical_memory_analysis_v1.rs");
+include!("production_ranked_projection_v1/checked_output_module_join_v1.rs");

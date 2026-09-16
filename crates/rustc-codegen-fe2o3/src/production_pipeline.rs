@@ -21,6 +21,8 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+include!("production_checked_output_pipeline_v1.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
     HostOnly,
@@ -46,6 +48,7 @@ pub(crate) enum ProductionPipelineError {
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     PreRankedMaterialization(fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1),
+    CheckedOutputMemoryTarget(CheckedOutputMemoryTargetErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -119,6 +122,9 @@ impl fmt::Display for ProductionPipelineError {
             }
             Self::PreRankedMaterialization(error) => {
                 write!(formatter, "production compilation pre-ranked materialization failed: {error}")
+            }
+            Self::CheckedOutputMemoryTarget(error) => {
+                write!(formatter, "production compilation checked-output memory target failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
@@ -274,6 +280,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
             Self::PreRankedMaterialization(error) => Some(error),
+            Self::CheckedOutputMemoryTarget(error) => Some(error),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
@@ -3493,6 +3500,18 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn materialize_target_neutral(
         self,
     ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
+        self.with_materialized_target_neutral_v1(|stage, _budget| Ok(stage))
+    }
+
+    // The historical caller transfers N out and ends this phase's ledger.
+    // The checked-output caller consumes the stage inside the same live ledger.
+    fn with_materialized_target_neutral_v1<T>(
+        self,
+        next: impl FnOnce(
+            MaterializedNeutralProductionCompilation,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, Box<ProductionPipelineError>>,
+    ) -> Result<T, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
             semantic_ssa,
             bindings,
@@ -3567,11 +3586,14 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
         budget
             .reserve_storage(retained_storage)
             .map_err(resource_error)?;
-        Ok(MaterializedNeutralProductionCompilation {
-            materialized,
-            ranked_roots,
-            bindings,
-        })
+        next(
+            MaterializedNeutralProductionCompilation {
+                materialized,
+                ranked_roots,
+                bindings,
+            },
+            &mut budget,
+        )
     }
 }
 
