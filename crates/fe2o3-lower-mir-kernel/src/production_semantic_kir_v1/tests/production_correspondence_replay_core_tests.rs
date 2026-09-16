@@ -1,5 +1,210 @@
 use super::*;
 
+const INVOCATION_INDEX_WORK_LIMIT_V1: usize = 100_000_000;
+
+// A real captured source/N/B/O view, but only the private numeric index builder
+// is queried. The inert empty claims below do not complete control coverage.
+fn with_invocation_source_index_fixture_v1(
+    body: impl FnOnce(
+        &ProductionSourceOutputOccurrencesV1<'_, '_>,
+        &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+        fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+        usize,
+        &mut AssertOriginBudgetV1<'_>,
+    ),
+) {
+    let root = SemanticFunctionIdV1::from_index(0);
+    let export = "invocation_index_resource";
+    let mut ssa = ProductionSemanticSsaOwnerV1::try_new(
+        noop_semantic_owner(&[export]),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    let mut work =
+        fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(INVOCATION_INDEX_WORK_LIMIT_V1);
+    let mut budget = AssertOriginBudgetV1::new(&mut work, 16 * 1024 * 1024);
+    budget.charge_work(7).unwrap();
+    budget.reserve_storage(19).unwrap();
+    let capture = ssa
+        .try_capture_occurrences_with_budget_v1(&mut budget)
+        .unwrap();
+    budget.reserve_storage(capture.retained_storage()).unwrap();
+    let entry = ssa.source_semantic().functions()[0].kernel_entry().unwrap();
+    let required = entry
+        .source_contract()
+        .launch()
+        .unwrap()
+        .required()
+        .unwrap()
+        .as_array();
+    let input = crate::ProductionSourceLaunchRootInputV1::new(
+        export,
+        *entry.kernel_binding_identity().as_bytes(),
+        crate::ProductionSourceLaunchInputV1::new(1, Some(required), [1, 1, 1]),
+    );
+    let launch =
+        crate::ProductionSourceLaunchRosterV1::try_new(ssa.source_semantic(), &[input]).unwrap();
+    let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+        ssa,
+        launch,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    )
+    .unwrap();
+    let source_bytes = source.executable_storage().retained_storage()
+        + source.assert_origin_storage().payload_storage();
+    budget.reserve_storage(source_bytes).unwrap();
+    let observed = fe2o3_pliron::optimize_native_neutral_kernel_ir_policy3_v1(
+        source.executable(),
+        &mut budget,
+    )
+    .unwrap();
+    budget
+        .reserve_storage(observed.storage().retained_storage())
+        .unwrap();
+    let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
+    let output_bytes = checked.storage().retained_storage();
+    budget.reserve_storage(output_bytes).unwrap();
+    let coordinate_bytes;
+    {
+        let (coordinates, coordinate_storage) =
+            fe2o3_kernel_analysis::check_canonical_kir_coordinate_preservation_v1(
+                source.executable(),
+                source.executable(),
+                &mut budget,
+            )
+            .unwrap();
+        coordinate_bytes = coordinate_storage.retained_storage();
+        budget.reserve_storage(coordinate_bytes).unwrap();
+        let (view, storage) = crate::derive_source_output_occurrences_policy3_v1(
+            &source,
+            &coordinates,
+            &checked,
+            &mut budget,
+        )
+        .unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        let ranked = noop_ranked_root(root, export);
+        let claims = ProductionProjectionControlCandidateV1::default();
+        let candidate = ProductionCanonicalMemoryAnalysisCandidateV1 {
+            selected_root: root,
+            selected_function: root,
+            lowering: &ranked.lowering,
+            access_sources: &[],
+            executable_effect_sources: &[],
+            control: &claims,
+        };
+        let canonical =
+            source_output_ordinary_function_alias_v1(&source, root, root, &mut budget).unwrap();
+        let captured = source
+            .semantic_ssa()
+            .occurrences_v1()
+            .unwrap()
+            .function(root)
+            .unwrap();
+        assert!(std::ptr::eq(captured.owner(), source.semantic_ssa()));
+        assert!(captured.events().iter().all(|event| {
+            source_output_invocation_event_key_v1(event).is_none()
+                && !matches!(event.resolved(), Some(SsaResolvedEventV1::Define { .. }))
+        }));
+        assert!(captured.edge_definitions().is_empty());
+        assert!(captured.successors().is_empty());
+        assert_eq!(source.correspondence.statement_operation_spans().len(), 1);
+        assert_eq!(source.correspondence.terminator_operation_spans().len(), 1);
+        let function = &source.executable().module().functions[canonical.0 as usize];
+        assert_eq!(function.body.as_ref().unwrap().blocks.len(), 1);
+        assert!(
+            function.body.as_ref().unwrap().blocks[0]
+                .operations
+                .is_empty()
+        );
+
+        // Capture query 8; every ignored event 8; one Nop span 5;
+        // first Vec reserve/push 1+1; one terminator span scan 5. The next
+        // reserve costs one work unit and fails AFTER a statement Vec is live.
+        let index_prefix = 8 + 8 * captured.events().len() + 5 + 1 + 1 + 5;
+        let floor = budget.storage();
+        body(&view, &candidate, canonical, index_prefix, &mut budget);
+        assert_eq!(budget.storage(), floor);
+        drop(view);
+        budget.release_storage(storage.retained_storage()).unwrap();
+    }
+    budget.release_storage(coordinate_bytes).unwrap();
+    drop(checked);
+    budget.release_storage(output_bytes).unwrap();
+    drop(source);
+    budget.release_storage(source_bytes).unwrap();
+    budget.release_storage(capture.retained_storage()).unwrap();
+    assert_eq!(budget.storage(), 19);
+}
+
+#[test]
+fn invocation_source_index_first_vector_storage_denial_restores_the_real_view_floor() {
+    with_invocation_source_index_fixture_v1(|view, candidate, canonical, _, budget| {
+        let floor = budget.storage();
+        let header = std::mem::size_of::<SourceOutputInvocationSourceIndexV1>();
+        let first_capacity_request = 4 * std::mem::size_of::<((u32, u32), usize)>();
+        let headroom = header + first_capacity_request - 1;
+        let held = budget.storage_limit() - floor - headroom;
+        budget.reserve_storage(held).unwrap();
+        let held_floor = budget.storage();
+        let before = budget.work();
+        let result = source_output_global_scratch_scope_v1(budget, |budget| {
+            let index =
+                source_output_invocation_source_index_v1(view, candidate, canonical, budget)?;
+            drop(index);
+            Ok(())
+        });
+        assert!(
+            matches!(result, Err(ProductionSourceOutputErrorV1::SourceOrigin(
+            SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Storage(error))
+        )) if error.actual() == budget.storage_limit() + 1)
+        );
+        assert!(budget.work() > before);
+        assert_eq!(budget.storage(), held_floor);
+        assert_eq!(budget.failed_storage(), Some(budget.storage_limit() + 1));
+        budget.release_storage(held).unwrap();
+        source_output_global_scratch_scope_v1(budget, |budget| {
+            let index =
+                source_output_invocation_source_index_v1(view, candidate, canonical, budget)?;
+            assert!(index.events.is_empty());
+            assert_eq!(index.statements.len(), 1);
+            assert_eq!(index.terminators.len(), 1);
+            assert_eq!(index.blocks.len(), 1);
+            drop(index);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.failed_storage(), Some(budget.storage_limit() + 1));
+    });
+}
+
+#[test]
+fn invocation_source_index_later_work_denial_drops_its_allocated_prefix() {
+    with_invocation_source_index_fixture_v1(|view, candidate, canonical, index_prefix, budget| {
+        let floor = budget.storage();
+        let held_work = INVOCATION_INDEX_WORK_LIMIT_V1 - budget.work() - index_prefix;
+        budget.charge_work(held_work).unwrap();
+        let before = budget.work();
+        let result = source_output_global_scratch_scope_v1(budget, |budget| {
+            let index =
+                source_output_invocation_source_index_v1(view, candidate, canonical, budget)?;
+            drop(index);
+            Ok(())
+        });
+        assert!(
+            matches!(result, Err(ProductionSourceOutputErrorV1::SourceOrigin(
+            SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Work(error))
+        )) if error.actual() == INVOCATION_INDEX_WORK_LIMIT_V1 + 1
+            && error.limit() == INVOCATION_INDEX_WORK_LIMIT_V1)
+        );
+        assert_eq!(budget.work(), before + index_prefix);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.failed_storage(), None);
+    });
+}
+
 #[derive(Clone, Copy)]
 enum Expected {
     Accepted,

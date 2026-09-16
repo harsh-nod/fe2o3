@@ -1246,6 +1246,12 @@ const INVOCATION_WITNESS_V1: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10)
 const INVOCATION_REFERENCE_V1: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
 
 fn invocation_coordinate_ssa_v1() -> ProductionSemanticSsaOwnerV1 {
+    invocation_coordinate_ssa_with_receiver_mode_v1(false)
+}
+
+fn invocation_coordinate_ssa_with_receiver_mode_v1(
+    moved_receiver: bool,
+) -> ProductionSemanticSsaOwnerV1 {
     let seed = genuine_dynamic_global_source_v1(GlobalWriteExpressionShapeV1::Parameter, 1);
     let semantic = seed.semantic_ssa().source_semantic();
     let old = &semantic.functions()[0];
@@ -1404,6 +1410,8 @@ fn invocation_coordinate_ssa_v1() -> ProductionSemanticSsaOwnerV1 {
                 SemanticCallableIdV1::from_index(callee),
                 if callee == 1 {
                     vec![]
+                } else if moved_receiver {
+                    vec![SemanticOperandV1::Move(whole(15, INVOCATION_REFERENCE_V1))]
                 } else {
                     vec![typed_operand(15, INVOCATION_REFERENCE_V1)]
                 },
@@ -1469,7 +1477,18 @@ fn invocation_coordinate_ssa_v1() -> ProductionSemanticSsaOwnerV1 {
 fn with_invocation_coordinate_source_v1(
     body: impl FnOnce(&ProductionPreRankedKirOwnerV1, &mut Budget<'_>),
 ) {
-    let mut ssa = invocation_coordinate_ssa_v1();
+    with_invocation_coordinate_source_mode_v1(false, body)
+}
+
+fn with_invocation_coordinate_source_mode_v1(
+    moved_receiver: bool,
+    body: impl FnOnce(&ProductionPreRankedKirOwnerV1, &mut Budget<'_>),
+) {
+    let mut ssa = if moved_receiver {
+        invocation_coordinate_ssa_with_receiver_mode_v1(true)
+    } else {
+        invocation_coordinate_ssa_v1()
+    };
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
     budget.reserve_storage(PREFIX).unwrap();

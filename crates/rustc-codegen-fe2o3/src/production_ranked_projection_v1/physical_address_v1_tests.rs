@@ -1452,7 +1452,47 @@ mod invocation_coordinate_address_tests {
             &mut Budget<'_>,
         ) -> Result<(), ProductionSourceOutputErrorV1>,
     ) {
-        with_invocation_coordinate_source_v1(|source, budget| {
+        with_fixture_mode(profile, control_case, false, body)
+    }
+
+    fn with_fixture_mode(
+        profile: Profile,
+        control_case: Option<u8>,
+        moved_receiver: bool,
+        body: impl FnOnce(
+            &ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>,
+            &ProductionBorrowedRankedCorrespondenceV1<'_>,
+            &canonical_memory_control_v1::CanonicalMemoryControlRecorderV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) {
+        with_invocation_coordinate_source_mode_v1(moved_receiver, |source, budget| {
+            if moved_receiver {
+                assert_eq!(control_case, Some(4));
+                let semantic = source.semantic_ssa().source_semantic();
+                let SemanticTerminatorKindV1::Call(get) =
+                    semantic.functions()[0].blocks()[3].terminator().kind()
+                else {
+                    panic!("fresh admitted Get call is absent");
+                };
+                assert!(matches!(get.arguments(), [SemanticOperandV1::Move(place)]
+                    if place.local().index() == 15 && place.ty() == INVOCATION_REFERENCE_V1));
+                let captured = source
+                    .semantic_ssa()
+                    .occurrences_v1()
+                    .unwrap()
+                    .function(ROOT)
+                    .unwrap();
+                assert!(captured.events().iter().any(|event| event.site()
+                    == fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Terminator {
+                        block: fe2o3_mir_model::SsaBlockIdV1::new(3),
+                    }
+                    && event.operand()
+                        == fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::CallArgument(0)
+                    && event.role() == fe2o3_pliron::ProductionSemanticSsaEventRoleV1::BaseUse
+                    && event.is_reachable()
+                    && event.is_promoted()));
+            }
             let floor = budget.storage();
             let bound =
                 dialect_amdgcn::bind_production_target_v1(source.executable().module(), profile)
@@ -1541,6 +1581,10 @@ mod invocation_coordinate_address_tests {
                                         Some("invocation source component is not scalar")
                                     }
                                     3 => None,
+                                    4 => {
+                                        assert!(moved_receiver);
+                                        Some("invocation Get requires one copied typed reference")
+                                    }
                                     _ => unreachable!(),
                                 };
                                 drop(facts);
@@ -1651,6 +1695,56 @@ mod invocation_coordinate_address_tests {
                     panic!("control-only case must not enter the completed address callback")
                 });
             }
+        }
+    }
+
+    #[test]
+    fn invocation_fresh_moved_receiver_reaches_the_closed_source_ancestry_refusal() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture_mode(profile, Some(4), true, |_, _, _, _| {
+                panic!("moved source receiver must not complete the address callback")
+            });
+        }
+    }
+
+    #[test]
+    fn invocation_actual_output_has_fresh_complete_formal_memory_without_discharge() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(profile, None, |analysis, original, recorder, budget| {
+                let floor = budget.storage();
+                analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                    relation.check_borrowed_ranked_addresses_v1(
+                        original,
+                        0,
+                        recorder.candidate(),
+                        budget,
+                    )
+                })?;
+                let mut completed = false;
+                analysis.with_complete_formal_memory_v1(budget, |formal, budget| {
+                    completed = true;
+                    assert!(std::ptr::eq(formal.output(), analysis.output()));
+                    formal.require_borrowed_source_v1(original, budget)
+                        .map_err(fe2o3_lower_mir_kernel::ProductionScopedFormalMemoryErrorV1::SourceOutput)?;
+                    assert_eq!(formal.selected_root(), analysis.selected_root());
+                    let obligations = formal.obligations();
+                    assert_eq!(obligations.kernel(), &formal.kernel().id);
+                    assert_eq!(obligations.entry(), &formal.kernel().entry);
+                    assert_eq!(obligations.accesses().len(), 1);
+                    let access = &obligations.accesses()[0];
+                    assert_eq!(access.kind(), fe2o3_kernel_ir::FormalMemoryAccessKind::Write);
+                    let function = formal.output().module().function(&formal.kernel().entry).unwrap();
+                    let location = access.location();
+                    let block = function.body.as_ref().unwrap().blocks.iter()
+                        .find(|block| block.id == location.block).unwrap();
+                    assert!(matches!(block.operations[location.operation_index].kind, fe2o3_kernel_ir::OperationKind::Store { .. }));
+                    assert!(obligations.inter_invocation_conflicts().is_empty());
+                    Ok(())
+                }).expect("actual O must freshly extract Complete; preserve any real Incomplete diagnostic");
+                assert!(completed);
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            });
         }
     }
 
