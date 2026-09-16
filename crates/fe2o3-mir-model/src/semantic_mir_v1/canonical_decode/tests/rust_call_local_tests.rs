@@ -135,6 +135,14 @@ fn packed_and_expanded_rust_call_locals_round_trip_with_empty_and_ignored_fields
     ] {
         for expanded in [false, true] {
             let request = request(&fields, expanded);
+            let v29 = request.clone().admit_exact_v29(limits).unwrap();
+            let decoded = AdmittedInertSemanticMirV1::decode_exact_v29_canonical(
+                v29.canonical_encoding(),
+                limits,
+            )
+            .unwrap();
+            assert_eq!(decoded.functions(), v29.functions());
+            assert_eq!(decoded.canonical_encoding(), v29.canonical_encoding());
             let admitted = request
                 .clone()
                 .admit_current_production(limits)
