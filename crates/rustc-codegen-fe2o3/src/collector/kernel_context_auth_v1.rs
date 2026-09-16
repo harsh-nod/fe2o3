@@ -295,7 +295,7 @@ pub(super) fn authenticate_v1<'tcx>(
         if collector
             .call_edges
             .values()
-            .any(|callees| callees.contains(&identity))
+            .any(|callees| callees.contains_key(&identity))
         {
             return Err(error("physical context root is reachable as a callee"));
         }

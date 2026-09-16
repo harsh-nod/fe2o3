@@ -54,8 +54,8 @@ use crate::rustc_semantic_adapter_v1::{
 };
 use crate::rustc_semantic_plan_v1::{
     DebugSourceCaptureRequestV2, ProductionSemanticPreflightErrorV1,
-    ProductionSemanticPreflightPlanV1, RetainedSemanticFunctionProducerV1,
-    build_production_semantic_preflight_plan_v1,
+    ProductionSemanticPreflightPlanV1, RetainedSemanticFunctionProducerV1, SourceClosureWorkV1,
+    build_production_semantic_preflight_plan_with_work_v1,
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
@@ -278,6 +278,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         collection,
         roots,
         context_entries,
+        closure_flow,
     } = closure;
     let target = match target.authenticate_import_session(tcx) {
         Ok(target) => target,
@@ -317,7 +318,8 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
                 .filter_map(|function| function.reference_effect_binding.clone())
                 .collect(),
         );
-    let identity_inventory = build_identity_inventory_v1(tcx, &target, &collection, &roots)?;
+    let (identity_inventory, closure_work) =
+        build_identity_inventory_v1(tcx, &target, &collection, &roots, closure_flow)?;
     require_lineage_transcript_bound_v3(
         "rustc identity inventory",
         &identity_inventory.canonical_transcript,
@@ -329,14 +331,14 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         sha256: rustc_identity_inventory_sha256,
         canonical_transcript: rustc_identity_inventory_transcript,
     } = identity_inventory;
-    let mut plan = match build_production_semantic_preflight_plan_v1(
+    let mut plan = match build_production_semantic_preflight_plan_with_work_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         functions,
         roots,
         rustc_identity_inventory_sha256,
         debug_source_capture,
-        Some(context_entries),
+        (Some(context_entries), closure_work),
     ) {
         Ok(plan) => plan,
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
@@ -4270,23 +4272,27 @@ fn build_identity_inventory_v1<'tcx>(
     target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
     collection: &CollectionResult<'tcx>,
     roots: &[AuthenticatedProductionRootV1<'tcx>],
-) -> Result<ProductionSemanticIdentityInventoryV1<'tcx>, ProductionSemanticImportErrorV1> {
+    closure_flow: super::closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
+) -> Result<
+    (
+        ProductionSemanticIdentityInventoryV1<'tcx>,
+        SourceClosureWorkV1,
+    ),
+    ProductionSemanticImportErrorV1,
+> {
     require_count_within_limit_v1(
         SemanticMirResourceV1::Functions,
         collection.functions.len(),
         HARD_MAX_FUNCTIONS_V1,
     )?;
     require_count_within_limit_v1(SemanticMirResourceV1::Roots, roots.len(), HARD_MAX_ROOTS_V1)?;
+    let closure_work = closure_flow
+        .revalidate_for_import_v1(tcx, collection)
+        .map_err(ProductionSemanticImportErrorV1::ClosureAdmission)?;
 
     let target = canonical_target_layout_v1(target.rustc_layout());
     let mut functions = Vec::with_capacity(collection.functions.len());
     for function in &collection.functions {
-        crate::closure_profile_v1::revalidate_closure_observation_v2(
-            tcx,
-            function.instance,
-            function.closure_observation.as_deref(),
-        )
-        .map_err(ProductionSemanticImportErrorV1::ClosureAdmission)?;
         functions.push(RetainedSemanticFunctionProducerV1 {
             identities: canonical_function_identities_v1(tcx, function.instance),
             instance: function.instance,
@@ -4338,12 +4344,15 @@ fn build_identity_inventory_v1<'tcx>(
 
     let (sha256, canonical_transcript) =
         identity_inventory_identity_and_transcript_v1(target, &functions, &canonical_roots);
-    Ok(ProductionSemanticIdentityInventoryV1 {
-        functions: functions.into_boxed_slice(),
-        roots: canonical_roots.into_boxed_slice(),
-        sha256,
-        canonical_transcript,
-    })
+    Ok((
+        ProductionSemanticIdentityInventoryV1 {
+            functions: functions.into_boxed_slice(),
+            roots: canonical_roots.into_boxed_slice(),
+            sha256,
+            canonical_transcript,
+        },
+        closure_work,
+    ))
 }
 
 fn identity_inventory_identity_and_transcript_v1(

@@ -336,6 +336,24 @@ impl RawMirPreflightCountsV1 {
     }
 }
 
+/// Carries one validation-work budget through collection, closure reobservation,
+/// and semantic preflight. Consumed when preflight resumes the raw MIR counts.
+#[derive(Debug, Default)]
+pub(crate) struct SourceClosureWorkV1 {
+    limits: SemanticMirLimitsV1,
+    counts: RawMirPreflightCountsV1,
+}
+
+impl SourceClosureWorkV1 {
+    pub(crate) fn charge(
+        &mut self,
+        amount: usize,
+    ) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        self.counts
+            .charge(SemanticMirResourceV1::ValidationWork, amount, self.limits)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct CallEdgeV1 {
     caller: SemanticFunctionIdV1,
@@ -673,6 +691,7 @@ fn charge_optional_debug_count_v2(
     Ok(actual)
 }
 
+#[cfg(test)]
 pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
@@ -682,8 +701,30 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     debug_source_capture: DebugSourceCaptureRequestV2,
     context_entries: Option<AuthenticatedContextEntriesV1<'tcx>>,
 ) -> Result<ProductionSemanticPreflightPlanV1<'tcx>, ProductionSemanticPreflightErrorV1> {
-    let limits = SemanticMirLimitsV1::default();
-    let mut counts = RawMirPreflightCountsV1::default();
+    build_production_semantic_preflight_plan_with_work_v1(
+        tcx,
+        target,
+        functions,
+        roots,
+        identity_inventory_sha256,
+        debug_source_capture,
+        (context_entries, SourceClosureWorkV1::default()),
+    )
+}
+
+pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: SemanticTargetDataLayoutV1,
+    functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
+    roots: Box<[SemanticFunctionIdV1]>,
+    identity_inventory_sha256: [u8; 32],
+    debug_source_capture: DebugSourceCaptureRequestV2,
+    (context_entries, work): (
+        Option<AuthenticatedContextEntriesV1<'tcx>>,
+        SourceClosureWorkV1,
+    ),
+) -> Result<ProductionSemanticPreflightPlanV1<'tcx>, ProductionSemanticPreflightErrorV1> {
+    let SourceClosureWorkV1 { limits, mut counts } = work;
     counts.charge(SemanticMirResourceV1::Functions, functions.len(), limits)?;
     counts.charge(SemanticMirResourceV1::Roots, roots.len(), limits)?;
 
@@ -3808,4 +3849,8 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 #[cfg(test)]
 mod tests {
     include!("rustc_semantic_plan_v1/tests.rs");
+
+    mod source_closure_work_tests {
+        include!("rustc_semantic_plan_v1/source_closure_work_tests.rs");
+    }
 }

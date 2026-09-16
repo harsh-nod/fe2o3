@@ -1,10 +1,13 @@
 # Execution Capability Integration Contract
 
-Status: the inert semantic MIR V29 types and callable codec are implemented;
-executable capability integration is not complete. M0 and M1 remain incomplete. The production
-importer has source descriptors for authenticated ContextIssue and the four
-workgroup/tile terminals. Generic closure forwarding is not integrated, so the
-ordinary `with_workgroup` chain still rejects before complete construction.
+Status: inert semantic MIR V29 types and callables, KIR V15 operations, and
+registered Execution codecs are implemented; executable capability integration
+is not complete. M0 and M1 remain incomplete. The production importer has source
+descriptors for authenticated ContextIssue and the four workgroup/tile terminals.
+Generic by-value closure forwarding is wired through collection and import
+reobservation. Natural `Fn` receiver adaptation and checked callback
+materialization remain incomplete, so the ordinary `with_workgroup` chain is
+not an admitted executable path.
 Source identities 122-126 and the context commitment are an unpublished
 draft pending the shared #271 allocation. The implementation must
 use the one production graph and existing verification and launch gates.
@@ -21,8 +24,9 @@ These versions do not activate intermediate historical formats. Semantic MIR
 V16-V26, held numerical V27 and historical KIR V13/V14 remain separate. Match
 explicit supported schemas, not a numeric range that admits those drafts.
 
-The following tags are allocated together. Only the five callable MIR encodings
-and four semantic MIR roles are implemented here; KIR/SO codecs remain pending.
+The following tags are allocated together. The five callable MIR encodings,
+four semantic MIR roles, six KIR operations and registered Execution codecs are
+inert representations. Their presence does not authorize executable lowering.
 
 | Operation | MIR intrinsic | KIR operation | Execution opcode |
 | --- | --- | --- | --- |
@@ -99,13 +103,36 @@ array lengths and value/mask ordering must agree. Hidden arguments and adjusted
 types are rejected; the ordinary FnAbi constructor retains target pass modes.
 These are source-consistency checks, not independent physical ABI proofs.
 
-The generic source-chain prerequisite is separate: the closure observer must
-retain device-local capture provenance through exact direct helper-call edges,
-and import must revalidate that provenance. A helper closure parameter is not
-automatically a host argument or automatically device-local. Natural `Fn` and
-`FnMut` closures passed through `FnOnce` also require checked rustc shim support.
-Neither forced inlining nor a special case for the `with_workgroup` name supplies
-that evidence. Direct descriptor tests do not count as this full-chain positive.
+## Closure Source Custody
+
+The collector retains every direct-call occurrence before callee deduplication.
+Each closure argument must be accounted for as an exact invocation receiver or
+an ordinary Rust caller/signature/MIR-formal binding. An unobserved projection
+cannot inherit another caller's local origin. Device-local aggregates seed local
+provenance; external parameters seed host provenance; helper parameters inherit
+all incoming origins. A mixed origin keeps the host capture restrictions.
+
+Alias discovery uses an order-independent worklist. Collection, origin
+propagation, import reobservation and preflight share the existing request work
+budget. Import consumes a move-only roster/graph/body record, fingerprints every
+body, reconstructs call occurrences, authenticates excluded terminal/intrinsic/
+FFI boundaries and derives origins again from live MIR and original roles.
+Retained admission labels cannot supply their own provenance.
+
+Rustc once-shims are matched against the complete resolved compiler Instance,
+not the `call_once` name or shim variant. Collection preserves caller, shim and
+actual closure body; only generated adapter syntax is exempt from user-HIR
+inspection. The closure body and its helpers still undergo ordinary source
+safety checks. This is collector admission, not complete semantic construction:
+an actual `Fn` body needs an explicit shared reborrow of the shim's mutable
+receiver, with canonical temporary/debug-local mapping and normal accounting.
+
+The bounded profile still rejects returned/projected environments, forwarding
+cycles and by-reference closure parameters. Its environment/capture/static-use
+limits are unchanged. Neither forced inlining nor a `with_workgroup` name
+exception supplies missing source evidence. Component collector tests and
+descriptor tests do not count as a full production source-chain positive,
+semantic equivalence proof, or executable capability authority.
 
 ## Ownership And Effects
 
