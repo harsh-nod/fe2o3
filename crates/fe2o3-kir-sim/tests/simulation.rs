@@ -8482,3 +8482,359 @@ fn failure_reduction_report_is_canonical_and_identity_bound() {
         Err(fe2o3_kir_sim::SimulationFailureReductionErrorV1::ResidentLimit { limit: 1, .. })
     ));
 }
+
+mod inactive_getter_gep_characterization {
+    use super::*;
+    use fe2o3_kir_sim::IndexWidthV1;
+
+    // These are verified KIR execution components, not captured source, a GPU
+    // invocation witness, or a proposed change to pointer semantics.
+    fn module(select_zero: bool, store_on_none: bool) -> (Module, u32) {
+        let element = Type::Scalar(ScalarType::U32);
+        let slice = Type::slice(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+        let pointer = Type::pointer(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations = vec![
+            op(
+                2,
+                Type::INDEX,
+                OperationKind::SliceLength { slice: ValueId(0) },
+            ),
+            op(
+                3,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(1),
+                    rhs: ValueId(2),
+                },
+            ),
+            op(
+                4,
+                pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+        ];
+        let offset = if select_zero {
+            entry.operations.push(op(
+                5,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(0)),
+            ));
+            entry.operations.push(op(
+                6,
+                Type::INDEX,
+                OperationKind::Select {
+                    condition: ValueId(3),
+                    true_value: ValueId(1),
+                    false_value: ValueId(5),
+                },
+            ));
+            ValueId(6)
+        } else {
+            ValueId(1)
+        };
+        let gep_operation = u32::try_from(entry.operations.len()).unwrap();
+        entry.operations.push(op(
+            7,
+            pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(4),
+                offset,
+            },
+        ));
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(3),
+            then_target: BlockId(1),
+            then_arguments: vec![],
+            else_target: BlockId(if store_on_none { 1 } else { 2 }),
+            else_arguments: vec![],
+        });
+        let mut some = BasicBlock::new(BlockId(1));
+        some.operations = vec![
+            op(8, element, OperationKind::Constant(Constant::U32(29))),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(7),
+                    value: ValueId(8),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ];
+        some.terminator = Some(Terminator::Return { values: vec![] });
+        let mut none = BasicBlock::new(BlockId(2));
+        none.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("sim-tests::inactive-getter-gep");
+        module.functions.push(Function::kernel_entry(
+            "inactive_getter_gep_impl",
+            Signature::new(vec![slice, Type::INDEX], vec![]),
+            vec![ValueId(0), ValueId(1)],
+            vec![entry, some, none],
+        ));
+        module.kernels.push(Kernel::new(
+            "inactive_getter_gep",
+            "inactive_getter_gep_impl",
+            dynamic_domain_1d(),
+        ));
+        (module, gep_operation)
+    }
+
+    fn profiles() -> [(SimulationTargetV1, u64); 2] {
+        [
+            (
+                SimulationTargetV1::little_endian(IndexWidthV1::Bits32),
+                u64::from(u32::MAX),
+            ),
+            (
+                SimulationTargetV1::little_endian(IndexWidthV1::Bits64),
+                u64::MAX,
+            ),
+        ]
+    }
+
+    fn request(target: SimulationTargetV1, index: u64, values: &[u32]) -> SimulationRequestV1 {
+        let bytes = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        let initialized = vec![true; bytes.len()];
+        let buffer = BufferArgumentV1::new(
+            ScalarType::U32,
+            AccessMode::ReadWrite,
+            4,
+            bytes,
+            initialized,
+            target,
+        )
+        .unwrap();
+        let mut request = SimulationRequestV1::new(
+            "inactive_getter_gep",
+            [1, 1, 1],
+            [1, 1, 1],
+            vec![
+                SimulationArgumentV1::Buffer(buffer),
+                SimulationArgumentV1::Scalar(
+                    ScalarBitsV1::new(ScalarType::Index, u128::from(index), target).unwrap(),
+                ),
+            ],
+        );
+        request.events = EventPolicyV1::Enabled;
+        request
+    }
+
+    fn assert_no_memory_access(events: &Collector) {
+        assert!(!events.0.iter().any(|event| matches!(
+            event.kind,
+            SimulationEventKindV1::MemoryRead { .. }
+                | SimulationEventKindV1::MemoryWrite { .. }
+                | SimulationEventKindV1::MemoryAtomic { .. }
+                | SimulationEventKindV1::MemoryFence { .. }
+                | SimulationEventKindV1::AllocationCreated { .. }
+        )));
+    }
+
+    fn assert_branch(events: &Collector, expected: u32) {
+        let branches = events
+            .0
+            .iter()
+            .filter_map(|event| match event.kind {
+                SimulationEventKindV1::Branch { target } => Some(target),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(branches, vec![BlockId(expected)]);
+    }
+
+    fn assert_gep_outcome(
+        events: &Collector,
+        operation: u32,
+        expected: SimulationExecutionOutcomeV1,
+    ) {
+        let outcomes = events
+            .0
+            .iter()
+            .filter_map(|event| {
+                if event.site.block == BlockId(0)
+                    && event.site.operation == Some(operation)
+                    && let SimulationEventKindV1::OperationEnd { outcome } = event.kind
+                {
+                    return Some(outcome);
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes, vec![expected]);
+    }
+
+    #[test]
+    fn inactive_index_gep_characterizes_existing_host_offset_limits() {
+        for (target, maximum) in profiles() {
+            let (module, gep_operation) = module(false, false);
+            let admitted = admitted(module);
+            let mut events = Collector::default();
+            let result = admitted.simulate_with_sink(
+                &request(target, maximum, &[17]),
+                target,
+                SimulationLimitsV1::default(),
+                &mut events,
+            );
+            // The current engine converts to host usize, then checked-multiplies
+            // by four. INDEX profile width is not a machine pointer-wrap rule.
+            match usize::try_from(maximum) {
+                Err(_) => {
+                    let SimulationErrorV1::Execution(error) = result.unwrap_err() else {
+                        panic!("expected GEP execution conversion failure");
+                    };
+                    assert!(matches!(
+                        error.kind,
+                        SimulationExecutionErrorKindV1::IntegerOutOfRange
+                    ));
+                    let site = error.site.unwrap();
+                    assert_eq!(site.block, BlockId(0));
+                    assert_eq!(site.operation, Some(gep_operation));
+                    assert_gep_outcome(
+                        &events,
+                        gep_operation,
+                        SimulationExecutionOutcomeV1::Failed,
+                    );
+                }
+                Ok(offset) if offset.checked_mul(4).is_none() => {
+                    let SimulationErrorV1::Execution(error) = result.unwrap_err() else {
+                        panic!("expected GEP execution byte-offset overflow");
+                    };
+                    assert!(matches!(
+                        error.kind,
+                        SimulationExecutionErrorKindV1::PointerOffsetOverflow
+                    ));
+                    let site = error.site.unwrap();
+                    assert_eq!(site.block, BlockId(0));
+                    assert_eq!(site.operation, Some(gep_operation));
+                    assert_gep_outcome(
+                        &events,
+                        gep_operation,
+                        SimulationExecutionOutcomeV1::Failed,
+                    );
+                }
+                Ok(_) => {
+                    let execution =
+                        result.expect("unused out-of-extent pointer is not dereferenced");
+                    assert_eq!(words(execution.buffer(0).unwrap().bytes()), vec![17]);
+                    assert_branch(&events, 2);
+                    assert_gep_outcome(
+                        &events,
+                        gep_operation,
+                        SimulationExecutionOutcomeV1::Completed,
+                    );
+                }
+            }
+            assert_no_memory_access(&events);
+        }
+    }
+
+    #[test]
+    fn inactive_select_zero_gep_reaches_none_without_memory_access() {
+        for (target, maximum) in profiles() {
+            for values in [vec![], vec![17]] {
+                for index in [maximum, values.len() as u64] {
+                    let (module, gep_operation) = module(true, false);
+                    let mut events = Collector::default();
+                    let execution = admitted(module)
+                        .simulate_with_sink(
+                            &request(target, index, &values),
+                            target,
+                            SimulationLimitsV1::default(),
+                            &mut events,
+                        )
+                        .expect("false selector feeds exact zero to GEP");
+                    assert_eq!(words(execution.buffer(0).unwrap().bytes()), values);
+                    assert_branch(&events, 2);
+                    assert_gep_outcome(
+                        &events,
+                        gep_operation,
+                        SimulationExecutionOutcomeV1::Completed,
+                    );
+                    assert_no_memory_access(&events);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn active_select_zero_gep_preserves_the_actual_index_and_single_store() {
+        for (target, _) in profiles() {
+            for selected in [false, true] {
+                for index in [0u64, 1] {
+                    let (module, gep_operation) = module(selected, false);
+                    let mut events = Collector::default();
+                    let execution = admitted(module)
+                        .simulate_with_sink(
+                            &request(target, index, &[11, 17]),
+                            target,
+                            SimulationLimitsV1::default(),
+                            &mut events,
+                        )
+                        .expect("active selector preserves the in-range source index");
+                    let mut expected = vec![11, 17];
+                    expected[index as usize] = 29;
+                    assert_eq!(words(execution.buffer(0).unwrap().bytes()), expected);
+                    assert_branch(&events, 1);
+                    assert_gep_outcome(
+                        &events,
+                        gep_operation,
+                        SimulationExecutionOutcomeV1::Completed,
+                    );
+                    let writes = events
+                        .0
+                        .iter()
+                        .filter_map(|event| match event.kind {
+                            SimulationEventKindV1::MemoryWrite { offset, bytes, .. } => {
+                                Some((offset, bytes))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(writes, vec![(index as usize * 4, 4)]);
+                    assert!(!events.0.iter().any(|event| matches!(
+                        event.kind,
+                        SimulationEventKindV1::MemoryRead { .. }
+                            | SimulationEventKindV1::MemoryAtomic { .. }
+                    )));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inactive_gep_is_not_an_authorization_to_dereference_outside_the_slice() {
+        for (target, _) in profiles() {
+            let (module, gep_operation) = module(false, true);
+            let mut events = Collector::default();
+            let error = admitted(module)
+                .simulate_with_sink(
+                    &request(target, 1, &[17]),
+                    target,
+                    SimulationLimitsV1::default(),
+                    &mut events,
+                )
+                .expect_err("deliberately entering the Store on None still checks bounds");
+            let SimulationErrorV1::Execution(error) = error else {
+                panic!("expected Store bounds failure");
+            };
+            assert!(matches!(
+                error.kind,
+                SimulationExecutionErrorKindV1::OutOfBounds { .. }
+            ));
+            let site = error.site.unwrap();
+            assert_eq!(site.block, BlockId(1));
+            assert_eq!(site.operation, Some(1));
+            assert_branch(&events, 1);
+            assert_gep_outcome(
+                &events,
+                gep_operation,
+                SimulationExecutionOutcomeV1::Completed,
+            );
+            assert_no_memory_access(&events);
+        }
+    }
+}

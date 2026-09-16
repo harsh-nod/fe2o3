@@ -361,34 +361,68 @@ fn extract_collected_addresses_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(
         |source, bound, checked, inputs, references, profile, budget| {
             let (coordinates, storage) =
                 dialect_amdgcn::check_production_target_coordinate_preservation_v1(
-                    source.executable(), bound, profile, budget,
-                ).map_err(|error| error.to_string())?;
-            budget.reserve_storage(storage.retained_storage())
+                    source.executable(),
+                    bound,
+                    profile,
+                    budget,
+                )
+                .map_err(|error| error.to_string())?;
+            budget
+                .reserve_storage(storage.retained_storage())
                 .map_err(|error| error.to_string())?;
             let (view, storage) =
                 fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
-                    source, &coordinates, checked, budget,
-                ).map_err(|error| error.to_string())?;
-            budget.reserve_storage(storage.retained_storage())
+                    source,
+                    &coordinates,
+                    checked,
+                    budget,
+                )
+                .map_err(|error| error.to_string())?;
+            budget
+                .reserve_storage(storage.retained_storage())
                 .map_err(|error| error.to_string())?;
             crate::production_ranked_projection_v1::observe_collected_ranked_addresses_v1(
-                &view, inputs, references, budget,
-                |roots, accesses, budget| {
-                    let write_error = |error| format!("collected address diagnostic failed: {error:?}");
-                    let mut writer = CollectedShapeWriterV1::new_for_completion(
-                        &mut stderr, budget,
-                        COLLECTED_SHAPE_MAX_BYTES_V1 - COLLECTED_ADDRESSES_COMPLETE_V1.len(),
-                        COLLECTED_ADDRESSES_COMPLETE_V1.len(),
-                    ).map_err(write_error)?;
-                    writer.record(format_args!(
-                        "fe2o3 collected-addresses: incomplete; profile={profile:?}; references=0; checked-roots={roots}; global-accesses={accesses}; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false"
-                    )).map_err(write_error)?;
-                    writer.finish().map_err(write_error)
+                &view,
+                profile,
+                inputs,
+                references,
+                budget,
+                |roots, accesses, complete_roots, budget| {
+                    write_collected_addresses_report_v1(
+                        profile,
+                        roots,
+                        accesses,
+                        complete_roots,
+                        budget,
+                        &mut stderr,
+                    )
                 },
             )
         },
     );
     complete_collected_addresses_observation_v1(result, &mut stderr)
+}
+
+fn write_collected_addresses_report_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    roots: usize,
+    accesses: usize,
+    complete_roots: usize,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    sink: &mut impl std::io::Write,
+) -> Result<(), String> {
+    let write_error = |error| format!("collected address diagnostic failed: {error:?}");
+    let mut writer = CollectedShapeWriterV1::new_for_completion(
+        sink,
+        budget,
+        COLLECTED_SHAPE_MAX_BYTES_V1 - COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+        COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+    )
+    .map_err(write_error)?;
+    writer.record(format_args!(
+        "fe2o3 collected-addresses: incomplete; profile={profile:?}; references=0; checked-roots={roots}; global-accesses={accesses}; source-preservation=conditional-checked; complete-roots={complete_roots}; runtime-premises=undischarged; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false"
+    )).map_err(write_error)?;
+    writer.finish().map_err(write_error)
 }
 
 fn complete_collected_addresses_observation_v1(
@@ -634,6 +668,43 @@ mod collected_shape_tests_v1 {
 
     fn header() -> usize {
         std::mem::size_of::<CollectedShapeWriterV1<'_, '_, '_, Vec<u8>>>()
+    }
+
+    #[test]
+    fn conditional_address_report_is_exact_bounded_and_has_no_completion() {
+        // Numeric writer component only, not an executable relation or premise discharge.
+        for profile in [
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            let mut work = Work::new(10_000);
+            let mut budget = Budget::new(&mut work, 17 + header());
+            budget.reserve_storage(17).unwrap();
+            let mut bytes = Vec::new();
+            write_collected_addresses_report_v1(
+                profile,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                &mut budget,
+                &mut bytes,
+            )
+            .unwrap();
+            let expected = format!(
+                "fe2o3 collected-addresses: incomplete; profile={profile:?}; references=0; checked-roots={0}; global-accesses={0}; source-preservation=conditional-checked; complete-roots={0}; runtime-premises=undischarged; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false\n",
+                usize::MAX,
+            );
+            assert_eq!(bytes, expected.as_bytes());
+            assert!(
+                !expected
+                    .lines()
+                    .any(|line| line == COLLECTED_ADDRESSES_COMPLETE_V1.trim_end())
+            );
+            assert!(bytes.len() < COLLECTED_SHAPE_MAX_BYTES_V1);
+            assert_eq!(budget.storage(), 17 + header());
+            budget.release_storage(header()).unwrap();
+            assert_eq!(budget.storage(), 17);
+        }
     }
 
     #[test]

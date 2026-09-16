@@ -493,13 +493,14 @@ mod identity_getter_physical_tests {
                                 let floor = budget.storage();
                                 let before = budget.work();
                                 let mut completed = false;
-                                with_source_preservation_output_v1(view, profile, inputs, &references, budget,
-                                |preservation, same_references, formals, budget| {
+                                with_source_preservation_output_v1::<()>(view, profile, inputs, &references, budget,
+                                |preservation, same_references, formals, accesses, budget| {
                                     completed = true;
                                     assert!(std::ptr::eq(same_references, &references));
                                     assert!(same_references.as_slice().is_empty());
                                     assert_eq!(preservation.roots().len(), inputs.len());
                                     assert_eq!(formals.len(), inputs.len());
+                                    assert_eq!(accesses, inputs.len() * stores);
                                     for (ordinal, (root, complete)) in preservation.roots().iter().zip(formals).enumerate() {
                                         assert_eq!(root.selected_root(), source.semantic_ssa().source_semantic().roots()[ordinal]);
                                         assert_eq!(complete.selected_root(), root.selected_root());
@@ -554,13 +555,13 @@ mod identity_getter_physical_tests {
                         let floor = budget.storage();
                         for length in [0, 1] {
                             let mut entered = false;
-                            let result = with_source_preservation_output_v1(
+                            let result = with_source_preservation_output_v1::<()>(
                                 view,
                                 profile,
                                 &inputs[..length],
                                 &references,
                                 budget,
-                                |_, _, _, _| {
+                                |_, _, _, _, _| {
                                     entered = true;
                                     Ok(())
                                 },
@@ -577,15 +578,16 @@ mod identity_getter_physical_tests {
                             assert_eq!(budget.storage(), floor);
                         }
                         let mut reentered = false;
-                        with_source_preservation_output_v1(
+                        with_source_preservation_output_v1::<()>(
                             view,
                             profile,
                             inputs,
                             &references,
                             budget,
-                            |_, same, formals, _| {
+                            |_, same, formals, accesses, _| {
                                 assert!(std::ptr::eq(same, &references));
                                 assert_eq!(formals.len(), 2);
+                                assert_eq!(accesses, 2);
                                 reentered = true;
                                 Ok(())
                             },
@@ -612,15 +614,16 @@ mod identity_getter_physical_tests {
                         let references = References::default();
                         let floor = budget.storage();
                         let mut entered = false;
-                        let error = with_source_preservation_output_v1(
+                        let error = with_source_preservation_output_v1::<()>(
                             view,
                             profile,
                             inputs,
                             &references,
                             budget,
-                            |preservation, same, formals, _| {
+                            |preservation, same, formals, accesses, _| {
                                 assert_eq!(preservation.roots().len(), 2);
                                 assert_eq!(formals.len(), 2);
+                                assert_eq!(accesses, 4);
                                 assert!(std::ptr::eq(same, &references));
                                 entered = true;
                                 Err(SourceJoinPipelineErrorV1::RankedProjection(
@@ -642,14 +645,15 @@ mod identity_getter_physical_tests {
                         assert_eq!(budget.storage(), floor);
                         let mut panic_entered = false;
                         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            with_source_preservation_output_v1(
+                            with_source_preservation_output_v1::<()>(
                                 view,
                                 profile,
                                 inputs,
                                 &references,
                                 budget,
-                                |preservation, same, formals, _| {
+                                |preservation, same, formals, accesses, _| {
                                     assert_eq!(preservation.roots().len(), formals.len());
+                                    assert_eq!(accesses, 4);
                                     assert!(std::ptr::eq(same, &references));
                                     panic_entered = true;
                                     std::panic::panic_any(0x3450_77u64)
@@ -661,14 +665,166 @@ mod identity_getter_physical_tests {
                         assert_eq!(panic.downcast_ref::<u64>(), Some(&0x3450_77));
                         assert_eq!(budget.storage(), floor);
                         let mut reentered = false;
-                        with_source_preservation_output_v1(
+                        with_source_preservation_output_v1::<()>(
                             view,
                             profile,
                             inputs,
                             &references,
                             budget,
-                            |_, _, formals, _| {
+                            |_, _, formals, accesses, _| {
                                 assert_eq!(formals.len(), 2);
+                                assert_eq!(accesses, 4);
+                                reentered = true;
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                        assert!(reentered);
+                        assert_eq!(budget.storage(), floor);
+                    },
+                );
+            }
+        }
+
+        #[test]
+        fn collected_preservation_observer_counts_and_callback_outcomes_keep_custody() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for mode in [false, true] {
+                    with_case(
+                        profile,
+                        29,
+                        mode,
+                        2,
+                        false,
+                        true,
+                        |_, view, inputs, budget| {
+                            let references = References::default();
+                            let floor = budget.storage();
+                            let before = budget.work();
+                            let mut entered = false;
+                            let error = observe_collected_ranked_addresses_v1(
+                                view,
+                                profile,
+                                inputs,
+                                &references,
+                                budget,
+                                |roots, accesses, complete_roots, _| {
+                                    assert_eq!((roots, accesses, complete_roots), (2, 4, 2));
+                                    entered = true;
+                                    Err("collected conditional callback marker".to_owned())
+                                },
+                            );
+                            assert!(entered);
+                            assert_eq!(
+                                error,
+                                Err("collected conditional callback marker".to_owned())
+                            );
+                            assert_eq!(budget.storage(), floor);
+                            let mut panic_entered = false;
+                            let panic =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    observe_collected_ranked_addresses_v1(
+                                        view,
+                                        profile,
+                                        inputs,
+                                        &references,
+                                        budget,
+                                        |roots, accesses, complete_roots, _| {
+                                            assert_eq!(
+                                                (roots, accesses, complete_roots),
+                                                (2, 4, 2)
+                                            );
+                                            panic_entered = true;
+                                            std::panic::panic_any(0x3490_17u64)
+                                        },
+                                    )
+                                }))
+                                .expect_err("actual collected callback panic remains a panic");
+                            assert!(panic_entered);
+                            assert_eq!(panic.downcast_ref::<u64>(), Some(&0x3490_17));
+                            assert_eq!(budget.storage(), floor);
+                            let mut completed = false;
+                            observe_collected_ranked_addresses_v1(
+                                view,
+                                profile,
+                                inputs,
+                                &references,
+                                budget,
+                                |roots, accesses, complete_roots, _| {
+                                    assert_eq!((roots, accesses, complete_roots), (2, 4, 2));
+                                    completed = true;
+                                    Ok(())
+                                },
+                            )
+                            .unwrap();
+                            assert!(completed);
+                            assert!(references.as_slice().is_empty());
+                            assert_eq!(budget.storage(), floor);
+                            assert!(budget.work() > before);
+                        },
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn collected_preservation_observer_accounting_precedes_callback_outcomes() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_case(
+                    profile,
+                    17,
+                    false,
+                    1,
+                    false,
+                    false,
+                    |_, view, inputs, budget| {
+                        let references = References::default();
+                        let floor = budget.storage();
+                        for outcome in 0..3 {
+                            let mut entered = false;
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    observe_collected_ranked_addresses_v1(
+                                        view,
+                                        profile,
+                                        inputs,
+                                        &references,
+                                        budget,
+                                        |roots, accesses, complete_roots, budget| {
+                                            assert_eq!(
+                                                (roots, accesses, complete_roots),
+                                                (1, 1, 1)
+                                            );
+                                            entered = true;
+                                            budget
+                                                .release_storage(budget.storage() - floor)
+                                                .unwrap();
+                                            match outcome {
+                                                0 => Ok(()),
+                                                1 => Err("must lose to accounting".to_owned()),
+                                                _ => std::panic::panic_any(0x3490_18u64),
+                                            }
+                                        },
+                                    )
+                                }))
+                                .expect(
+                                    "outer retained-floor Accounting takes precedence over panic",
+                                );
+                            assert!(entered);
+                            let error = result.expect_err("live proof receipts were released");
+                            assert!(error.contains("storage accounting failed"), "{error}");
+                            assert!(!error.contains("must lose to accounting"));
+                            assert_eq!(budget.storage(), floor);
+                        }
+                        let mut reentered = false;
+                        observe_collected_ranked_addresses_v1(
+                            view,
+                            profile,
+                            inputs,
+                            &references,
+                            budget,
+                            |roots, accesses, complete_roots, _| {
+                                assert_eq!((roots, accesses, complete_roots), (1, 1, 1));
                                 reentered = true;
                                 Ok(())
                             },

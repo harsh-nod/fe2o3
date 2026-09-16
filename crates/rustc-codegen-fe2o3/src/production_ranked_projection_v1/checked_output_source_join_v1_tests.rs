@@ -228,7 +228,7 @@ mod checked_output_source_join_tests {
             .split_once("fn with_source_ranked_prefix_v1<T>(")
             .expect("source-only prefix declaration")
             .1
-            .split_once("fn with_source_preservation_output_v1<'owners>(")
+            .split_once("fn with_source_preservation_output_v1<")
             .expect("separate source/output consumer declaration")
             .0;
         assert!(prefix.contains("with_canonical_assertions_source_budget_v1("));
@@ -241,20 +241,46 @@ mod checked_output_source_join_tests {
             diagnostic
                 .find("if !references.as_slice().is_empty()")
                 .unwrap()
-                < diagnostic.find("with_source_ranked_prefix_v1(").unwrap()
-        );
-        assert!(
-            diagnostic.find("with_source_ranked_prefix_v1(").unwrap()
                 < diagnostic
-                    .find("with_checked_output_assertions_view_budget_v1(")
+                    .find("with_source_preservation_output_v1(")
                     .unwrap()
         );
+        let diagnostic_compact = diagnostic.split_whitespace().collect::<String>();
+        assert!(diagnostic_compact.contains("view,profile,inputs,references,budget,"));
+        assert!(diagnostic.contains("preservation.roots().len() != formals.len()"));
+        let conjunction = text
+            .split_once("fn with_source_preservation_output_v1<")
+            .expect("conditional conjunction declaration")
+            .1
+            .split_once("pub(crate) fn observe_collected_ranked_addresses_v1")
+            .expect("separate observer declaration")
+            .0;
+        for (before, after) in [
+            (
+                "with_source_ranked_prefix_v1(",
+                "original.with_source_preservation_v1(",
+            ),
+            (
+                "partition.len() != inputs.len()",
+                "with_prepared_canonical_memory_session_v1(",
+            ),
+            (
+                "original.with_source_preservation_v1(",
+                "with_native_input_relations_v1(",
+            ),
+            (
+                "check_borrowed_ranked_addresses_v1(",
+                "with_complete_formal_memory_module_v1(",
+            ),
+        ] {
+            assert!(conjunction.find(before).unwrap() < conjunction.find(after).unwrap());
+        }
+        let conjunction_compact = conjunction.split_whitespace().collect::<String>();
         assert!(
-            diagnostic.find("partition.len() != inputs.len()").unwrap()
-                < diagnostic
-                    .find("with_prepared_canonical_memory_session_v1(")
-                    .unwrap()
+            conjunction_compact
+                .contains("require_source_functional_roster_v1(verification,inputs.len(),budget)")
         );
+        assert!(conjunction.contains("references.as_slice().is_empty()"));
         for forbidden in [
             "SourceRankedCustodyV1 {",
             "with_complete_formal_memory_module_v1(",

@@ -122,7 +122,7 @@ fn require_collected_addresses_success(success: bool, stderr: &str, profile: &st
         other => panic!("unexpected test profile {other}"),
     };
     let expected = format!(
-        "fe2o3 collected-addresses: incomplete; profile={profile}; references=0; checked-roots={roots}; global-accesses={roots}; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false"
+        "fe2o3 collected-addresses: incomplete; profile={profile}; references=0; checked-roots={roots}; global-accesses={roots}; source-preservation=conditional-checked; complete-roots={roots}; runtime-premises=undischarged; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false"
     );
     assert_eq!(
         stderr.lines().filter(|line| *line == expected).count(),
