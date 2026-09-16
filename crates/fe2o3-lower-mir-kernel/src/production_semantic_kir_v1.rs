@@ -2734,6 +2734,80 @@ struct NormalizedAtomicContractV1 {
     failure_ordering: Option<u8>,
 }
 
+#[derive(Clone, Copy)]
+struct MissingRankedEffectDiagnosticV1 {
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    site: SemanticAccessSiteV1,
+    consumer: KirMemoryConsumerV1,
+}
+
+fn write_missing_ranked_effect_v1(
+    enabled: bool,
+    writer: &mut impl std::io::Write,
+    diagnostic: MissingRankedEffectDiagnosticV1,
+) {
+    if !enabled {
+        return;
+    }
+    let consumer = diagnostic.consumer;
+    let access = match consumer.access {
+        dialect_kernel::AccessKindAttr::Read => "read",
+        dialect_kernel::AccessKindAttr::Write => "write",
+        dialect_kernel::AccessKindAttr::AtomicRead => "atomic-read",
+        dialect_kernel::AccessKindAttr::AtomicWrite => "atomic-write",
+        dialect_kernel::AccessKindAttr::AtomicReadModifyWrite => "atomic-read-modify-write",
+    };
+    let space = match consumer.memory_space {
+        dialect_kernel::MemorySpaceAttr::Private => "private",
+        dialect_kernel::MemorySpaceAttr::Workgroup => "workgroup",
+        dialect_kernel::MemorySpaceAttr::Global => "global",
+    };
+    let atomic = consumer.atomic;
+    let failure = atomic.and_then(|contract| contract.failure_ordering);
+    // Fixed fields only: at most 390 + 3 * size_of::<usize>() bytes, including LF.
+    let _ = writeln!(
+        writer,
+        "MIR_PLIRON_MISSING_RANKED_EFFECT_V1 owner={} function={} semantic_block={} statement_present={} statement={} semantic_access={} kir_block={} kir_operation={} kir_access={} pointer={} access={} space={} atomic_present={} ordering={} scope={} failure_present={} failure_ordering={} counterpart=absent",
+        diagnostic.correspondence_owner.index(),
+        diagnostic.semantic_function.index(),
+        diagnostic.site.block,
+        u8::from(diagnostic.site.statement.is_some()),
+        diagnostic.site.statement.unwrap_or(0),
+        diagnostic.site.ordinal,
+        consumer.location.block.0,
+        consumer.location.operation_index,
+        consumer.operation_access_ordinal,
+        consumer.pointer.0,
+        access,
+        space,
+        u8::from(atomic.is_some()),
+        atomic.map_or(0, |contract| contract.ordering),
+        atomic.map_or(0, |contract| contract.scope),
+        u8::from(failure.is_some()),
+        failure.unwrap_or(0),
+    );
+}
+
+fn trace_missing_ranked_effect_v1(diagnostic: MissingRankedEffectDiagnosticV1) {
+    if std::env::var_os("FE2O3_TRACE_RANKED_CUSTODY_V1").is_none() {
+        return;
+    }
+    write_missing_ranked_effect_v1(true, &mut std::io::stderr().lock(), diagnostic);
+}
+
+fn missing_ranked_effect_v1(
+    diagnostic: MissingRankedEffectDiagnosticV1,
+    observe: impl FnOnce(MissingRankedEffectDiagnosticV1),
+) -> ProductionMirPlironTranslationErrorV1 {
+    observe(diagnostic);
+    ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+        semantic_block: diagnostic.site.block,
+        semantic_statement: diagnostic.site.statement,
+        semantic_access_ordinal: diagnostic.site.ordinal,
+    }
+}
+
 struct KirCorrelationIndexV1<'module> {
     blocks: BTreeMap<BlockId, &'module [Operation]>,
     operations: BTreeMap<FunctionOperationLocation, &'module Operation>,
@@ -6355,13 +6429,18 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
             continue;
         }
-        let (logical_site, source) = ranked_source_for_semantic_effect_v1(&ranked, site).ok_or(
-            ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
-                semantic_block: site.block,
-                semantic_statement: site.statement,
-                semantic_access_ordinal: site.ordinal,
-            },
-        )?;
+        let (logical_site, source) = ranked_source_for_semantic_effect_v1(&ranked, site)
+            .ok_or_else(|| {
+                missing_ranked_effect_v1(
+                    MissingRankedEffectDiagnosticV1 {
+                        correspondence_owner,
+                        semantic_function,
+                        site,
+                        consumer: *consumer,
+                    },
+                    trace_missing_ranked_effect_v1,
+                )
+            })?;
         if source.access != consumer.access {
             return Err(ProductionMirPlironTranslationErrorV1::AccessKindMismatch {
                 location: consumer.location,
@@ -30744,6 +30823,180 @@ mod resource_tests {
             )
             .is_none(),
             "a missing ordinal must not reuse an ambiguous ordinal-zero summary"
+        );
+    }
+
+    fn missing_ranked_trace_fixture() -> MissingRankedEffectDiagnosticV1 {
+        MissingRankedEffectDiagnosticV1 {
+            correspondence_owner: SemanticFunctionIdV1::from_index(1),
+            semantic_function: SemanticFunctionIdV1::from_index(2),
+            site: SemanticAccessSiteV1 {
+                block: 3,
+                statement: Some(4),
+                ordinal: 5,
+            },
+            consumer: KirMemoryConsumerV1 {
+                location: FunctionOperationLocation::new(BlockId(6), 7),
+                operation_access_ordinal: 8,
+                pointer: ValueId(9),
+                access: AccessKindAttr::AtomicReadModifyWrite,
+                memory_space: dialect_kernel::MemorySpaceAttr::Workgroup,
+                atomic: Some(NormalizedAtomicContractV1 {
+                    ordering: 10,
+                    scope: 11,
+                    failure_ordering: Some(12),
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn missing_ranked_trace_disabled_never_uses_writer() {
+        struct NoWrite;
+        impl std::io::Write for NoWrite {
+            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+                panic!("disabled diagnostic touched writer");
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("disabled diagnostic flushed writer");
+            }
+        }
+        write_missing_ranked_effect_v1(false, &mut NoWrite, missing_ranked_trace_fixture());
+    }
+
+    #[test]
+    fn missing_ranked_trace_fields_and_absence_are_exact() {
+        let mut diagnostic = missing_ranked_trace_fixture();
+        let mut bytes = Vec::new();
+        write_missing_ranked_effect_v1(true, &mut bytes, diagnostic);
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "MIR_PLIRON_MISSING_RANKED_EFFECT_V1 owner=1 function=2 semantic_block=3 statement_present=1 statement=4 semantic_access=5 kir_block=6 kir_operation=7 kir_access=8 pointer=9 access=atomic-read-modify-write space=workgroup atomic_present=1 ordering=10 scope=11 failure_present=1 failure_ordering=12 counterpart=absent\n",
+        );
+        diagnostic.site.statement = None;
+        diagnostic.consumer.atomic = None;
+        bytes.clear();
+        write_missing_ranked_effect_v1(true, &mut bytes, diagnostic);
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "MIR_PLIRON_MISSING_RANKED_EFFECT_V1 owner=1 function=2 semantic_block=3 statement_present=0 statement=0 semantic_access=5 kir_block=6 kir_operation=7 kir_access=8 pointer=9 access=atomic-read-modify-write space=workgroup atomic_present=0 ordering=0 scope=0 failure_present=0 failure_ordering=0 counterpart=absent\n",
+        );
+    }
+
+    #[test]
+    fn missing_ranked_trace_maximum_fields_obey_fixed_bound() {
+        let diagnostic = MissingRankedEffectDiagnosticV1 {
+            correspondence_owner: SemanticFunctionIdV1::from_index(u32::MAX),
+            semantic_function: SemanticFunctionIdV1::from_index(u32::MAX),
+            site: SemanticAccessSiteV1 {
+                block: u32::MAX,
+                statement: Some(u32::MAX),
+                ordinal: u32::MAX,
+            },
+            consumer: KirMemoryConsumerV1 {
+                location: FunctionOperationLocation::new(BlockId(u32::MAX), usize::MAX),
+                operation_access_ordinal: u32::MAX,
+                pointer: ValueId(u32::MAX),
+                access: AccessKindAttr::AtomicReadModifyWrite,
+                memory_space: dialect_kernel::MemorySpaceAttr::Workgroup,
+                atomic: Some(NormalizedAtomicContractV1 {
+                    ordering: u8::MAX,
+                    scope: u8::MAX,
+                    failure_ordering: Some(u8::MAX),
+                }),
+            },
+        };
+        let mut bytes = Vec::new();
+        write_missing_ranked_effect_v1(true, &mut bytes, diagnostic);
+        assert_eq!(bytes.len(), 390 + usize::MAX.to_string().len());
+        assert!(bytes.len() <= 390 + 3 * std::mem::size_of::<usize>());
+        assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
+        for access in [
+            AccessKindAttr::Read,
+            AccessKindAttr::Write,
+            AccessKindAttr::AtomicRead,
+            AccessKindAttr::AtomicWrite,
+            AccessKindAttr::AtomicReadModifyWrite,
+        ] {
+            for memory_space in [
+                dialect_kernel::MemorySpaceAttr::Private,
+                dialect_kernel::MemorySpaceAttr::Workgroup,
+                dialect_kernel::MemorySpaceAttr::Global,
+            ] {
+                bytes.clear();
+                write_missing_ranked_effect_v1(
+                    true,
+                    &mut bytes,
+                    MissingRankedEffectDiagnosticV1 {
+                        consumer: KirMemoryConsumerV1 {
+                            access,
+                            memory_space,
+                            ..diagnostic.consumer
+                        },
+                        ..diagnostic
+                    },
+                );
+                assert!(bytes.len() <= 390 + 3 * std::mem::size_of::<usize>());
+                assert!(bytes.ends_with(b" counterpart=absent\n"));
+            }
+        }
+    }
+
+    #[test]
+    fn missing_ranked_trace_writer_failure_keeps_original_refusal() {
+        struct RefuseWrite(usize);
+        impl std::io::Write for RefuseWrite {
+            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                Err(std::io::Error::other("injected diagnostic writer failure"))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("diagnostic must not flush the writer");
+            }
+        }
+        let mut writer = RefuseWrite(0);
+        let diagnostic = missing_ranked_trace_fixture();
+        let mut entered = false;
+        let error = missing_ranked_effect_v1(diagnostic, |actual| {
+            entered = true;
+            assert_eq!(actual.site, diagnostic.site);
+            assert_eq!(actual.consumer.location, diagnostic.consumer.location);
+            write_missing_ranked_effect_v1(true, &mut writer, actual);
+        });
+        assert!(entered);
+        assert_eq!(writer.0, 1);
+        assert!(matches!(
+            error,
+            ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+                semantic_block: 3,
+                semantic_statement: Some(4),
+                semantic_access_ordinal: 5,
+            }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "semantic MIR effect <block=3, statement=Some(4), ordinal=5> has no ranked PLIRON counterpart",
+        );
+    }
+
+    #[test]
+    fn missing_ranked_trace_preserves_actual_validator_refusal() {
+        let fixture = unsupported_index_correlation_fixture();
+        let lowering = ranked_correlation_input(AccessKindAttr::Read, 1);
+        let error = validate_translation_fixture(&fixture, &lowering, &[], 16).unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+                semantic_block: 0,
+                semantic_statement: Some(0),
+                semantic_access_ordinal: 0,
+            }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "semantic MIR effect <block=0, statement=Some(0), ordinal=0> has no ranked PLIRON counterpart",
         );
     }
 
