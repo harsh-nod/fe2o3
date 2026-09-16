@@ -18,6 +18,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
     feature = "reference-positive",
+    feature = "reference-aggregate",
     feature = "reference-mutated",
     feature = "reference-unsafe",
     feature = "reference-abi-mismatch",
@@ -229,6 +230,26 @@ fn cpu_reference(_point: usize, output: &mut u32) {
 #[cfg(feature = "reference-mutated")]
 fn cpu_reference(_point: usize, output: &mut u32) {
     *output = 18;
+}
+
+#[cfg(feature = "reference-aggregate")]
+fn cpu_aggregate_reference(_point: usize, value: u32, output: &mut u32) {
+    *output = value;
+}
+
+#[cfg(feature = "reference-aggregate")]
+#[kernel(
+    typed,
+    reference = cpu_aggregate_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn aggregate_component(value: u32, mut output: DisjointSlice<u32>) {
+    let values = [11_u32, value, 23, 29];
+    let nested = (values, 31_u32);
+    let alias = nested;
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = alias.0[1];
+    }
 }
 
 #[cfg(feature = "reference-unsafe")]
