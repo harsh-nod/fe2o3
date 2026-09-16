@@ -95,7 +95,9 @@ mod tests {
 
     #[test]
     fn root_issuer_cannot_construct_a_context_on_host() {
-        let result = std::panic::catch_unwind(KernelContext::<'static>::__compiler_issue);
+        let result = std::panic::catch_unwind(|| -> KernelContext<'static> {
+            KernelContext::__compiler_issue()
+        });
         assert!(result.is_err());
     }
 
