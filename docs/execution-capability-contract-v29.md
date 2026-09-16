@@ -2,8 +2,10 @@
 
 Status: the inert semantic MIR V29 types and callable codec are implemented;
 executable capability integration is not complete. M0 and M1 remain incomplete. The production
-importer constructs authenticated ContextIssue but still rejects workgroup/tile
-terminals. Source identity 122 and the context commitment are an unpublished
+importer has source descriptors for authenticated ContextIssue and the four
+workgroup/tile terminals. Generic closure forwarding is not integrated, so the
+ordinary `with_workgroup` chain still rejects before complete construction.
+Source identities 122-126 and the context commitment are an unpublished
 draft pending the shared #271 allocation. The implementation must
 use the one production graph and existing verification and launch gates.
 
@@ -67,8 +69,8 @@ their existing production schema selection.
 
 This is type representation, not capability issuance. In particular, a caller
 parameter with a capability type does not gain authority: executable
-materialization still rejects before aggregate/ZST erasure or export. The four
-remaining source terminals remain rejected. ContextIssue consumes the move-only
+materialization still rejects before aggregate/ZST erasure or export.
+ContextIssue consumes the move-only
 original/optimized entry receipt through preflight and actual body construction.
 Collection ordinals are not semantic IDs: the receipt joins exact Instances to
 the sorted function table and checked local/block mappings. It also retains the
@@ -87,6 +89,23 @@ and restored-argument binding. The original body is hashed while borrowed,
 without querying optimized MIR. The existing function child binds optimized
 MIR; ordinary bodies receive no extra transcript fields. This is source custody
 and inert construction, not checked KIR materialization or executable authority.
+
+The five terminal descriptors use the authenticated provider method and its
+normalized, instantiated rustc signature. Every input, output and referenced
+pointee retains that exact type identity, including brands and epochs. The
+existing nominal classifier supplies geometry; a second marker-name parser is
+not used. Source argument roles, borrow mutability, ownership, scalar elements,
+array lengths and value/mask ordering must agree. Hidden arguments and adjusted
+types are rejected; the ordinary FnAbi constructor retains target pass modes.
+These are source-consistency checks, not independent physical ABI proofs.
+
+The generic source-chain prerequisite is separate: the closure observer must
+retain device-local capture provenance through exact direct helper-call edges,
+and import must revalidate that provenance. A helper closure parameter is not
+automatically a host argument or automatically device-local. Natural `Fn` and
+`FnMut` closures passed through `FnOnce` also require checked rustc shim support.
+Neither forced inlining nor a special case for the `with_workgroup` name supplies
+that evidence. Direct descriptor tests do not count as this full-chain positive.
 
 ## Ownership And Effects
 

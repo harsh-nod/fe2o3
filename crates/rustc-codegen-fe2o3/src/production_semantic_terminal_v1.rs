@@ -23,6 +23,10 @@ pub(crate) enum ProductionBf16ConversionV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
     ContextIssue,
+    WorkgroupDerive,
+    MaskedTileLoadU32,
+    MaskedTileIntoFragmentU32,
+    LaneFragmentIntoPartsU32,
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -157,6 +161,18 @@ impl ProductionSemanticTerminalRuleV1 {
         match item {
             TrustedDeviceItem::KernelContextIssue => {
                 Self::Expand(ProductionTerminalExpansionV1::ContextIssue)
+            }
+            TrustedDeviceItem::ExecutionWorkgroupCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupDerive)
+            }
+            TrustedDeviceItem::MaskedTile1DLoadMasked => {
+                Self::Expand(ProductionTerminalExpansionV1::MaskedTileLoadU32)
+            }
+            TrustedDeviceItem::MaskedTile1DIntoFragment => {
+                Self::Expand(ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32)
+            }
+            TrustedDeviceItem::LaneFragment1DIntoParts => {
+                Self::Expand(ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32)
             }
             TrustedDeviceItem::ThreadIndexX => Self::Expand(
                 ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
@@ -490,6 +506,18 @@ impl ProductionSemanticTerminalRuleV1 {
         match self {
             Self::Expand(ProductionTerminalExpansionV1::ContextIssue) => {
                 TrustedDeviceItem::KernelContextIssue
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupDerive) => {
+                TrustedDeviceItem::ExecutionWorkgroupCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MaskedTileLoadU32) => {
+                TrustedDeviceItem::MaskedTile1DLoadMasked
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32) => {
+                TrustedDeviceItem::MaskedTile1DIntoFragment
+            }
+            Self::Expand(ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32) => {
+                TrustedDeviceItem::LaneFragment1DIntoParts
             }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X)) => {
                 TrustedDeviceItem::ThreadIndexX
@@ -847,6 +875,22 @@ mod tests {
                 ProductionTerminalExpansionV1::ContextIssue,
             ),
             (
+                TrustedDeviceItem::ExecutionWorkgroupCurrent,
+                ProductionTerminalExpansionV1::WorkgroupDerive,
+            ),
+            (
+                TrustedDeviceItem::MaskedTile1DLoadMasked,
+                ProductionTerminalExpansionV1::MaskedTileLoadU32,
+            ),
+            (
+                TrustedDeviceItem::MaskedTile1DIntoFragment,
+                ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32,
+            ),
+            (
+                TrustedDeviceItem::LaneFragment1DIntoParts,
+                ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32,
+            ),
+            (
                 TrustedDeviceItem::ThreadIndexX,
                 ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
             ),
@@ -1157,12 +1201,8 @@ mod tests {
         for item in [
             TrustedDeviceItem::KernelContext,
             TrustedDeviceItem::ExecutionWorkgroupCapability,
-            TrustedDeviceItem::ExecutionWorkgroupCurrent,
             TrustedDeviceItem::MaskedTile1D,
             TrustedDeviceItem::LaneFragment1D,
-            TrustedDeviceItem::MaskedTile1DLoadMasked,
-            TrustedDeviceItem::MaskedTile1DIntoFragment,
-            TrustedDeviceItem::LaneFragment1DIntoParts,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,

@@ -34,6 +34,7 @@ use crate::rustc_semantic_adapter_v1::rustc_type_identity_v1;
 use crate::rustc_semantic_plan_v1::RetainedSemanticTypeProducerV1;
 
 mod execution_v29;
+pub(crate) use execution_v29::role as execution_role_v29;
 
 const MAX_RUSTC_LAYOUT_NOUNDEF_NODES_V1: usize = 16_384;
 

@@ -3077,6 +3077,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
+ "fe2o3-device",
  "fe2o3-functional-proof",
  "fe2o3-host",
  "fe2o3-hsaco",

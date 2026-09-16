@@ -2328,6 +2328,10 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
+        ProductionTerminalExpansionV1::WorkgroupDerive
+        | ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32
+        | ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => Some(1),
+        ProductionTerminalExpansionV1::MaskedTileLoadU32 => Some(3),
         ProductionTerminalExpansionV1::ContextIssue
         | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
@@ -2529,10 +2533,15 @@ mod tests {
 
     #[test]
     fn terminal_expansion_arities_are_closed() {
-        assert_eq!(
-            terminal_argument_count_v1(ProductionTerminalExpansionV1::ContextIssue),
-            Some(0)
-        );
+        for (expansion, count) in [
+            (ProductionTerminalExpansionV1::ContextIssue, 0),
+            (ProductionTerminalExpansionV1::WorkgroupDerive, 1),
+            (ProductionTerminalExpansionV1::MaskedTileLoadU32, 3),
+            (ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32, 1),
+            (ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32, 1),
+        ] {
+            assert_eq!(terminal_argument_count_v1(expansion), Some(count));
+        }
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
             Some(0)

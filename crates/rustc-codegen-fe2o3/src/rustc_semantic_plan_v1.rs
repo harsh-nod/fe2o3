@@ -3642,6 +3642,10 @@ const fn terminal_expansion_tag_for_schema_v1(
     match expansion {
         // Draft allocation requested in #271; do not publish before acknowledgment.
         ProductionTerminalExpansionV1::ContextIssue => 122,
+        ProductionTerminalExpansionV1::WorkgroupDerive => 123,
+        ProductionTerminalExpansionV1::MaskedTileLoadU32 => 124,
+        ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32 => 125,
+        ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => 126,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X) => 13,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y) => 14,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z) => 15,

@@ -59,6 +59,9 @@ use crate::rustc_semantic_plan_v1::{
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
+#[path = "execution_terminal_descriptors_v29.rs"]
+mod execution_terminals;
+
 const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
@@ -955,27 +958,13 @@ fn terminal_operation_v1<'tcx>(
     let rust_output = signature.output();
     match expansion {
         ProductionTerminalExpansionV1::ContextIssue
-            if inputs.is_empty() && rust_inputs.is_empty()
-                && abi.canon_abi() == SemanticCanonAbiV1::Rust
-                && abi.extern_abi() == SemanticExternAbiV1::Rust
-                && !abi.c_variadic()
-                && output == abi.return_value().ty()
-                && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
-                && abi.return_value().adjusted().is_none()
-                && abi.return_value().pointee_override().is_none()
-                && matches!(rust_output.kind(), TyKind::Adt(definition, arguments)
-                    if definition.is_struct() && arguments.len() == 4
-                        && arguments[0].as_region().is_some()
-                        && arguments[1..].iter().all(|arg| arg.as_type().is_some())
-                        && trusted_device_items::classify(tcx, definition.did()) == Some(TrustedDeviceItem::KernelContext))
-                && types.get(output.index() as usize).is_some_and(|ty|
-                    ty.identity() == crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(tcx, rust_output)
-                        && ty.rust_type_kind() == fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(
-                            fe2o3_mir_model::semantic_mir_v1::SemanticExecutionRoleV29::KernelContext)) =>
-        {
-            Ok(SemanticCompilerIntrinsicOperationV1::Execution(
-                fe2o3_mir_model::semantic_mir_v1::SemanticExecutionOperationV29::ContextIssue { context: output },
-            ))
+        | ProductionTerminalExpansionV1::WorkgroupDerive
+        | ProductionTerminalExpansionV1::MaskedTileLoadU32
+        | ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32
+        | ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => {
+            execution_terminals::construct(tcx, instance, expansion, abi, types)
+                .map(SemanticCompilerIntrinsicOperationV1::Execution)
+                .ok_or_else(|| body_owner_table_mismatch_v1("execution terminal descriptor"))
         }
         ProductionTerminalExpansionV1::ThreadIndex(axis)
             if inputs.is_empty()
@@ -2770,8 +2759,7 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::ContextIssue
-        | ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -4090,6 +4078,10 @@ const fn terminal_operation_tag_for_schema_v1(
     match expansion {
         // Draft allocation requested in #271; do not publish before acknowledgment.
         ProductionTerminalExpansionV1::ContextIssue => 122,
+        ProductionTerminalExpansionV1::WorkgroupDerive => 123,
+        ProductionTerminalExpansionV1::MaskedTileLoadU32 => 124,
+        ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32 => 125,
+        ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => 126,
         ProductionTerminalExpansionV1::ThreadIndex(
             fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
         ) => 13,
@@ -4593,6 +4585,13 @@ mod tests {
                 121,
             ),
             (ProductionTerminalExpansionV1::ContextIssue, 122),
+            (ProductionTerminalExpansionV1::WorkgroupDerive, 123),
+            (ProductionTerminalExpansionV1::MaskedTileLoadU32, 124),
+            (
+                ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32,
+                125,
+            ),
+            (ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32, 126),
         ] {
             assert_eq!(
                 terminal_operation_tag_for_schema_v1(

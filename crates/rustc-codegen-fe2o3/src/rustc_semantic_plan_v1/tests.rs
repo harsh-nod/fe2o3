@@ -402,6 +402,10 @@
                 121,
             ),
             (ProductionTerminalExpansionV1::ContextIssue, 122),
+            (ProductionTerminalExpansionV1::WorkgroupDerive, 123),
+            (ProductionTerminalExpansionV1::MaskedTileLoadU32, 124),
+            (ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32, 125),
+            (ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32, 126),
         ] {
             assert_eq!(
                 terminal_expansion_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::CombinedV4),
