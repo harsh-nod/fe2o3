@@ -109,7 +109,8 @@ cargo fe2o3 build
 ```
 
 The first three commands are host-only and authority-free. Clippy pins the
-selected toolchain driver and rejects `--fix`; tests require `--all-targets`.
+selected toolchain driver and rejects `--fix`. Host tests accept `--all-targets`,
+or an explicit `--lib` or `--test NAME` selection for component-only coverage.
 `build` is the production GPU compilation route. Hashes recorded in evidence
 are compiler outputs, not author-supplied macro arguments.
 
@@ -193,7 +194,9 @@ wrapper using exactly:
 cargo fe2o3 test --locked --all-targets -p <wrapper-managed-package>
 ```
 
-`--all-targets` is mandatory. The host-test command rejects caller `--target`,
+The generic CI partition retains mandatory `--all-targets` coverage. An explicit
+library or named integration-test selection is not a substitute for that lane.
+The host-test command rejects caller `--target`,
 `--config`, Cargo-side `-Z`, `--doc`, and `--no-run` arguments. It also rejects
 ambient runner and rustdoc selection plus configured runner, protected fe2o3,
 dynamic-loader, and compiler selection. Configured rustdoc is overridden with
@@ -230,6 +233,42 @@ network sockets, or device nodes.
 The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
 The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces
 that separation in every generic CI run.
+
+## Tutorial CPU References
+
+Run one exact CPU suite declared by `config/tutorial-kernel-manifest-v1.json`:
+
+```sh
+scripts/run-tutorial-cpu-reference.sh examples/vecadd/Cargo.toml lib
+scripts/run-tutorial-cpu-reference.sh examples/gfx950_advanced_attention/Cargo.toml test reference
+```
+
+The adapter validates the declared source contract, resolves the selected
+standard Cargo test harness and default host features, builds the repository's
+`cargo-fe2o3` driver, and runs its binding-aware host-test route. It never falls
+back to raw Cargo tests or directly runs a discovered executable. An installed
+pinned nightly and cached offline dependencies are required. Metadata,
+bootstrap, execution and postflight share the declared 1,200-second deadline.
+
+The JSON observation records the exact source/config/tool identities, commands,
+selected harness, process results and individual test outcomes. Failure,
+ignored tests, zero tests, filtered selections, unavailable prerequisites and
+input drift cannot count as a complete successful suite. Named integration
+targets may build metadata-bound companion binaries; those are not counted as
+executed tests. Executable hashes are post-execution on-disk observations,
+not attestations of the driver's executed image.
+
+Each run uses private scratch outside the checkout and removes its driver/build
+artifacts. Bounded logs and `observation.json` remain in the reported evidence
+directory. `FE2O3_TUTORIAL_CPU_OUTPUT_ROOT` may select an existing, canonical,
+owner-private directory with mode `0700`. Source/configuration remain trusted;
+before/after checks and process-group cleanup are not a hostile-code sandbox.
+
+These are source-pinned CPU-reference observations only. All compiler,
+simulation, policy, hardware and overall qualification fields remain false;
+the tutorial manifest's `--require-qualified` gate is unchanged. The vecadd
+library tests execute the existing shared kernel-body macro through safe host
+adapters, not a copied arithmetic implementation or GPU launch.
 
 ## Kernel IR V12
 
