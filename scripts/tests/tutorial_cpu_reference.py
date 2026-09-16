@@ -176,6 +176,140 @@ class AdapterComponents(unittest.TestCase):
         self.assertEqual(observed["digestScope"], "post-execution-on-disk-artifact-only")
         self.assertEqual(set(observed), {"path", "observedSha256", "digestScope"})
 
+    def test_artifact_observation_uses_existing_runner_bound_not_data_bounds(self) -> None:
+        self.assertEqual(adapter.MAX_EXECUTABLE_BYTES, 512 * 1024 * 1024)
+        self.assertEqual(adapter.ARTIFACT_HASH_CHUNK, 64 * 1024)
+        self.assertEqual(adapter.MAX_FILE, 16 * 1024 * 1024)
+        self.assertEqual(adapter.MAX_INPUT_BYTES, 256 * 1024 * 1024)
+        self.assertEqual(adapter.MAX_STREAM, 16 * 1024 * 1024)
+        # Scale only the constants in this component: no large allocation or
+        # real test executable is needed to exercise the distinct bound.
+        payload = b"artifact above both data limits"
+        self.executable.write_bytes(payload)
+        with patch.object(adapter, "MAX_EXECUTABLE_BYTES", 32), \
+                patch.object(adapter, "ARTIFACT_HASH_CHUNK", 7), \
+                patch.object(adapter, "MAX_INPUT_BYTES", 16), \
+                patch.object(adapter, "MAX_FILE", 8):
+            for limit in (adapter.MAX_FILE, adapter.MAX_INPUT_BYTES):
+                with self.assertRaisesRegex(adapter.ObservationError, "invalid/big file"):
+                    adapter.read_regular(self.executable, limit)
+            observed = self.observe(self.events())
+        self.assertEqual(observed["outcome"], "passed")
+        self.assertEqual(observed["executable"]["observedSha256"], adapter.digest(payload))
+        self.assertEqual(observed["executable"]["digestScope"], "post-execution-on-disk-artifact-only")
+        self.assertTrue(all(value is False for value in adapter.NO_AUTHORITY.values()))
+
+    def test_artifact_hash_empty_exact_and_over_limit_are_bounded(self) -> None:
+        real_open = Path.open
+        requests = []
+
+        @contextlib.contextmanager
+        def opened(path, *arguments, **keywords):
+            with real_open(path, *arguments, **keywords) as stream:
+                def read(size):
+                    requests.append(size)
+                    return stream.read(size)
+                yield SimpleNamespace(read=read, fileno=stream.fileno)
+
+        with patch.object(adapter, "MAX_EXECUTABLE_BYTES", 32), \
+                patch.object(adapter, "ARTIFACT_HASH_CHUNK", 7):
+            for size in (1, 31, 32):
+                payload = b"x" * size
+                self.executable.write_bytes(payload)
+                requests.clear()
+                with patch.object(Path, "open", opened):
+                    observed = adapter.artifact_digest(self.executable)
+                self.assertEqual(observed, adapter.digest(payload))
+                self.assertTrue(requests)
+                self.assertTrue(all(0 < size <= 7 for size in requests))
+                self.assertLessEqual(sum(requests), len(payload) + 14)
+            for size in (0, 33):
+                self.executable.write_bytes(b"x" * size)
+                with patch.object(Path, "open", side_effect=AssertionError("invalid file opened")), \
+                        self.assertRaisesRegex(adapter.ObservationError, "invalid/big artifact"):
+                    adapter.artifact_digest(self.executable)
+
+    def test_artifact_hash_refuses_noncanonical_nonregular_and_substituted_open(self) -> None:
+        alias = self.target / "alias"
+        alias.symlink_to(self.executable)
+        for path in (alias, Path("relative"), Path("/proc/self/fd/9"), self.target):
+            with self.subTest(path=path), self.assertRaises(adapter.ObservationError):
+                adapter.artifact_digest(path)
+        other = self.target / "other"
+        other.write_bytes(self.executable.read_bytes())
+        real_open = Path.open
+        opened = real_open(other, "rb")
+        with patch.object(Path, "open", return_value=opened), \
+                self.assertRaisesRegex(adapter.ObservationError, "changed while opening"):
+            adapter.artifact_digest(self.executable)
+        self.assertTrue(opened.closed)
+
+    def test_artifact_hash_checks_every_opened_and_final_descriptor_field(self) -> None:
+        real_fstat = os.fstat
+        fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+        for changed_call in (1, 2):
+            for field in fields:
+                calls = 0
+
+                def altered(fd):
+                    nonlocal calls
+                    calls += 1
+                    actual = real_fstat(fd)
+                    values = {name: getattr(actual, name) for name in fields}
+                    if calls == changed_call:
+                        values[field] += 1
+                    return SimpleNamespace(**values)
+
+                with self.subTest(call=changed_call, field=field), \
+                        patch.object(adapter.os, "fstat", side_effect=altered), \
+                        self.assertRaisesRegex(adapter.ObservationError, "artifact changed"):
+                    adapter.artifact_digest(self.executable)
+
+    def test_artifact_hash_rejects_short_read_growth_mutation_and_path_drift(self) -> None:
+        real_open = Path.open
+        for mode in ("short", "growth", "overwrite", "replace", "read-error"):
+            self.executable.write_bytes(b"abcdefgh")
+            retained = []
+
+            @contextlib.contextmanager
+            def opened(path, *arguments, **keywords):
+                with real_open(path, *arguments, **keywords) as stream:
+                    retained.append(stream)
+                    first = True
+
+                    def read(size):
+                        nonlocal first
+                        if not first:
+                            return stream.read(size)
+                        first = False
+                        if mode == "short":
+                            return b""
+                        if mode == "read-error":
+                            raise OSError("injected artifact read failure")
+                        data = stream.read(size)
+                        if mode == "growth":
+                            with real_open(path, "ab") as writer:
+                                writer.write(b"extra")
+                        elif mode == "overwrite":
+                            with real_open(path, "r+b") as writer:
+                                writer.write(b"X")
+                            current = path.stat()
+                            os.utime(path, ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000))
+                        else:
+                            path.unlink()
+                            with real_open(path, "wb") as writer:
+                                writer.write(b"abcdefgh")
+                        return data
+
+                    yield SimpleNamespace(read=read, fileno=stream.fileno)
+
+            with self.subTest(mode=mode), patch.object(adapter, "MAX_EXECUTABLE_BYTES", 8), \
+                    patch.object(adapter, "ARTIFACT_HASH_CHUNK", 3), \
+                    patch.object(Path, "open", opened), \
+                    self.assertRaises((adapter.ObservationError, OSError)):
+                adapter.artifact_digest(self.executable)
+            self.assertTrue(retained and all(stream.closed for stream in retained))
+
     def test_named_integration_accepts_only_exact_metadata_companion_bins(self) -> None:
         self.source = self.root / "tests/fixture.rs"
         self.source.parent.mkdir()

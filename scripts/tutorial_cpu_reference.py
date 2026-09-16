@@ -33,6 +33,10 @@ MAX_INPUT_BYTES = 256 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_MANIFEST = 1024 * 1024
 MAX_SECONDS = 1200
+# Match the existing managed runner's pinned_executable::MAX_EXECUTABLE_BYTES.
+# This is an on-disk observation limit, not executed-image provenance.
+MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024
+ARTIFACT_HASH_CHUNK = 64 * 1024
 WRAPPER = "scripts/run-tutorial-cpu-reference.sh"
 NO_AUTHORITY = {
     "qualification": False,
@@ -213,6 +217,35 @@ def count(value: Any, label: str) -> int:
     return value
 
 
+def artifact_digest(path: Path) -> str:
+    require(path.is_absolute() and "/proc/" not in str(path), "unresolved process path")
+    require(path.resolve(strict=True) == path, f"noncanonical artifact path: {path}")
+    before = path.stat(follow_symlinks=False)
+    limit = MAX_EXECUTABLE_BYTES
+    require(stat.S_ISREG(before.st_mode) and 0 < before.st_size <= limit,
+            f"invalid/big artifact: {path}")
+    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+
+    def unchanged(info: Any) -> bool:
+        return all(getattr(before, field) == getattr(info, field) for field in fields)
+
+    state = hashlib.sha256()
+    total = 0
+    with path.open("rb") as stream:
+        require(unchanged(os.fstat(stream.fileno())), f"artifact changed while opening: {path}")
+        while True:
+            chunk = stream.read(min(ARTIFACT_HASH_CHUNK, limit - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            require(total <= limit and total <= before.st_size, f"artifact grew while hashing: {path}")
+            state.update(chunk)
+        require(total == before.st_size and unchanged(os.fstat(stream.fileno()))
+                and unchanged(path.stat(follow_symlinks=False)),
+                f"artifact changed/short read while hashing: {path}")
+    return state.hexdigest()
+
+
 def observed_executable(executable: Any, target_root: Path) -> dict[str, str]:
     require(isinstance(executable, str), "missing executable path")
     path = Path(executable)
@@ -220,7 +253,7 @@ def observed_executable(executable: Any, target_root: Path) -> dict[str, str]:
             and path.is_relative_to(target_root), "unbound executable path")
     require(path.resolve(strict=True) == path and path.is_file()
             and os.access(path, os.X_OK), "invalid executable")
-    return {"path": str(path), "observedSha256": digest(read_regular(path, MAX_INPUT_BYTES)),
+    return {"path": str(path), "observedSha256": artifact_digest(path),
             "digestScope": "post-execution-on-disk-artifact-only"}
 
 
