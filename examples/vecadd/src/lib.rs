@@ -12,3 +12,6 @@ macro_rules! production_f32_add {
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     vecadd_kernel_body!(thread, (), production_f32_add, a, b, c);
 }
+
+#[cfg(test)]
+mod host_reference_tests;

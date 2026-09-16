@@ -1232,6 +1232,8 @@ run_generic_core() {
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step kernel-compile-matrix-shell-tests \
     bash scripts/tests/kernel-compile-matrix.sh
+  run_step tutorial-cpu-reference-tests \
+    python3 -B scripts/tests/tutorial_cpu_reference.py
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
