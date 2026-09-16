@@ -1435,6 +1435,24 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- \
         --ignored --exact
+  run_step rocm-production-simulation-bundle-v4-recursive-refusals \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-v5-wave-debugger \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-v5-workgroup-cpu \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path -- \
+        --ignored --exact
   run_step rocm-production-simulation-bundle-v6-nested-control-flow \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

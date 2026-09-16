@@ -91,6 +91,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         expected_packages = {
             f["compilerInput"]["packageManifest"] for f in self.manifest["compilerFixtures"]
         } | {entry["packageManifest"] for entry in self.manifest["entries"]}
+        expected_packages.update(
+            tab["sourceItem"]["compilerInput"]["packageManifest"]
+            for lesson in self.manifest["curriculum"]["lessons"] for tab in lesson["codeTabs"]
+            if tab["sourceItem"] is not None
+        )
         self.assertEqual(
             Counter(call.args[1] for call in walk.call_args_list),
             Counter({package: 1 for package in expected_packages}),
@@ -120,7 +125,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "87c88792365c86375f0a13dff6676e7a6b32d7252057bba3d22acdffe9a2b776")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "81f46d6ad50a534979939a0b20b567253ceea23a1ab2eee0265b88e96c8dbe17")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         del self.manifest["curriculum"]
@@ -140,6 +145,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             self.manifest["curriculum"],
             {entry["lessonId"]: entry for entry in self.manifest["entries"]},
             {fixture["fixtureId"]: fixture for fixture in self.manifest["compilerFixtures"]},
+            ROOT,
         )
 
     def curriculum_lesson(self, lesson_id="first-fill"):
@@ -243,14 +249,14 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         gaps = {}
         self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
         self.assertEqual(gaps, {
-            "cpu-semantic-simulation": ["crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"],
             "gemm-proof-plan": ["examples/tiled_gemm_v1/src/kernel.rs"],
             "gfx950-gpt-oss-120b-megakernel": [
                 "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs",
                 "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs",
             ],
         })
-        self.curriculum_lesson("cpu-semantic-simulation")["sourceBindingGap"] = None
+        tab = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
+        tab.update(sourceItem=None, sourceItemStatus="pending")
         with self.assertRaisesRegex(SystemExit, "sourceBindingGap.*production-ranked-bounds-device"):
             self.validate_curriculum()
 
@@ -277,6 +283,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 tab["displayedUtf8Bytes"] = len(code.encode("utf-8"))
                 tab["displayedSha256"] = hashlib.sha256(code.encode("utf-8")).hexdigest()
                 tab["sourceFragmentsSha256"] = None
+                if tab["sourceItem"] is not None:
+                    tab.update(sourceItem=None, sourceItemStatus="pending")
+                    lesson["sourceBindingGap"] = "Synthetic inventory has no source-driver contract."
                 projected = {key: tab[key] for key in self.validator.CURRICULUM_TAB_FIELDS if key != "sourceFragmentsSha256"}
                 projected.update(displayedCode=code, sourceFragments=None)
                 actual["codeTabs"].append(projected)
@@ -590,6 +599,129 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertTrue(scanner('#[cfg_attr(feature = "kernel", kernel)] fn real() {}\n'))
         with self.assertRaisesRegex(SystemExit, "unterminated .*string literal"):
             scanner('const BROKEN: &str = "unterminated')
+
+    def test_v1_remains_strict_and_retains_its_unbound_source_gap(self):
+        self.manifest["curriculum"]["schema"] = self.validator.CURRICULUM_SCHEMA
+        with self.assertRaisesRegex(SystemExit, "source-item obligation"):
+            self.validate_curriculum()
+        lesson = self.curriculum_lesson("cpu-semantic-simulation")
+        lesson["codeTabs"][0].update(sourceItem=None, sourceItemStatus="pending")
+        lesson["sourceBindingGap"] = "Legacy source driver is not yet contract-bound."
+        self.validate_curriculum()
+        self.manifest["curriculum"]["schema"] = "unknown"
+        with self.assertRaisesRegex(SystemExit, "pending obligation schema"):
+            self.validate_curriculum()
+
+    def test_source_driver_has_complete_ordered_displayed_cases_without_qualification(self):
+        tab = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
+        item = tab["sourceItem"]
+        self.assertEqual(len(item["cases"]), 13)
+        self.assertEqual(sum(row["expectation"]["kind"] == "rejected" for row in item["cases"]), 3)
+        self.assertGreater(item["sourceRanges"][0]["byteOffset"], item["sourceRanges"][1]["byteOffset"])
+        self.assertEqual(self.validator.validate_source_item(ROOT, "cpu-semantic-simulation", tab, {}), tab["sourcePath"])
+        self.assertEqual(tab["sourceItemStatus"], "contract-bound")
+        self.assertEqual(self.manifest["curriculum"]["status"], "pending")
+
+    def test_rehashed_source_contracts_reject_malformed_or_incomplete_coverage(self):
+        mutations = [
+            lambda item: item["cases"].pop(),
+            lambda item: item["cases"].append(copy.deepcopy(item["cases"][0])),
+            lambda item: item["cases"].reverse(),
+            lambda item: item["cases"][0].update(kernelSymbol="aggregate_pair_struct"),
+            lambda item: item["cases"][0].update(displayedFragmentOrdinal=1),
+            lambda item: item["cases"][0].update(displayedFragmentOrdinal=True),
+            lambda item: item["cases"][0].update(features=["unavailable_feature"]),
+            lambda item: item["cases"][0].update(target="gfx000"),
+            lambda item: item["cases"][0].update(testFunction="missing_driver_test"),
+            lambda item: item["cases"][0]["expectation"].update(bundleVersion=7),
+            lambda item: item["cases"][0]["expectation"].update(bundleVersion=True),
+            lambda item: item["cases"][0]["expectation"].update(kind="qualified"),
+            lambda item: item["cases"][6]["expectation"].update(outputArtifact="present"),
+            lambda item: item["sourceRanges"][0].update(byteOffset=-1),
+            lambda item: item["sourceRanges"][0].update(byteLength=True),
+            lambda item: item["sourceRanges"][0].update(byteLength=2**32),
+            lambda item: item["sourceRanges"].append(copy.deepcopy(item["sourceRanges"][0])),
+            lambda item: item["sourceRanges"].__setitem__(1, copy.deepcopy(item["sourceRanges"][0])),
+            lambda item: item["compilerInput"].update(cargoLockSha256="0" * 64),
+            lambda item: item["compilerInput"].update(sourceClosureSha256="0" * 64),
+            lambda item: item["compilerInput"].update(packageManifestSha256="0" * 64),
+            lambda item: item["driver"].update(path="other.rs"),
+            lambda item: item.update(qualified=True),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                tab = copy.deepcopy(self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0])
+                mutate(tab["sourceItem"])
+                tab["sourceItem"]["contractSha256"] = self.validator.source_item_contract_sha256("cpu-semantic-simulation", tab)
+                with self.assertRaises(SystemExit):
+                    self.validator.validate_source_item(ROOT, "cpu-semantic-simulation", tab, {})
+
+    def test_source_contract_digest_binds_independent_driver_expectations(self):
+        original = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
+        for key, value in (
+            ("features", ["aggregate_pair_struct"]),
+            ("testFunction", "ordinary_rust_struct_argument_exports_exact_v4_components"),
+            ("target", "gfx950"),
+            ("expectation", {"kind": "verified-bundle-export", "bundleVersion": 4}),
+        ):
+            tab = copy.deepcopy(original)
+            tab["sourceItem"]["cases"][0][key] = value
+            self.assertNotEqual(
+                original["sourceItem"]["contractSha256"],
+                self.validator.source_item_contract_sha256("cpu-semantic-simulation", tab),
+            )
+        self.assertNotEqual(original["sourceItem"]["contractSha256"], self.validator.source_item_contract_sha256("other-lesson", original))
+
+    def test_feature_scoped_includes_require_a_literal_false_top_level_module(self):
+        source = '#[cfg(feature = "generated")] mod selected { include!(env!("SOURCE")); }'
+        validate = self.validator.validate_rust_source_includes
+        args = (ROOT / "source.rs", ROOT, "fixture")
+        validate(source, *args, enabled_features=frozenset())
+        validate(source.replace("mod selected", "#[allow(dead_code)] pub(crate) mod selected"), *args, enabled_features=frozenset())
+        for candidate, features in (
+            (source, None), (source, frozenset({"generated"})),
+            (source.replace('feature = "generated"', 'unknown'), frozenset()),
+            (source.replace('feature = "generated"', 'not(feature = "generated")'), frozenset()),
+            ("macro_rules! outer { () => {" + source + "}; }", frozenset()),
+            ("other! { " + source + " }", frozenset()),
+            (source.replace("#[cfg", "#![cfg"), frozenset()),
+            (source + ' include!(env!("OTHER"));', frozenset()),
+        ):
+            with self.subTest(candidate=candidate, features=features), self.assertRaisesRegex(SystemExit, "non-literal include"):
+                validate(candidate, *args, enabled_features=features)
+
+    def test_build_scripts_cannot_inject_a_supposedly_disabled_feature(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "fixture"
+            (package / "src").mkdir(parents=True)
+            source = package / "src/lib.rs"
+            source.write_text('#[cfg(feature = "generated")] mod selected { include!(env!("SOURCE")); }\n#[kernel] fn selected() {}\n')
+            lock = package / "Cargo.lock"
+            lock.write_text("version = 4\n")
+            manifest = package / "Cargo.toml"
+            for build, implicit, allowed in (("", False, True), ("", True, False), ('build = "builder.rs"\n', False, False), ("build = true\n", False, False), ("build = false\n", True, True)):
+                manifest.write_text('[package]\nname = "fixture"\nversion = "0.1.0"\n' + build + '[workspace]\n[features]\ngenerated = []\n')
+                build_path = package / "build.rs"
+                build_path.unlink(missing_ok=True)
+                if implicit:
+                    build_path.write_text('fn main() { println!("cargo::rustc-cfg=feature=\\\"generated\\\""); }\n')
+                if 'builder.rs' in build:
+                    (package / "builder.rs").write_text("fn main() {}\n")
+                sources = self.validator.package_rust_sources(root, "fixture/Cargo.toml", "test")
+                item = {
+                    "packageManifest": "fixture/Cargo.toml", "packageManifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                    "cargoLockPath": "fixture/Cargo.lock", "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+                    "sourcePaths": ["fixture/src/lib.rs"], "sourceClosureSha256": self.validator.package_source_closure_sha256(root, sources),
+                    "cargoTarget": {"kind": "lib", "name": "fixture", "sourcePath": "src/lib.rs"},
+                    "defaultFeatures": True, "features": [], "kernelSymbols": ["selected"],
+                }
+                with self.subTest(build=build, implicit=implicit):
+                    if allowed:
+                        self.validator.validate_compiler_input_data(root, item, "test", feature_scoped_includes=True)
+                    else:
+                        with self.assertRaisesRegex(SystemExit, "non-literal include"):
+                            self.validator.validate_compiler_input_data(root, item, "test", feature_scoped_includes=True)
 
 
 if __name__ == "__main__":

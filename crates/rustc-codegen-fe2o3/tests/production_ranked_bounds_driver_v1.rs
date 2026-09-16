@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 include!("production_ranked_bounds_driver_v1/dynamic_local_array_tests.rs");
 include!("production_ranked_bounds_driver_v1/generative_provider_tests.rs");
 include!("production_ranked_bounds_driver_v1/context_entry_tests.rs");
+include!("production_ranked_bounds_driver_v1/tutorial_source_contract.rs");
 
 fn run_typed_layout_runtime_fixture(
     target: &ScratchTarget,
@@ -1346,10 +1347,19 @@ fn ordinary_source_sqrt_executes_exact_binary32_in_simulation() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle() {
+    let case = TutorialSourceCaseV1 {
+        test_function: "ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle",
+        feature: "barrier_before_access",
+        kernel_symbol: "barrier_before_access",
+        target: "gfx942",
+        bundle_version: 1,
+        displayed_fragment: 0,
+        refusal: None,
+    };
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("copy-static.fe2sim");
     let result = output(
-        simulation_export_command("gfx942", &bundle_path, target.path()),
+        case.export_command(&bundle_path, target.path()),
         "run production simulation-bundle extraction",
     );
 
@@ -1384,6 +1394,7 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
     assert_eq!(bundle.kernel_count(), 1);
     let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7())
         .expect("decode compiler-produced launch geometry");
+    case.assert_kernel(bundle.target(), &module);
     assert_eq!(module.kernels.len(), 1);
     assert_eq!(
         module.kernels[0].domain.extents().next(),
@@ -1684,15 +1695,21 @@ fn ordinary_kernel_source_exports_the_exact_gfx950_simulation_target() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
+    let case = TutorialSourceCaseV1 {
+        test_function: "ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger",
+        feature: "wave_reduce_f32",
+        kernel_symbol: "wave_reduce_f32",
+        target: "gfx950",
+        bundle_version: 5,
+        displayed_fragment: 3,
+        refusal: None,
+    };
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("wave-reduce-f32-v5.fe2sim");
     let result = output(
-        simulation_export_command_for_feature(
-            "gfx950",
+        case.export_command(
             &bundle_path,
             &target.path().join("wave-reduce-export-target"),
-            Some(5),
-            "wave_reduce_f32",
         ),
         "export ordinary attributed Rust KIR V9 wave reduction as bundle V5",
     );
@@ -1731,6 +1748,7 @@ fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
             bundle.canonical_kir_v10().to_vec(),
         )
         .expect("decode the exact V10 executable body");
+    case.assert_kernel(bundle.target(), &module);
     assert!(module.functions.iter().any(|function| {
         function.body.as_ref().is_some_and(|body| {
             body.blocks.iter().any(|block| {
@@ -2089,14 +2107,20 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
     for (case_index, (feature, scalar_name, scalar_bits, expected_bits)) in
         cases.into_iter().enumerate()
     {
+        let case = TutorialSourceCaseV1 {
+            test_function: "ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path",
+            feature,
+            kernel_symbol: feature,
+            target: "gfx942",
+            bundle_version: 5,
+            displayed_fragment: 4,
+            refusal: None,
+        };
         let bundle_path = target.path().join(format!("{feature}-v5.fe2sim"));
         let result = output(
-            simulation_export_command_for_feature(
-                "gfx942",
+            case.export_command(
                 &bundle_path,
                 &target.path().join(format!("{feature}-export-target")),
-                Some(5),
-                feature,
             ),
             "export ordinary attributed Rust workgroup reduction as Bundle V5",
         );
@@ -2144,6 +2168,7 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
                 bundle.canonical_kir_v10().to_vec(),
             )
             .unwrap();
+        case.assert_kernel(bundle.target(), &module);
         let kernel = module
             .kernels
             .iter()
@@ -3276,15 +3301,21 @@ fn check_typed_layout_export(target: &ScratchTarget, exporter: &Path, bundle_pat
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_struct_argument_exports_exact_v4_components() {
+    let case = TutorialSourceCaseV1 {
+        test_function: "ordinary_rust_struct_argument_exports_exact_v4_components",
+        feature: "aggregate_pair_struct",
+        kernel_symbol: "aggregate_pair_struct",
+        target: "gfx942",
+        bundle_version: 4,
+        displayed_fragment: 1,
+        refusal: None,
+    };
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("aggregate-pair-struct-v4.fe2sim");
     let result = output(
-        simulation_export_command_for_feature(
-            "gfx942",
+        case.export_command(
             &bundle_path,
             &target.path().join("aggregate-pair-struct-target"),
-            Some(4),
-            "aggregate_pair_struct",
         ),
         "export ordinary attributed Rust aggregate V4 bundle",
     );
@@ -3297,6 +3328,10 @@ fn ordinary_rust_struct_argument_exports_exact_v4_components() {
         std::fs::read(&bundle_path).unwrap(),
     )
     .unwrap();
+    case.assert_kernel(
+        bundle.target(),
+        &fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap(),
+    );
     let map =
         fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
             .unwrap();
@@ -3516,14 +3551,16 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     use fe2o3_kernel_ir::SemanticStorageProjectionV2::{ArrayElement, Field};
 
     let target = ScratchTarget::new();
-    for (feature, expected_paths) in [
+    for (feature, fragment, expected_paths) in [
         (
             "aggregate_pair_tuple",
+            1,
             vec![vec![Field { index: 0 }], vec![Field { index: 1 }]],
         ),
-        ("aggregate_zst", vec![]),
+        ("aggregate_zst", 2, vec![]),
         (
             "aggregate_pair_array",
+            1,
             vec![
                 vec![ArrayElement { index: 0 }],
                 vec![ArrayElement { index: 1 }],
@@ -3531,6 +3568,7 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
         ),
         (
             "aggregate_nested",
+            2,
             vec![
                 vec![Field { index: 0 }, Field { index: 0 }],
                 vec![Field { index: 0 }, Field { index: 1 }],
@@ -3539,14 +3577,20 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             ],
         ),
     ] {
+        let case = TutorialSourceCaseV1 {
+            test_function: "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+            feature,
+            kernel_symbol: feature,
+            target: "gfx942",
+            bundle_version: 4,
+            displayed_fragment: fragment,
+            refusal: None,
+        };
         let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
         let result = output(
-            simulation_export_command_for_feature(
-                "gfx942",
+            case.export_command(
                 &bundle_path,
                 &target.path().join(format!("{feature}-target")),
-                Some(4),
-                feature,
             ),
             "export ordinary attributed Rust aggregate V4 bundle",
         );
@@ -3559,6 +3603,10 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             std::fs::read(&bundle_path).unwrap(),
         )
         .unwrap();
+        case.assert_kernel(
+            bundle.target(),
+            &fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap(),
+        );
         let map =
             fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
                 .unwrap();
@@ -3724,18 +3772,24 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
         ("aggregate_pointer", "contains a pointer or reference"),
         ("aggregate_drop", "Drop requiring drop glue"),
     ] {
+        let case = TutorialSourceCaseV1 {
+            test_function: "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+            feature,
+            kernel_symbol: feature,
+            target: "gfx942",
+            bundle_version: 4,
+            displayed_fragment: 2,
+            refusal: Some(typed_reason),
+        };
         let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
         assert!(
             matches!(std::fs::symlink_metadata(&bundle_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
             "{feature} output path was not initially absent"
         );
         let result = output(
-            simulation_export_command_for_feature(
-                "gfx942",
+            case.export_command(
                 &bundle_path,
                 &target.path().join(format!("{feature}-target")),
-                Some(4),
-                feature,
             ),
             "reject unsupported ordinary attributed Rust aggregate ABI",
         );

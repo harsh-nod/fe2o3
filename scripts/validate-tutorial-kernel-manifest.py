@@ -36,6 +36,7 @@ TOP_LEVEL_KEYS = {
     "entries",
 }
 CURRICULUM_SCHEMA = "fe2o3-tutorial-curriculum-obligations-v1"
+CURRICULUM_SCHEMA_V2 = "fe2o3-tutorial-curriculum-obligations-v2"
 SITE_INVENTORY_SCHEMA = "fe2o3-tutorial-runtime-projection-v1"
 CURRICULUM_KEYS = {"schema", "site", "status", "lessons"}
 CURRICULUM_LESSON_KEYS = {
@@ -153,6 +154,7 @@ IGNORED_PACKAGE_DIRECTORIES = {"target"}
 CORPUS_CONTRACT_DIGEST_DOMAIN = b"fe2o3-tutorial-kernel-corpus-contract-v1\0"
 SOURCE_CLOSURE_DIGEST_DOMAIN = b"fe2o3-tutorial-package-rust-source-closure-v1\0"
 FIXTURE_INPUT_DIGEST_DOMAIN = b"fe2o3-tutorial-fixture-compiler-input-v1\0"
+SOURCE_ITEM_DIGEST_DOMAIN = b"fe2o3-tutorial-displayed-source-contract-v1\0"
 ATTRIBUTE_START = re.compile(r"#[ \t]*\[")
 MACRO_RULES_START = re.compile(r"\bmacro_rules\s*!")
 SOURCE_INCLUDE_START = re.compile(r"\binclude\s*!")
@@ -663,6 +665,29 @@ def validate_compiler_input(
 ) -> dict[str, Any]:
     compiler_input = require_object(fixture["compilerInput"], f"{label}.compilerInput")
     require_exact_keys(compiler_input, COMPILER_INPUT_KEYS, f"{label}.compilerInput")
+    result = validate_compiler_input_data(
+        repo_root, {key: value for key, value in compiler_input.items() if key != "contractSha256"},
+        label, package_cache,
+    )
+    contract_sha256 = require_string(
+        compiler_input["contractSha256"], f"{label}.compilerInput.contractSha256"
+    )
+    if contract_sha256 != fixture_input_contract_sha256(fixture):
+        fail(f"{label}.compilerInput.contractSha256 is stale")
+    return result
+
+
+def validate_compiler_input_data(
+    repo_root: Path,
+    compiler_input: dict[str, Any],
+    label: str,
+    package_cache: dict[str, dict[str, Any]] | None = None,
+    *, feature_scoped_includes: bool = False,
+) -> dict[str, Any]:
+    require_exact_keys(
+        require_object(compiler_input, f"{label}.compilerInput"),
+        COMPILER_INPUT_KEYS - {"contractSha256"}, f"{label}.compilerInput",
+    )
     package_manifest = checked_path(
         repo_root,
         compiler_input["packageManifest"],
@@ -680,7 +705,6 @@ def validate_compiler_input(
         package_sources = package_rust_sources(repo_root, package_manifest, label)
         for path, text in package_sources:
             validate_rust_path_attributes(text, path, package_root, label)
-            validate_rust_source_includes(text, path, package_root, label)
         cached = {
             "manifestPath": manifest_path,
             "packageRoot": package_root,
@@ -792,6 +816,19 @@ def validate_compiler_input(
     enabled_features = cargo_feature_closure(
         cargo, direct_features, compiler_input["defaultFeatures"], label
     )
+    build = cargo["package"].get("build")
+    can_scope_includes = feature_scoped_includes and (
+        build is False or (build is None and not (package_root / "build.rs").exists())
+    )
+    include_selection = tuple(enabled_features) if can_scope_includes else None
+    checked_includes = cached.setdefault("checkedIncludes", set())
+    if include_selection not in checked_includes:
+        for path, text in cached["packageSources"]:
+            validate_rust_source_includes(
+                text, path, package_root, label,
+                enabled_features=frozenset(enabled_features) if can_scope_includes else None,
+            )
+        checked_includes.add(include_selection)
     kernel_symbols = require_string_list(
         compiler_input["kernelSymbols"], f"{label}.compilerInput.kernelSymbols"
     )
@@ -804,11 +841,6 @@ def validate_compiler_input(
             fail(
                 f"{label}.compilerInput.kernelSymbols is not attributed in sourcePaths: {symbol}"
             )
-    contract_sha256 = require_string(
-        compiler_input["contractSha256"], f"{label}.compilerInput.contractSha256"
-    )
-    if contract_sha256 != fixture_input_contract_sha256(fixture):
-        fail(f"{label}.compilerInput.contractSha256 is stale")
     return {
         "packageName": package_name,
         "packageVersion": package_version,
@@ -861,12 +893,46 @@ def validate_rust_path_attributes(
             fail(f"{label} module path does not name a regular file: {value!r}")
 
 
+def inactive_feature_modules(
+    source: str, code: str, pairs: dict[int, int], enabled_features: frozenset[str],
+) -> list[tuple[int, int]]:
+    """Only a literal false cfg on a top-level inline module excludes its body."""
+    inactive = []
+    for attribute in ATTRIBUTE_START.finditer(code):
+        start = attribute.start()
+        if (start > 0 and code[start - 1] == "!") or any(
+            opening < start < closing for opening, closing in pairs.items()
+        ):
+            continue
+        closing, _ = _rust_attribute(code, start, pairs)
+        opening = code.find("[", start, closing)
+        condition = re.fullmatch(
+            r'\s*cfg\s*\(\s*feature\s*=\s*"([A-Za-z0-9_-]+)"\s*\)\s*',
+            source[opening + 1:closing - 1],
+        )
+        if condition is None or condition[1] in enabled_features:
+            continue
+        cursor = closing
+        while re.match(r"\s*#\s*\[", code[cursor:]):
+            cursor, _ = _rust_attribute(code, cursor + len(code[cursor:]) - len(code[cursor:].lstrip()), pairs)
+        module = re.match(r"\s*(?:pub(?:\([^()]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{", code[cursor:])
+        if module is not None:
+            body = cursor + module.end() - 1
+            if body in pairs:
+                inactive.append((body, pairs[body]))
+    return inactive
+
+
 def validate_rust_source_includes(
-    source: str, source_path: Path, package_root: Path, label: str
+    source: str, source_path: Path, package_root: Path, label: str,
+    *, enabled_features: frozenset[str] | None = None,
 ) -> None:
     code = _rust_code_without_comments_and_literals(source)
     pairs = _rust_delimiters(code)
+    inactive = [] if enabled_features is None else inactive_feature_modules(source, code, pairs, enabled_features)
     for include in SOURCE_INCLUDE_START.finditer(code):
+        if any(start < include.start() < end for start, end in inactive):
+            continue
         cursor = include.end()
         while cursor < len(code) and code[cursor].isspace():
             cursor += 1
@@ -1089,7 +1155,120 @@ def require_digest(value: Any, label: str, length: int = 64) -> None:
         fail(f"{label} must be an exact lowercase {length}-digit digest")
 
 
-def validate_curriculum_tab(tab: Any, ordinal: int, lesson: str, role: str) -> None:
+def source_item_contract_sha256(lesson_id: str, tab: dict[str, Any]) -> str:
+    payload = {
+        "curriculumSchema": CURRICULUM_SCHEMA_V2,
+        "lessonId": lesson_id,
+        "tab": {key: tab[key] for key in CURRICULUM_TAB_FIELDS},
+        "sourceItem": {key: value for key, value in tab["sourceItem"].items() if key != "contractSha256"},
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
+    return hashlib.sha256(SOURCE_ITEM_DIGEST_DOMAIN + encoded).hexdigest()
+
+
+def source_item_fragments(repo_root: Path, tab: dict[str, Any], label: str) -> list[str]:
+    item = tab["sourceItem"]
+    if tab["sourceDigestScope"] != "displayed" or not tab["sourceFragmentsSha256"]:
+        fail(f"{label} requires exact displayed fragments")
+    path = checked_path(repo_root, tab["sourcePath"], f"{label}.sourcePath")
+    source_path = repo_root / path
+    if source_path.stat().st_size > MAX_ATTRIBUTED_SOURCE_BYTES:
+        fail(f"{label} attributed source exceeds its bound")
+    source = source_path.read_bytes()
+    ranges = bounded_list(item["sourceRanges"], f"{label}.sourceRanges", 64)
+    if len(ranges) != len(tab["sourceFragmentsSha256"]):
+        fail(f"{label} fragment range coverage differs")
+    intervals: list[tuple[int, int]] = []
+    fragments = []
+    for index, selected in enumerate(ranges):
+        require_exact_keys(require_object(selected, "source range"), {"byteOffset", "byteLength"}, "source range")
+        offset, size = selected["byteOffset"], selected["byteLength"]
+        if type(offset) is not int or type(size) is not int or offset < 0 or size <= 0 or offset + size > len(source):
+            fail(f"{label} source range is outside its byte bounds")
+        end = offset + size
+        if any(offset < stop and start < end for start, stop in intervals):
+            fail(f"{label} source ranges overlap")
+        intervals.append((offset, end))
+        encoded = source[offset:end]
+        try:
+            fragments.append(encoded.decode("utf-8"))
+        except UnicodeError:
+            fail(f"{label} source range is not valid UTF-8")
+        if hashlib.sha256(encoded).hexdigest() != tab["sourceFragmentsSha256"][index]:
+            fail(f"{label} source fragment digest is stale")
+    return fragments
+
+
+def validate_source_item(
+    repo_root: Path, lesson_id: str, tab: dict[str, Any],
+    cache: dict[str, dict[str, Any]],
+) -> str:
+    label = f"curriculum {lesson_id} tab {tab['ordinal']} source item"
+    item = require_object(tab["sourceItem"], label)
+    require_exact_keys(item, {"kind", "compilerInput", "driver", "sourceRanges", "cases", "contractSha256"}, label)
+    if item["kind"] != "source-driver":
+        fail(f"{label} has an unsupported kind")
+    shared = require_object(item["compilerInput"], f"{label}.compilerInput")
+    require_exact_keys(shared, COMPILER_INPUT_KEYS - {"features", "kernelSymbols", "contractSha256"}, f"{label}.compilerInput")
+    if shared["sourcePaths"] != [tab["sourcePath"]]:
+        fail(f"{label} must bind its exact displayed source path")
+    driver = require_object(item["driver"], f"{label}.driver")
+    require_exact_keys(driver, {"package", "target", "path"}, f"{label}.driver")
+    package = require_string(driver["package"], f"{label}.driver.package")
+    target = require_string(driver["target"], f"{label}.driver.target")
+    if re.fullmatch(r"[a-z][a-z0-9-]*", package) is None or RUST_IDENTIFIER.fullmatch(target) is None:
+        fail(f"{label} requires an exact integration-test driver")
+    if driver["path"] != f"crates/{package}/tests/{target}.rs":
+        fail(f"{label} requires an exact integration-test driver path")
+    driver_path = checked_path(repo_root, driver["path"], f"{label}.driver.path")
+    _, actual_package, _ = parse_package_identity(repo_root / f"crates/{package}/Cargo.toml", label)
+    if actual_package != package or (repo_root / driver_path).stat().st_size > MAX_ATTRIBUTED_SOURCE_BYTES:
+        fail(f"{label} driver package or byte bound differs")
+    driver_code = _rust_code_without_comments_and_literals((repo_root / driver_path).read_text(encoding="utf-8"))
+    fragments = source_item_fragments(repo_root, tab, label)
+    expected = [(ordinal, symbol) for ordinal, fragment in enumerate(fragments)
+                for symbol in ordinary_attributed_kernel_names(fragment)]
+    if not expected or len(set(symbol for _, symbol in expected)) != len(expected):
+        fail(f"{label} displayed kernel declarations must be nonempty and unique")
+    observed = []
+    for row in bounded_list(item["cases"], f"{label}.cases", 256):
+        require_exact_keys(require_object(row, "source case"),
+                           {"features", "kernelSymbol", "target", "displayedFragmentOrdinal", "testFunction", "expectation"}, "source case")
+        symbol = require_string(row["kernelSymbol"], f"{label}.kernelSymbol")
+        ordinal = row["displayedFragmentOrdinal"]
+        if type(ordinal) is not int or not 0 <= ordinal < len(fragments):
+            fail(f"{label} displayedFragmentOrdinal is outside its bounds")
+        observed.append((ordinal, symbol))
+        require_target(row["target"], f"{label}.target")
+        name = require_string(row["testFunction"], f"{label}.testFunction")
+        if RUST_IDENTIFIER.fullmatch(name) is None or len(re.findall(r"\bfn\s+" + re.escape(name) + r"\s*\(", driver_code)) != 1:
+            fail(f"{label} must identify one existing driver function")
+        expectation = require_object(row["expectation"], f"{label}.expectation")
+        kind = require_string(expectation.get("kind"), f"{label}.expectation.kind")
+        if kind not in {"verified-bundle-export", "rejected"}:
+            fail(f"{label} has an unsupported expectation")
+        keys = {"kind", "bundleVersion"} | ({"diagnosticContains", "outputArtifact"} if kind == "rejected" else set())
+        require_exact_keys(expectation, keys, f"{label}.expectation")
+        version = expectation["bundleVersion"]
+        if type(version) is not int or not 1 <= version <= 6:
+            fail(f"{label} has an unsupported bundle version")
+        if kind == "rejected":
+            diagnostic = require_string(expectation["diagnosticContains"], f"{label}.diagnosticContains")
+            if len(diagnostic) > 512 or expectation["outputArtifact"] != "absent":
+                fail(f"{label} requires an exact refusal and absent artifact")
+        validate_compiler_input_data(
+            repo_root, {**shared, "features": row["features"], "kernelSymbols": [symbol]}, label, cache,
+            feature_scoped_includes=True,
+        )
+    if observed != expected:
+        fail(f"{label} must cover every displayed declaration in exact fragment/source order")
+    require_digest(item["contractSha256"], f"{label}.contractSha256")
+    if item["contractSha256"] != source_item_contract_sha256(lesson_id, tab):
+        fail(f"{label} contract digest is stale")
+    return tab["sourcePath"]
+
+
+def validate_curriculum_tab(tab: Any, ordinal: int, lesson: str, role: str, source_items: bool = False) -> None:
     label = f"curriculum {lesson} tab {ordinal}"
     require_exact_keys(require_object(tab, label), CURRICULUM_TAB_KEYS, label)
     if type(tab["ordinal"]) is not int or tab["ordinal"] != ordinal:
@@ -1127,17 +1306,26 @@ def validate_curriculum_tab(tab: Any, ordinal: int, lesson: str, role: str) -> N
     if tab["evidenceId"] is not None:
         require_string(tab["evidenceId"], f"{label}.evidenceId")
     requires_item = role == "executable" and tab["kind"] == "kernel" and tab["language"] == "rust"
+    if source_items and requires_item and tab["sourceItem"] is not None:
+        if tab["sourceItemStatus"] != "contract-bound":
+            fail(f"{label} source item is a contract, not qualification")
+        return
     expected_status = "pending" if requires_item else "not-applicable"
     if tab["sourceItem"] is not None or tab["sourceItemStatus"] != expected_status:
         fail(f"{label} must retain its {expected_status} source-item obligation; metadata is not compiler custody")
 
 
 def validate_curriculum(
-    curriculum: Any, entries: dict[str, Any], fixtures: dict[str, Any]
+    curriculum: Any, entries: dict[str, Any], fixtures: dict[str, Any],
+    repo_root: Path, cache: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, list[str]]:
     require_exact_keys(require_object(curriculum, "curriculum"), CURRICULUM_KEYS, "curriculum")
-    if curriculum["schema"] != CURRICULUM_SCHEMA or curriculum["status"] != "pending":
+    schema = require_string(curriculum["schema"], "curriculum.schema")
+    if schema not in {CURRICULUM_SCHEMA, CURRICULUM_SCHEMA_V2} or curriculum["status"] != "pending":
         fail("curriculum must use the pending obligation schema, not qualification")
+    source_items = schema == CURRICULUM_SCHEMA_V2
+    if cache is None:
+        cache = {}
     site = require_object(curriculum["site"], "curriculum.site")
     require_exact_keys(site, {"repository", "commit", "tree"}, "curriculum.site")
     if site["repository"] != "harsh-nod/fe2o3-kernels":
@@ -1190,11 +1378,14 @@ def validate_curriculum(
                 fail(f"{lesson_id} must retain ordered SIMT/tile and any mixed obligations")
             mixed |= "mixed" in kinds
         kernel_paths: set[str] = set()
+        bound_paths: set[str] = set()
         for ordinal, tab in enumerate(bounded_list(lesson["codeTabs"], f"{lesson_id}.codeTabs", 64)):
             tabs += 1
             if tabs > MAX_CURRICULUM_TABS:
                 fail("curriculum code-tab count exceeds its bound")
-            validate_curriculum_tab(tab, ordinal, lesson_id, role)
+            validate_curriculum_tab(tab, ordinal, lesson_id, role, source_items)
+            if source_items and tab["sourceItem"] is not None:
+                bound_paths.add(validate_source_item(repo_root, lesson_id, tab, cache))
             if tab["kind"] == "kernel" and tab["language"] == "rust" and tab["sourcePath"] is not None:
                 kernel_paths.add(tab["sourcePath"])
         if role == "executable":
@@ -1204,9 +1395,9 @@ def validate_curriculum(
             for entry_id in ids:
                 if entry_id != lesson_id and not kernel_paths & source_paths[entry_id]:
                     fail(f"{lesson_id} sourceEntryId {entry_id} has no matching pinned kernel source path")
-            linked_paths = set().union(*(source_paths[entry_id] for entry_id in ids))
+            linked_paths = bound_paths.union(*(source_paths[entry_id] for entry_id in ids))
             missing_paths = kernel_paths - linked_paths
-            if not ids or missing_paths:
+            if (not ids and not bound_paths) or missing_paths:
                 require_string(
                     lesson["sourceBindingGap"],
                     f"{lesson_id}.sourceBindingGap for unmatched paths {sorted(missing_paths)}",
@@ -1383,7 +1574,7 @@ def validate_manifest(
         fail("every compiler fixture must retain a lesson/scope association")
     validate_qualification(manifest["qualification"], entries, fixtures)
     if "curriculum" in manifest:
-        gaps = validate_curriculum(manifest["curriculum"], entries, fixtures)
+        gaps = validate_curriculum(manifest["curriculum"], entries, fixtures, repo_root, cache)
         if curriculum_gaps is not None:
             curriculum_gaps.update(gaps)
     return fixtures
