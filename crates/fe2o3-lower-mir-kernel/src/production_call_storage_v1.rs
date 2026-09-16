@@ -122,6 +122,8 @@ impl<T> CallPayloadBufferV1<T> {
     }
 }
 
+type CallReturnPayloadV1 = (Box<[SemanticKirCallReturnV1]>, Box<[CallResultComponentV1]>);
+
 struct CallReturnBufferV1 {
     sites: CallPayloadBufferV1<SemanticKirCallReturnV1>,
     components: CallPayloadBufferV1<CallResultComponentV1>,
@@ -277,10 +279,7 @@ impl CallReturnBufferV1 {
     fn into_box(
         self,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<
-        (Box<[SemanticKirCallReturnV1]>, Box<[CallResultComponentV1]>),
-        ProductionSemanticKirErrorV1,
-    > {
+    ) -> Result<CallReturnPayloadV1, ProductionSemanticKirErrorV1> {
         let floor = budget.storage();
         let old = self.requested_bytes()?;
         let result = (|| {
