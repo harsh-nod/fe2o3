@@ -1397,6 +1397,24 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- \
         --ignored --exact
+  run_step rocm-production-simulation-bundle-v4-aggregate-components \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_rust_struct_argument_exports_exact_v4_components -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-v5-recursive-aggregates \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-v6-nested-control-flow \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_semantic_conformance_v3 \
+        ordinary_rust_nested_control_flow_executes_after_production_ssa_lowering -- \
+        --ignored --exact
   run_step rocm-production-integer-scan-overflow \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

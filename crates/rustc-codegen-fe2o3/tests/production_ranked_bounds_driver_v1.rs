@@ -3215,23 +3215,20 @@ fn ordinary_rust_struct_argument_exports_exact_v4_components() {
         .abi()
         .identity()
         .as_bytes();
-    let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xa6; 32]).unwrap();
-    let backend_module =
-        fe2o3_runtime::RuntimeBackendV1::load_module_v1(&mut backend, 1, bundle.canonical_bytes())
-            .unwrap();
-    let unavailable = fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
-        &mut backend,
-        backend_module,
+    let mut explicit_kernarg = [0xa5; 40];
+    explicit_kernarg[0..4].copy_from_slice(&0x1122_3344_u32.to_le_bytes());
+    explicit_kernarg[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+    explicit_kernarg[16..24].fill(0);
+    explicit_kernarg[24..32].copy_from_slice(&64_u64.to_le_bytes());
+    explicit_kernarg[32..40].copy_from_slice(&3_u64.to_le_bytes());
+    execute_aggregate_bundle_through_sim_runtime(
+        bundle.canonical_bytes(),
         "aggregate_pair_struct",
         abi_identity,
+        &explicit_kernarg,
+        16,
+        0x0102_0304_0506_0708,
     );
-    assert!(matches!(
-        unavailable,
-        Err(fe2o3_runtime::RuntimeBackendFailureV1::Rejected(
-            fe2o3_sim_runtime::SimRuntimeBackendErrorV1::UnsupportedBundle(detail)
-        )) if detail.contains("semantic source type is not an exact pointer or reference")
-    ));
-    fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, backend_module).unwrap();
 }
 
 #[test]
@@ -3537,8 +3534,8 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     }
 }
 
-fn execute_aggregate_bundle_v5_through_sim_runtime(
-    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV5,
+fn execute_aggregate_bundle_through_sim_runtime(
+    bundle: &[u8],
     kernel_name: &str,
     signature: [u8; 32],
     explicit_kernarg: &[u8],
@@ -3563,7 +3560,15 @@ fn execute_aggregate_bundle_v5_through_sim_runtime(
     backend
         .write_allocation_v1(allocation, 0, &[0; 64 * 8])
         .unwrap();
-    let module = backend.load_module_v1(1, bundle.canonical_bytes()).unwrap();
+    let module = backend.load_module_v1(1, bundle).unwrap();
+    let mut wrong_signature = signature;
+    wrong_signature[0] ^= 1;
+    assert!(matches!(
+        backend.resolve_kernel_v1(module, kernel_name, wrong_signature),
+        Err(fe2o3_runtime::RuntimeBackendFailureV1::Rejected(
+            fe2o3_sim_runtime::SimRuntimeBackendErrorV1::InvalidKernel(detail)
+        )) if detail == "semantic ABI signature mismatch"
+    ));
     let kernel = backend
         .resolve_kernel_v1(module, kernel_name, signature)
         .unwrap();
@@ -3912,8 +3917,8 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
         // The only pointer bytes are the output binding. Aggregate leaves are
         // separate scalars, and the 0xa5 physical padding remains unread.
         explicit_kernarg[output_slot as usize..output_slot as usize + 8].fill(0);
-        execute_aggregate_bundle_v5_through_sim_runtime(
-            &bundle,
+        execute_aggregate_bundle_through_sim_runtime(
+            bundle.canonical_bytes(),
             feature,
             *root.abi().identity().as_bytes(),
             &explicit_kernarg,
