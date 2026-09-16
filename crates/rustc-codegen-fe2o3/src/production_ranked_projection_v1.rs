@@ -4419,9 +4419,9 @@ fn private_indexed_write_source_v1(
         }
         _ => return false,
     };
-    // A projected RHS can emit a read before the physical write, whereas the
-    // ranked projector visits the destination first. Do not assign a write
-    // ordinal for that unsupported mixed-effect recipe.
+    // Private-array reads and whole initialization still lack an exact
+    // attachment recipe. Keep this metadata subset closed independently of
+    // the general RHS-before-destination projection order.
     let value_type = match value {
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
             if !place.projections().is_empty() {
@@ -22265,6 +22265,25 @@ fn project_statement_accesses(
     let source = statement.source();
     match statement.kind() {
         SemanticStatementKindV1::Assign(assignment) => {
+            // Match executable lowering: evaluate every RHS read before the
+            // destination write, including when both refer to one allocation.
+            project_rvalue_reads(
+                types,
+                function,
+                block_index,
+                bounds_checks,
+                assignment.value().kind(),
+                source,
+                constants,
+                local_contracts,
+                guarded_accesses,
+                guarded_sites,
+                projected_views,
+                operations,
+                sources,
+                next_value,
+                ranked_ir,
+            )?;
             project_place_access(
                 types,
                 function,
@@ -22283,13 +22302,15 @@ fn project_statement_accesses(
                 sources,
                 next_value,
                 ranked_ir,
-            )?;
-            project_rvalue_reads(
+            )
+        }
+        SemanticStatementKindV1::Store(store) => {
+            project_operand_read(
                 types,
                 function,
                 block_index,
                 bounds_checks,
-                assignment.value().kind(),
+                store.value(),
                 source,
                 constants,
                 local_contracts,
@@ -22300,9 +22321,7 @@ fn project_statement_accesses(
                 sources,
                 next_value,
                 ranked_ir,
-            )
-        }
-        SemanticStatementKindV1::Store(store) => {
+            )?;
             project_place_access_with_atomic(
                 types,
                 function,
@@ -22316,23 +22335,6 @@ fn project_statement_accesses(
                 },
                 store.atomic(),
                 PlaceAccessRequirementV1::ExplicitMemory,
-                source,
-                constants,
-                local_contracts,
-                guarded_accesses,
-                guarded_sites,
-                projected_views,
-                operations,
-                sources,
-                next_value,
-                ranked_ir,
-            )?;
-            project_operand_read(
-                types,
-                function,
-                block_index,
-                bounds_checks,
-                store.value(),
                 source,
                 constants,
                 local_contracts,
