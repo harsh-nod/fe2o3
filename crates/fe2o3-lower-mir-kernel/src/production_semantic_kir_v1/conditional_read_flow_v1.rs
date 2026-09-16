@@ -77,16 +77,19 @@ fn authenticate_conditional_total_read_v1(
     let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
         return None;
     };
-    if call.arguments().len() != 4 || call.destination().is_none() {
-        return None;
-    }
-    if !matches!(
-        semantic.callables().get(call.callee().index() as usize),
+    call.destination()?;
+    let arity = match semantic.callables().get(call.callee().index() as usize) {
         Some(SemanticCallableDeclV1::CompilerIntrinsic {
             operation: SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { .. },
             ..
-        })
-    ) {
+        }) => 4,
+        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. },
+            ..
+        }) => 3,
+        _ => return None,
+    };
+    if call.arguments().len() != arity {
         return None;
     }
     let OperationKind::GuardedLoad {

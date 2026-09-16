@@ -509,6 +509,7 @@ struct ProjectedCapabilityEffectsV1 {
 enum ProjectedReadValueV1 {
     Constant(u64),
     Local(SemanticLocalIdV1),
+    AllocationExtent(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -555,6 +556,7 @@ enum ProjectedCapabilityOriginV1 {
     Accumulator(ProjectedMfmaAccumulatorV1),
     ReadViewResult(ProjectedReadViewV1),
     ReadView(ProjectedReadViewV1),
+    ConsumedReadOnly(ProjectedReadViewV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4513,6 +4515,7 @@ fn project_rust_bounds_checks(
 
 include!("production_ranked_projection_v1/dynamic_local_array_v1.rs");
 include!("production_ranked_projection_v1/indexed_atomic_v1.rs");
+include!("production_ranked_projection_v1/consumed_read_only_v1.rs");
 
 #[allow(clippy::too_many_arguments)]
 fn project_rust_bounds_checks_with_ordinary_v1(
@@ -5028,6 +5031,7 @@ fn project_authenticated_capabilities_v1(
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
 ) -> Result<ProjectedCapabilityEffectsV1, ProductionRankedProjectionErrorV1> {
+    audit_consumed_read_only_roots_v1(types, callables, function, local_allocations)?;
     let block_count = function.blocks().len();
     let entry = function.entry().index() as usize;
     if entry >= block_count {
@@ -5432,11 +5436,15 @@ fn project_read_value_to_ranked_v1(
     value: ProjectedReadValueV1,
     stable_argument_origins: &[Option<u32>],
     arguments: &mut [Option<u32>],
+    extent_arguments: &mut [Option<u32>],
     next_argument: &mut usize,
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
     match value {
+        ProjectedReadValueV1::AllocationExtent(argument) => {
+            project_consumed_read_only_extent_v1(argument, extent_arguments, next_argument)
+        }
         ProjectedReadValueV1::Constant(value) => {
             reserve_operation(operations)?;
             let result = next_value_id(next_value)?;
@@ -5485,6 +5493,7 @@ fn project_strided_read_effects_v1(
     effects: &[Option<ProjectedReadViewAccessV1>],
     stable_argument_origins: &[Option<u32>],
     arguments: &mut [Option<u32>],
+    extent_arguments: &mut [Option<u32>],
     next_argument: &mut usize,
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
@@ -5528,6 +5537,7 @@ fn project_strided_read_effects_v1(
                 effect.view.rows,
                 stable_argument_origins,
                 arguments,
+                extent_arguments,
                 next_argument,
                 operations,
                 next_value,
@@ -5536,6 +5546,7 @@ fn project_strided_read_effects_v1(
                 effect.view.columns,
                 stable_argument_origins,
                 arguments,
+                extent_arguments,
                 next_argument,
                 operations,
                 next_value,
@@ -5569,6 +5580,7 @@ fn project_strided_read_effects_v1(
             effect.row,
             stable_argument_origins,
             arguments,
+            extent_arguments,
             next_argument,
             operations,
             next_value,
@@ -5577,6 +5589,7 @@ fn project_strided_read_effects_v1(
             effect.column,
             stable_argument_origins,
             arguments,
+            extent_arguments,
             next_argument,
             operations,
             next_value,
@@ -5766,9 +5779,11 @@ fn projected_value_is_shared_read_v1(value: &ProjectedCapabilityValueV1) -> bool
         ProjectedCapabilityValueV1::Known(
             ProjectedCapabilityOriginV1::ReadViewResult(_)
                 | ProjectedCapabilityOriginV1::ReadView(_)
+                | ProjectedCapabilityOriginV1::ConsumedReadOnly(_)
         ) | ProjectedCapabilityValueV1::ConstructedEnum(ProjectedCapabilityEnumEnvelopeV1 {
             origin: ProjectedCapabilityOriginV1::ReadViewResult(_)
-                | ProjectedCapabilityOriginV1::ReadView(_),
+                | ProjectedCapabilityOriginV1::ReadView(_)
+                | ProjectedCapabilityOriginV1::ConsumedReadOnly(_),
             ..
         })
     )
@@ -6227,6 +6242,21 @@ fn transfer_capability_terminator_v1(
         intrinsic_operation,
         Some(SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. })
     );
+    if matches!(
+        intrinsic_operation,
+        Some(
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { .. }
+                | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. }
+        )
+    ) {
+        return transfer_consumed_read_only_use_v1(
+            call,
+            intrinsic_operation,
+            state,
+            constants,
+            require_authenticated_site,
+        );
+    }
     if let Some(SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. }) =
         intrinsic_operation
     {
@@ -6290,6 +6320,25 @@ fn transfer_capability_terminator_v1(
     }
     let root = ((block_index as u64) << 32) | destination_local as u64;
     let (origin, layout) = match operation {
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+            view, element, ..
+        } => {
+            let origin = consumed_read_only_origin_v1(
+                call,
+                function,
+                root,
+                *view,
+                *element,
+                local_allocations,
+            )
+            .map(|view| {
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ConsumedReadOnly(
+                    view,
+                ))
+            })
+            .unwrap_or(ProjectedCapabilityValueV1::Invalid);
+            (origin, None)
+        }
         SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
             result,
             element,
@@ -6659,6 +6708,18 @@ fn transfer_capability_terminator_v1(
         }
     };
     consume_capability_operands_v1(state, call.arguments());
+    if matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly { .. }
+    ) && let Some(source) = call.arguments().first().and_then(raw_operand_place)
+    {
+        // The authenticated by-value terminal consumes custody even when
+        // optimized MIR uses Copy for its original exclusive argument.
+        state.insert(
+            source.local().index() as usize,
+            ProjectedCapabilityValueV1::Invalid,
+        );
+    }
     state.insert(destination_local, origin);
     if require_authenticated_site
         && is_gfx950_transpose
@@ -7510,6 +7571,7 @@ fn project_intrinsic_contracts(
         &read_view_sources,
         &stable_argument_origins,
         &mut runtime_index_arguments,
+        &mut runtime_slice_extent_arguments,
         &mut next_runtime_argument,
         operations,
         next_value,
@@ -11251,6 +11313,8 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly { .. }
+            | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
@@ -24260,6 +24324,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/constant_slice_index_v1_tests.rs");
     include!("production_ranked_projection_v1/indexed_atomic_v1_tests.rs");
+    include!("production_ranked_projection_v1/consumed_read_only_v1_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");

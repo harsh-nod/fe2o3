@@ -2327,6 +2327,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
         | ProductionTerminalExpansionV1::RustcFabsF32
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen
+        | ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly
+        | ProductionTerminalExpansionV1::ReadOnlyAllocationLen
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
@@ -2341,6 +2343,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
+        | ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum

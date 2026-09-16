@@ -1,4 +1,5 @@
 include!("production_extraction_driver_v1/atomic_slice_lowering_v1_tests.rs");
+include!("production_extraction_driver_v1/consumed_read_only_v1.rs");
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

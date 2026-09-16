@@ -357,6 +357,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes V30 consuming read-only allocation terminals without authority.
+    pub fn decode_exact_v30_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V30),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -399,6 +411,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
                         | SemanticMirWireVersionV1::V29
+                        | SemanticMirWireVersionV1::V30
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1663,7 +1676,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V15 {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V30 {
+            71
+        } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
         } else if self.wire_version == SemanticMirWireVersionV1::V14 {
             67
@@ -2103,6 +2118,18 @@ impl<'a> CanonicalDecoderV1<'a> {
                 result: SemanticTypeIdV1(self.u32()?),
                 view: SemanticTypeIdV1(self.u32()?),
                 error: SemanticTypeIdV1(self.u32()?),
+            },
+            69 => SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+                slice: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
+            70 => SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen {
+                view: SemanticTypeIdV1(self.u32()?),
+            },
+            71 => SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr {
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
             },
             _ => unreachable!(),
         })
@@ -2708,6 +2735,7 @@ mod tests {
 
     mod atomic_u32_v29_tests;
     mod frozen_v15;
+    mod read_only_allocation_v30_tests;
     mod rust_call_local_tests;
 
     fn identity(tag: u8) -> [u8; 32] {

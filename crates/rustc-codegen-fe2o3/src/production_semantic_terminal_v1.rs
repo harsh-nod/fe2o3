@@ -53,6 +53,9 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     WriteOnlyDisjointSliceWriteRowStriped2d,
     StridedReadView2DFromSharedSlice,
     StridedReadView2DLoadOr,
+    DisjointSliceIntoReadOnly,
+    ReadOnlyAllocationLen,
+    ReadOnlyAllocationLoadOr,
     WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
@@ -270,6 +273,15 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::StridedReadView2DLoadOr => {
                 Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr)
+            }
+            TrustedDeviceItem::DisjointSliceIntoReadOnly => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly)
+            }
+            TrustedDeviceItem::ReadOnlyAllocationLen => {
+                Self::Expand(ProductionTerminalExpansionV1::ReadOnlyAllocationLen)
+            }
+            TrustedDeviceItem::ReadOnlyAllocationLoadOr => {
+                Self::Expand(ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr)
             }
             TrustedDeviceItem::WorkgroupLdsScopeCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent)
@@ -600,6 +612,15 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr) => {
                 TrustedDeviceItem::StridedReadView2DLoadOr
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly) => {
+                TrustedDeviceItem::DisjointSliceIntoReadOnly
+            }
+            Self::Expand(ProductionTerminalExpansionV1::ReadOnlyAllocationLen) => {
+                TrustedDeviceItem::ReadOnlyAllocationLen
+            }
+            Self::Expand(ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr) => {
+                TrustedDeviceItem::ReadOnlyAllocationLoadOr
             }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent) => {
                 TrustedDeviceItem::WorkgroupLdsScopeCurrent

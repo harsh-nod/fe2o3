@@ -219,6 +219,7 @@ fn authenticated_strided_read_producer_selects_total_failure_only_for_readonly_v
             &[Some(effect)],
             &vec![None; function.locals().len()],
             &mut arguments,
+            &mut vec![None; function.locals().len()],
             &mut 1,
             &mut Vec::new(),
             &mut 0,

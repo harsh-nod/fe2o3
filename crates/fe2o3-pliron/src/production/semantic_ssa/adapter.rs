@@ -554,7 +554,9 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
         | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
             tile: input_tile, ..
         } => argument == 0 && source_type == *input_tile,
-        SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { view, .. } => {
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { view, .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { view }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { view, .. } => {
             argument == 0 && source_type == *view
         }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { lane, .. } => {
@@ -1062,5 +1064,46 @@ pub(super) fn semantic_edge_role_v1(role: SemanticEdgeRoleV1) -> u16 {
         SemanticEdgeRoleV1::AssertUnwind => 10,
         SemanticEdgeRoleV1::FalseEdgeReal => 11,
         SemanticEdgeRoleV1::FalseEdgeImaginary => 12,
+    }
+}
+
+#[cfg(test)]
+mod read_only_allocation_borrow_tests {
+    use super::*;
+
+    #[test]
+    fn read_only_allocation_borrow_requires_exact_receiver() {
+        let view = SemanticTypeIdV1::from_index(7);
+        let element = SemanticTypeIdV1::from_index(2);
+        for operation in [
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { view },
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { view, element },
+        ] {
+            assert!(compiler_intrinsic_accepts_transparent_borrow_v1(
+                &operation, 0, view
+            ));
+            for argument in [1, 2, 3] {
+                assert!(!compiler_intrinsic_accepts_transparent_borrow_v1(
+                    &operation, argument, view
+                ));
+            }
+            for source in [element, SemanticTypeIdV1::from_index(8)] {
+                assert!(!compiler_intrinsic_accepts_transparent_borrow_v1(
+                    &operation, 0, source
+                ));
+            }
+        }
+        let constructor = SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+            slice: SemanticTypeIdV1::from_index(6),
+            view,
+            element,
+        };
+        for source in [SemanticTypeIdV1::from_index(6), view, element] {
+            assert!(!compiler_intrinsic_accepts_transparent_borrow_v1(
+                &constructor,
+                0,
+                source
+            ));
+        }
     }
 }

@@ -7605,7 +7605,7 @@ fn guarded_accesses_have_structural_bounds_result(
             continue;
         }
         if let Some((_predicate, index, slice)) =
-            guarded_load_bound_subject(operation, &definitions)
+            guarded_load_bound_subject(operation, &definitions, &mut budget)
         {
             return Err(ProductionMemoryDischargeFailureV1::guarded_bound(
                 location,
@@ -7645,7 +7645,9 @@ fn guarded_load_has_structural_bound(
     definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
     budget: &mut GuardedAddressProofBudgetV1,
 ) -> bool {
-    let Some((predicate, index, slice)) = guarded_load_bound_subject(operation, definitions) else {
+    let Some((predicate, index, slice)) =
+        guarded_load_bound_subject(operation, definitions, budget)
+    else {
         return false;
     };
     let mut visiting = BTreeSet::new();
@@ -7665,6 +7667,7 @@ fn guarded_load_has_structural_bound(
 fn guarded_load_bound_subject(
     operation: &Operation,
     definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
+    budget: &mut GuardedAddressProofBudgetV1,
 ) -> Option<(ValueId, ValueId, ValueId)> {
     let (pointer, predicate) = match &operation.kind {
         OperationKind::GuardedLoad {
@@ -7680,11 +7683,7 @@ fn guarded_load_bound_subject(
     else {
         return None;
     };
-    let Some(OperationKind::SliceData { slice }) =
-        operation_definition(definitions, *base).map(|operation| &operation.kind)
-    else {
-        return None;
-    };
+    let slice = read_only_allocation_bound_slice_v1(*base, definitions, budget)?;
     let Some(OperationKind::Select {
         condition,
         true_value: index,
@@ -7701,7 +7700,7 @@ fn guarded_load_bound_subject(
     {
         return None;
     }
-    Some((predicate, *index, *slice))
+    Some((predicate, *index, slice))
 }
 
 fn operation_definition<'module>(
@@ -11849,6 +11848,7 @@ include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 include!("production_semantic_kir_v1/atomic_load_store_v1.rs");
+include!("production_semantic_kir_v1/read_only_allocation_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     fixed_array_analysis: Option<FixedArrayGuardAnalysisV1<'a>>,
@@ -16358,6 +16358,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Type::Scalar(ScalarType::U8),
                 SemanticMfmaStorageLayoutV1::RowMajor,
             )?,
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+                slice,
+                view,
+                element,
+            } => self.lower_disjoint_slice_into_read_only_v1(
+                block, call, operations, *slice, *view, *element,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { view } => {
+                self.lower_read_only_allocation_len_v1(block, call, operations, *view)?
+            }
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { view, element } => {
+                self.lower_read_only_allocation_load_or_v1(
+                    block, call, operations, *view, *element,
+                )?
+            }
             SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
                 result,
                 view,
@@ -23264,7 +23279,7 @@ fn lower_parameter_type(
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
         .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?
         .shape();
-    if let Some((element, _, access)) = disjoint_slice_descriptor(callables, ty) {
+    if let Some((element, _, access)) = disjoint_slice_descriptor(types, callables, ty) {
         return Ok(Type::slice(
             lower_scalar_type(types, element)?,
             AddressSpace::Global,
@@ -23981,7 +23996,7 @@ fn authenticated_disjoint_slice_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty)?;
+    let (element, raw_index, access) = disjoint_slice_descriptor(types, callables, ty)?;
     let argument = usize::try_from(argument).ok()?;
     let abi = function.abi();
     if abi.source_input_types().get(argument) != Some(&ty)
@@ -25238,12 +25253,28 @@ fn lower_scalar_kind(scalar: SemanticScalarTypeV1) -> Result<Type, ProductionSem
 }
 
 fn disjoint_slice_descriptor(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1, AccessMode)> {
     let mut descriptor = None;
     for callable in callables {
         let candidate = match callable {
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+                        slice,
+                        view,
+                        element,
+                    },
+                ..
+            } if *slice == ty => {
+                let (actual_element, length) = read_only_allocation_fields_v1(types, *view)?;
+                if actual_element != *element {
+                    return None;
+                }
+                Some((*element, length, AccessMode::ReadWrite))
+            }
             SemanticCallableDeclV1::CompilerIntrinsic {
                 operation:
                     SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
@@ -26066,6 +26097,7 @@ mod resource_tests {
     include!("production_semantic_kir_v1/atomic_slice_translation_v1_tests.rs");
     include!("production_semantic_kir_v1/guarded_effect_flow_v1_tests.rs");
     include!("production_semantic_kir_v1/conditional_total_read_replay_v1_tests.rs");
+    include!("production_semantic_kir_v1/read_only_allocation_v1_tests.rs");
     mod private_array_resource_tests {
         include!("production_semantic_kir_v1/tests/production_private_array_resource_tests.rs");
     }
