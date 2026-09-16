@@ -233,15 +233,12 @@ fn check_tutorial_source_package_metadata(
             return Err("Cargo package manifest path must be absolute".into());
         }
         let path = canonicalize(path)?;
-        if path == manifest || name == source.export.package {
-            if path != manifest
-                || name != source.export.package
-                || selected.replace(package).is_some()
-            {
-                return Err(
-                    "Cargo package name/manifest identity is substituted or duplicated".into(),
-                );
-            }
+        if path != manifest && name != source.export.package {
+            continue;
+        }
+        if path != manifest || name != source.export.package || selected.replace(package).is_some()
+        {
+            return Err("Cargo package name/manifest identity is substituted or duplicated".into());
         }
     }
     let selected = selected.ok_or("bound Cargo package is absent")?;
