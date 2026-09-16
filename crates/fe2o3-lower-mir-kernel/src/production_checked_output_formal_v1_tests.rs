@@ -381,3 +381,111 @@ fn detached_nonempty_obligations_are_owned_data_not_an_executable_owner() {
     assert_eq!(detached[0].accesses().len(), 1);
     assert!(detached[0].inter_invocation_conflicts().is_empty());
 }
+
+#[test]
+fn actual_checked_selected_zero_store_has_guarded_complete_rows_not_wire_authority() {
+    use fe2o3_kernel_ir::{
+        ComparePredicate, Constant, FormalAccessDomainV1, FormalBoundsKindV1,
+        FormalMemoryReceiptErrorV1, InertCanonicalFormalMemoryObligationReceiptV1,
+        IntrinsicOperation, ScalarType,
+    };
+    let pointer = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let scalar = |id, ty, kind| Operation::effect_free(ValueDef::new(ValueId(id), ty), kind);
+    let module = component_module(
+        vec![
+            Type::slice(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadWrite,
+            ),
+            Type::Scalar(ScalarType::U32),
+        ],
+        vec![
+            scalar(
+                2,
+                Type::INDEX,
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ),
+            scalar(
+                3,
+                Type::INDEX,
+                OperationKind::SliceLength { slice: ValueId(0) },
+            ),
+            scalar(
+                4,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(2),
+                    rhs: ValueId(3),
+                },
+            ),
+            scalar(5, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+            scalar(
+                6,
+                Type::INDEX,
+                OperationKind::Select {
+                    condition: ValueId(4),
+                    true_value: ValueId(2),
+                    false_value: ValueId(5),
+                },
+            ),
+            scalar(
+                7,
+                pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            scalar(
+                8,
+                pointer,
+                OperationKind::GetElementPointer {
+                    base: ValueId(7),
+                    offset: ValueId(6),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::GuardedStore {
+                    pointer: ValueId(8),
+                    value: ValueId(1),
+                    predicate: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ],
+    );
+    with_component(module, |checked| {
+        let report = analyze_checked_output_formal_memory_v1(checked).unwrap();
+        assert!(std::ptr::eq(report.output(), checked.owner()));
+        let [obligations] = report.kernels() else {
+            panic!("one checked kernel")
+        };
+        let [access] = obligations.accesses() else {
+            panic!("one retained actual write")
+        };
+        let FormalAccessDomainV1::SliceBounded(domain) = access.domain() else {
+            panic!("guarded domain")
+        };
+        assert_eq!(
+            obligations.bounds_requirements()[0].minimum_byte_len(),
+            None
+        );
+        assert_eq!(
+            obligations.bounds_requirements()[0].kind(),
+            FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
+        );
+        assert!(!domain.may_access_untrusted_index(0, 0, 2));
+        assert!(domain.may_access_untrusted_index(0, 1, 2));
+        assert!(!domain.may_access_untrusted_index(1, 1, 2));
+        assert!(obligations.inter_invocation_conflicts().is_empty());
+        assert_eq!(
+            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(obligations),
+            Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation)
+        );
+        assert!(!checked.grants_authority());
+    });
+}

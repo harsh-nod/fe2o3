@@ -140,6 +140,22 @@ fn encode_obligations(
     obligations: &FormalMemoryObligations,
 ) -> Result<Vec<u8>, FormalMemoryReceiptErrorV1> {
     preflight_record_counts(ObligationRecordCountsV1::from_obligations(obligations))?;
+    // V1/V2 have no conditional-domain or symbolic-region representation.
+    // Refuse before constructing the writer or any canonical-order scratch.
+    if obligations
+        .accesses
+        .iter()
+        .any(|access| access.domain != super::FormalAccessDomainV1::LaunchEnvelope)
+        || obligations
+            .bounds_requirements
+            .iter()
+            .any(|bound| bound.minimum_byte_len().is_none())
+        || obligations.runtime_alias_requirements.iter().any(|alias| {
+            alias.left_accessed_bytes().is_none() || alias.right_accessed_bytes().is_none()
+        })
+    {
+        return Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation);
+    }
     let version = if obligations
         .allocations
         .iter()
@@ -293,7 +309,11 @@ fn encode_bounds(
 ) -> Result<(), FormalMemoryReceiptErrorV1> {
     encode_location(writer, requirement.location)?;
     writer.u32(requirement.allocation.parameter_index)?;
-    writer.u64(requirement.minimum_byte_len)
+    writer.u64(
+        requirement
+            .minimum_byte_len()
+            .ok_or(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation)?,
+    )
 }
 
 fn encode_alias(
@@ -302,10 +322,16 @@ fn encode_alias(
 ) -> Result<(), FormalMemoryReceiptErrorV1> {
     writer.u32(requirement.left.parameter_index)?;
     writer.u32(requirement.right.parameter_index)?;
-    writer.u64(requirement.left_accessed_bytes.start)?;
-    writer.u64(requirement.left_accessed_bytes.end_exclusive)?;
-    writer.u64(requirement.right_accessed_bytes.start)?;
-    writer.u64(requirement.right_accessed_bytes.end_exclusive)
+    let left = requirement
+        .left_accessed_bytes()
+        .ok_or(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation)?;
+    let right = requirement
+        .right_accessed_bytes()
+        .ok_or(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation)?;
+    writer.u64(left.start)?;
+    writer.u64(left.end_exclusive)?;
+    writer.u64(right.start)?;
+    writer.u64(right.end_exclusive)
 }
 
 fn encode_conflict(
@@ -1012,6 +1038,7 @@ fn decode_memory_access_kind(tag: u8) -> Result<(), FormalMemoryReceiptErrorV1> 
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FormalMemoryReceiptErrorV1 {
+    UnsupportedGuardedRepresentation,
     TooLarge {
         max: usize,
     },
@@ -1082,6 +1109,7 @@ pub enum FormalMemoryReceiptErrorV1 {
 impl fmt::Display for FormalMemoryReceiptErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedGuardedRepresentation => formatter.write_str("guarded formal-memory obligations are not representable by receipt V1/V2"),
             Self::TooLarge { max } => {
                 write!(formatter, "formal-memory receipt exceeds {max} bytes")
             }
@@ -1377,6 +1405,9 @@ impl<'bytes> Reader<'bytes> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        FormalAccessDomainV1, FormalAliasRegionV1, FormalBoundsKindV1, FormalByteRange,
+    };
     use super::*;
     use crate::{BlockId, FunctionId, KernelId, ValueId};
 
@@ -1386,6 +1417,20 @@ mod tests {
 
     fn range(start: u64, end_exclusive: u64) -> InvocationRange1d {
         InvocationRange1d::new(start, end_exclusive).unwrap()
+    }
+
+    fn fixed(region: &mut FormalAliasRegionV1) -> &mut FormalByteRange {
+        let FormalAliasRegionV1::FixedBytes(range) = region else {
+            panic!("expected fixed region")
+        };
+        range
+    }
+
+    fn minimum(bound: &mut FormalBoundsRequirement) -> &mut u64 {
+        let FormalBoundsKindV1::FixedMinimumBytes(value) = &mut bound.kind else {
+            panic!("expected fixed bound")
+        };
+        value
     }
 
     fn allocation(parameter_index: u32, kind: FormalParameterKind) -> FormalAllocationParameter {
@@ -1418,6 +1463,7 @@ mod tests {
                     byte_width: 8,
                     alignment: 8,
                     invocations: range(2, 19),
+                    domain: FormalAccessDomainV1::LaunchEnvelope,
                 },
                 FormalMemoryAccess {
                     location: location(1, 4),
@@ -1428,31 +1474,32 @@ mod tests {
                     byte_width: 4,
                     alignment: 4,
                     invocations: range(2, 19),
+                    domain: FormalAccessDomainV1::LaunchEnvelope,
                 },
             ],
             bounds_requirements: vec![
                 FormalBoundsRequirement {
                     location: location(2, 8),
                     allocation: super::super::FormalAllocationIdentity { parameter_index: 1 },
-                    minimum_byte_len: 152,
+                    kind: FormalBoundsKindV1::FixedMinimumBytes(152),
                 },
                 FormalBoundsRequirement {
                     location: location(1, 4),
                     allocation: super::super::FormalAllocationIdentity { parameter_index: 0 },
-                    minimum_byte_len: 88,
+                    kind: FormalBoundsKindV1::FixedMinimumBytes(88),
                 },
             ],
             runtime_alias_requirements: vec![RuntimeAliasRequirement {
                 left: super::super::FormalAllocationIdentity { parameter_index: 0 },
                 right: super::super::FormalAllocationIdentity { parameter_index: 1 },
-                left_accessed_bytes: super::super::FormalByteRange {
+                left_accessed_bytes: FormalAliasRegionV1::FixedBytes(super::super::FormalByteRange {
                     start: 20,
                     end_exclusive: 88,
-                },
-                right_accessed_bytes: super::super::FormalByteRange {
+                }),
+                right_accessed_bytes: FormalAliasRegionV1::FixedBytes(super::super::FormalByteRange {
                     start: 2,
                     end_exclusive: 152,
-                },
+                }),
             }],
             inter_invocation_conflicts: vec![InterInvocationConflictRequirement {
                 left: location(2, 8),
@@ -1598,27 +1645,19 @@ mod tests {
         assert_mutation_changes(&baseline, |value| value.accesses[0].byte_width += 1);
         assert_mutation_changes(&baseline, |value| value.accesses[0].alignment = 16);
         assert_mutation_changes(&baseline, |value| {
-            value.bounds_requirements[0].minimum_byte_len += 1
+            *minimum(&mut value.bounds_requirements[0]) += 1
         });
         assert_mutation_changes(&baseline, |value| {
-            value.runtime_alias_requirements[0]
-                .left_accessed_bytes
-                .start += 1
+            fixed(&mut value.runtime_alias_requirements[0].left_accessed_bytes).start += 1
         });
         assert_mutation_changes(&baseline, |value| {
-            value.runtime_alias_requirements[0]
-                .left_accessed_bytes
-                .end_exclusive += 1
+            fixed(&mut value.runtime_alias_requirements[0].left_accessed_bytes).end_exclusive += 1
         });
         assert_mutation_changes(&baseline, |value| {
-            value.runtime_alias_requirements[0]
-                .right_accessed_bytes
-                .start += 1
+            fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).start += 1
         });
         assert_mutation_changes(&baseline, |value| {
-            value.runtime_alias_requirements[0]
-                .right_accessed_bytes
-                .end_exclusive += 1
+            fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).end_exclusive += 1
         });
         assert_mutation_changes(&baseline, |value| {
             value.accesses[1].kind = FormalMemoryAccessKind::Write;
@@ -1706,7 +1745,7 @@ mod tests {
         assert_rejected(
             |value| {
                 let mut duplicate = value.bounds_requirements[0];
-                duplicate.minimum_byte_len += 1;
+                *minimum(&mut duplicate) += 1;
                 value.bounds_requirements.push(duplicate);
             },
             FormalMemoryReceiptErrorV1::SemanticKeyConflict {
@@ -1716,7 +1755,7 @@ mod tests {
         assert_rejected(
             |value| {
                 let mut duplicate = value.runtime_alias_requirements[0];
-                duplicate.left_accessed_bytes.start += 1;
+                fixed(&mut duplicate.left_accessed_bytes).start += 1;
                 value.runtime_alias_requirements.push(duplicate);
             },
             FormalMemoryReceiptErrorV1::SemanticKeyConflict {
@@ -1890,18 +1929,16 @@ mod tests {
             );
         }
         assert_rejected(
-            |value| value.bounds_requirements[0].minimum_byte_len = 0,
+            |value| *minimum(&mut value.bounds_requirements[0]) = 0,
             FormalMemoryReceiptErrorV1::InvalidRange {
                 field: "bounds minimum byte length",
             },
         );
         assert_rejected(
             |value| {
-                value.runtime_alias_requirements[0]
-                    .left_accessed_bytes
-                    .start = value.runtime_alias_requirements[0]
-                    .left_accessed_bytes
-                    .end_exclusive;
+                fixed(&mut value.runtime_alias_requirements[0].left_accessed_bytes).start =
+                    fixed(&mut value.runtime_alias_requirements[0].left_accessed_bytes)
+                        .end_exclusive;
             },
             FormalMemoryReceiptErrorV1::InvalidRange {
                 field: "runtime alias accessed bytes",
@@ -1909,11 +1946,7 @@ mod tests {
         );
         assert_rejected(
             |value| {
-                value.runtime_alias_requirements[0]
-                    .right_accessed_bytes
-                    .start = value.runtime_alias_requirements[0]
-                    .right_accessed_bytes
-                    .end_exclusive
+                fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).start = fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).end_exclusive
                     + 1;
             },
             FormalMemoryReceiptErrorV1::InvalidRange {

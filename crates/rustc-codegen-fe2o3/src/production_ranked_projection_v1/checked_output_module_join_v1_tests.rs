@@ -1286,7 +1286,7 @@ fn formal_actual_tuple_literal_global_store_is_complete_at_one_invocation() {
                             assert_eq!(access.byte_width(), 4);
                             assert_eq!(
                                 obligations.bounds_requirements()[0].minimum_byte_len(),
-                                (bits + 1) * 4
+                                Some((bits + 1) * 4)
                             );
                             assert!(obligations.inter_invocation_conflicts().is_empty());
                             Ok(())

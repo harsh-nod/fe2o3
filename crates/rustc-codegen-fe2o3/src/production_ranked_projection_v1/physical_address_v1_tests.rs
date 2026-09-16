@@ -499,6 +499,76 @@ mod identity_getter_physical_tests {
         }
 
         #[test]
+        fn source_preservation_complete_reports_each_actual_guarded_store_without_length_premise() {
+            use fe2o3_kernel_ir::{
+                FormalAccessDomainV1, FormalBoundsKindV1, FormalGuardedPathV1,
+                FormalMemoryAccessKind, FormalMemoryReceiptErrorV1,
+                InertCanonicalFormalMemoryObligationReceiptV1, OperationKind,
+            };
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for mode in [false, true] {
+                    for stores in [1, 2] {
+                        with_case(
+                            profile,
+                            29,
+                            mode,
+                            stores,
+                            true,
+                            true,
+                            |source, view, inputs, budget| {
+                                let references = References::default();
+                                with_original(source, inputs, &references, budget, |_, _| {});
+                                let floor = budget.storage();
+                                let mut entered = false;
+                                with_source_preservation_output_v1::<()>(view, profile, inputs, &references, budget,
+                                |preservation, same, formals, accesses, _| {
+                                    entered = true;
+                                    assert!(std::ptr::eq(same, &references));
+                                    assert!(same.as_slice().is_empty());
+                                    assert_eq!(formals.len(), 2);
+                                    assert_eq!(accesses, 2 * stores);
+                                    for (root, formal) in preservation.roots().iter().zip(formals) {
+                                        assert!(std::ptr::eq(formal.output(), view.output()));
+                                        assert!(!root.preconditions().requires_representable_invocation_address());
+                                        let obligations = formal.obligations();
+                                        assert_eq!(obligations.accesses().len(), stores);
+                                        assert_eq!(obligations.bounds_requirements().len(), stores);
+                                        assert!(obligations.inter_invocation_conflicts().is_empty());
+                                        let function = formal.output().module().function(&formal.kernel().entry).unwrap();
+                                        let body = function.body.as_ref().unwrap();
+                                        for (access, bound) in obligations.accesses().iter().zip(obligations.bounds_requirements()) {
+                                            assert_eq!(access.kind(), FormalMemoryAccessKind::Write);
+                                            let FormalAccessDomainV1::SliceBounded(domain) = access.domain() else { panic!("actual Some-domain Store") };
+                                            assert!(matches!(domain.path(), FormalGuardedPathV1::TrueEdge { .. }));
+                                            let location = access.location();
+                                            let block = body.blocks.iter().find(|block| block.id == location.block).unwrap();
+                                            assert!(matches!(block.operations[location.operation_index].kind,
+                                                OperationKind::Store { pointer, .. } if pointer == domain.pointer()));
+                                            assert_eq!(domain.slice(), body.parameters[0]);
+                                            assert_eq!(domain.allocation(), access.allocation());
+                                            assert_eq!(domain.element_bytes(), 4);
+                                            assert_eq!(bound.minimum_byte_len(), None);
+                                            assert_eq!(bound.kind(), FormalBoundsKindV1::SliceElementAtGuardedIndex(domain));
+                                            assert!(!domain.may_access_untrusted_index(0, 0, 64));
+                                            assert!(domain.may_access_untrusted_index(0, 1, 64));
+                                            assert!(!domain.may_access_untrusted_index(1, 1, 64));
+                                        }
+                                        assert_eq!(InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(obligations),
+                                            Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation));
+                                    }
+                                    Ok(())
+                                }).expect("fresh same-O Complete with honest guarded rows");
+                                assert!(entered);
+                                assert_eq!(budget.storage(), floor);
+                                assert!(references.as_slice().is_empty());
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn source_preservation_consumer_closes_all_roots_values_and_stores_without_some() {
             for profile in [Profile::Gfx942, Profile::Gfx950] {
                 for mode in [false, true] {

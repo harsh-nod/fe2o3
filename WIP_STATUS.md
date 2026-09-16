@@ -1,97 +1,92 @@
-# Issue 271 Guarded Getter Integration Checkpoint
+# Issue 271 Guarded Formal Analysis Checkpoint
 
-Reviewable WIP with five known failing formal-consumer tests, not production
-activation or tutorial qualification. Do not merge this historical tree wholesale
-over current main. M5/M7 remain active; no acceptance milestone is newly complete.
-M8 remains incomplete.
+Reviewable WIP, not production activation or tutorial qualification. M5 exact
+optimized-program verification and M7 production integration/legacy retirement
+remain active. M8 is unqualified; no acceptance milestone is newly complete.
+Do not merge this historical tree wholesale over current main.
 
 ## Exact Source
 
 - Host: XSJHARMENON01.
 - Checkout: /home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913.
 - Checkout HEAD: 10b190b8267c0c4011b4ef6bbb52680a3c44b391.
-- Source: 5,071 files, manifest SHA256
-  f9d0117a61d3e8e18133dadd19d14713bf15e1b2443d2061bf45ed487df2d408.
-- Previous published WIP: fde5bd5ec2749ce9f26f76b626c808eebab3a0d0.
+- Source: 5,073 files, manifest SHA256
+  e511a34ba9f7abe70a11ee41775e5df74d7099aee1f28acd522c7645b735729c.
+- Previous published WIP: 54c34f322654b1f455ca2e092bbd658d434718d3.
 
-Snapshot construction checks every source Git blob and preserves the source
-checkout HEAD/index. This status file is outside the source manifest. Ten source
-paths change from the previous WIP, plus this status.
+Snapshot construction verifies every source Git blob and preserves the source
+checkout HEAD/index. This status is outside the source manifest. The new batch
+changes ten source paths, including two new files, plus this status.
 
 ## Implemented
 
-Checked slice access lowering now selects zero for the inactive index before
-forming its element pointer. The source-to-original-IR checker requires that
-exact recipe before removing the old inactive-address representability premise.
-It does not make arbitrary Select operations affine or erase dereference bounds.
+The formal-memory engine now recognizes a bounded exact conditional slice-access
+recipe: rank-one GlobalX index, the same formal slice's length/data, index less
+than length, and zero selected for an inactive offset before GEP. Each actual
+access needs the matching explicit predicate or a checked unique true incoming
+edge dominating that use. Conditional recipes are not unconditional affine facts.
+Private index overwrites and conflicting pointer joins do not retain stale facts.
 
-The output-control, physical-address and functional-address relations retain an
-exact private selected-offset description. Each actual Some-branch Store joins
-its own source/output occurrence, predicate, raw index and selected definition.
-The physical relation describes the actual selected offset, not the raw index.
-All components use the existing resource ledger and retained live-storage floor.
+The analysis retains the active domain [0, launch_extent) intersected with
+index < slice_length, symbolic bounds, whole-formal-allocation alias regions and
+all required conflict pairs. It does not invent a launch-sized minimum slice
+length or discharge Rust slice validity, alignment, lifetime or exclusivity.
+Byte-only bound evaluation cannot discharge the new symbolic obligation.
+Legacy receipt formats explicitly refuse representations they cannot encode.
 
-New backend tests compose the genuine source/original relation, Expression/R1,
-control and physical/functional address relations for both gfx942 and gfx950,
-both discriminator encodings, and one or two distinct Stores. Independently
-verified hostile output mutations are rejected at the real checked-transition
-boundary. Those refusals are not mislabeled as address-relation coverage.
+New guarded scans, queries, sorting, capacities and pair work are bounded and
+charged. The new workspace/report storage ceiling is not a claim about whole
+engine RSS or the accounting of every historical allocation.
 
-The existing final formal-memory Complete gate is unchanged. Its five genuine
-positive tests remain failing, not ignored, inverted or replaced with weaker
-component tests. Source-preservation and address-relation success alone does
-not establish end-to-end memory safety or compiler correctness.
+The existing five positive final-consumer tests now pass unchanged. The original
+guarded-read integration fixture also stays unchanged; its obsolete refusal
+oracle now requires Complete while checking both retained accesses, symbolic
+bounds, alias obligations and refusal by the legacy receipt encoder. Arbitrary
+guard and wrong-predicate negative coverage remains intact.
 
-## Exact Test Results
+## Exact Qualification
 
-The latest exact-source focused run passed 44 tests and failed five, with zero
-ignored and 846 filtered out. The new composition tests and updated importer/
-physical-shape oracles pass. All five failures occur because the unchanged formal
-engine rejects the selected index as UnsupportedIndexExpression before the final
-consumer callback. Logs:
-v257-clean-v356-getmut-backend-relations-imports.vCdx2egG.
-Source and helper guards passed. Test execution took 25.90 seconds after a
-1m37s build.
+On the final source above, with all source/helper guards passing:
 
-On preceding composed source
-37933a05e508df0650442cc907690bf06f64d38e14dfdee342b142ad88b4c91b,
-425 lowerer tests passed, with zero failures or ignores. The full backend run on
-that source passed 886 and failed seven: two stale shape oracles subsequently
-corrected here, plus the same five formal-consumer failures. Logs:
-v257-clean-v356-getmut-composed-lowerer.A6wjgMwS and
-v257-clean-v356-getmut-composed-backend.kGpZSGXu. All input guards passed.
+- 804 kernel-IR tests passed across 41 suites, zero failed, one pre-existing
+  ignored full-block-count stress test. Includes all 16 new guarded unit cases.
+  Logs: v257-clean-v358-guarded-formal-final-kernel-ir.32lFBefV.
+- 426 lowerer library tests passed, zero failed or ignored, 9.54 seconds.
+- 896 backend library tests passed, zero failed or ignored, 166.40 seconds.
+  Consumer logs: v257-clean-v358-guarded-formal-final-consumers.5fy2EluY.
 
-The first test-successor build failed on two missing test imports; ROOT added
-Type and ValueId. That failed compile remains recorded at
-v257-clean-v356-getmut-backend-relations.ocMwfcic. The full lowerer/backend suites
-and binary targets have not been rerun on this final source. No tutorial, actual
-collector, hardware, site or Verus qualification is claimed.
+Total: 2,126 passing tests. Changed-region pinned formatting was applied; this is
+not a full-workspace formatting result. No new extractor/binary, actual collector,
+tutorial, simulator, hardware, website or Verus qualification is claimed.
 
-## Remaining Work
+Earlier failures remain recorded rather than relabeled: the initial new-test
+Type::U32 compile failure, then 452 passing tests and the obsolete guarded-read
+oracle failure. These were corrected using the existing Type::Scalar API and the
+reviewed fixture-preserving oracle change. Before the final two hostile tests,
+426 lowerer and 896 backend tests also passed on their recorded predecessor
+sources. The earlier published WIP's five genuine formal failures are now fixed.
 
-The formal engine needs use-specific guarded access domains. It must prove the
-selected offset equals the raw index only for a matching active access, retain
-the domain [0, launch_extent) intersected with index < slice_length, and handle
-empty/short slices without inventing a launch-sized minimum slice obligation.
-Bounds, every alias/conflict pair, resource limits and final-output subject
-binding remain mandatory. Existing legacy receipt formats must refuse evidence
-they cannot represent. That implementation is being developed separately and
-is not included in this snapshot.
+## Remaining Integration
 
-Standard Rust slice validity, exclusivity, lifetime, alignment and extent
-premises remain conditional. Defined entry wrappers, broader source rules,
-normal managed metadata custody, runtime/target binding, optional reference
-refinement, production activation and legacy retirement remain open.
+Production artifact lineage and lowerer evidence still invoke legacy formal
+receipt encoders, which cannot encode the new symbolic rows. A read-only audit
+also identified a legacy admission roster that assumes every guarded read still
+has a ranked-proof refusal reason; mixed newly supported and older ranked-only
+reads require explicit compatibility work. Neither gate is weakened here, and
+passing in-memory consumers is not proof of artifact publication compatibility.
 
-Both public main branches were independently read at
-17ad92bea81ab7f6f60e74b1b97076c29007451b. Their independently tested bounds fixes
-and formatting follow-up are not folded into this historical WIP tree. The
-separate initializer WIP remains based on
-8a7b98fd73de314e2f0208e82e449852e680e5bd, with further local-frame work under test
-in its own checkout. Neither its helper admission failure nor general nonliteral
-initializer semantics is solved by this snapshot.
+Broader source rules, managed metadata custody, runtime/target binding, optional
+reference refinement, production activation and legacy removal remain open.
+The separately published initializer/local-frame WIP is a75d1ab228767280cb1d985dfd5cf59027862e52.
+Its genuine helper positive still fails HelperEffectsUnavailable. Retained
+helper obligations and downstream consumers are a separate unqualified draft.
+
+Both public main refs were independently observed at
+9f8ffda4df3647d0ed7c424f16a6ff0111a32a69. Neither this historical canonical tree
+nor the initializer WIP is composed with that newer execution-KIR/MIR work.
+Preserve those concurrent changes; all test claims here are source-specific.
 
 M8 all-tutorial compilation, simulation, target-matched hardware and website
 qualification remain open. Approved Verus runtime qualification is deferred,
-not passed. No SSH/GPU work or shared-machine cleanup occurred here. Separate
-issue 272 WIP is unchanged by this checkpoint.
+not passed. No SSH/GPU work or shared-machine cleanup occurred in this batch.
+Separate issue 272 WIP was not modified by this checkpoint.
