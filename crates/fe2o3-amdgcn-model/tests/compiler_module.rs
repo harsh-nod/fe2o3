@@ -933,3 +933,6 @@ mod shared_slice_helpers_v1;
 
 #[path = "compiler_module/ordinary_helper_results_v1.rs"]
 mod ordinary_helper_results_v1;
+
+#[path = "compiler_module/counted_private_alloca_v1.rs"]
+mod counted_private_alloca_v1;

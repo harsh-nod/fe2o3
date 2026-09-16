@@ -146,6 +146,24 @@ absence policy, remain in force. Returned LLVM is inert, not source/formal
 admission, protected publication, launch evidence or hardware qualification.
 The lowering engine retains its separate resource policy.
 
+Counted Private `Alloca` supports scalar elements admitted by the existing
+target/capability checks and direct, correctly typed positive
+`U8`/`U16`/`U32`/`U64`/`Index` constants. It preserves the operation's original
+block and count type, emitting `alloca` in address space 5 without hoisting or
+adding lifetime intrinsics. Existing uncounted allocations retain their behavior.
+Natural alignment is required, and checked `count * element_bytes` must fit
+within `i32::MAX`. This is a conservative private-index representation limit,
+not a device scratch-capacity or allocation-success guarantee.
+
+Dynamic, signed, zero, computed and block-parameter counts remain unsupported,
+as do counted pointer/vector elements. Workgroup allocations still require
+explicit `WorkgroupMemory`. Half-precision storage retains the existing `i16`
+representation and Float16/BFloat16 capability gates. The constant fact is
+collected in the existing value map, avoiding a whole-function scan for each
+allocation. Native model tests cover both exact targets and assemble
+representative LLVM text; these are not hardware or final production-admission
+results.
+
 The following boundaries remain closed:
 
 - AMDGPU raw-Module entry points reject V12 vectors and verification events
