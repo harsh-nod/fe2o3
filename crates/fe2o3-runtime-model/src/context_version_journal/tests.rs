@@ -527,6 +527,72 @@ fn internal_slot_and_capacity_invariants_reject_before_mutation() {
 }
 
 #[test]
+fn constructor_initializes_all_arena_contents_and_free_stack_order() {
+    for (a, w) in [(1, 3), (7, 2), (2, 7)] {
+        let journal = Journal::new(7, a, w).unwrap();
+        assert_eq!(journal.writers, vec![None; w]);
+        assert_eq!(journal.free, (0..w).rev().collect::<Vec<_>>());
+        assert_eq!(journal.allocations, vec![None; a]);
+        assert_eq!(journal.allocation_free, (0..a).rev().collect::<Vec<_>>());
+        assert_eq!(journal.members, vec![None; a]);
+        assert_eq!(journal.member_free, (0..a).rev().collect::<Vec<_>>());
+        assert_eq!(journal.scratch, vec![None; a]);
+        audit(&journal);
+    }
+}
+
+#[test]
+fn registration_count_guards_preserve_fresh_slot_and_storage() {
+    for capacity in [1, 3, 4097] {
+        for invalid_count in [capacity, usize::MAX] {
+            let mut journal = Journal::new(7, 2, capacity).unwrap();
+            journal.reserved_count = invalid_count;
+            let before = snapshot(&journal);
+            journal.indexed_accesses.set(0);
+            assert_eq!(journal.register_writer(key(41)), Err(Error::InvalidState));
+            assert_eq!(journal.indexed_accesses.get(), 2);
+            assert_eq!(snapshot(&journal), before);
+
+            // The failed preflight consumes neither a slot nor registration history.
+            journal.reserved_count = 0;
+            let reference = journal.register_writer(key(41)).unwrap();
+            assert_eq!(
+                reference,
+                Reference {
+                    slot: 0,
+                    key: key(41)
+                }
+            );
+            assert_eq!(storage(&journal), before.storage);
+            audit(&journal);
+        }
+    }
+}
+
+#[test]
+fn abort_count_underflow_preserves_genuine_reference_and_storage() {
+    let mut journal = Journal::new(7, 2, 3).unwrap();
+    let first = journal.register_writer(key(41)).unwrap();
+    let second = journal.register_writer(key(44)).unwrap();
+    assert!(journal.free.len() < journal.writer_capacity);
+    assert!(journal.free.len() < journal.free.capacity());
+    journal.reserved_count = 0;
+    let before = snapshot(&journal);
+    journal.indexed_accesses.set(0);
+    assert_eq!(journal.abort_reserved(first), Err(Error::InvalidState));
+    assert_eq!(journal.indexed_accesses.get(), 1);
+    assert_eq!(snapshot(&journal), before);
+    assert_eq!(journal.lookup_reserved(first), Ok(key(41)));
+    assert_eq!(journal.lookup_reserved(second), Ok(key(44)));
+
+    journal.reserved_count = 2;
+    journal.abort_reserved(first).unwrap();
+    assert_eq!(journal.reserved_writer_count(), 1);
+    assert_eq!(storage(&journal), before.storage);
+    audit(&journal);
+}
+
+#[test]
 fn short_traces_match_independent_active_writer_map() {
     const ACTIONS: usize = 9;
     const DEPTH: u32 = 4;

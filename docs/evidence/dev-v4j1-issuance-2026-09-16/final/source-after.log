@@ -1,0 +1,11 @@
+crates/fe2o3-runtime-model/src/context_version_journal.rs: OK
+crates/fe2o3-runtime-model/src/context_version_journal/tests.rs: OK
+crates/fe2o3-runtime-model/verus/context_version_journal_issuance_v1.rs: OK
+crates/fe2o3-runtime-model/verus/check-journal-issuance.py: OK
+crates/fe2o3-runtime-model/verus/check-negative-quality.py: OK
+crates/fe2o3-runtime-model/verus/verify-verus.sh: OK
+crates/fe2o3-runtime-model/verus/pins/CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256: OK
+crates/fe2o3-runtime-model/verus/pins/JOURNAL_ISSUANCE_CHECKER_SHA256: OK
+crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256: OK
+crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256: OK
+docs/evidence/dev-v4j1-issuance-2026-09-16/verify-issuance.sh: OK

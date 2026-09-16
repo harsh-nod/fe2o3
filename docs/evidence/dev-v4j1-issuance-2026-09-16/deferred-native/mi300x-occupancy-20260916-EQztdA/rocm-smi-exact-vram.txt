@@ -1,0 +1,35 @@
+UTC 2026-09-16T20:10:14Z
+
+
+============================ ROCm System Management Interface ============================
+===================================== KFD Processes ======================================
+KFD process information:
+PID    	PROCESS NAME	GPU(s)	VRAM USED  	SDMA USED	CU OCCUPANCY	
+3161407	python      	0     	0          	0        	0           	
+3161415	python      	0     	0          	0        	0           	
+3161403	python      	1     	83189223424	0        	0           	
+3161411	python      	0     	0          	0        	0           	
+3161428	python      	0     	0          	0        	0           	
+3161424	python      	0     	0          	0        	0           	
+3161432	python      	0     	0          	0        	0           	
+3161419	python      	0     	0          	0        	0           	
+==========================================================================================
+================================== Memory Usage (Bytes) ==================================
+GPU[0]		: VRAM Total Memory (B): 206141652992
+GPU[0]		: VRAM Total Used Memory (B): 91542904832
+GPU[1]		: VRAM Total Memory (B): 206141652992
+GPU[1]		: VRAM Total Used Memory (B): 298647552
+GPU[2]		: VRAM Total Memory (B): 206141652992
+GPU[2]		: VRAM Total Used Memory (B): 298713088
+GPU[3]		: VRAM Total Memory (B): 206141652992
+GPU[3]		: VRAM Total Used Memory (B): 298651648
+GPU[4]		: VRAM Total Memory (B): 206141652992
+GPU[4]		: VRAM Total Used Memory (B): 298647552
+GPU[5]		: VRAM Total Memory (B): 206141652992
+GPU[5]		: VRAM Total Used Memory (B): 298651648
+GPU[6]		: VRAM Total Memory (B): 206141652992
+GPU[6]		: VRAM Total Used Memory (B): 298647552
+GPU[7]		: VRAM Total Memory (B): 206141652992
+GPU[7]		: VRAM Total Used Memory (B): 298647552
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

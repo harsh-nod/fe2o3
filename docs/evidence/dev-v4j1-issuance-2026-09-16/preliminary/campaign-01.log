@@ -1,0 +1,26 @@
+PASS: journal issuance positive_before
+PASS: journal issuance constructor_context
+PASS: journal issuance constructor_watermark
+PASS: journal issuance constructor_count
+PASS: journal issuance constructor_writer_bound
+PASS: journal issuance constructor_writer_extent
+PASS: journal issuance constructor_allocation_extent
+PASS: journal issuance constructor_scratch_omitted
+PASS: journal issuance constructor_free_order
+PASS: journal issuance register_pop_omitted
+PASS: journal issuance register_wrong_slot
+PASS: journal issuance register_wrong_content
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py", line 416, in <module>
+    main()
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py", line 412, in main
+    campaign(args.source, args.verus, args.timeout, args.output)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py", line 304, in campaign
+    run_solver(verus, timeout, candidate, expected, out, mutation, environment)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py", line 249, in run_solver
+    check_result(status, stdout, stderr, original.decode("ascii"), source, mutation)
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py", line 158, in check_result
+    require(status == (1 if mutation else 0), "normal expected exit required")
+  File "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py", line 78, in require
+    raise ValueError(message)
+ValueError: normal expected exit required

@@ -89,6 +89,14 @@ Earlier 2,744-test full runs retain their original source cohort. This accepts
 executable-model settlement only, not production Context, authenticated proofs,
 native execution or performance. Resources next takes V4-J1 issuance proofs.
 
+Current Resources development integrates the canonical
+[V4-J1 issuance contents proof](runtime-context-version-journal-issuance-v1.md),
+including actual whole-journal framing, executable body mutations and the missing
+Rust count-guard tests. The [development receipt](evidence/dev-v4j1-issuance-2026-09-16/README.md)
+separates model proof qualification from Rust/storage correspondence and production
+Context integration. R116/V3 remains accepted. The external candidate history
+below is preserved and does not substitute for this canonical-source campaign.
+
 Resources development update: the external V13 issuance candidate
 `r120-journal-issuance-v13.rs`, SHA-256
 `1bc85ba1280dc0bfd5f0ac99a726bd0d21ad1b57fe71dbf837247ed3487f47cd`,
@@ -247,7 +255,7 @@ serialized builds, proof/hardware scheduling and signed dual-remote publication.
 | --- | --- | --- |
 | Native: `native_replacement_handoff` | Integrate ordinary recycled detach and remaining N4-L live/control routes above R123 | Applicable queue teardown, then N5 DATA-ADOPT |
 | Admission: `submission_identity_handoff` | Prepare joint I2/C4 after locally accepted R118B C1/C2/C3; production integration needs N5 | Actual ISSUE, COMPLETE, C5 typed future/join, C6 generated GRAPH/DRAIN |
-| Resources: `r102_evidence_review` | V4-J1 issuance proofs above accepted executable V1/V2/V3 models | Membership/settlement proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
+| Resources: `r102_evidence_review` | Qualify canonical V4-J1 issuance contents above accepted executable V1/V2/V3 models | Rust/storage correspondence, membership/settlement proofs, V5/V6 production journal/hooks, V7 writers/recovery, V8 leases; M1-M4 retained-memory bounds |
 | Primary | Integrate one reviewed packet at a time; own Q1/Q2/Q3 and release gate #277 | Coordinate A3-A7 and publish only the evidence actually obtained |
 
 ### Ready Now
@@ -261,7 +269,7 @@ Native's tests, and Resources supplies settlement/accounting contracts.
 | --- | --- | --- |
 | Native | Compose remaining live detach across model retake/commit; R123 accepts retained persistent-control release above R122 data release | Remaining live/control routes, queue teardown, N5 adoption and native qualification |
 | Admission | Retain accepted R118B identity/lifecycle regressions; prepare the joint I2/C4 handoff | Actual generated ISSUE, COMPLETE, typed output or graph execution |
-| Resources | Implement V4-J1's reviewed issuance-proof handoff; M1-M3 design remains independently ready | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
+| Resources | Qualify integrated V4-J1 contents and continue Rust/storage correspondence; M1-M3 design remains independently ready | Production journal receipts, all writers, recovery, reuse or total retained-memory bound |
 | Primary | Specify Q1/Q2/Q3 evidence contracts and #277's missing feature-enabled release audit | New proof, hardware, release-policy or performance acceptance |
 
 Each handoff names source ownership, prerequisites, exact positive/rejection
@@ -374,7 +382,7 @@ Model evidence does not authenticate a production completion or NoEffect receipt
 | Packet | Bounded Deliverable And Exit |
 | --- | --- |
 | V3 / R116 | Locally accepted executable settlement and public/private Unknown model against the frozen full-reference inert evidence and error precedence. Success advances lineage; NoEffect preserves lineage and burned epochs; Unknown retains the complete chain. |
-| V4 | Start the reviewed V4-J1 issuance handoff, then authenticate membership/settlement properties with solver results, negative mutations and actual Rust/model correspondence. No proof execution is added by R116. |
+| V4 | Qualify the integrated V4-J1 issuance contents proof, then authenticate Rust/storage correspondence and membership/settlement properties with solver results and negative mutations. No proof execution is added by R116 itself. |
 | V5/V6 | Join the production Context journal and initial mutation hooks using authentic existing IDs and private move-only tickets. Begin precedes effects; settlement precedes callbacks. A backend error is not NoEffect authority. |
 | V7 | Cover every mutation family, bounded ordered writers and explicit Unknown recovery. Host-write/copy-only coverage is insufficient. |
 | V8 | Add exact input range/generation leases after V7 and exclusive graph reservation. Kernel reuse additionally needs admitted compiler effects. |

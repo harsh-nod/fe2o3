@@ -167,6 +167,15 @@ pass. Nine runner, 31 freeze and 122 qualification-contract tests pass. All
 reviews pass. This accepts executable-model settlement and counted touched work,
 not production Context integration, authenticated receipts, proofs, recovery,
 reuse, native execution or performance.
+
+[V4-J1 development](runtime-context-version-journal-issuance-v1.md) now integrates
+the canonical issuance proof with actual whole-journal contents framing,
+source-bound executable mutations and the missing Rust count-guard tests.
+Constructor allocation failure, physical storage, unwind, mechanically verified
+Rust correspondence and production Context integration remain open. See the
+[development receipt](evidence/dev-v4j1-issuance-2026-09-16/README.md); this does
+not advance the accepted R116/V3 checkpoint or claim full journal verification.
+
 Original integrated GNU/musl runs each passed 2,744 tests with five ignored;
 two subsequently appended review tests mean those runs are preliminary history,
 not final-source prerequisites. The original
@@ -937,7 +946,7 @@ open.
 | Next Native packets | Native | Qualify R126 synchronous-copy custody, typed capacity disposition, allocation settlement, warm pending-compute allocation and remaining queue lifecycle, then N5 DATA-ADOPT | R124 ordinary recycled detach and R125 live prepared cancellation are accepted at their CPU/test boundaries. R126 ownership/teardown extensions, typed capacity disposition, allocation settlement and warm pending allocation are implemented development work; native/profile/pipeline qualification remains open. Explicit no-owner settlement now refunds direct Context credit; generic, later-stage and Worker quiescence still quarantine it. Confirmed disposal alone does not permit slot reuse |
 | Locally accepted Admission packets | Admission | R118B C1 Context identity, C2 descriptor identity and C3 reply/custody tests | Eighteen added tests, full GNU/musl and 78 compiled negatives; existing validators and lifecycle machinery, with no native/formal/performance acceptance |
 | Next Admission packets | Admission | Joint I2 ISSUE, C4 COMPLETE, then C5 typed output and C6 GRAPH/DRAIN | N5 adoption, exact publication/completion custody and retained R118B regressions; no invented completion adapter |
-| First Resources packets | Resources | V4-J1 issuance proofs, then membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models. External V13-V15 development solver results are recorded in the current dispatch; integration, authenticated proof qualification and production Rust/model correspondence remain pending |
+| First Resources packets | Resources | Qualify canonical V4-J1 issuance contents, then Rust/storage correspondence and membership/settlement proofs | R108 issuance, R113 membership and R116 settlement are locally accepted executable models. The canonical V4-J1 proof, source-bound executable mutations and Rust count-guard tests are now integrated development work; the linked receipt records verification results separately from production Rust/model correspondence, storage and Context integration, which remain open |
 | Next Resources packets | Resources | VER-1A.3 journal, .4/.5 hooks, complete VER-1B, then VER-2 leases | Exact Context IDs; complete mutation coverage, ordered writers and recovery before reuse |
 | Native/runtime integration | Primary + Native/Admission | N3/N4 -> DATA-ADOPT -> ISSUE -> CO-4/COMPLETE -> generated typed API -> GRAPH/DRAIN | C1/C2/C3 join ISSUE; real publication/completion identity, exact readback and custody; cross-run reuse also needs V7/V8 |
 | Resource closure | Resources + Native | Aggregate domains, native backing/control budgets, host/native residency and total retained memory | Charged bootstrap/terminal headroom, compound pre-effect admission and no double charging |

@@ -1,0 +1,16 @@
+UTC 2026-09-16T20:10:37Z
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

@@ -1,0 +1,15 @@
+UTC 2026-09-16T20:12:18Z
+
+
+============================ ROCm System Management Interface ============================
+======================================= Unique ID ========================================
+GPU[0]		: Unique ID: 0x6ced1647a296545c
+GPU[1]		: Unique ID: 0xab83d2ffef0d3cdf
+GPU[2]		: Unique ID: 0xd2e26fef80cf5c33
+GPU[3]		: Unique ID: 0x189ca857de1ef2fb
+GPU[4]		: Unique ID: 0x54f88318ca05093d
+GPU[5]		: Unique ID: 0xb7baafd0fb173d8e
+GPU[6]		: Unique ID: 0x10a254ce4987e716
+GPU[7]		: Unique ID: 0x53691ef168a0147d
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

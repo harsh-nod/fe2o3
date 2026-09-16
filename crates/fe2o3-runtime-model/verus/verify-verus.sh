@@ -7,6 +7,7 @@ PATH=/usr/bin:/bin
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
 \readonly script_dir repo_root
+journal_issuance_proof="$script_dir/context_version_journal_issuance_v1.rs"
 lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
 identity_proof="$script_dir/device_identity_generation_v1.rs"
 projection_proof="$script_dir/device_projection_refinement_v1.rs"
@@ -762,7 +763,8 @@ source_checker="$repo_root/examples/wave64_collectives_v1/check-proof-source.py"
 negative_quality_checker="$script_dir/check-negative-quality.py"
 negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"
 negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"
-\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture
+journal_issuance_checker="$script_dir/check-journal-issuance.py"
+\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker
 verus_bin=${VERUS:-verus}
 
 if [ "$#" -ne 0 ]; then
@@ -783,6 +785,8 @@ read_pin() {
 }
 
 expected_lifecycle=$(read_pin "$pin_dir/MODEL_SHA256")
+expected_journal_issuance=$(read_pin "$pin_dir/CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
+expected_journal_issuance_checker=$(read_pin "$pin_dir/JOURNAL_ISSUANCE_CHECKER_SHA256")
 expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
 expected_projection=$(read_pin "$pin_dir/DEVICE_PROJECTION_REFINEMENT_SHA256")
 expected_memory=$(read_pin "$pin_dir/MEMORY_LIFECYCLE_SHA256")
@@ -1569,6 +1573,8 @@ check_digest() {
 }
 
 check_sources() {
+    check_digest "$expected_journal_issuance" "$journal_issuance_proof"
+    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"
     check_digest "$expected_lifecycle" "$lifecycle_proof"
     check_digest "$expected_identity" "$identity_proof"
     check_digest "$expected_projection" "$projection_proof"
@@ -2327,6 +2333,7 @@ check_sources() {
 
 check_sources
 /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \
+    "$journal_issuance_proof" \
     "$lifecycle_proof" \
     "$identity_proof" \
     "$projection_proof" \
@@ -3182,6 +3189,13 @@ check_negative() {
     printf 'expected-negative rejected: %s\n' "$label"
 }
 
+check_positive "$journal_issuance_proof" 'verification results:: 69 verified, 0 errors' journal-issuance
+/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"
+/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \
+    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \
+    /usr/bin/python3 -I "$journal_issuance_checker" \
+    "$journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/journal-issuance"
+
 check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
 check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
 check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
@@ -3938,7 +3952,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 expected_negative_files=686'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 journal_issuance_obligations=69 journal_issuance_executable_mutations=21 expected_negative_files=686'
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

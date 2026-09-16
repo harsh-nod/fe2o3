@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
 EXPECTED_RUNNER_FUNCTION_SHA256 = {
     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
-    "check_sources": "930e2e7da896bfff2b223eaad06a1113059b652da168436fd4e3f8fb0af10835",
+    "check_sources": "cf69c474454c912ba612bc4ad497ecff00d3bdce36f3a2ddd9098e48bc5aaad3",
     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
 }
-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1508
+EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1511
 EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
-    "fb15cdda132cf4e9712219c9737c773e03440022720f88dd14d063a4bb87776c"
+    "e79051b636492be2b10ba0341a172419e4130cc4a14acca8f2252b34a0b3bb56"
 )
 EXPECTED_RUNNER_SHA256 = (
-    "4a5cbe5c79d708acafdac85420bcef5d76f386b9d3b73a3208998658bdf76e47"
+    "27178c49928f90213f8d03b81318b9aeb509ac83b82ab7d97ebe19dd235c8fc0"
 )
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
@@ -81,7 +81,15 @@ RUNNER_TOOL_BINDING_BLOCK = (
     'negative_quality_checker="$script_dir/check-negative-quality.py"',
     'negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"',
     'negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"',
-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture",
+    'journal_issuance_checker="$script_dir/check-journal-issuance.py"',
+    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker",
+)
+RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
+    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
+    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
+    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
+    '    /usr/bin/python3 -I "$journal_issuance_checker" \\',
+    '    "$journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/journal-issuance"',
 )
 RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
@@ -94,6 +102,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \\'
 )
 RUNNER_TOOL_DIGEST_LINES = (
+    '    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"',
     '    check_digest "$expected_closure" "$closure_manifest"',
     "    check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' \"$closure_checker\"",
     '    check_digest "$expected_source_checker" "$source_checker"',
@@ -102,6 +111,7 @@ RUNNER_TOOL_DIGEST_LINES = (
     '    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"',
 )
 RUNNER_TOOL_NAMES = (
+    "journal_issuance_checker",
     "closure_manifest",
     "closure_checker",
     "source_checker",
@@ -928,6 +938,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
         RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK,
         "negative-quality invocation",
     )
+    journal_start = exact_block_start(lines, RUNNER_JOURNAL_CAMPAIGN_BLOCK, "journal campaign")
     if not environment_start < root_start < tool_start < invocation_start:
         raise QualityError(
             "runner environment, root, tool, and invocation blocks are out of order",
@@ -954,6 +965,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
             code="runner.quality_audit.count",
         )
     allowed_tool_lines.update(quality_audits)
+    allowed_tool_lines.update(range(journal_start, journal_start + len(RUNNER_JOURNAL_CAMPAIGN_BLOCK)))
     for digest_line in RUNNER_TOOL_DIGEST_LINES:
         matches = [index for index, line in enumerate(lines) if line == digest_line]
         if len(matches) != 1:
@@ -1041,6 +1053,12 @@ def audit_runner_root_bindings(runner_source: str) -> None:
         exact_block_start(lines, block, "late-authority binding")
         for block in RUNNER_LATE_BINDING_BLOCKS
     ]
+    source_checks = [index for index, line in enumerate(lines) if line == "check_sources"]
+    if not (late_block_starts[-1] < journal_start
+            and quality_audits[0] < journal_start < source_checks[-2]
+            and journal_start < quality_audits[-1] < closure_invocations[-1]):
+        raise QualityError("journal campaign must run between authentication and final source/tool checks",
+                           code="runner.journal_campaign.order")
     if late_block_starts != sorted(late_block_starts):
         raise QualityError(
             "runner late-authority binding blocks are out of order",
@@ -1466,13 +1484,14 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
                 *RUNNER_LATE_ASSIGNMENT_LINES[:3],
                 *(line for block in RUNNER_LATE_BINDING_BLOCKS for line in block),
                 "check_sources",
-                "check_sources",
-                "check_sources",
                 RUNNER_SOURCE_CHECKER_INVOCATION,
                 '    "$negative_alpha" \\',
                 '    "$negative_beta"',
                 *RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK,
+                *RUNNER_JOURNAL_CAMPAIGN_BLOCK,
+                "check_sources",
                 RUNNER_NEGATIVE_QUALITY_AUDIT,
+                "check_sources",
                 '"$closure_checker" "$verus_root" "$closure_manifest"',
                 'check_negative "$negative_alpha" alpha_postcondition alpha-label',
                 'check_negative "$negative_beta" beta_postcondition beta-label',
@@ -1544,6 +1563,34 @@ def inventory_self_test() -> None:
         )
 
     cases = [
+        (
+            "missing journal campaign",
+            lambda _d, r: replace_runner(r, "\n".join(RUNNER_JOURNAL_CAMPAIGN_BLOCK) + "\n", ""),
+        ),
+        (
+            "duplicate journal campaign",
+            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_JOURNAL_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "changed journal arguments",
+            lambda _d, r: replace_runner(r, RUNNER_JOURNAL_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_JOURNAL_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
+        ),
+        (
+            "masked journal failure",
+            lambda _d, r: replace_runner(r, RUNNER_JOURNAL_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_JOURNAL_CAMPAIGN_BLOCK[-1] + " || true"),
+        ),
+        (
+            "journal tool rebound",
+            lambda _d, r: r.write_text(r.read_text() + 'journal_issuance_checker=/tmp/untrusted\n'),
+        ),
+        (
+            "relocated journal campaign",
+            lambda _d, r: r.write_text(r.read_text().replace(
+                "\n".join(RUNNER_JOURNAL_CAMPAIGN_BLOCK) + "\n", "")
+                + "\n".join(RUNNER_JOURNAL_CAMPAIGN_BLOCK) + "\n"),
+        ),
         (
             "complete runner raw-byte substitution",
             lambda _d, r: r.write_bytes(
@@ -1627,8 +1674,8 @@ def inventory_self_test() -> None:
         ),
         (
             "missing negative-quality invocation",
-            lambda _d, r: remove_first_runner(
-                r, RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK[-1] + "\n"
+            lambda _d, r: replace_runner(
+                r, RUNNER_NEGATIVE_QUALITY_AUDIT + "\ncheck_sources\n", "check_sources\n"
             ),
         ),
         (
@@ -2085,6 +2132,10 @@ def inventory_self_test() -> None:
             expected_errors[case_label] = code
 
     expect("runner.raw_digest", "complete runner raw-byte substitution")
+    expect("runner.block.journal_campaign.count", "missing journal campaign", "duplicate journal campaign",
+           "changed journal arguments", "masked journal failure")
+    expect("runner.tool_wiring.unparsed", "journal tool rebound")
+    expect("runner.journal_campaign.order", "relocated journal campaign")
     expect("roster.source_count", "extra regular source")
     expect("source.unexpected_entry", "symlink source", "non-Rust source")
     expect(

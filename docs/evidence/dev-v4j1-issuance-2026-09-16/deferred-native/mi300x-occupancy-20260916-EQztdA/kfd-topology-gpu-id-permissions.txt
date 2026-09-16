@@ -1,0 +1,11 @@
+UTC 2026-09-16T20:12:36Z
+node=2 gpu_id=28851 drm_render_minor=128 unique_id=7848954222502892636
+node=3 gpu_id=23018 drm_render_minor=136 unique_id=12358953799103888607
+node=4 gpu_id=29122 drm_render_minor=144 unique_id=15195831167150414899
+node=5 gpu_id=22683 drm_render_minor=152 unique_id=1773477448619324155
+node=6 gpu_id=53458 drm_render_minor=160 unique_id=6122787835901970749
+node=7 gpu_id=63883 drm_render_minor=168 unique_id=13239087366709656974
+node=8 gpu_id=53667 drm_render_minor=176 unique_id=1198613695807612694
+node=9 gpu_id=63738 drm_render_minor=184 unique_id=6010369199893910653
+device=/dev/kfd readable=yes writable=yes
+device=/dev/dri/renderD136 readable=yes writable=yes

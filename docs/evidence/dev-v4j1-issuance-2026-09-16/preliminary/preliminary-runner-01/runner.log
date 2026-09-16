@@ -1,0 +1,9 @@
+source-before exit=0
+rustc exit=0
+cargo exit=0
+python exit=0
+helper-selftest exit=0
+negative-quality-selftest exit=0
+negative-quality-inventory exit=0
+formatting exit=0
+clippy exit=0

@@ -1,0 +1,15 @@
+{
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/context_version_journal_issuance_v1.rs": "018a295aa951568aa93f2f32318106af341c79e4568dda649ad803c6f4b95792",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/check-journal-issuance.py": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/wave64_collectives_v1/check-proof-source.py": "a3071ad8f0025a59d0c70dcf2427c1eb43b0c02fe484474a84d0377d99ccb887",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/row_softmax_v1/verify-verus-closure.sh": "c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST": "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01",
+  "/home/harsh/.local/opt/verus-0.2026.08.09.92f466f/verus": "d97501a883931d1d173b1bf4b6cf4d973f16d105dbcb468e177b52b2331612d2",
+  "/home/harsh/.local/opt/verus-0.2026.08.09.92f466f/rust_verify": "433399ab278ec9dddb6499ec7cb670077819c828d07431528b5faf6f2ba56c62",
+  "/home/harsh/.local/opt/verus-0.2026.08.09.92f466f/z3": "e583c4186a45e72411fa2cb2048401eed03f0f8e5f24694676a8f6271a50b765",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256": "6d124614dd89bef1d27ab7b82b44e7bcc18482f46d8028a9b03150c51f7be982",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/JOURNAL_ISSUANCE_CHECKER_SHA256": "468cc90edd835e3ce1dc7b493f0dbe5abc92c8d92266164dba477af4d4b7cc06",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/PROOF_SOURCE_CHECKER_SHA256": "43161d6819f5661b43d4da6c7e2590c3df34385e6f7eedc7cf653939044cc99e",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST_SHA256": "b4fe9f1137c9603115e6e527de2f9fd8dafa40c05217a62324987f72f2c197f4",
+  "/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/pins/VERUS_SHA256": "e04191db1b13406418578087e114fe30f6ac36a776a6eb0047322f278a2024d9"
+}

@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-r61-execution/examples/wave64_collectives_v1/check-proof-source.py",
+    "/home/harsh/.codex-tmp/v4j1-integration.GH2Ye9/final/mutations/abort_push_omitted/journal.rs"
+  ],
+  "started_ns": 1789589909867701950,
+  "process_group": 760913,
+  "group_absent": true,
+  "finished_ns": 1789589910013361519,
+  "status": 0
+}
