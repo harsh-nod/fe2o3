@@ -15,6 +15,148 @@ use fe2o3_pliron::{
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 
+#[test]
+fn inert_v29_cannot_enter_any_executable_lowering_path() {
+    use fe2o3_lower_mir_kernel::{
+        ProductionPreRankedKirErrorV1, ProductionRankedSemanticProjectionModuleReceiptV1,
+    };
+    let source = || {
+        let b = admitted(false, false);
+        let request = InertSemanticMirRequestV1::new_with_callables(
+            b.target(),
+            b.types().to_vec(),
+            b.allocations().to_vec(),
+            b.statics().to_vec(),
+            b.vtables().to_vec(),
+            b.functions().to_vec(),
+            b.callables().to_vec(),
+            b.roots().to_vec(),
+        )
+        .unwrap();
+        ProductionSemanticMirOwnerV1::try_new(
+            request
+                .admit_exact_v29(SemanticMirLimitsV1::default())
+                .unwrap(),
+            ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap()
+    };
+    let reject = |error| {
+        assert!(
+            matches!(error, ProductionSemanticKirErrorV1::Unsupported { detail, .. }
+        if detail == "execution capabilities require checked canonical KIR materialization")
+        )
+    };
+    let launch_for = |owner: &ProductionSemanticMirOwnerV1| {
+        ProductionSourceLaunchRosterV1::try_new(
+            owner.semantic(),
+            &[ProductionSourceLaunchRootInputV1::new(
+                "logical_root",
+                bytes(5),
+                ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [3, 1, 1]),
+            )],
+        )
+        .unwrap()
+    };
+    let limits = ProductionSemanticKirLimitsV1::default();
+    reject(ProductionSemanticKirOwnerV1::try_lower(source(), limits).unwrap_err());
+    let owner = source();
+    let launch = launch_for(&owner);
+    let receipt = ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+        owner, vec![ranked_root(launch.roots()[0].layout(), 1, true)]).unwrap();
+    reject(
+        ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(receipt, limits)
+            .unwrap_err(),
+    );
+    let owner = source();
+    let launch = launch_for(&owner);
+    let ssa =
+        ProductionSemanticSsaOwnerV1::try_new(owner, ProductionSemanticSsaLimitsV1::default())
+            .unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
+    budget.reserve_storage(19).unwrap();
+    let error = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+        ssa,
+        launch,
+        limits,
+        &mut budget,
+    )
+    .unwrap_err();
+    let ProductionPreRankedKirErrorV1::Lowering(error) = error else {
+        panic!("wrong rejection layer")
+    };
+    reject(error);
+    assert_eq!(budget.storage(), 19);
+    assert!(budget.failed_storage().is_none());
+}
+
+#[test]
+fn inert_v29_nested_role_without_calls_survives_custody_but_not_lowering() {
+    let id = SemanticTypeIdV1::from_index;
+    let zst = |tag, fields: Vec<SemanticTypeIdV1>| {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticTypeLayoutV1::aggregate(
+                Some(0),
+                1,
+                SemanticAggregateLayoutV1::new(vec![0; fields.len()], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(fields).unwrap()),
+        )
+    };
+    let context = zst(71, vec![id(1); 5]).with_rust_type_kind(SemanticRustTypeKindV1::Execution(
+        SemanticExecutionRoleV29::KernelContext,
+    ));
+    let types = vec![unit_type(), zst(70, vec![]), context, zst(72, vec![id(2)])];
+    let local = SemanticLocalDeclV1::new(
+        SemanticLocalIdentityV1::from_sha256(bytes(63)),
+        id(3),
+        SemanticLocalRoleV1::Temporary,
+        SemanticSourceProvenanceV1::unavailable(),
+    );
+    let owner = owner_from_parts(
+        types,
+        vec![return_local(), local],
+        0,
+        vec![block(73, vec![], SemanticTerminatorKindV1::Return)],
+        b"semantic_kir_test",
+    );
+    let encoded = owner.semantic().canonical_encoding().to_vec();
+    let hash = owner.semantic().semantic_sha256();
+    let decoded = AdmittedInertSemanticMirV1::decode_exact_v29_canonical(
+        &encoded,
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let owner =
+        ProductionSemanticMirOwnerV1::try_new(decoded, ProductionSemanticMirLimitsV1::default())
+            .unwrap();
+    let ssa =
+        ProductionSemanticSsaOwnerV1::try_new(owner, ProductionSemanticSsaLimitsV1::default())
+            .unwrap();
+    ssa.verify_replay().unwrap();
+    let owner = ssa.into_source_owner().unwrap();
+    assert_eq!(
+        owner.semantic().wire_version(),
+        SemanticMirWireVersionV1::V29
+    );
+    assert_eq!(owner.semantic().semantic_sha256(), hash);
+    assert_eq!(owner.semantic().canonical_encoding(), encoded);
+    assert_eq!(
+        owner.semantic().types()[2].rust_type_kind(),
+        SemanticRustTypeKindV1::Execution(SemanticExecutionRoleV29::KernelContext)
+    );
+    assert_eq!(owner.semantic().callables().len(), 1);
+    assert!(
+        matches!(ProductionSemanticKirOwnerV1::try_lower(owner, ProductionSemanticKirLimitsV1::default()),
+        Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+        if detail == "execution capabilities require checked canonical KIR materialization")
+    );
+}
+
 fn materialize(
     owner: ProductionSemanticMirOwnerV1,
     binding: [u8; 32],

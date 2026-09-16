@@ -345,6 +345,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes the exact inert V29 schema without admitting executable capabilities.
+    pub fn decode_exact_v29_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V29),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -780,11 +792,26 @@ impl<'a> CanonicalDecoderV1<'a> {
             first_pointee: self.optional_pointee_info()?,
             second_pointee: self.optional_pointee_info()?,
         };
-        let shape_tag = self.tagged("type shape", 13)?;
-        let rust_type_kind = if shape_tag == 13 {
-            SemanticRustTypeKindV1::Str
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V29 {
+            17
         } else {
-            SemanticRustTypeKindV1::Ordinary
+            13
+        };
+        let shape_tag = self.tagged("type shape", maximum_tag)?;
+        let rust_type_kind = match shape_tag {
+            13 => SemanticRustTypeKindV1::Str,
+            14 => SemanticRustTypeKindV1::Execution(SemanticExecutionRoleV29::KernelContext),
+            15 => SemanticRustTypeKindV1::Execution(SemanticExecutionRoleV29::Workgroup),
+            16 | 17 => {
+                let lanes = self.u16()?;
+                let elements = self.u16()?;
+                SemanticRustTypeKindV1::Execution(if shape_tag == 16 {
+                    SemanticExecutionRoleV29::MaskedTileU32 { lanes, elements }
+                } else {
+                    SemanticExecutionRoleV29::LaneFragmentU32 { lanes, elements }
+                })
+            }
+            _ => SemanticRustTypeKindV1::Ordinary,
         };
         let shape = match shape_tag {
             0 => SemanticTypeShapeV1::Unit,
@@ -853,6 +880,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element: SemanticTypeIdV1(self.u32()?),
             },
             13 => SemanticTypeShapeV1::Opaque,
+            14..=17 => SemanticTypeShapeV1::Aggregate(self.type_list()?),
             _ => unreachable!(),
         };
         Ok(
@@ -1642,7 +1670,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V15 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V29 {
+            86
+        } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
         } else if self.wire_version == SemanticMirWireVersionV1::V14 {
             67
@@ -1665,7 +1695,46 @@ impl<'a> CanonicalDecoderV1<'a> {
         } else {
             36
         };
-        Ok(match self.tagged("compiler intrinsic", maximum_tag)? {
+        let offset = self.offset;
+        let tag = self.tagged("compiler intrinsic", maximum_tag)?;
+        // Historical capability drafts and synthetic scope exit are not callable grammar.
+        if matches!(tag, 69..=80 | 83) {
+            return Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "compiler intrinsic",
+                offset,
+                value: tag,
+            });
+        }
+        Ok(match tag {
+            81 => SemanticCompilerIntrinsicOperationV1::Execution(
+                SemanticExecutionOperationV29::ContextIssue {
+                    context: SemanticTypeIdV1(self.u32()?),
+                },
+            ),
+            82 => SemanticCompilerIntrinsicOperationV1::Execution(
+                SemanticExecutionOperationV29::WorkgroupDerive {
+                    context: SemanticTypeIdV1(self.u32()?),
+                    workgroup: SemanticTypeIdV1(self.u32()?),
+                },
+            ),
+            84 => SemanticCompilerIntrinsicOperationV1::Execution(
+                SemanticExecutionOperationV29::MaskedTileLoadU32 {
+                    workgroup: SemanticTypeIdV1(self.u32()?),
+                    tile: SemanticTypeIdV1(self.u32()?),
+                },
+            ),
+            85 => SemanticCompilerIntrinsicOperationV1::Execution(
+                SemanticExecutionOperationV29::MaskedTileIntoFragmentU32 {
+                    tile: SemanticTypeIdV1(self.u32()?),
+                    fragment: SemanticTypeIdV1(self.u32()?),
+                },
+            ),
+            86 => SemanticCompilerIntrinsicOperationV1::Execution(
+                SemanticExecutionOperationV29::LaneFragmentIntoPartsU32 {
+                    fragment: SemanticTypeIdV1(self.u32()?),
+                    parts: SemanticTypeIdV1(self.u32()?),
+                },
+            ),
             0 => SemanticCompilerIntrinsicOperationV1::ThreadIndex(self.axis()?),
             1 => SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(self.axis()?),
             2 => SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(self.axis()?),
@@ -2685,6 +2754,7 @@ mod tests {
     use super::*;
     use std::fmt::Debug;
 
+    mod capability_v29_tests;
     mod frozen_v15;
     mod rust_call_local_tests;
 
@@ -4839,7 +4909,11 @@ mod tests {
                 layout.clone(),
                 shape,
             );
-            component_round_trip(declaration, encode_type, |decoder| decoder.ty());
+            component_round_trip(
+                declaration,
+                |writer, ty| encode_type(writer, ty, SemanticMirWireVersionV1::V2),
+                |decoder| decoder.ty(),
+            );
         }
 
         let integer = SemanticBackendPrimitiveV1::integer(false, 8, 1);

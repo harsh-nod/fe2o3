@@ -17,9 +17,11 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 mod canonical_decode;
+mod capability_v29;
 mod target_properties;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
+pub use capability_v29::{SemanticExecutionOperationV29, SemanticExecutionRoleV29};
 use target_properties::{
     target_object_size_bound_in, target_pointer_profile, target_vector_alignment,
     validate_target_primitive,
@@ -43,6 +45,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 // V16-V26 belong to incompatible unpublished capability drafts; V27 is held
 // for the independently coordinated numerical-relation contract.
 pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
+pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -66,6 +69,7 @@ pub enum SemanticMirWireVersionV1 {
     V14,
     V15,
     V28,
+    V29,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -86,6 +90,7 @@ impl SemanticMirWireVersionV1 {
             Self::V14 => INERT_SEMANTIC_MIR_VERSION_V14,
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
+            Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
         }
     }
 
@@ -106,6 +111,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V14 => Some(Self::V14),
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
+            INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
             _ => None,
         }
     }
@@ -1871,6 +1877,8 @@ pub enum SemanticRustTypeKindV1 {
     #[default]
     Ordinary,
     Str,
+    /// Nominal execution role with preserved aggregate layout, not issuance authority.
+    Execution(SemanticExecutionRoleV29),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5339,6 +5347,8 @@ pub enum SemanticWriteOnlyDisjointWriteKindV1 {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
+    /// Inert execution lifecycle descriptors; production requires checked KIR materialization.
+    Execution(SemanticExecutionOperationV29),
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -6252,6 +6262,14 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V28, limits)
     }
 
+    /// Admits the V29 inert capability grammar, not executable capability authority.
+    pub fn admit_exact_v29(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V29, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6266,6 +6284,12 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         let version = minimum_wire_version(&self).max(SemanticMirWireVersionV1::V5);
+        if version == SemanticMirWireVersionV1::V29 {
+            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V28,
+                required: version,
+            });
+        }
         self.admit_for_wire_version(version, limits)
     }
 
@@ -7033,6 +7057,7 @@ struct ValidationContextV1<'a> {
     limits: SemanticMirLimitsV1,
     totals: ValidationTotalsV1,
     work: u64,
+    owned_execution_roles: Vec<bool>,
 }
 
 impl<'a> ValidationContextV1<'a> {
@@ -7213,6 +7238,7 @@ fn validate_request(
         limits,
         totals: ValidationTotalsV1::default(),
         work: 0,
+        owned_execution_roles: Vec::new(),
     };
     let identity_order_work = request
         .types
@@ -7331,9 +7357,14 @@ fn validate_request(
         }
     }
 
+    let mut execution_roles = false;
     for (index, ty) in request.types.iter().enumerate() {
         context.one()?;
         validate_type(&mut context, SemanticTypeIdV1(index as u32), ty)?;
+        execution_roles |= matches!(ty.rust_type_kind, SemanticRustTypeKindV1::Execution(_));
+    }
+    if execution_roles {
+        context.owned_execution_roles = capability_v29::owned_role_types(&mut context)?;
     }
     validate_callables(&mut context)?;
     for (index, allocation) in request.allocations.iter().enumerate() {
@@ -7584,6 +7615,8 @@ fn record_intrinsic_capability_claims(
     claims: &mut IntrinsicCapabilityClaimsV1,
 ) -> bool {
     match operation {
+        // V29 roles are declared on types and checked by each exact signature.
+        SemanticCompilerIntrinsicOperationV1::Execution(_) => true,
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. } => {
             claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
         }
@@ -8036,6 +8069,9 @@ fn compiler_intrinsic_signature_matches(
         return false;
     }
     match operation {
+        SemanticCompilerIntrinsicOperationV1::Execution(operation) => {
+            operation.signature_matches(request, inputs, output)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
@@ -9953,7 +9989,7 @@ fn validate_type(
             context.type_reference(*return_type, location)?;
         }
     }
-    Ok(())
+    capability_v29::validate_execution_type(context, ty)
 }
 
 fn validate_type_abi_properties(
@@ -14022,6 +14058,9 @@ fn validate_aggregate_rvalue(
     result_type: SemanticTypeIdV1,
     aggregate: &SemanticAggregateRvalueV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if capability_v29::role(context.request, result_type).is_some() {
+        return invalid_type_operation(SemanticTypeOperationV1::Aggregate, location);
+    }
     let operands_match = |expected: &[SemanticTypeIdV1]| {
         aggregate.operands.len() == expected.len()
             && aggregate
@@ -14542,6 +14581,11 @@ fn validate_constant(
     constant: &SemanticConstantV1,
 ) -> Result<(), SemanticMirErrorV1> {
     context.type_reference(constant.ty, location)?;
+    if capability_v29::role(context.request, constant.ty).is_some()
+        || context.owned_execution_roles.get(constant.ty.0 as usize) == Some(&true)
+    {
+        return invalid_type_operation(SemanticTypeOperationV1::Constant, location);
+    }
     let ty = &context.request.types[constant.ty.0 as usize];
     match &constant.value {
         SemanticConstantValueV1::ZeroSized => {
@@ -15781,6 +15825,9 @@ fn enqueue_compiler_intrinsic_type_references(
     pending: &mut VecDeque<SemanticTypeIdV1>,
 ) {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::Execution(operation) => {
+            pending.extend(operation.type_ids());
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
@@ -16587,7 +16634,7 @@ fn encode_request(
     writer.u64(request.target.object_size_bound_bytes)?;
     writer.count(request.types.len())?;
     for ty in &request.types {
-        encode_type(&mut writer, ty)?;
+        encode_type(&mut writer, ty, wire_version)?;
     }
     writer.count(request.allocations.len())?;
     for allocation in &request.allocations {
@@ -16644,6 +16691,22 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if request
+        .types
+        .iter()
+        .any(|ty| matches!(ty.rust_type_kind, SemanticRustTypeKindV1::Execution(_)))
+        || request.callables.iter().any(|callable| {
+            matches!(
+                callable,
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::Execution(_),
+                    ..
+                }
+            )
+        })
+    {
+        return SemanticMirWireVersionV1::V29;
+    }
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
     let uses_scan = request.callables.iter().any(|callable| {
@@ -16995,7 +17058,17 @@ fn encode_source_origin(
 fn encode_type(
     writer: &mut CanonicalWriterV1,
     ty: &SemanticTypeDeclV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if let SemanticRustTypeKindV1::Execution(role) = ty.rust_type_kind {
+        if wire_version != SemanticMirWireVersionV1::V29 {
+            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: wire_version,
+                required: SemanticMirWireVersionV1::V29,
+            });
+        }
+        role.validate_geometry()?;
+    }
     writer.identity(ty.identity.0)?;
     writer.identity(ty.layout_identity.0)?;
     encode_type_layout(writer, &ty.layout)?;
@@ -17006,6 +17079,13 @@ fn encode_type(
     encode_optional_pointee_info(writer, ty.abi_properties.second_pointee)?;
     if ty.rust_type_kind == SemanticRustTypeKindV1::Str {
         return writer.u8(13);
+    }
+    if let SemanticRustTypeKindV1::Execution(role) = ty.rust_type_kind {
+        let SemanticTypeShapeV1::Aggregate(fields) = &ty.shape else {
+            return Err(SemanticMirErrorV1::InvalidTypeLayout);
+        };
+        role.encode(writer)?;
+        return encode_type_list(writer, fields);
     }
     match &ty.shape {
         SemanticTypeShapeV1::Unit => writer.u8(0),
@@ -17699,13 +17779,27 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
-    // V28 changes entry-local roles, not the published intrinsic grammar.
-    let wire_version = if wire_version == SemanticMirWireVersionV1::V28 {
+    if matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::Execution(_)
+    ) && wire_version != SemanticMirWireVersionV1::V29
+    {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V29,
+        });
+    }
+    // Both versions inherit the frozen legacy intrinsic grammar unchanged.
+    let wire_version = if matches!(
+        wire_version,
+        SemanticMirWireVersionV1::V28 | SemanticMirWireVersionV1::V29
+    ) {
         SemanticMirWireVersionV1::V15
     } else {
         wire_version
     };
     match operation {
+        SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
             writer.u8(0)?;
             encode_axis(writer, axis)
@@ -19783,6 +19877,7 @@ mod private_tests {
                 limits: SemanticMirLimitsV1::default(),
                 totals: ValidationTotalsV1::default(),
                 work: 0,
+                owned_execution_roles: Vec::new(),
             };
             validate_rvalue(
                 &mut context,
@@ -20808,6 +20903,7 @@ mod private_tests {
             limits: SemanticMirLimitsV1::default(),
             totals: ValidationTotalsV1::default(),
             work: 0,
+            owned_execution_roles: Vec::new(),
         };
         validate_dynamic_lds_linearity(&mut context, SemanticFunctionIdV1::from_index(0), function)
     }
@@ -21635,6 +21731,7 @@ mod private_tests {
             limits: SemanticMirLimitsV1::default(),
             totals: ValidationTotalsV1::default(),
             work: 0,
+            owned_execution_roles: Vec::new(),
         };
         let operand = SemanticOperandV1::Constant(SemanticConstantV1::new(
             scalar,

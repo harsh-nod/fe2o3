@@ -9966,6 +9966,19 @@ fn reject_retired_production_intrinsics_v1(
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Execution(_),
+                ..
+            }
+        )
+    }) {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "execution capabilities require checked canonical KIR materialization",
+        ));
+    }
+    if callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
                 operation: SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. },
                 ..
             }
