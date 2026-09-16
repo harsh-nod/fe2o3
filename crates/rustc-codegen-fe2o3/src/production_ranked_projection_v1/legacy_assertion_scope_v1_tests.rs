@@ -1393,4 +1393,505 @@ mod legacy_scope_tests {
             ));
         }
     }
+
+    // Genuine source/canonical-owner composition, not the cursor's RecordingFacts model.
+    const COMPOSITION_SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
+    const COMPOSITION_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
+    const COMPOSITION_WRAPPER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
+
+    #[derive(Clone, Copy, Debug)]
+    enum PrivateSliceCompositionV1 {
+        Read,
+        TwoReads,
+        ProjectedPrivateWrite,
+    }
+
+    fn private_slice_composition_types_v1() -> Vec<SemanticTypeDeclV1> {
+        use fe2o3_mir_model::semantic_mir_v1::*;
+        let mut types = assertion_types();
+        assert_eq!(types.len(), COMPOSITION_SLICE.index() as usize);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([237; 32]),
+            SemanticLayoutIdentityV1::from_sha256([237; 32]),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                4,
+                SemanticFieldsShapeV1::array(4, 0),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(false),
+                None,
+                false,
+                None,
+                4,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Slice { element: A_U32 },
+        ));
+        let pair = SemanticBackendReprV1::scalar_pair(
+            SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+            ),
+            SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            ),
+        );
+        types.push(
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([238; 32]),
+                SemanticLayoutIdentityV1::from_sha256([238; 32]),
+                SemanticTypeLayoutV1::new_with_backend_repr(Some(16), 8, pair, false).unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    SemanticPointerTypeV1::new_with_kind(
+                        COMPOSITION_SLICE,
+                        SemanticPointerKindV1::Reference,
+                        SemanticMutabilityV1::Immutable,
+                        0,
+                        64,
+                        SemanticPointerMetadataV1::SliceLength,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(
+                            SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                            0,
+                            4,
+                        )
+                        .unwrap(),
+                    ),
+                    None,
+                ),
+            ),
+        );
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([239; 32]),
+            SemanticLayoutIdentityV1::from_sha256([239; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(16),
+                8,
+                pair,
+                false,
+                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(
+                SemanticAggregateTypeV1::new(vec![COMPOSITION_REF]).unwrap(),
+            ),
+        ));
+        types
+    }
+
+    fn private_slice_composition_source_v1(
+        mode: PrivateSliceCompositionV1,
+    ) -> SemanticFunctionDeclV1 {
+        use fe2o3_mir_model::semantic_mir_v1::*;
+        let field = || {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(2),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), COMPOSITION_REF)
+                        .unwrap(),
+                ],
+                COMPOSITION_REF,
+            )
+            .unwrap()
+        };
+        let slice_read = || {
+            SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(2),
+                    vec![
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::Field(0),
+                            COMPOSITION_REF,
+                        )
+                        .unwrap(),
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::Dereference,
+                            COMPOSITION_SLICE,
+                        )
+                        .unwrap(),
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(4)),
+                            A_U32,
+                        )
+                        .unwrap(),
+                    ],
+                    A_U32,
+                )
+                .unwrap(),
+            )
+        };
+        let private_place = || {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(7),
+                vec![
+                    SemanticProjectionV1::new(
+                        SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(4)),
+                        A_U32,
+                    )
+                    .unwrap(),
+                ],
+                A_U32,
+            )
+            .unwrap()
+        };
+        let later = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            if matches!(mode, PrivateSliceCompositionV1::ProjectedPrivateWrite) {
+                private_place()
+            } else {
+                typed_place(6, A_U32)
+            },
+            SemanticRvalueV1::new(
+                A_U32,
+                if matches!(mode, PrivateSliceCompositionV1::TwoReads) {
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::BitXor,
+                        left: slice_read(),
+                        right: slice_read(),
+                    }
+                } else {
+                    SemanticRvalueKindV1::Use(slice_read())
+                },
+            ),
+        )));
+        let old = assertion_root_with_access(
+            vec![
+                (A_UNIT, SemanticLocalRoleV1::Return),
+                (COMPOSITION_REF, SemanticLocalRoleV1::Argument(0)),
+                (COMPOSITION_WRAPPER, SemanticLocalRoleV1::Temporary),
+                (A_U64, SemanticLocalRoleV1::Temporary),
+                (A_U64, SemanticLocalRoleV1::Temporary),
+                (A_BOOL, SemanticLocalRoleV1::Temporary),
+                (A_U32, SemanticLocalRoleV1::Temporary),
+                (A_ARRAY, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![],
+            vec![
+                block(
+                    210,
+                    vec![
+                        typed_assignment(
+                            2,
+                            COMPOSITION_WRAPPER,
+                            SemanticRvalueKindV1::aggregate(
+                                SemanticAggregateKindV1::Tuple,
+                                vec![SemanticOperandV1::Copy(typed_place(1, COMPOSITION_REF))],
+                            )
+                            .unwrap(),
+                        ),
+                        typed_assignment(
+                            3,
+                            A_U64,
+                            SemanticRvalueKindV1::Unary {
+                                operation: SemanticUnaryOpV1::PointerMetadata,
+                                operand: SemanticOperandV1::Copy(field()),
+                            },
+                        ),
+                        typed_assignment(
+                            4,
+                            A_U64,
+                            SemanticRvalueKindV1::Use(typed_constant(A_U64, 0, 8)),
+                        ),
+                        typed_assignment(
+                            5,
+                            A_BOOL,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::LessThan,
+                                left: SemanticOperandV1::Copy(typed_place(4, A_U64)),
+                                right: SemanticOperandV1::Copy(typed_place(3, A_U64)),
+                            },
+                        ),
+                    ],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: SemanticOperandV1::Copy(typed_place(5, A_BOOL)),
+                        expected: true,
+                        message: SemanticAssertMessageV1::BoundsCheck {
+                            length: SemanticOperandV1::Copy(typed_place(3, A_U64)),
+                            index: SemanticOperandV1::Copy(typed_place(4, A_U64)),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(
+                    211,
+                    vec![
+                        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            private_place(),
+                            SemanticRvalueV1::new(
+                                A_U32,
+                                SemanticRvalueKindV1::Use(typed_constant(A_U32, 17, 4)),
+                            ),
+                        ))),
+                        later,
+                    ],
+                    SemanticTerminatorKindV1::Return,
+                ),
+            ],
+            false,
+        );
+        let first = SemanticAbiValueAttributesV1::new(
+            SemanticAbiRegularAttributesV1::new(
+                true,
+                Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                true,
+                true,
+                false,
+                true,
+            ),
+            SemanticAbiExtensionV1::None,
+            0,
+            Some(4),
+        )
+        .unwrap();
+        let second = SemanticAbiValueAttributesV1::new(
+            SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+            SemanticAbiExtensionV1::None,
+            0,
+            None,
+        )
+        .unwrap();
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            old.abi().identity(),
+            old.abi().layout_identity(),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            1,
+            vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                COMPOSITION_REF,
+                SemanticAbiPassModeV1::Pair { first, second },
+            ))],
+            SemanticAbiValueV1::new(A_UNIT, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::SharedBorrow])
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            old.identity(),
+            old.role(),
+            old.item_definition_identity(),
+            old.monomorphization_identity(),
+            old.generic_type_arguments_identity(),
+            old.const_generic_arguments_identity(),
+            old.source(),
+            abi,
+            old.locals().to_vec(),
+            old.entry(),
+            old.blocks().to_vec(),
+        )
+        .unwrap()
+        .with_kernel_entry(old.kernel_entry().unwrap().clone())
+    }
+
+    fn private_slice_composition_attach_v1(
+        mode: PrivateSliceCompositionV1,
+        legacy: bool,
+    ) -> Result<
+        fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1,
+    > {
+        use fe2o3_lower_mir_kernel::{
+            ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirLimitsV1,
+            ProductionSemanticKirOwnerV1,
+        };
+        let types = private_slice_composition_types_v1();
+        let function = private_slice_composition_source_v1(mode);
+        let ssa = assertion_ssa_functions(types.clone(), vec![function.clone()]);
+        let materialized =
+            materialize_ranked_fixture_v1(ssa, &[ranked_root_input_1d(A_NAME, 247, 64)]);
+        let reads = if matches!(mode, PrivateSliceCompositionV1::TwoReads) {
+            2
+        } else {
+            1
+        };
+        let memory = materialized
+            .executable()
+            .module()
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter_map(|operation| match operation.kind {
+                fe2o3_kernel_ir::OperationKind::Load { .. } => Some(AccessKindAttr::Read),
+                fe2o3_kernel_ir::OperationKind::Store { .. } => Some(AccessKindAttr::Write),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut expected_memory = vec![AccessKindAttr::Write];
+        expected_memory.extend((0..reads).map(|_| AccessKindAttr::Read));
+        if matches!(mode, PrivateSliceCompositionV1::ProjectedPrivateWrite) {
+            expected_memory.push(AccessKindAttr::Write);
+        }
+        assert_eq!(
+            memory, expected_memory,
+            "actual N must evaluate the canonical RHS before a retained private destination"
+        );
+        // These are real owner/inventory/budget queries, not fabricated slice facts.
+        with_canonical_assertions_v1(&materialized, |session| {
+            let mut facts = session.for_source(ROOT, ROOT);
+            for ordinal in 0..reads {
+                let input = facts.slice_access(
+                    ProjectedSemanticAccessSiteV1 {
+                        block: 1,
+                        statement: Some(1),
+                    },
+                    ordinal,
+                    0,
+                )?;
+                assert_eq!(input.source_argument, 0);
+                assert_eq!(input.element_width, 4);
+            }
+            assert!(
+                facts
+                    .slice_access(
+                        ProjectedSemanticAccessSiteV1 {
+                            block: 1,
+                            statement: Some(1),
+                        },
+                        reads,
+                        0
+                    )
+                    .is_err(),
+                "the next occurrence is not another canonical read"
+            );
+            Ok(())
+        })
+        .unwrap();
+        let floor = materialized.executable_storage().retained_storage()
+            + materialized.assert_origin_storage().payload_storage();
+        let mut work = Work::new(1_000_000);
+        let mut budget = Budget::new(&mut work, floor);
+        budget.reserve_storage(floor).unwrap();
+        for statement in 0..=u32::from(matches!(
+            mode,
+            PrivateSliceCompositionV1::ProjectedPrivateWrite
+        )) {
+            assert_eq!(
+                materialized.materialized_private_array_constant_index(
+                    ROOT,
+                    ROOT,
+                    fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
+                        block: fe2o3_mir_model::SsaBlockIdV1::new(1),
+                        statement,
+                    },
+                    fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::Destination,
+                    &mut budget,
+                ),
+                Ok(Some(0))
+            );
+        }
+        assert_eq!(budget.storage(), floor);
+        drop(budget);
+        let program = assertion_project(materialized).unwrap();
+        assert!(program.all_kernel_checks_are_clean());
+        let ProductionRankedSemanticProgramV1 {
+            materialized,
+            roots,
+        } = program;
+        let root = roots.into_vec().into_iter().next().unwrap();
+        assert!(root.lowering.all_mandatory_reports_are_clean());
+        let rows = root
+            .access_sources
+            .iter()
+            .map(|row| {
+                let kind = match root.lowering.kernel().blocks()[row.ranked_block() as usize]
+                    .operations()[row.ranked_operation() as usize]
+                {
+                    ProductionRankedOperationV1::Access { kind, .. } => kind,
+                    _ => panic!("composition row must retain an ordinary memory effect"),
+                };
+                (
+                    row.semantic_block(),
+                    row.semantic_statement(),
+                    row.semantic_access_ordinal(),
+                    kind,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut expected = vec![(1, Some(0), 0, AccessKindAttr::Write)];
+        expected.extend((0..reads).map(|ordinal| (1, Some(1), ordinal, AccessKindAttr::Read)));
+        assert_eq!(
+            rows, expected,
+            "private write does not shift a later site's canonical read cursor"
+        );
+        if legacy {
+            let source = assertion_ssa_functions(types, vec![function])
+                .into_source_owner()
+                .unwrap();
+            assert_eq!(
+                source.semantic().semantic_sha256(),
+                materialized
+                    .semantic_ssa()
+                    .source_semantic()
+                    .semantic_sha256()
+            );
+            let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+                source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
+            ).unwrap();
+            ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+                receipt,
+                ProductionSemanticKirLimitsV1::default(),
+                1,
+            )
+        } else {
+            ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
+                materialized_ranked_fixture_receipt_v1(materialized, root),
+            )
+        }
+    }
+
+    #[test]
+    fn private_write_then_canonical_slice_read_resets_the_real_site_cursor() {
+        for legacy in [false, true] {
+            let _owner =
+                private_slice_composition_attach_v1(PrivateSliceCompositionV1::Read, legacy)
+                    .expect("private write followed by checked canonical read must attach");
+        }
+    }
+
+    #[test]
+    fn private_write_then_two_canonical_reads_retains_same_statement_ordinals() {
+        for legacy in [false, true] {
+            let _owner =
+                private_slice_composition_attach_v1(PrivateSliceCompositionV1::TwoReads, legacy)
+                    .expect("both checked RHS reads must precede the promoted scalar destination");
+        }
+    }
+
+    #[test]
+    fn canonical_read_into_private_destination_keeps_the_projected_rhs_refusal() {
+        use fe2o3_lower_mir_kernel::{
+            ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
+        };
+        for legacy in [false, true] {
+            let result = private_slice_composition_attach_v1(
+                PrivateSliceCompositionV1::ProjectedPrivateWrite,
+                legacy,
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                        ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+                            semantic_block: 1,
+                            semantic_statement: Some(1),
+                            semantic_access_ordinal: 1,
+                        }
+                    ))
+                ),
+                "unsupported projected RHS must fail at the later private destination, after its canonical read"
+            );
+        }
+    }
 }
