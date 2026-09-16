@@ -2663,6 +2663,8 @@ mod tests {
     use super::*;
     use std::fmt::Debug;
 
+    mod frozen_v15;
+
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]
     }
