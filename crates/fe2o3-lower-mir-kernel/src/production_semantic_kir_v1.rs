@@ -84,11 +84,21 @@ include!("production_private_array_records_v1.rs");
 include!("production_private_array_emission_v1.rs");
 include!("production_private_array_relation_v1.rs");
 include!("production_private_array_consumers_v1.rs");
+include!("production_argument_shapes_v1.rs");
+include!("production_argument_structure_v1.rs");
+include!("production_call_correspondence_v1.rs");
+include!("production_call_emission_v1.rs");
+include!("production_call_storage_v1.rs");
+include!("production_call_validation_v1.rs");
+include!("production_call_index_v1.rs");
+include!("production_call_view_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
 const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
 const DEFAULT_MAX_OPERATIONS_V1: usize = 1_048_576;
+const DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1: usize = 16 * 1024 * 1024;
+const DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1: usize = 16 * 1024 * 1024;
 
 /// Independent work limits for semantic-MIR-to-Kernel-IR lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +107,8 @@ pub struct ProductionSemanticKirLimitsV1 {
     max_blocks: usize,
     max_statements: usize,
     max_operations: usize,
+    max_argument_correspondence_work: usize,
+    max_argument_correspondence_storage: usize,
 }
 
 impl ProductionSemanticKirLimitsV1 {
@@ -122,7 +134,23 @@ impl ProductionSemanticKirLimitsV1 {
             max_blocks,
             max_statements,
             max_operations,
+            max_argument_correspondence_work: DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1,
+            max_argument_correspondence_storage: DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1,
         }
+    }
+
+    /// Bounds argument/call correspondence work and peak logical payload bytes.
+    /// Construction and validation are independently bounded phases; validation
+    /// includes retained call anchors plus temporary indices. Allocator excess,
+    /// immutable source graphs and legacy argument rows are excluded.
+    pub const fn with_argument_correspondence_limits(
+        mut self,
+        max_work: usize,
+        max_storage_bytes: usize,
+    ) -> Self {
+        self.max_argument_correspondence_work = max_work;
+        self.max_argument_correspondence_storage = max_storage_bytes;
+        self
     }
 }
 
@@ -513,6 +541,8 @@ pub struct SemanticKirCorrespondenceV1 {
     statement_operation_spans: Box<[SemanticKirStatementOperationSpanV1]>,
     terminator_operation_spans: Box<[SemanticKirTerminatorOperationSpanV1]>,
     generated_terminator_values: Box<[SemanticKirGeneratedTerminatorValuesV1]>,
+    call_returns: Box<[SemanticKirCallReturnV1]>,
+    call_result_components: Box<[CallResultComponentV1]>,
     synthetic_operation_spans: Box<[SemanticKirSyntheticOperationSpanV1]>,
     parameter_bindings: Box<[SemanticKirParameterBindingV1]>,
     parameter_component_bindings: Box<[SemanticKirParameterComponentBindingV1]>,
@@ -599,15 +629,9 @@ impl SemanticKirCorrespondenceV1 {
         semantic_owner: &ProductionSemanticSsaOwnerV1,
         module: &Module,
         expected_roots: &[SemanticFunctionIdV1],
-        max_blocks: usize,
+        limits: ProductionSemanticKirLimitsV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        validate_semantic_kir_correspondence(
-            semantic_owner,
-            module,
-            expected_roots,
-            max_blocks,
-            self,
-        )
+        validate_semantic_kir_correspondence(semantic_owner, module, expected_roots, limits, self)
     }
 }
 
@@ -774,6 +798,8 @@ pub enum ProductionSemanticKirErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
     /// Assertion-origin emission, sealing, query, or resource rejection.
     AssertOrigin(SemanticKirAssertOriginErrorV1),
+    /// Argument/call correspondence exhausted its independent phase budget.
+    ArgumentCorrespondenceResource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     /// A bounded lowering resource exceeded its limit.
     ResourceLimit {
         /// Resource that exceeded its limit.
@@ -924,6 +950,9 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => write!(formatter, "exact semantic owner failed: {error}"),
             Self::SemanticSsa(error) => write!(formatter, "semantic SSA custody failed: {error}"),
             Self::AssertOrigin(error) => error.fmt(formatter),
+            Self::ArgumentCorrespondenceResource(error) => {
+                write!(formatter, "argument/call correspondence: {error}")
+            }
             Self::ResourceLimit {
                 resource,
                 actual,
@@ -1079,6 +1108,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::AssertOrigin(error) => Some(error),
+            Self::ArgumentCorrespondenceResource(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
             Self::CanonicalKernelIrV8(error) => Some(error),
             Self::CanonicalKernelIrV9(error) => Some(error),
@@ -7736,7 +7766,7 @@ fn validate_semantic_kir_correspondence(
     owner: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     expected_roots: &[SemanticFunctionIdV1],
-    max_blocks: usize,
+    limits: ProductionSemanticKirLimitsV1,
     correspondence: &SemanticKirCorrespondenceV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     owner
@@ -7746,7 +7776,7 @@ fn validate_semantic_kir_correspondence(
         owner,
         module,
         expected_roots,
-        max_blocks,
+        limits,
         correspondence,
     )
 }
@@ -7755,7 +7785,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     owner: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     expected_roots: &[SemanticFunctionIdV1],
-    max_blocks: usize,
+    limits: ProductionSemanticKirLimitsV1,
     correspondence: &SemanticKirCorrespondenceV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
@@ -7792,7 +7822,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     let mut expected_entries = Vec::with_capacity(module.kernels.len());
     let mut expected_helpers = Vec::new();
     let mut retained_correspondence = BTreeSet::new();
-    let mut closure_budget = ReachableClosureBudgetV1::new(max_blocks);
+    let mut closure_budget = ReachableClosureBudgetV1::new(limits.max_blocks);
     for (kernel, expected_root_id) in module.kernels.iter().zip(expected_roots) {
         let root_id = semantic_roots_by_symbol
             .get(kernel.id.as_str())
@@ -7868,6 +7898,31 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     let mut parameter_offset = 0_usize;
     let mut parameter_component_offset = 0_usize;
     let mut ignored_parameter_offset = 0_usize;
+    let mut call_return_offset = 0_usize;
+    let mut argument_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        limits.max_argument_correspondence_work,
+    );
+    let mut argument_budget = ArgumentBudgetV1::new(
+        &mut argument_work,
+        limits.max_argument_correspondence_storage,
+    );
+    argument_budget.reserve_storage(CallReturnBufferV1::bytes(
+        correspondence.call_returns.len(),
+        correspondence.call_result_components.len(),
+    )?)?;
+    argument_budget.charge_work(argument_sum_v1(&[
+        correspondence.parameter_bindings.len(),
+        correspondence.parameter_component_bindings.len(),
+        correspondence.ignored_parameter_bindings.len(),
+        correspondence.call_returns.len(),
+        argument_product_v1(expected_functions.len(), 4)?,
+    ])?)?;
+    let call_targets = CallTargetIndexV1::new(module, &expected_functions, &mut argument_budget)?;
+    validate_call_component_pool_v1(
+        &correspondence.call_returns,
+        &correspondence.call_result_components,
+        &mut argument_budget,
+    )?;
     for expected_function in &expected_functions {
         let correspondence_owner = match expected_function.role {
             SemanticKirFunctionRoleV1::KernelEntry => semantic_roots_by_symbol
@@ -7880,9 +7935,8 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
             .functions()
             .get(expected_function.semantic_function.index() as usize)
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let target = module
-            .function(&expected_function.kernel_ir_function)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let target =
+            call_targets.physical(&expected_function.kernel_ir_function, &mut argument_budget)?;
         if target.role
             != match expected_function.role {
                 SemanticKirFunctionRoleV1::KernelEntry => {
@@ -8001,26 +8055,48 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
             &synthetic,
             runtime_assert_rule,
-        ) || !validate_parameter_correspondence_v1(
-            correspondence_owner,
-            expected_function.semantic_function,
-            semantic_function,
-            target_body,
-            correspondence
-                .parameter_bindings
-                .get(parameter_offset..parameter_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            correspondence
-                .parameter_component_bindings
-                .get(parameter_component_offset..parameter_component_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            correspondence
-                .ignored_parameter_bindings
-                .get(ignored_parameter_offset..ignored_parameter_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
         ) {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
+        validate_parameter_correspondence_v1(
+            semantic,
+            expected_function,
+            target,
+            ArgumentTraceV1 {
+                direct: correspondence
+                    .parameter_bindings
+                    .get(parameter_offset..parameter_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                components: correspondence
+                    .parameter_component_bindings
+                    .get(parameter_component_offset..parameter_component_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                ignored: correspondence
+                    .ignored_parameter_bindings
+                    .get(ignored_parameter_offset..ignored_parameter_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            },
+            &mut argument_budget,
+        )?;
+        let call_return_end = call_return_offset
+            + correspondence.call_returns[call_return_offset..]
+                .iter()
+                .take_while(|row| {
+                    row.correspondence_owner == correspondence_owner
+                        && row.semantic_function == expected_function.semantic_function
+                })
+                .count();
+        validate_call_correspondence_v1(
+            owner,
+            expected_function,
+            target,
+            &call_targets,
+            &correspondence.call_returns[call_return_offset..call_return_end],
+            &correspondence.call_result_components,
+            &correspondence.terminator_operation_spans[terminator_offset..terminator_end],
+            &mut argument_budget,
+        )?;
+        call_return_offset = call_return_end;
         block_offset = block_end;
         statement_offset = statement_end;
         terminator_offset = terminator_end;
@@ -8035,150 +8111,15 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         || parameter_offset != correspondence.parameter_bindings.len()
         || parameter_component_offset != correspondence.parameter_component_bindings.len()
         || ignored_parameter_offset != correspondence.ignored_parameter_bindings.len()
+        || call_return_offset != correspondence.call_returns.len()
     {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
     Ok(())
 }
 
-fn validate_parameter_correspondence_v1(
-    correspondence_owner: SemanticFunctionIdV1,
-    semantic_function: SemanticFunctionIdV1,
-    function: &SemanticFunctionDeclV1,
-    target: &FunctionBody,
-    bindings: &[SemanticKirParameterBindingV1],
-    component_bindings: &[SemanticKirParameterComponentBindingV1],
-    ignored_bindings: &[SemanticKirIgnoredParameterBindingV1],
-) -> bool {
-    let semantic_argument_count = function
-        .locals()
-        .iter()
-        .filter(|declaration| declaration.role().is_entry_argument())
-        .count();
-    if bindings.len().checked_add(component_bindings.len()) != Some(target.parameters.len()) {
-        return false;
-    }
-    let direct_ok = bindings.iter().all(|binding| {
-        let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
-            return false;
-        };
-        function
-            .locals()
-            .get(local)
-            .is_some_and(|declaration| declaration.role().is_entry_argument())
-            && binding.correspondence_owner == correspondence_owner
-            && binding.semantic_function == semantic_function
-            && target.parameters.contains(&binding.kernel_ir_value)
-    });
-    let components_ok = component_bindings.iter().all(|binding| {
-        let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
-            return false;
-        };
-        function
-            .locals()
-            .get(local)
-            .is_some_and(|declaration| declaration.role().is_entry_argument())
-            && binding.correspondence_owner == correspondence_owner
-            && binding.semantic_function == semantic_function
-            && !binding.projection.is_empty()
-            && target.parameters.contains(&binding.kernel_ir_value)
-    });
-    let ignored_ok = ignored_bindings.iter().all(|binding| {
-        let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
-            return false;
-        };
-        let Some(declaration) = function.locals().get(local) else {
-            return false;
-        };
-        let abi = function.abi();
-        let exact_ignored = |value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1| {
-            value.ty() == declaration.ty()
-                && value.value().adjusted().is_none()
-                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
-        };
-        let argument_ignored = match declaration.role() {
-            SemanticLocalRoleV1::Argument(argument)
-                if abi.extern_abi()
-                    == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
-                    && argument == abi.fixed_count() =>
-            {
-                abi.source_input_types().get(argument as usize) == Some(&declaration.ty())
-                    && abi
-                        .adjusted_arguments()
-                        .iter()
-                        .filter(|value| {
-                            matches!(
-                                value.role(),
-                                SemanticAbiArgumentRoleV1::RustCallTupleField(_)
-                            )
-                        })
-                        .all(|value| {
-                            value.value().adjusted().is_none()
-                                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
-                        })
-            }
-            SemanticLocalRoleV1::Argument(argument) => {
-                abi.source_input_types().get(argument as usize) == Some(&declaration.ty())
-                    && abi
-                        .adjusted_arguments()
-                        .get(argument as usize)
-                        .is_some_and(exact_ignored)
-            }
-            SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
-                argument == abi.fixed_count()
-                    && (abi.fixed_count() as usize)
-                        .checked_add(field as usize)
-                        .and_then(|index| abi.adjusted_arguments().get(index))
-                        .is_some_and(|value| {
-                            value.role() == SemanticAbiArgumentRoleV1::RustCallTupleField(field)
-                                && exact_ignored(value)
-                        })
-            }
-            SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => false,
-        };
-        binding.correspondence_owner == correspondence_owner
-            && binding.semantic_function == semantic_function
-            && binding.semantic_type == declaration.ty()
-            && argument_ignored
-    });
-    let mut represented = BTreeSet::new();
-    represented.extend(bindings.iter().map(|binding| binding.semantic_local));
-    represented.extend(
-        component_bindings
-            .iter()
-            .map(|binding| binding.semantic_local),
-    );
-    represented.extend(
-        ignored_bindings
-            .iter()
-            .map(|binding| binding.semantic_local),
-    );
-    let ignored_locals = ignored_bindings
-        .iter()
-        .map(|binding| binding.semantic_local)
-        .collect::<BTreeSet<_>>();
-    let ignored_are_unique_and_disjoint = ignored_locals.len() == ignored_bindings.len()
-        && bindings
-            .iter()
-            .all(|binding| !ignored_locals.contains(&binding.semantic_local))
-        && component_bindings
-            .iter()
-            .all(|binding| !ignored_locals.contains(&binding.semantic_local));
-    let mut values = BTreeSet::new();
-    values.extend(bindings.iter().map(|binding| binding.kernel_ir_value));
-    values.extend(
-        component_bindings
-            .iter()
-            .map(|binding| binding.kernel_ir_value),
-    );
-    direct_ok
-        && components_ok
-        && ignored_ok
-        && ignored_are_unique_and_disjoint
-        && represented.len() == semantic_argument_count
-        && values.len() == target.parameters.len()
-        && target.parameters.iter().all(|value| values.contains(value))
-}
+include!("production_argument_correspondence_v1.rs");
+include!("production_argument_view_v1.rs");
 
 fn validate_operation_correspondence_layout(
     expected: &[ExpectedSemanticKirBlockCoverageV1],
@@ -9862,6 +9803,7 @@ struct LoweredFunctionSignatureV1 {
     call_arguments: Vec<HelperCallArgumentV1>,
     parameter_types: Vec<Type>,
     result_types: Vec<Type>,
+    result_semantic_type: SemanticTypeIdV1,
 }
 
 #[derive(Clone)]
@@ -9895,6 +9837,7 @@ struct LoweredFunctionResultV1 {
     statement_operation_spans: Vec<SemanticKirStatementOperationSpanV1>,
     terminator_operation_spans: Vec<SemanticKirTerminatorOperationSpanV1>,
     generated_terminator_values: Vec<SemanticKirGeneratedTerminatorValuesV1>,
+    call_returns: CallReturnBufferV1,
     synthetic_operation_spans: Vec<SemanticKirSyntheticOperationSpanV1>,
     parameter_bindings: Vec<SemanticKirParameterBindingV1>,
     parameter_component_bindings: Vec<SemanticKirParameterComponentBindingV1>,
@@ -10132,16 +10075,11 @@ fn semantic_function_parameters_v1(
     function_id: SemanticFunctionIdV1,
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<(u32, usize, SemanticTypeIdV1)>, ProductionSemanticKirErrorV1> {
-    if function.abi().extern_abi()
-        == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
-    {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "kernel entry requires an ordinary source ABI",
-        ));
-    }
+    check_argument_function_abi_v1(
+        function,
+        function_id,
+        SemanticKirFunctionRoleV1::KernelEntry,
+    )?;
     let mut parameters = function
         .locals()
         .iter()
@@ -10193,6 +10131,10 @@ fn shared_slice_helper_parameter_v1(
     {
         return false;
     }
+    shared_slice_leaf_v1(types, ty)
+}
+
+fn shared_slice_leaf_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
     let Some(declaration) = types.get(ty.index() as usize) else {
         return false;
     };
@@ -10213,6 +10155,31 @@ fn shared_slice_helper_parameter_v1(
     else {
         return false;
     };
+    let SemanticBackendReprV1::ScalarPair { first, second } = declaration.layout().backend_repr()
+    else {
+        return false;
+    };
+    if declaration.layout().size_bytes() != Some(16)
+        || declaration.layout().alignment_bytes() != 8
+        || !matches!(
+            first.primitive(),
+            SemanticBackendPrimitiveV1::Pointer {
+                address_space: 0,
+                size_bytes: 8,
+                alignment_bytes: 8
+            }
+        )
+        || !matches!(
+            second.primitive(),
+            SemanticBackendPrimitiveV1::Integer {
+                bits: 64,
+                signed: false,
+                alignment_bytes: 8
+            }
+        )
+    {
+        return false;
+    }
     // Full source/type/ABI admission precedes this representation selection.
     matches!(
         types
@@ -10250,6 +10217,7 @@ fn lower_one_semantic_function_v1(
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -10322,6 +10290,13 @@ fn lower_one_semantic_function_v1(
         max_operations,
         PrivateArrayRecorderWorkV1::Shared(private_array_work),
         private_array_sources,
+        CallReturnBufferV1::for_function(
+            function,
+            semantic.callables(),
+            defined_function_signatures,
+            plan.result_types.len(),
+            call_budget,
+        )?,
     )?;
 
     let order = semantic_ssa
@@ -10484,6 +10459,8 @@ fn lower_one_semantic_function_v1(
     }
     let emitted_operations = lowering.emitted_operations;
     let generated_terminator_values = lowering.generated_terminator_values;
+    let mut call_returns = lowering.call_returns;
+    call_returns.order_blocks(call_budget)?;
     let private_arrays = lowering.private_arrays.into_rows()?;
     let operation_capabilities = target_blocks
         .iter()
@@ -10550,6 +10527,7 @@ fn lower_one_semantic_function_v1(
         statement_operation_spans,
         terminator_operation_spans,
         generated_terminator_values,
+        call_returns,
         synthetic_operation_spans,
         parameter_bindings,
         parameter_component_bindings: plan.parameter_component_bindings.clone(),
@@ -10603,7 +10581,75 @@ fn lower_module_with_assert_origins_v1(
     owner: &ProductionSemanticSsaOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        limits.max_argument_correspondence_work,
+    );
+    let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
+    let result = lower_module_with_call_budget_v1(
+        owner,
+        limits,
+        authenticated_launch_roots,
+        assert_origins,
+        &mut budget,
+    )?;
+    if budget.storage()
+        != CallReturnBufferV1::bytes(
+            result.1.call_returns.len(),
+            result.1.call_result_components.len(),
+        )?
+    {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    Ok(result)
+}
+
+fn lower_module_with_call_budget_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    let floor = call_budget.storage();
+    let result = lower_module_with_call_budget_inner_v1(
+        owner,
+        limits,
+        authenticated_launch_roots,
+        assert_origins,
+        call_budget,
+    )
+    .and_then(|(module, rows)| {
+        validate_call_component_pool_v1(
+            &rows.call_returns,
+            &rows.call_result_components,
+            call_budget,
+        )?;
+        Ok((module, rows))
+    });
+    let retained = match &result {
+        Ok((_, rows)) => {
+            CallReturnBufferV1::bytes(rows.call_returns.len(), rows.call_result_components.len())?
+        }
+        Err(_) => 0,
+    };
+    let live = argument_sum_v1(&[floor, retained])?;
+    call_budget.release_storage(
+        call_budget
+            .storage()
+            .checked_sub(live)
+            .ok_or(ArgumentResourceV1::Accounting)?,
+    )?;
+    result
+}
+
+fn lower_module_with_call_budget_inner_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
@@ -10627,6 +10673,7 @@ fn lower_module_with_assert_origins_v1(
             assert_origins,
             &mut private_array_work,
             None,
+            call_budget,
         )?;
         if correspondence.private_arrays.active {
             private_array_order_correspondence_v1(
@@ -10676,6 +10723,7 @@ fn lower_module_with_assert_origins_v1(
     let mut statement_spans = Vec::new();
     let mut terminator_spans = Vec::new();
     let mut generated_terminator_values = Vec::new();
+    let mut call_returns = CallReturnBufferV1::empty();
     let mut synthetic_spans = Vec::new();
     let mut parameter_bindings = Vec::new();
     let mut parameter_component_bindings = Vec::new();
@@ -10693,6 +10741,7 @@ fn lower_module_with_assert_origins_v1(
             assert_origins.as_deref_mut(),
             &mut private_array_work,
             private_arrays.as_ref(),
+            call_budget,
         )?;
         let [kernel] = root_module.kernels.as_slice() else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -10877,6 +10926,9 @@ fn lower_module_with_assert_origins_v1(
                 .any(|record| {
                     !exact_root_record(record.correspondence_owner, record.semantic_function)
                 })
+            || root_correspondence.call_returns.iter().any(|record| {
+                !exact_root_record(record.correspondence_owner, record.semantic_function)
+            })
             || root_correspondence
                 .synthetic_operation_spans
                 .iter()
@@ -10924,6 +10976,14 @@ fn lower_module_with_assert_origins_v1(
             root_correspondence.generated_terminator_values.into_vec(),
             ProductionSemanticKirResourceV1::DebugBindings,
             limits.max_operations,
+        )?;
+        call_returns.append(
+            CallReturnBufferV1::from_box(
+                root_correspondence.call_returns,
+                root_correspondence.call_result_components,
+            ),
+            limits.max_blocks,
+            call_budget,
         )?;
         append_correspondence_records_v1(
             &mut synthetic_spans,
@@ -11030,6 +11090,7 @@ fn lower_module_with_assert_origins_v1(
         &function_ordinals,
         |record| (record.correspondence_owner, record.semantic_function),
     )?;
+    call_returns.order(&function_ordinals, call_budget)?;
     synthetic_spans =
         order_correspondence_records_v1(synthetic_spans, &function_ordinals, |record| {
             (record.correspondence_owner, record.semantic_function)
@@ -11055,6 +11116,7 @@ fn lower_module_with_assert_origins_v1(
     if private_arrays.active {
         private_array_order_correspondence_v1(&mut private_arrays, &mut private_array_work)?;
     }
+    let (call_returns, call_result_components) = call_returns.into_box(call_budget)?;
     let correspondence = SemanticKirCorrespondenceV1 {
         private_arrays,
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
@@ -11064,12 +11126,14 @@ fn lower_module_with_assert_origins_v1(
         statement_operation_spans: statement_spans.into_boxed_slice(),
         terminator_operation_spans: terminator_spans.into_boxed_slice(),
         generated_terminator_values: generated_terminator_values.into_boxed_slice(),
+        call_returns,
+        call_result_components,
         synthetic_operation_spans: synthetic_spans.into_boxed_slice(),
         parameter_bindings: parameter_bindings.into_boxed_slice(),
         parameter_component_bindings: parameter_component_bindings.into_boxed_slice(),
         ignored_parameter_bindings: ignored_parameter_bindings.into_boxed_slice(),
     };
-    correspondence.validate_layout_against(owner, &merged, semantic.roots(), limits.max_blocks)?;
+    correspondence.validate_layout_against(owner, &merged, semantic.roots(), limits)?;
     Ok((merged, correspondence))
 }
 
@@ -11090,7 +11154,7 @@ type ByValueKernelParameterComponentV1 = (
     SemanticTypeIdV1,
     Type,
     u64,
-    SemanticBackendScalarV1,
+    ParameterAbiLeafV1,
 );
 
 fn order_correspondence_records_v1<T, F>(
@@ -11136,6 +11200,7 @@ fn lower_single_root_module(
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     outer_private_arrays: Option<&PrivateArrayMergeV1>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<
     (Module, SemanticKirCorrespondenceV1, PrivateArrayPayloadV1),
     ProductionSemanticKirErrorV1,
@@ -11266,15 +11331,8 @@ fn lower_single_root_module(
         )
     })?;
     for (argument, local, ty) in &entry_parameters {
-        let direct = lower_kernel_parameter_type(
-            semantic.types(),
-            semantic.callables(),
-            body,
-            *argument,
-            *ty,
-        );
-        let direct_error = match direct {
-            Ok(parameter_ty) => {
+        let components = match kernel_parameter_shape_v1(semantic, body, *argument, *ty)? {
+            KernelParameterShapeV1::Direct(parameter_ty) => {
                 closure_budget.charge_parameter_expansion(
                     logical_argument_rows_v1(body),
                     entry_parameter_types.len(),
@@ -11298,30 +11356,8 @@ fn lower_single_root_module(
                 });
                 continue;
             }
-            Err(error) => error,
+            KernelParameterShapeV1::Components(components) => components,
         };
-
-        let declaration = semantic
-            .types()
-            .get(ty.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
-        if !matches!(
-            declaration.shape(),
-            SemanticTypeShapeV1::Unit
-                | SemanticTypeShapeV1::Array { .. }
-                | SemanticTypeShapeV1::Tuple(_)
-                | SemanticTypeShapeV1::Aggregate(_)
-        ) || body
-            .abi()
-            .source_argument_ownership()
-            .get(*argument as usize)
-            != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-        {
-            return Err(direct_error);
-        }
-
-        let components =
-            lower_by_value_kernel_parameter_components_v1(semantic.types(), body, *argument, *ty)?;
         closure_budget.charge_parameter_expansion(
             logical_argument_rows_v1(body),
             entry_parameter_types.len(),
@@ -11459,6 +11495,10 @@ fn lower_single_root_module(
                     call_arguments: plan.call_arguments.clone(),
                     parameter_types: plan.parameter_types.clone(),
                     result_types: plan.result_types.clone(),
+                    result_semantic_type: semantic.functions()
+                        [plan.semantic_function.index() as usize]
+                        .abi()
+                        .source_output_type(),
                 },
             )
         })
@@ -11533,6 +11573,7 @@ fn lower_single_root_module(
     let mut statement_operation_spans = Vec::new();
     let mut terminator_operation_spans = Vec::new();
     let mut generated_terminator_values = Vec::new();
+    let mut call_returns = CallReturnBufferV1::empty();
     let mut synthetic_operation_spans = Vec::new();
     let mut parameter_bindings = Vec::new();
     let mut parameter_component_bindings = Vec::new();
@@ -11563,6 +11604,7 @@ fn lower_single_root_module(
             assert_origins.as_deref_mut(),
             private_array_work,
             Some((&private_arrays, outer_private_arrays)),
+            call_budget,
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
@@ -11589,6 +11631,7 @@ fn lower_single_root_module(
         statement_operation_spans.extend(lowered.statement_operation_spans);
         terminator_operation_spans.extend(lowered.terminator_operation_spans);
         generated_terminator_values.extend(lowered.generated_terminator_values);
+        call_returns.append(lowered.call_returns, limits.max_blocks, call_budget)?;
         synthetic_operation_spans.extend(lowered.synthetic_operation_spans);
         parameter_bindings.extend(lowered.parameter_bindings);
         append_correspondence_records_v1(
@@ -11710,6 +11753,7 @@ fn lower_single_root_module(
     }
     let (private_arrays, private_payload) =
         private_arrays.into_correspondence(private_array_work)?;
+    let (call_returns, call_result_components) = call_returns.into_box(call_budget)?;
     let correspondence = SemanticKirCorrespondenceV1 {
         private_arrays,
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
@@ -11719,18 +11763,15 @@ fn lower_single_root_module(
         statement_operation_spans: statement_operation_spans.into_boxed_slice(),
         terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
         generated_terminator_values: generated_terminator_values.into_boxed_slice(),
+        call_returns,
+        call_result_components,
         synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
         parameter_bindings: parameter_bindings.into_boxed_slice(),
         parameter_component_bindings: parameter_component_bindings.into_boxed_slice(),
         ignored_parameter_bindings: ignored_parameter_bindings.into_boxed_slice(),
     };
     if validate_correspondence {
-        correspondence.validate_layout_against(
-            owner,
-            &module,
-            &[selected_root],
-            limits.max_blocks,
-        )?;
+        correspondence.validate_layout_against(owner, &module, &[selected_root], limits)?;
     }
     Ok((module, correspondence, private_payload))
 }
@@ -11830,6 +11871,7 @@ struct SemanticFunctionLoweringV1<'a> {
     authenticated_loop_induction_bounds: BTreeMap<(u32, u32), u128>,
     emitted_unsigned_exclusive_bounds: BTreeMap<ValueId, u128>,
     generated_terminator_values: Vec<SemanticKirGeneratedTerminatorValuesV1>,
+    call_returns: CallReturnBufferV1,
 }
 
 struct SemanticParameterBindingsV1<'a> {
@@ -11866,6 +11908,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
         Self::new_interprocedural(
             types,
             callables,
@@ -11885,6 +11929,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             max_operations,
             PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, max_operations)),
             None,
+            CallReturnBufferV1::for_function(
+                function,
+                callables,
+                &BTreeMap::new(),
+                0,
+                &mut budget,
+            )?,
         )
     }
 
@@ -11908,6 +11959,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         max_operations: usize,
         mut private_array_work: PrivateArrayRecorderWorkV1<'a>,
         private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+        call_returns: CallReturnBufferV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -12116,6 +12168,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             authenticated_loop_induction_bounds,
             emitted_unsigned_exclusive_bounds: BTreeMap::new(),
             generated_terminator_values: Vec::new(),
+            call_returns,
         })
     }
 
@@ -12614,6 +12667,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         target: SemanticBlockIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<Vec<ValueId>, ProductionSemanticKirErrorV1> {
+        self.edge_arguments_with_result_v1(block, edge_ordinal, target, operations, None)
+            .map(|(arguments, _)| arguments)
+    }
+
+    fn edge_arguments_with_result_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        edge_ordinal: u32,
+        target: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+        watch: Option<(SemanticLocalIdV1, &[ValueDef])>,
+    ) -> Result<(Vec<ValueId>, CallComponentSpanV1), ProductionSemanticKirErrorV1> {
         let mut arguments = Vec::new();
         let planned = self
             .control_flow_ssa
@@ -12634,6 +12699,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .get(&(block.index(), edge_ordinal))
             .cloned()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let watched = watch.and_then(|(local, result)| {
+            definitions
+                .iter()
+                .copied()
+                .find(|definition| definition.variable().get() == local.index())
+                .map(|definition| (definition, result))
+        });
+        let first = self.call_returns.components.rows.len();
+        let mut captured = false;
         for definition in definitions {
             let local = definition.variable().get();
             let binding = self
@@ -12685,9 +12759,33 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "promoted aggregate changed its SSA component types",
                 ));
             }
+            let selected =
+                watched.filter(|(definition, _)| definition.variable() == argument.variable());
+            if let Some((definition, results)) = selected {
+                if argument != definition || values.len() != results.len() || captured {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+                captured = true;
+            }
             for (component, (value, actual)) in values.into_iter().enumerate() {
                 let expected =
                     self.control_flow_ssa.promoted[&local].kernel_types[component].clone();
+                let anchor = if let Some((_, results)) = selected {
+                    if value != results[component].id || actual != results[component].ty {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                    Some(CallResultComponentV1::Transport {
+                        slot: u32::try_from(arguments.len())
+                            .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                        conversion: if actual == expected {
+                            None
+                        } else {
+                            Some(call_operation_ordinal_v1(operations, block)?)
+                        },
+                    })
+                } else {
+                    None
+                };
                 let value = self.coerce_transport_value_v1(
                     operations,
                     block,
@@ -12697,10 +12795,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     expected,
                     "promoted aggregate changed its SSA component types",
                 )?;
+                if let Some(anchor) = anchor {
+                    self.call_returns.components.push(anchor)?;
+                }
                 arguments.push(value);
             }
         }
-        Ok(arguments)
+        Ok((arguments, self.call_returns.component_span(first)?))
     }
 
     fn lower_statement(
@@ -14782,89 +14883,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Some(block.index()),
                 None,
                 unsupported_terminator_detail(terminator),
-            )),
-        }
-    }
-
-    fn lower_return(
-        &mut self,
-        block: SemanticBlockIdV1,
-        operations: &mut Vec<Operation>,
-    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
-        let return_local = self
-            .function
-            .locals()
-            .iter()
-            .position(|local| local.role() == SemanticLocalRoleV1::Return)
-            .ok_or_else(|| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "function return local is missing",
-                )
-            })?;
-        match self.result_types.as_slice() {
-            [] => Ok(Terminator::Return { values: Vec::new() }),
-            [expected] => {
-                let expected = expected.clone();
-                let binding = self
-                    .locals
-                    .get(return_local)
-                    .and_then(Option::as_ref)
-                    .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                        function: self.semantic_function.index(),
-                        block: block.index(),
-                        statement: None,
-                        local: return_local as u32,
-                    })?;
-                let (value, actual) = binding.clone().value().map_err(|detail| {
-                    unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        detail,
-                    )
-                })?;
-                let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
-                    self.emit(
-                        operations,
-                        expected.clone(),
-                        OperationKind::Cast {
-                            kind: CastKind::Bitcast,
-                            value,
-                            to: expected,
-                        },
-                    )?
-                    .value()
-                    .map_err(|detail| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            detail,
-                        )
-                    })?
-                    .0
-                } else if actual == expected {
-                    value
-                } else {
-                    return Err(unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        "helper return local type changed",
-                    ));
-                };
-                Ok(Terminator::Return {
-                    values: vec![value],
-                })
-            }
-            _ => Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "helper has more than one lowered return value",
             )),
         }
     }
@@ -17517,204 +17535,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         } else {
             Ok(Terminator::Branch { target, arguments })
         }
-    }
-
-    fn lower_defined_call(
-        &mut self,
-        block: SemanticBlockIdV1,
-        call: &SemanticDirectCallV1,
-        callee: SemanticFunctionIdV1,
-        operations: &mut Vec<Operation>,
-    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
-        if !matches!(call.unwind(), SemanticUnwindActionV1::Unreachable) {
-            return Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "defined scalar call does not have an unreachable unwind edge",
-            ));
-        }
-        let callee_id = self
-            .defined_function_ids
-            .get(&callee)
-            .cloned()
-            .ok_or_else(|| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "defined call target is outside the lowered helper closure",
-                )
-            })?;
-        let signature = self
-            .defined_function_signatures
-            .get(&callee)
-            .cloned()
-            .ok_or_else(|| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "defined call target has no exact KIR signature",
-                )
-            })?;
-        if call.arguments().len() != signature.parameter_semantic_types.len()
-            || signature.call_arguments.len() != signature.parameter_types.len()
-            || signature.result_types.len() > 1
-        {
-            return Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "defined call argument or result arity changed",
-            ));
-        }
-        let prepared_destination = match call.destination() {
-            Some(destination) if !destination.place().projections().is_empty() => {
-                self.prepare_call_destination_v1(block, destination.place(), operations)?
-            }
-            _ => PreparedSemanticCallDestinationV1::Unprojected,
-        };
-        // Moving each source operand once precedes outer-tuple expansion.
-        let mut source_bindings = Vec::new();
-        source_bindings
-            .try_reserve_exact(call.arguments().len())
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
-            })?;
-        for (argument, expected) in call
-            .arguments()
-            .iter()
-            .zip(&signature.parameter_semantic_types)
-        {
-            if semantic_operand_type(argument) != *expected {
-                return Err(unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "defined call source argument type changed",
-                ));
-            }
-            source_bindings.push(self.lower_operand(block, None, argument, operations)?);
-        }
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(signature.parameter_types.len())
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
-            })?;
-        let mut flattened = None;
-        for (projection, expected) in signature
-            .call_arguments
-            .iter()
-            .zip(&signature.parameter_types)
-        {
-            let source = source_bindings
-                .get(projection.source_argument as usize)
-                .ok_or_else(|| {
-                    unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        "defined call projection has no source argument",
-                    )
-                })?;
-            let binding = match (source, projection.tuple_field) {
-                (SemanticValueBindingV1::Aggregate(fields), Some(field)) => {
-                    fields.get(field as usize).ok_or_else(|| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "defined call tuple field is missing",
-                        )
-                    })?
-                }
-                (_, None) => source,
-                (_, Some(_)) => {
-                    return Err(unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        "defined call RustCall argument is not a tuple binding",
-                    ));
-                }
-            };
-            let failure = |detail| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    detail,
-                )
-            };
-            let (value, actual) = match projection.component {
-                None => binding.value().map_err(failure)?,
-                Some(component) => {
-                    let key = (projection.source_argument, projection.tuple_field);
-                    if flattened
-                        .as_ref()
-                        .is_none_or(|(previous, _)| *previous != key)
-                    {
-                        flattened = Some((key, binding.values().map_err(failure)?));
-                    }
-                    flattened
-                        .as_ref()
-                        .unwrap()
-                        .1
-                        .get(component)
-                        .cloned()
-                        .ok_or_else(|| failure("defined call aggregate component is missing"))?
-                }
-            };
-            if &actual != expected {
-                return Err(failure("defined call argument type changed"));
-            }
-            arguments.push(value);
-        }
-        let destination = call.destination().ok_or_else(|| {
-            unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "returning defined call has no continuation destination",
-            )
-        })?;
-        let binding = match signature.result_types.as_slice() {
-            [] => {
-                self.push_operation(operations, || {
-                    Operation::new(
-                        Vec::new(),
-                        OperationKind::Call {
-                            callee: callee_id,
-                            arguments,
-                        },
-                    )
-                })?;
-                SemanticValueBindingV1::Unit
-            }
-            [result] => self.emit(
-                operations,
-                result.clone(),
-                OperationKind::Call {
-                    callee: callee_id,
-                    arguments,
-                },
-            )?,
-            _ => unreachable!("bounded helper plan admits at most one result"),
-        };
-        self.finish_call_destination_v1(
-            block,
-            destination.place(),
-            prepared_destination,
-            binding,
-            None,
-            operations,
-        )?;
-        Ok(Terminator::Branch {
-            target: BlockId(destination.edge().target().index()),
-            arguments: self.edge_arguments(block, 0, destination.edge().target(), operations)?,
-        })
     }
 
     fn lower_subgroup_reduce_f32(
@@ -23096,7 +22916,7 @@ fn lower_parameter_type(
             let address_space = lower_address_space(pointer.address_space())?;
             match pointer.metadata() {
                 SemanticPointerMetadataV1::None => Ok(Type::pointer(
-                    lower_memory_element_type(types, pointer.pointee())?,
+                    lower_parameter_memory_element_v1(types, pointer.pointee())?,
                     address_space,
                     access,
                 )),
@@ -23116,7 +22936,7 @@ fn lower_parameter_type(
                         ));
                     };
                     Ok(Type::slice(
-                        lower_scalar_type(types, *element)?,
+                        lower_parameter_scalar_v1(types, *element)?,
                         address_space,
                         access,
                     ))
@@ -23143,10 +22963,7 @@ fn lower_memory_element_type(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
-    if let Ok(scalar) = lower_scalar_type(types, ty) {
-        return Ok(scalar);
-    }
-    transparent_scalar_storage_type(types, ty).ok_or_else(|| {
+    memory_element_type_v1(types, ty).ok_or_else(|| {
         ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
             semantic_type: ty.index(),
             shape: types
@@ -23155,6 +22972,18 @@ fn lower_memory_element_type(
                 .unwrap_or_else(|| "<missing>".to_owned()),
         }
     })
+}
+
+fn memory_element_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> Option<Type> {
+    if matches!(
+        types
+            .get(ty.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+    ) {
+        return lower_scalar_type(types, ty).ok();
+    }
+    transparent_scalar_storage_type(types, ty)
 }
 
 fn lower_dynamic_lds_element_type_v1(
@@ -23276,8 +23105,13 @@ fn transparent_scalar_storage_type(
         if !visited.insert(current) || visited.len() > MAX_SSA_VALUE_COMPONENTS_V1 {
             return None;
         }
-        if let Ok(scalar) = lower_scalar_type(types, current) {
-            return Some(scalar);
+        if matches!(
+            types
+                .get(current.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+        ) {
+            return lower_scalar_type(types, current).ok();
         }
         let declaration = types.get(current.index() as usize)?;
         let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
@@ -23389,199 +23223,22 @@ fn lower_by_value_parameter_components_v1(
     function: &SemanticFunctionDeclV1,
     abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1,
 ) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
-    fn append(
-        types: &[SemanticTypeDeclV1],
-        ty: SemanticTypeIdV1,
-        path: &mut Vec<SemanticKirParameterProjectionV1>,
-        output: &mut Vec<ByValueKernelParameterComponentV1>,
-        structural_nodes: &mut usize,
-        offset: u64,
-    ) -> Result<(), ProductionSemanticKirErrorV1> {
-        *structural_nodes = structural_nodes
-            .checked_add(1)
-            .ok_or_else(|| unsupported(0, None, None, "by-value argument structure overflows"))?;
-        if *structural_nodes > MAX_SSA_VALUE_COMPONENTS_V1
-            || output.len() > MAX_SSA_VALUE_COMPONENTS_V1
-        {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value argument exceeds the component limit",
-            ));
-        }
-        let declaration = types
-            .get(ty.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "by-value argument type is missing"))?;
-        if declaration.layout().is_uninhabited() || declaration.layout().size_bytes().is_none() {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value argument has an uninhabited or unsized layout",
-            ));
-        }
-        match declaration.shape() {
-            SemanticTypeShapeV1::Unit => Ok(()),
-            SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
-                let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr()
-                else {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value scalar leaf lacks exact scalar backend representation",
-                    ));
-                };
-                let mut retained_path = Vec::new();
-                retained_path.try_reserve_exact(path.len()).map_err(|_| {
-                    ProductionSemanticKirErrorV1::AllocationFailure {
-                        resource: ProductionSemanticKirResourceV1::DebugBindings,
-                    }
-                })?;
-                retained_path.extend_from_slice(path);
-                output.try_reserve(1).map_err(|_| {
-                    ProductionSemanticKirErrorV1::AllocationFailure {
-                        resource: ProductionSemanticKirResourceV1::DebugBindings,
-                    }
-                })?;
-                output.push((
-                    retained_path,
-                    ty,
-                    lower_scalar_type(types, ty)?,
-                    offset,
-                    *scalar,
-                ));
-                Ok(())
-            }
-            SemanticTypeShapeV1::Array { element, length } => {
-                let length = usize::try_from(*length).map_err(|_| {
-                    unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array length does not fit this host",
-                    )
-                })?;
-                if length > MAX_SSA_VALUE_COMPONENTS_V1 {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array exceeds the component limit",
-                    ));
-                }
-                let SemanticFieldsShapeV1::Array {
-                    stride_bytes,
-                    count,
-                } = declaration.layout().fields()
-                else {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array lacks exact rustc field-stride evidence",
-                    ));
-                };
-                if usize::try_from(*count) != Ok(length) {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value array length disagrees with rustc layout",
-                    ));
-                }
-                for index in 0..length {
-                    path.try_reserve(1).map_err(|_| {
-                        ProductionSemanticKirErrorV1::AllocationFailure {
-                            resource: ProductionSemanticKirResourceV1::DebugBindings,
-                        }
-                    })?;
-                    path.push(SemanticKirParameterProjectionV1::ArrayIndex(
-                        u32::try_from(index).map_err(|_| {
-                            unsupported(0, None, None, "array index does not fit the wire")
-                        })?,
-                    ));
-                    let element_offset = stride_bytes
-                        .checked_mul(index as u64)
-                        .and_then(|relative| offset.checked_add(relative))
-                        .ok_or_else(|| {
-                            unsupported(0, None, None, "by-value array offset overflows")
-                        })?;
-                    append(
-                        types,
-                        *element,
-                        path,
-                        output,
-                        structural_nodes,
-                        element_offset,
-                    )?;
-                    path.pop();
-                }
-                Ok(())
-            }
-            SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
-                let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details()
-                else {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value aggregate lacks exact rustc field-offset evidence",
-                    ));
-                };
-                if layout.field_offsets().len() != fields.fields().len() {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "by-value aggregate field count disagrees with rustc layout",
-                    ));
-                }
-                for (index, field) in fields.fields().iter().copied().enumerate() {
-                    path.try_reserve(1).map_err(|_| {
-                        ProductionSemanticKirErrorV1::AllocationFailure {
-                            resource: ProductionSemanticKirResourceV1::DebugBindings,
-                        }
-                    })?;
-                    path.push(SemanticKirParameterProjectionV1::Field(
-                        u32::try_from(index).map_err(|_| {
-                            unsupported(0, None, None, "aggregate field does not fit the wire")
-                        })?,
-                    ));
-                    let field_offset = offset
-                        .checked_add(layout.field_offsets()[index])
-                        .ok_or_else(|| {
-                            unsupported(0, None, None, "by-value field offset overflows")
-                        })?;
-                    append(types, field, path, output, structural_nodes, field_offset)?;
-                    path.pop();
-                }
-                Ok(())
-            }
-            SemanticTypeShapeV1::Enum { .. } => Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value enum kernel arguments require variant-aware packing evidence",
-            )),
-            SemanticTypeShapeV1::Pointer(_) => Err(unsupported(
-                0,
-                None,
-                None,
-                "embedded pointer kernel arguments have no owned region binding",
-            )),
-            _ => Err(unsupported(
-                0,
-                None,
-                None,
-                "kernel argument has no pointer-free aggregate component representation",
-            )),
-        }
-    }
+    lower_by_value_abi_components_v1(
+        types,
+        function,
+        abi.value(),
+        ParameterLeafPolicyV1::PointerFree,
+    )
+}
 
+fn lower_by_value_abi_components_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
+    policy: ParameterLeafPolicyV1,
+) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
     let ty = abi.ty();
-    if abi.value().adjusted().is_some() {
+    if abi.adjusted().is_some() {
         return Err(unsupported(
             0,
             None,
@@ -23597,41 +23254,55 @@ fn lower_by_value_parameter_components_v1(
         })?;
     let mut path = Vec::new();
     let mut structural_nodes = 0;
-    append(types, ty, &mut path, &mut output, &mut structural_nodes, 0)?;
+    append_parameter_structure_v1(
+        types,
+        ty,
+        policy,
+        &mut path,
+        &mut output,
+        &mut structural_nodes,
+        0,
+        &mut |_| Ok(()),
+    )?;
     let source_size = types[ty.index() as usize]
         .layout()
         .size_bytes()
         .ok_or_else(|| unsupported(0, None, None, "by-value argument layout is unsized"))?;
-    let mut leaf_ranges = Vec::new();
-    leaf_ranges.try_reserve_exact(output.len()).map_err(|_| {
-        ProductionSemanticKirErrorV1::AllocationFailure {
+    let mut words = Vec::new();
+    words
+        .try_reserve_exact(output.len().saturating_mul(2))
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
             resource: ProductionSemanticKirResourceV1::DebugBindings,
-        }
-    })?;
-    for (_, _, _, offset, scalar) in &output {
-        let width = scalar.primitive().size_bytes().ok_or_else(|| {
-            unsupported(
-                0,
-                None,
-                None,
-                "by-value scalar component has no exact byte width",
-            )
         })?;
-        let end = offset.checked_add(width).ok_or_else(|| {
-            unsupported(0, None, None, "by-value scalar component range overflows")
-        })?;
-        if end > source_size {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value scalar component exceeds its source layout",
-            ));
+    for (_, _, _, offset, leaf) in &output {
+        for (relative, scalar) in leaf.words() {
+            let offset = offset
+                .checked_add(relative)
+                .ok_or_else(|| unsupported(0, None, None, "by-value ABI word offset overflows"))?;
+            let width = scalar.primitive().size_bytes().ok_or_else(|| {
+                unsupported(
+                    0,
+                    None,
+                    None,
+                    "by-value scalar component has no exact byte width",
+                )
+            })?;
+            let end = offset.checked_add(width).ok_or_else(|| {
+                unsupported(0, None, None, "by-value scalar component range overflows")
+            })?;
+            if end > source_size {
+                return Err(unsupported(
+                    0,
+                    None,
+                    None,
+                    "by-value scalar component exceeds its source layout",
+                ));
+            }
+            words.push((offset, end, scalar));
         }
-        leaf_ranges.push((*offset, end));
     }
-    leaf_ranges.sort_unstable();
-    if leaf_ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+    words.sort_unstable_by_key(|word| word.0);
+    if words.windows(2).any(|pair| pair[0].1 > pair[1].0) {
         return Err(unsupported(
             0,
             None,
@@ -23651,8 +23322,8 @@ fn lower_by_value_parameter_components_v1(
         SemanticAbiPassModeV1::Direct(attributes) => {
             match types[ty.index() as usize].layout().backend_repr() {
                 SemanticBackendReprV1::Scalar(root_scalar) => matches!(
-                    output.as_slice(),
-                    [(_, _, _, 0, leaf_scalar)] if leaf_scalar == root_scalar
+                    words.as_slice(),
+                    [(0, _, leaf_scalar)] if leaf_scalar == root_scalar
                 ),
                 SemanticBackendReprV1::Memory { sized: true } => {
                     function.abi().spec_abi_unadjusted()
@@ -23690,13 +23361,12 @@ fn lower_by_value_parameter_components_v1(
                 .ok_or_else(|| {
                     unsupported(0, None, None, "aggregate ABI scalar offset overflows")
                 })?;
-            matches!(
-                output.as_slice(),
-                [(_, _, _, 0, first_leaf), (_, _, _, leaf_offset, second_leaf)]
-                    if first_leaf == first
-                        && second_leaf == second
-                        && *leaf_offset == second_offset
-            )
+            match words.as_slice() {
+                [(0, _, a), (b_offset, _, b)] => {
+                    a == first && *b_offset == second_offset && b == second
+                }
+                _ => false,
+            }
         }
         SemanticAbiPassModeV1::Cast { pad_i32, cast } => {
             let layout = types[ty.index() as usize].layout();
@@ -23882,7 +23552,7 @@ fn authenticated_disjoint_slice_parameter(
     }
 
     Some(Type::slice(
-        lower_scalar_type(types, element).ok()?,
+        lower_parameter_scalar_v1(types, element).ok()?,
         AddressSpace::Global,
         access,
     ))
@@ -23960,7 +23630,7 @@ fn authenticated_global_mut_pointer_parameter(
 
     let pointer = physical_pointer?;
     Some(Type::pointer(
-        lower_scalar_type(types, pointer.pointee()).ok()?,
+        lower_parameter_scalar_v1(types, pointer.pointee()).ok()?,
         AddressSpace::Global,
         AccessMode::ReadWrite,
     ))
@@ -25884,6 +25554,9 @@ mod resource_tests {
     }
     mod correspondence_replay_core_tests {
         include!("production_semantic_kir_v1/tests/production_correspondence_replay_core_tests.rs");
+    }
+    mod argument_correspondence_tests {
+        include!("production_semantic_kir_v1/tests/production_argument_correspondence_tests.rs");
     }
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
@@ -30168,6 +29841,8 @@ mod resource_tests {
                 operation_count: 0,
             }]
             .into_boxed_slice(),
+            call_returns: Box::new([]),
+            call_result_components: Box::new([]),
             generated_terminator_values: Box::new([]),
             synthetic_operation_spans: Box::new([]),
             parameter_bindings: Box::new([]),
@@ -30278,6 +29953,8 @@ mod resource_tests {
                 operation_count: 0,
             }]
             .into_boxed_slice(),
+            call_returns: Box::new([]),
+            call_result_components: Box::new([]),
             generated_terminator_values: Box::new([]),
             synthetic_operation_spans: vec![SemanticKirSyntheticOperationSpanV1 {
                 correspondence_owner,
@@ -31396,6 +31073,8 @@ mod resource_tests {
                 operation_count: 0,
             }]
             .into_boxed_slice(),
+            call_returns: Box::new([]),
+            call_result_components: Box::new([]),
             generated_terminator_values: Box::new([]),
             synthetic_operation_spans: Box::new([]),
             parameter_bindings: Box::new([]),
@@ -31634,6 +31313,8 @@ mod resource_tests {
                 operation_count: 0,
             }]
             .into_boxed_slice(),
+            call_returns: Box::new([]),
+            call_result_components: Box::new([]),
             generated_terminator_values: Box::new([]),
             synthetic_operation_spans: Box::new([]),
             parameter_bindings: Box::new([]),
@@ -31931,6 +31612,8 @@ mod resource_tests {
                 operation_count: 0,
             }]
             .into_boxed_slice(),
+            call_returns: Box::new([]),
+            call_result_components: Box::new([]),
             generated_terminator_values: Box::new([]),
             synthetic_operation_spans: Box::new([]),
             parameter_bindings: Box::new([]),
@@ -32568,6 +32251,8 @@ mod resource_tests {
                 },
             ]
             .into_boxed_slice(),
+            call_returns: Box::new([]),
+            call_result_components: Box::new([]),
             generated_terminator_values: vec![SemanticKirGeneratedTerminatorValuesV1 {
                 correspondence_owner: semantic_function,
                 semantic_function,

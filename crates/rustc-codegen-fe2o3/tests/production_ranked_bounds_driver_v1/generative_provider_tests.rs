@@ -28,7 +28,7 @@ fn staged_generative_providers_reject_without_export_authority() {
         ("provider_fragment", REASON),
         (
             "provider_tile_chain",
-            "bounded closure admission failed: bounded closure profile rejected MIR: capture 0 has unsupported physical layout: unsized value at root.pointee: `[u32]`",
+            "bounded closure admission failed: bounded closure profile rejected MIR: raw-pointer captures have no allocation authority",
         ),
     ] {
         let bundle = target.path().join(format!("{feature}.fe2sim"));

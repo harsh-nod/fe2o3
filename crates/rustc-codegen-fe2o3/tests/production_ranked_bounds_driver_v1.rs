@@ -967,11 +967,66 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
             "export ordinary Rust FnOnce closures",
         );
         assert!(exported.status.success(), "{}", exported.stderr);
-        for (seed, lhs, rhs) in [
-            (13_u32, 29_u32, 11_u32),
-            (0, 0, 0),
-            (u32::MAX, 1, 2),
-            (0, 1, u32::MAX),
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap();
+        let pair = vec![fe2o3_kernel_ir::Type::Scalar(fe2o3_kernel_ir::ScalarType::U32); 2];
+        let mut calls = 0;
+        for operation in module
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+        {
+            let fe2o3_kernel_ir::OperationKind::Call { callee, .. } = &operation.kind else {
+                continue;
+            };
+            if operation.results.len() != 2 {
+                continue;
+            }
+            let helper = module
+                .function(callee)
+                .expect("defined aggregate-result helper");
+            assert_eq!(helper.role, fe2o3_kernel_ir::FunctionRole::InternalHelper);
+            assert_eq!(helper.signature.results, pair);
+            assert!(
+                operation
+                    .results
+                    .iter()
+                    .zip(&pair)
+                    .all(|(value, ty)| &value.ty == ty)
+            );
+            let returns = helper
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator {
+                    Some(fe2o3_kernel_ir::Terminator::Return { values }) => Some(values),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!returns.is_empty());
+            assert!(returns.iter().all(|values| values.len() == 2));
+            calls += 1;
+        }
+        assert!(
+            calls > 0,
+            "ordinary tuple-result Call must survive optimization"
+        );
+        assert_shared_slice_call_chain_v1(&module);
+        let typed_bundle_path = assert_shared_slice_source_v1(architecture, &target);
+        for (seed, lhs, rhs, input_length) in [
+            (13_u32, 29_u32, 11_u32, 3_usize),
+            (0, 0, 0, 0),
+            (u32::MAX, 1, 2, 1),
+            (0, 1, u32::MAX, 65),
+            (7, 11, 13, 129),
+            (u32::MAX, 29, 11, 3),
         ] {
             let expected = [
                 (seed ^ lhs).wrapping_sub(rhs).wrapping_add(lhs),
@@ -994,6 +1049,15 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                         "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
                     }));
                 }
+                let input_bytes = seed.to_le_bytes().repeat(input_length);
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_only",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&input_bytes)),
+                }));
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_write",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
+                }));
                 let request_path = target.path().join("rust-call-request.json");
                 std::fs::write(
                     &request_path,
@@ -1004,9 +1068,11 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                     .unwrap(),
                 )
                 .unwrap();
-                let admitted =
-                    fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
-                        .unwrap();
+                let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(
+                    &typed_bundle_path,
+                    &request_path,
+                )
+                .unwrap();
                 let execution = admitted
                     .input()
                     .module
@@ -1019,6 +1085,10 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                         panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
                     });
                 assert_eq!(execution.invocations_executed(), grid as u64);
+                assert_eq!(execution.buffer(6).unwrap().bytes(), input_bytes);
+                let mut expected_length = (input_length as u32).to_le_bytes().repeat(grid);
+                expected_length.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                assert_eq!(execution.buffer(7).unwrap().bytes(), expected_length);
                 for (index, value) in expected.into_iter().enumerate() {
                     let mut expected_bytes = value.to_le_bytes().repeat(grid);
                     expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
@@ -1032,6 +1102,8 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
         }
     }
 }
+
+include!("production_ranked_bounds_driver_v1/shared_slice_call_assertions.rs");
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]

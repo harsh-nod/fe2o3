@@ -199,6 +199,37 @@ fn device_wrapped_raw(pointer: *const u32) -> u32 {
     let closure = move |x| { let moved = wrapped; (unsafe { *moved.0 }) ^ x };
     closure(1)
 }
+
+struct SliceToken<'a>(&'a [u32], ((), ()));
+struct MutableSliceToken<'a>(&'a mut [u32]);
+struct NestedSliceToken<'a, 'b>(&'a &'b [u32]);
+struct ReferenceElements<'a>(&'a [&'a u32]);
+#[inline(never)]
+fn consume_slice(token: SliceToken<'_>) -> u32 { token.0.len() as u32 }
+fn device_slice_once(input: &[u32]) -> u32 {
+    let token = SliceToken(input, ((), ()));
+    let closure = move || consume_slice(token);
+    closure()
+}
+fn host_wrapped_slice(input: &[u32]) -> u32 {
+    let token = SliceToken(input, ((), ()));
+    host_apply(move |x| consume_slice(token) ^ x, 1)
+}
+fn device_mutable_slice(input: &mut [u32]) -> u32 {
+    let token = MutableSliceToken(input);
+    let closure = move || { let moved = token; moved.0.len() as u32 };
+    closure()
+}
+fn device_nested_slice(input: &&[u32]) -> u32 {
+    let token = NestedSliceToken(input);
+    let closure = move || { let moved = token; moved.0.len() as u32 };
+    closure()
+}
+fn device_reference_elements(input: &[&u32]) -> u32 {
+    let token = ReferenceElements(input);
+    let closure = move || { let moved = token; moved.0.len() as u32 };
+    closure()
+}
 "#;
 
 #[derive(Clone, Debug)]
@@ -373,11 +404,25 @@ impl Callbacks for CaptureCallbacks {
 }
 
 fn check_wrapped_captures(tcx: TyCtxt<'_>) -> usize {
+    let instance = Instance::mono(tcx, local_function(tcx, "device_slice_once"));
+    let admission = observe_closures_v2(tcx, instance).unwrap().unwrap();
+    assert_eq!(admission.environments().len(), 1);
+    let environment = &admission.environments()[0];
+    assert_eq!(environment.call_kind, ClosureCallKindV1::FnOnce);
+    assert_eq!(environment.origin, ClosureOriginV1::DeviceInternal);
+    assert_eq!(environment.captures.len(), 1);
+    assert_eq!(environment.captures[0].layout.size_bytes, 16);
+    let observation = admission.into_observation();
+    revalidate_closure_observation_v2(tcx, instance, Some(&observation)).unwrap();
     let cases = [
         ("host_wrapped_shared", true, "allocation/completion token"),
         ("host_wrapped_mutable", true, "allocation/completion token"),
         ("host_wrapped_raw", true, "raw-pointer captures"),
         ("device_wrapped_raw", false, "raw-pointer captures"),
+        ("host_wrapped_slice", true, "allocation/completion token"),
+        ("device_mutable_slice", false, "unsized value"),
+        ("device_nested_slice", false, "no outer reference"),
+        ("device_reference_elements", false, "scalar elements"),
     ];
     for (name, host, diagnostic) in cases {
         let caller = Instance::mono(tcx, local_function(tcx, name));
@@ -402,7 +447,7 @@ fn check_wrapped_captures(tcx: TyCtxt<'_>) -> usize {
 
 #[test]
 fn aggregate_wrappers_cannot_hide_borrowed_or_raw_capture_authority() {
-    assert_eq!(compiler_results().wrapped_capture_cases, 4);
+    assert_eq!(compiler_results().wrapped_capture_cases, 8);
 }
 
 fn local_function(tcx: TyCtxt<'_>, name: &str) -> rustc_hir::def_id::DefId {
