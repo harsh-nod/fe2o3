@@ -90,9 +90,15 @@ fn materialized_graph_and_canonical_buffers_move_through_attachment_unchanged() 
     assert_eq!(budget.storage(), 19);
     let storage = materialized.executable_storage();
     let origin_storage = materialized.assert_origin_storage();
-    budget
-        .reserve_storage(storage.retained_storage() + origin_storage.payload_storage())
-        .unwrap();
+    let helper_storage = materialized.helper_memory_storage_v1();
+    let retained_total = materialized.retained_analysis_storage_v1();
+    assert_eq!(
+        retained_total,
+        storage.retained_storage()
+            + origin_storage.payload_storage()
+            + helper_storage.retained_storage()
+    );
+    budget.reserve_storage(retained_total).unwrap();
     let graph = materialized.executable();
     let identity = *graph.canonical().identity();
     let functions = graph.module().functions.as_ptr();
@@ -122,6 +128,14 @@ fn materialized_graph_and_canonical_buffers_move_through_attachment_unchanged() 
         attached.pre_ranked_assert_origin_storage(),
         Some(origin_storage)
     );
+    assert_eq!(
+        attached.pre_ranked_helper_memory_storage_v1(),
+        Some(helper_storage)
+    );
+    assert_eq!(
+        attached.pre_ranked_retained_analysis_storage_v1(),
+        Some(retained_total)
+    );
     let origins = attached.pre_ranked_assert_origins().unwrap();
     assert!(std::ptr::eq(origins.executable(), retained));
     assert!(
@@ -142,9 +156,7 @@ fn materialized_graph_and_canonical_buffers_move_through_attachment_unchanged() 
     // This is deliberately a later reconstruction audit, not receipt attachment.
     attached.verify_equivalence().unwrap();
     drop(attached);
-    budget
-        .release_storage(storage.retained_storage() + origin_storage.payload_storage())
-        .unwrap();
+    budget.release_storage(retained_total).unwrap();
     assert_eq!(budget.storage(), 19);
 }
 
@@ -162,8 +174,7 @@ fn attachment_rejects_missing_layout_or_changed_rank_before_translation() {
             ProductionSemanticKirLimitsV1::default(),
             &mut budget,
         );
-        let payload = materialized.executable_storage().retained_storage()
-            + materialized.assert_origin_storage().payload_storage();
+        let payload = materialized.retained_analysis_storage_v1();
         budget.reserve_storage(payload).unwrap();
         let layout = materialized.source_launch().roots()[0].layout();
         let result = ProductionMaterializedRankedModuleReceiptV1::
@@ -260,18 +271,22 @@ fn explicit_function_limit_above_default_survives_connected_materialization() {
     );
     let storage = materialized.executable_storage();
     let origin_storage = materialized.assert_origin_storage();
-    budget
-        .reserve_storage(storage.retained_storage() + origin_storage.payload_storage())
-        .unwrap();
+    let helper_storage = materialized.helper_memory_storage_v1();
+    let retained_total = materialized.retained_analysis_storage_v1();
+    assert_eq!(
+        retained_total,
+        storage.retained_storage()
+            + origin_storage.payload_storage()
+            + helper_storage.retained_storage()
+    );
+    budget.reserve_storage(retained_total).unwrap();
     assert_eq!(
         materialized.executable().module().functions.len(),
         FUNCTION_COUNT
     );
     materialized.semantic_ssa().verify_replay().unwrap();
     drop(materialized);
-    budget
-        .release_storage(storage.retained_storage() + origin_storage.payload_storage())
-        .unwrap();
+    budget.release_storage(retained_total).unwrap();
     assert_eq!(budget.storage(), 0);
 }
 
@@ -480,7 +495,15 @@ fn optional_source_capture_stays_separately_reserved_through_legacy_attachment()
     assert!(materialized.semantic_ssa().occurrences_v1().is_some());
     let graph_storage = materialized.executable_storage();
     let origin_storage = materialized.assert_origin_storage();
-    let materialized_payload = graph_storage.retained_storage() + origin_storage.payload_storage();
+    let helper_storage = materialized.helper_memory_storage_v1();
+    let retained_total = materialized.retained_analysis_storage_v1();
+    assert_eq!(
+        retained_total,
+        graph_storage.retained_storage()
+            + origin_storage.payload_storage()
+            + helper_storage.retained_storage()
+    );
+    let materialized_payload = retained_total;
     budget.reserve_storage(materialized_payload).unwrap();
     let layout = materialized.source_launch().roots()[0].layout();
     let receipt =
@@ -499,6 +522,14 @@ fn optional_source_capture_stays_separately_reserved_through_legacy_attachment()
     assert_eq!(
         attached.pre_ranked_assert_origin_storage(),
         Some(origin_storage)
+    );
+    assert_eq!(
+        attached.pre_ranked_helper_memory_storage_v1(),
+        Some(helper_storage)
+    );
+    assert_eq!(
+        attached.pre_ranked_retained_analysis_storage_v1(),
+        Some(retained_total)
     );
     assert_eq!(
         budget.storage(),
@@ -551,6 +582,8 @@ fn existing_legacy_constructors_do_not_synthesize_connected_origin_custody() {
         assert!(owner.pre_ranked_executable_storage().is_none());
         assert!(owner.pre_ranked_assert_origins().is_none());
         assert!(owner.pre_ranked_assert_origin_storage().is_none());
+        assert!(owner.pre_ranked_helper_memory_storage_v1().is_none());
+        assert!(owner.pre_ranked_retained_analysis_storage_v1().is_none());
         assert!(owner.source_launch_roster().is_none());
         owner.verify_equivalence().unwrap();
     }

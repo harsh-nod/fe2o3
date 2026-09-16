@@ -101,6 +101,12 @@ impl VerifiedCanonicalKernelIrModuleV12 {
         &self.module
     }
 
+    /// Borrows the exact immutable decoded module already verified during V12
+    /// admission. This neither converts versions nor admits an arbitrary Module.
+    pub const fn verified_module_ref_v1(&self) -> crate::VerifiedKernelIrModuleV1<'_> {
+        crate::VerifiedKernelIrModuleV1::new_verified_v1(&self.module)
+    }
+
     pub const fn canonical(&self) -> &VerifiedCanonicalKernelIrV12 {
         &self.canonical
     }

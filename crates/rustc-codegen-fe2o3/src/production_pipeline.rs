@@ -3481,17 +3481,9 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
                 &mut budget,
             )
             .map_err(ProductionPipelineError::PreRankedMaterialization)?;
-        // Accept the graph and sealed origin transfers before any next phase.
+        // Accept the graph, sealed origin and helper transfers before any next phase.
         // This local ledger does not claim coverage of source-ranked analyses.
-        let retained_storage = materialized
-            .executable_storage()
-            .retained_storage()
-            .checked_add(materialized.assert_origin_storage().payload_storage())
-            .ok_or_else(|| {
-                resource_error(
-                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
-                )
-            })?;
+        let retained_storage = materialized.retained_analysis_storage_v1();
         budget
             .reserve_storage(retained_storage)
             .map_err(resource_error)?;

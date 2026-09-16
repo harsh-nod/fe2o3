@@ -30,7 +30,7 @@ const SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 const SLICE_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
 
 #[derive(Clone, Copy)]
-enum Fixture {
+pub(super) enum Fixture {
     Literal(bool),
     ElidedBounds,
     Unreachable,
@@ -517,7 +517,7 @@ fn fixture_with_blocks_symbol_and_slices(
         crate::ProductionSourceLaunchRosterV1::try_new(ssa.source_semantic(), &launches).unwrap();
     (ssa, launch)
 }
-fn materialize(
+pub(super) fn materialize(
     kind: Fixture,
     shared: bool,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -532,7 +532,7 @@ fn materialize(
     .unwrap()
 }
 fn retained(owner: &ProductionPreRankedKirOwnerV1) -> usize {
-    owner.executable_storage().retained_storage() + owner.assert_origin_storage().payload_storage()
+    owner.retained_analysis_storage_v1()
 }
 
 #[test]

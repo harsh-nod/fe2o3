@@ -324,9 +324,7 @@ mod canonical_assertion_graph_tests {
     #[test]
     fn graph_session_restores_caller_floor_on_success_early_and_late_errors() {
         let materialized = assertion_materialized(literal_assertion(true, true, false));
-        let floor = materialized.executable_storage().retained_storage()
-            + materialized.assert_origin_storage().payload_storage()
-            + 29;
+        let floor = materialized.retained_analysis_storage_v1() + 29;
         for mode in [0, 1, 2] {
             let mut work = Work::new(if mode == 0 { 18 } else { usize::MAX });
             let mut budget = Budget::new(&mut work, usize::MAX);

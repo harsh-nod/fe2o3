@@ -286,16 +286,15 @@ pub fn derive_source_output_occurrences_v1<'source, 'output>(
     use ProductionSourceOutputErrorV1 as Error;
     let floor = budget.storage();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Entry, source-pointer comparison, two live sums and floor comparison.
+        // Preserve the entry, source-pointer, two-sum and floor precharge. The
+        // source subtotal is now checked once when its immutable owner is sealed.
         budget.charge_work(5).map_err(Error::Resource)?;
         if !std::ptr::eq(source.executable(), coordinates.input()) {
             return Err(Error::InputCustody);
         }
         let live = source
-            .executable_storage()
-            .retained_storage()
-            .checked_add(source.assert_origin_storage().payload_storage())
-            .and_then(|n| n.checked_add(checked_output.storage().retained_storage()))
+            .retained_analysis_storage_v1()
+            .checked_add(checked_output.storage().retained_storage())
             .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
         if floor < live {
             return Err(Error::Resource(AssertOriginResourceV1::Accounting));

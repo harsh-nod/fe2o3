@@ -426,15 +426,14 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         use ProductionSourceOutputErrorV1 as Error;
         use ProductionSourceOutputPrivateArrayAccessV1 as Outcome;
         use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
-        // Three known live-payload sums and the minimum floor comparison. B's
+        // Preserve the three-sum/floor precharge; source's immutable graph,
+        // origin and helper subtotal was already checked at sealing. B's
         // separate owner receipt remains a caller precondition, as in B0.
         budget.charge_work(4).map_err(Error::Resource)?;
         let minimum = self
             .source
-            .executable_storage()
-            .retained_storage()
-            .checked_add(self.source.assert_origin_storage().payload_storage())
-            .and_then(|n| n.checked_add(self.checked_output.storage().retained_storage()))
+            .retained_analysis_storage_v1()
+            .checked_add(self.checked_output.storage().retained_storage())
             .and_then(|n| n.checked_add(self.storage.retained_storage()))
             .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
         if budget.storage() < minimum {
