@@ -16,6 +16,7 @@ Neither option upgrades a pending obligation to execution or launch evidence.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import hashlib
 import json
 import os
@@ -399,6 +400,12 @@ def source_contains_ordinary_attributed_kernel(source: str) -> bool:
 
 
 def ordinary_attributed_kernel_names(source: str) -> list[str]:
+    return ordinary_attributed_function_names(source, _attribute_has_kernel_name)
+
+
+def ordinary_attributed_function_names(
+    source: str, has_attribute: Callable[[str], bool],
+) -> list[str]:
     code = _rust_code_without_comments_and_literals(source)
     pairs = _rust_delimiters(code)
     macro_bodies = _macro_rule_bodies(code, pairs)
@@ -414,7 +421,7 @@ def ordinary_attributed_kernel_names(source: str) -> list[str]:
         if attribute.start() > 0 and code[attribute.start() - 1] == "!":
             continue
         closing, body = _rust_attribute(code, attribute.start(), pairs)
-        if not _attribute_has_kernel_name(body):
+        if not has_attribute(body):
             continue
         cursor = closing
         while True:
@@ -817,16 +824,23 @@ def validate_compiler_input_data(
         cargo, direct_features, compiler_input["defaultFeatures"], label
     )
     build = cargo["package"].get("build")
+    declared_features = cargo.get("features", {})
+    only_local_features = all(
+        isinstance(values, list) and all(
+            isinstance(value, str) and "/" not in value and not value.startswith("dep:")
+            for value in values
+        ) for values in declared_features.values()
+    )
     can_scope_includes = feature_scoped_includes and (
         build is False or (build is None and not (package_root / "build.rs").exists())
-    )
+    ) and only_local_features
     include_selection = tuple(enabled_features) if can_scope_includes else None
     checked_includes = cached.setdefault("checkedIncludes", set())
     if include_selection not in checked_includes:
         for path, text in cached["packageSources"]:
             validate_rust_source_includes(
                 text, path, package_root, label,
-                enabled_features=frozenset(enabled_features) if can_scope_includes else None,
+                inactive_features=frozenset(declared_features) - frozenset(enabled_features) if can_scope_includes else None,
             )
         checked_includes.add(include_selection)
     kernel_symbols = require_string_list(
@@ -894,7 +908,7 @@ def validate_rust_path_attributes(
 
 
 def inactive_feature_modules(
-    source: str, code: str, pairs: dict[int, int], enabled_features: frozenset[str],
+    source: str, code: str, pairs: dict[int, int], inactive_features: frozenset[str],
 ) -> list[tuple[int, int]]:
     """Only a literal false cfg on a top-level inline module excludes its body."""
     inactive = []
@@ -910,7 +924,7 @@ def inactive_feature_modules(
             r'\s*cfg\s*\(\s*feature\s*=\s*"([A-Za-z0-9_-]+)"\s*\)\s*',
             source[opening + 1:closing - 1],
         )
-        if condition is None or condition[1] in enabled_features:
+        if condition is None or condition[1] not in inactive_features:
             continue
         cursor = closing
         while re.match(r"\s*#\s*\[", code[cursor:]):
@@ -925,11 +939,11 @@ def inactive_feature_modules(
 
 def validate_rust_source_includes(
     source: str, source_path: Path, package_root: Path, label: str,
-    *, enabled_features: frozenset[str] | None = None,
+    *, inactive_features: frozenset[str] | None = None,
 ) -> None:
     code = _rust_code_without_comments_and_literals(source)
     pairs = _rust_delimiters(code)
-    inactive = [] if enabled_features is None else inactive_feature_modules(source, code, pairs, enabled_features)
+    inactive = [] if inactive_features is None else inactive_feature_modules(source, code, pairs, inactive_features)
     for include in SOURCE_INCLUDE_START.finditer(code):
         if any(start < include.start() < end for start, end in inactive):
             continue
@@ -1221,10 +1235,28 @@ def validate_source_item(
     if driver["path"] != f"crates/{package}/tests/{target}.rs":
         fail(f"{label} requires an exact integration-test driver path")
     driver_path = checked_path(repo_root, driver["path"], f"{label}.driver.path")
-    _, actual_package, _ = parse_package_identity(repo_root / f"crates/{package}/Cargo.toml", label)
+    driver_manifest = checked_path(repo_root, f"crates/{package}/Cargo.toml", f"{label}.driver manifest")
+    driver_cargo, actual_package, _ = parse_package_identity(repo_root / driver_manifest, label)
     if actual_package != package or (repo_root / driver_path).stat().st_size > MAX_ATTRIBUTED_SOURCE_BYTES:
         fail(f"{label} driver package or byte bound differs")
-    driver_code = _rust_code_without_comments_and_literals((repo_root / driver_path).read_text(encoding="utf-8"))
+    tests = driver_cargo.get("test", [])
+    if not isinstance(tests, list) or any(not isinstance(test, dict) for test in tests):
+        fail(f"{label} driver Cargo test targets are malformed")
+    selected = [test for test in tests if test.get("name") == target]
+    if any(test.get("path") == f"tests/{target}.rs" and test.get("name") != target for test in tests):
+        fail(f"{label} driver Cargo test path has a different target name")
+    if len(selected) > 1:
+        fail(f"{label} driver has duplicate Cargo test targets")
+    if selected:
+        test = selected[0]
+        if (test.get("path", f"tests/{target}.rs") != f"tests/{target}.rs"
+                or test.get("harness", True) is not True or test.get("required-features", []) != []):
+            fail(f"{label} driver Cargo test target differs")
+    elif driver_cargo["package"].get("autotests", True) is not True:
+        fail(f"{label} driver Cargo test target is disabled")
+    driver_names = ordinary_attributed_function_names(
+        (repo_root / driver_path).read_text(encoding="utf-8"), lambda body: body.strip() == "test",
+    )
     fragments = source_item_fragments(repo_root, tab, label)
     expected = [(ordinal, symbol) for ordinal, fragment in enumerate(fragments)
                 for symbol in ordinary_attributed_kernel_names(fragment)]
@@ -1241,8 +1273,8 @@ def validate_source_item(
         observed.append((ordinal, symbol))
         require_target(row["target"], f"{label}.target")
         name = require_string(row["testFunction"], f"{label}.testFunction")
-        if RUST_IDENTIFIER.fullmatch(name) is None or len(re.findall(r"\bfn\s+" + re.escape(name) + r"\s*\(", driver_code)) != 1:
-            fail(f"{label} must identify one existing driver function")
+        if RUST_IDENTIFIER.fullmatch(name) is None or driver_names.count(name) != 1:
+            fail(f"{label} must identify one existing driver test function")
         expectation = require_object(row["expectation"], f"{label}.expectation")
         kind = require_string(expectation.get("kind"), f"{label}.expectation.kind")
         if kind not in {"verified-bundle-export", "rejected"}:

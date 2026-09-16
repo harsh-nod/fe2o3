@@ -202,7 +202,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         for key, value in (("sourceItem", {"symbol": "fill"}), ("sourceItemStatus", "not-applicable")):
             self.manifest = copy.deepcopy(self.original)
             self.curriculum_lesson()["codeTabs"][0][key] = value
-            with self.assertRaisesRegex(SystemExit, "source-item obligation"):
+            with self.assertRaisesRegex(SystemExit, "source-item obligation|source item is a contract"):
                 self.validate_curriculum()
 
     def test_whole_file_metadata_and_tab_ordinals_remain_required(self):
@@ -633,6 +633,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             lambda item: item["cases"][0].update(features=["unavailable_feature"]),
             lambda item: item["cases"][0].update(target="gfx000"),
             lambda item: item["cases"][0].update(testFunction="missing_driver_test"),
+            lambda item: item["cases"][0].update(testFunction="workspace"),
             lambda item: item["cases"][0]["expectation"].update(bundleVersion=7),
             lambda item: item["cases"][0]["expectation"].update(bundleVersion=True),
             lambda item: item["cases"][0]["expectation"].update(kind="qualified"),
@@ -676,19 +677,19 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         source = '#[cfg(feature = "generated")] mod selected { include!(env!("SOURCE")); }'
         validate = self.validator.validate_rust_source_includes
         args = (ROOT / "source.rs", ROOT, "fixture")
-        validate(source, *args, enabled_features=frozenset())
-        validate(source.replace("mod selected", "#[allow(dead_code)] pub(crate) mod selected"), *args, enabled_features=frozenset())
+        validate(source, *args, inactive_features=frozenset({"generated"}))
+        validate(source.replace("mod selected", "#[allow(dead_code)] pub(crate) mod selected"), *args, inactive_features=frozenset({"generated"}))
         for candidate, features in (
-            (source, None), (source, frozenset({"generated"})),
-            (source.replace('feature = "generated"', 'unknown'), frozenset()),
-            (source.replace('feature = "generated"', 'not(feature = "generated")'), frozenset()),
-            ("macro_rules! outer { () => {" + source + "}; }", frozenset()),
-            ("other! { " + source + " }", frozenset()),
-            (source.replace("#[cfg", "#![cfg"), frozenset()),
-            (source + ' include!(env!("OTHER"));', frozenset()),
+            (source, None), (source, frozenset()),
+            (source.replace('feature = "generated"', 'unknown'), frozenset({"generated"})),
+            (source.replace('feature = "generated"', 'not(feature = "generated")'), frozenset({"generated"})),
+            ("macro_rules! outer { () => {" + source + "}; }", frozenset({"generated"})),
+            ("other! { " + source + " }", frozenset({"generated"})),
+            (source.replace("#[cfg", "#![cfg"), frozenset({"generated"})),
+            (source + ' include!(env!("OTHER"));', frozenset({"generated"})),
         ):
             with self.subTest(candidate=candidate, features=features), self.assertRaisesRegex(SystemExit, "non-literal include"):
-                validate(candidate, *args, enabled_features=features)
+                validate(candidate, *args, inactive_features=features)
 
     def test_build_scripts_cannot_inject_a_supposedly_disabled_feature(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -722,6 +723,59 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(SystemExit, "non-literal include"):
                             self.validator.validate_compiler_input_data(root, item, "test", feature_scoped_includes=True)
+            for features in (
+                '[features]\ngenerated = []\nfirst = ["generated"]\ndefault = ["first"]\n',
+                '[features]\ngenerated = []\ndefault = ["foo/bar"]\n',
+                '[features]\ngenerated = []\ndefault = ["dep:foo"]\n',
+                '[features]\nfoo = []\n',
+                '[features]\ngenerated = "unsupported"\n',
+            ):
+                manifest.write_text('[package]\nname = "fixture"\nversion = "0.1.0"\nbuild = false\n[workspace]\n' + features)
+                item["packageManifestSha256"] = hashlib.sha256(manifest.read_bytes()).hexdigest()
+                with self.subTest(features=features), self.assertRaisesRegex(SystemExit, "non-literal include"):
+                    self.validator.validate_compiler_input_data(root, item, "test", feature_scoped_includes=True)
+
+    def test_source_driver_rejects_disabled_redirected_and_symlinked_test_targets(self):
+        original = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "crates/test-driver"
+            (package / "tests").mkdir(parents=True)
+            (package / "tests/selection.rs").write_text("#[test] fn selected() {}\nfn helper() {}\n")
+            path = package / "Cargo.toml"
+            tab = copy.deepcopy(original)
+            tab["sourceItem"]["driver"] = {"package": "test-driver", "target": "selection", "path": "crates/test-driver/tests/selection.rs"}
+            for settings in (
+                "autotests = false\n",
+                '[[test]]\nname = "selection"\npath = "other.rs"\n',
+                '[[test]]\nname = "selection"\nharness = false\n',
+                '[[test]]\nname = "selection"\nrequired-features = ["disabled"]\n',
+                '[[test]]\nname = "renamed"\npath = "tests/selection.rs"\n',
+            ):
+                path.write_text('[package]\nname = "test-driver"\nversion = "0.1.0"\n' + settings)
+                with self.subTest(settings=settings), self.assertRaisesRegex(SystemExit, "driver Cargo test"):
+                    self.validator.validate_source_item(root, "cpu-semantic-simulation", tab, {})
+            outside = root / "outside.toml"
+            outside.write_text('[package]\nname = "test-driver"\nversion = "0.1.0"\n')
+            path.unlink()
+            path.symlink_to(outside)
+            with self.assertRaisesRegex(SystemExit, "symlink"):
+                self.validator.validate_source_item(root, "cpu-semantic-simulation", tab, {})
+
+    def test_source_ranges_reject_utf8_splits_and_are_bound_to_fragment_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "source.rs").write_text("// \u03bb\n#[kernel] fn selected() {}\n", encoding="utf-8")
+            tab = {
+                "sourcePath": "source.rs", "sourceDigestScope": "displayed",
+                "sourceFragmentsSha256": ["0" * 64],
+                "sourceItem": {"sourceRanges": [{"byteOffset": 4, "byteLength": 1}]},
+            }
+            with self.assertRaisesRegex(SystemExit, "not valid UTF-8"):
+                self.validator.source_item_fragments(root, tab, "test")
+            tab["sourceItem"]["sourceRanges"][0] = {"byteOffset": 0, "byteLength": 3}
+            with self.assertRaisesRegex(SystemExit, "fragment digest"):
+                self.validator.source_item_fragments(root, tab, "test")
 
 
 if __name__ == "__main__":

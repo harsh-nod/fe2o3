@@ -1705,12 +1705,10 @@ fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
         refusal: None,
     };
     let target = ScratchTarget::new();
+    let export_target = ScratchTarget::in_directory(target.path());
     let bundle_path = target.path().join("wave-reduce-f32-v5.fe2sim");
     let result = output(
-        case.export_command(
-            &bundle_path,
-            &target.path().join("wave-reduce-export-target"),
-        ),
+        case.export_command(&bundle_path, export_target.path()),
         "export ordinary attributed Rust KIR V9 wave reduction as bundle V5",
     );
     assert!(
@@ -1749,6 +1747,7 @@ fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
         )
         .expect("decode the exact V10 executable body");
     case.assert_kernel(bundle.target(), &module);
+    drop(export_target);
     assert!(module.functions.iter().any(|function| {
         function.body.as_ref().is_some_and(|body| {
             body.blocks.iter().any(|block| {
@@ -2120,7 +2119,7 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
         let result = output(
             case.export_command(
                 &bundle_path,
-                &target.path().join(format!("{feature}-export-target")),
+                &target.path().join("workgroup-reduce-export-target"),
             ),
             "export ordinary attributed Rust workgroup reduction as Bundle V5",
         );
@@ -3551,6 +3550,7 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     use fe2o3_kernel_ir::SemanticStorageProjectionV2::{ArrayElement, Field};
 
     let target = ScratchTarget::new();
+    let export_target = target.path().join("aggregate-export-target");
     for (feature, fragment, expected_paths) in [
         (
             "aggregate_pair_tuple",
@@ -3588,10 +3588,7 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
         };
         let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
         let result = output(
-            case.export_command(
-                &bundle_path,
-                &target.path().join(format!("{feature}-target")),
-            ),
+            case.export_command(&bundle_path, &export_target),
             "export ordinary attributed Rust aggregate V4 bundle",
         );
         assert!(
@@ -3787,10 +3784,7 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             "{feature} output path was not initially absent"
         );
         let result = output(
-            case.export_command(
-                &bundle_path,
-                &target.path().join(format!("{feature}-target")),
-            ),
+            case.export_command(&bundle_path, &export_target),
             "reject unsupported ordinary attributed Rust aggregate ABI",
         );
         assert!(
