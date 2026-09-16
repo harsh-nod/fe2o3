@@ -567,3 +567,285 @@ fn packet_j_core_has_one_binder_and_one_fixed_optimizer_callsite() {
     assert!(!source.contains("optimize_production_kernel_ir_module_v3("));
     assert!(!source.contains("target_module.clone()"));
 }
+
+fn formal_literal_tuple_store_source_v1(
+    bits: u64,
+    invocations: u32,
+) -> ProductionPreRankedKirOwnerV1 {
+    let seed = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+    let semantic = seed.semantic_ssa().source_semantic();
+    let root = &semantic.functions()[0];
+    let mut blocks = root.blocks().to_vec();
+    let guard = &blocks[2];
+    let mut statements = vec![typed_assignment(
+        8,
+        A_U64,
+        SemanticRvalueKindV1::Use(typed_constant(A_U64, u128::from(bits), 8)),
+    )];
+    statements.extend_from_slice(guard.statements());
+    blocks[2] = SemanticBasicBlockV1::new(
+        guard.identity(),
+        guard.source(),
+        statements,
+        guard.terminator().clone(),
+    )
+    .unwrap();
+    let mut locals = root.locals().to_vec();
+    assert_eq!(locals[8].role(), SemanticLocalRoleV1::Argument(3));
+    locals[8] = SemanticLocalDeclV1::new(
+        locals[8].identity(),
+        A_U64,
+        SemanticLocalRoleV1::Temporary,
+        locals[8].source(),
+    );
+    let old = root.abi();
+    assert_eq!(old.fixed_count(), 4);
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        old.identity(),
+        old.layout_identity(),
+        old.canon_abi(),
+        old.extern_abi(),
+        old.can_unwind(),
+        old.c_variadic(),
+        3,
+        old.arguments()[..3].to_vec(),
+        old.return_value().clone(),
+    )
+    .unwrap()
+    .with_source_argument_ownership(old.source_argument_ownership()[..3].to_vec())
+    .unwrap();
+    let dimensions = SemanticWorkgroupDimensionsV1::new([invocations, 1, 1]).unwrap();
+    let contract = SemanticKernelSourceContractV1::new(
+        Some(SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap()),
+        None,
+        None,
+    )
+    .unwrap();
+    let mut functions = semantic.functions().to_vec();
+    functions[0] = ordinary_rebuild_v1(root, abi, locals, blocks).with_kernel_entry(
+        SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(A_NAME.as_bytes().to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256(bytes(247)),
+            contract,
+        ),
+    );
+    materialize_ranked_fixture_v1(
+        assertion_ssa_functions(semantic.types().to_vec(), functions),
+        &[ranked_root_input_1d(A_NAME, 247, invocations)],
+    )
+    .unwrap()
+}
+
+// Fixture oracle on the actual O own-use chain, independent of the affine cache.
+// The original tuple helper result and the source assertion remain executable.
+fn require_actual_literal_global_offset_v1(
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    bits: u64,
+) -> fe2o3_kernel_ir::FunctionOperationLocation {
+    use fe2o3_kernel_ir::{
+        AddressSpace, CastKind, Constant, OperationKind, ScalarType, Terminator, Type,
+    };
+    let module = output.module();
+    assert_eq!(module.kernels.len(), 1);
+    let function = module.function(&module.kernels[0].entry).unwrap();
+    let body = function.body.as_ref().unwrap();
+    let definition = |value| {
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .find(|operation| operation.results.iter().any(|result| result.id == value))
+            .unwrap()
+    };
+    let stores = body
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block.operations.iter().enumerate().filter_map(
+                move |(index, operation)| match operation.kind {
+                    OperationKind::Store {
+                        pointer, access, ..
+                    } if access.address_space == AddressSpace::Global => {
+                        Some((block.id, index, pointer))
+                    }
+                    _ => None,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(stores.len(), 1);
+    let &(block, operation, mut pointer) = stores.first().unwrap();
+    let location = fe2o3_kernel_ir::FunctionOperationLocation::new(block, operation);
+    let mut offset = None;
+    for _ in 0..8 {
+        match definition(pointer).kind {
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value,
+                ..
+            } => pointer = value,
+            OperationKind::GetElementPointer { offset: value, .. } => {
+                offset = Some(value);
+                break;
+            }
+            _ => panic!("unexpected literal fixture pointer chain"),
+        }
+    }
+    let cast = definition(offset.expect("actual GEP"));
+    let OperationKind::Cast {
+        kind: CastKind::Bitcast,
+        mut value,
+        ref to,
+    } = cast.kind
+    else {
+        panic!("source U64 index must remain the actual INDEX bitcast");
+    };
+    assert_eq!(to, &Type::INDEX);
+    assert_eq!(cast.results.len(), 1);
+    assert_eq!(cast.results[0].ty, Type::INDEX);
+    for _ in 0..128 {
+        if let Some(operation) = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .find(|operation| operation.results.iter().any(|result| result.id == value))
+        {
+            assert_eq!(operation.results.len(), 1);
+            assert_eq!(operation.results[0].ty, Type::Scalar(ScalarType::U64));
+            assert!(
+                matches!(operation.kind, OperationKind::Constant(Constant::U64(actual)) if actual == bits)
+            );
+            return location;
+        }
+        let (block, ordinal) = body
+            .blocks
+            .iter()
+            .find_map(|block| {
+                block
+                    .parameters
+                    .iter()
+                    .position(|parameter| parameter.id == value)
+                    .map(|ordinal| (block, ordinal))
+            })
+            .expect("literal value must have an actual definition or block parameter");
+        assert_eq!(block.parameters[ordinal].ty, Type::Scalar(ScalarType::U64));
+        let mut incoming = Vec::new();
+        for predecessor in &body.blocks {
+            match predecessor.terminator.as_ref().unwrap() {
+                Terminator::Branch { target, arguments } if *target == block.id => {
+                    incoming.push(arguments[ordinal])
+                }
+                Terminator::ConditionalBranch {
+                    then_target,
+                    then_arguments,
+                    else_target,
+                    else_arguments,
+                    ..
+                } => {
+                    if *then_target == block.id {
+                        incoming.push(then_arguments[ordinal]);
+                    }
+                    if *else_target == block.id {
+                        incoming.push(else_arguments[ordinal]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let first = *incoming.first().expect("constant forwarding predecessor");
+        assert!(incoming.iter().all(|value| *value == first));
+        value = first;
+    }
+    panic!("literal fixture forwarding depth exceeded");
+}
+
+#[test]
+fn formal_actual_tuple_literal_global_store_is_complete_at_one_invocation() {
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        for bits in [0, 3, 17] {
+            let source = formal_literal_tuple_store_source_v1(bits, 1);
+            with_formal_completed_roots_v1(
+                &source,
+                profile,
+                true,
+                &[ranked_root_input_1d(A_NAME, 247, 1)],
+                |roots, budget| {
+                    assert_eq!(roots.len(), 1);
+                    let actual = require_actual_literal_global_offset_v1(roots[0].output(), bits);
+                    roots[0].with_physical_address_relation_v1(budget, |relation, _| {
+                        assert_eq!(
+                            (
+                                relation.global_access_count(),
+                                relation.private_access_count()
+                            ),
+                            (1, 0)
+                        );
+                        Ok(())
+                    })?;
+                    fe2o3_lower_mir_kernel::with_complete_formal_memory_module_v1(
+                        roots,
+                        budget,
+                        |formal, _| {
+                            assert_eq!(formal.len(), 1);
+                            assert!(std::ptr::eq(formal[0].output(), roots[0].output()));
+                            let obligations = formal[0].obligations();
+                            let [access] = obligations.accesses() else {
+                                panic!("one formal Global access");
+                            };
+                            assert_eq!(access.location(), actual);
+                            assert_eq!(
+                                access.byte_offset(),
+                                fe2o3_kernel_ir::ByteExpression::invocation_affine(bits * 4, 0)
+                            );
+                            assert_eq!(access.byte_width(), 4);
+                            assert_eq!(
+                                obligations.bounds_requirements()[0].minimum_byte_len(),
+                                (bits + 1) * 4
+                            );
+                            assert!(obligations.inter_invocation_conflicts().is_empty());
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn formal_actual_tuple_literal_global_store_keeps_multi_invocation_conflict() {
+    use fe2o3_kernel_ir::{
+        ExplicitLaunchExtent, FormalIndexWidth, derive_kernel_memory_obligations_for_launch,
+    };
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        for bits in [0, 17] {
+            let source = formal_literal_tuple_store_source_v1(bits, 64);
+            // D is not forged past its independent ranked race gate. This is
+            // genuine checked-O extraction, not admissible F completion.
+            with_actual_policy3_canonical_view_v1(&source, profile, |checked, view, _| {
+                assert!(std::ptr::eq(checked.owner(), view.output()));
+                let actual = require_actual_literal_global_offset_v1(checked.owner(), bits);
+                let module = checked.owner().module();
+                let analysis = derive_kernel_memory_obligations_for_launch(
+                    module,
+                    &module.kernels[0].id,
+                    ExplicitLaunchExtent::Exact {
+                        rank: 1,
+                        extents: [64, 1, 1],
+                    },
+                    FormalIndexWidth::Bits64,
+                )
+                .unwrap();
+                assert!(analysis.is_complete(), "{analysis:?}");
+                let obligations = analysis.obligations();
+                assert_eq!(obligations.accesses().len(), 1);
+                assert_eq!(obligations.accesses()[0].location(), actual);
+                assert_eq!(obligations.inter_invocation_conflicts().len(), 1);
+                assert_eq!(obligations.inter_invocation_conflicts()[0].left(), actual);
+                assert_eq!(obligations.inter_invocation_conflicts()[0].right(), actual);
+            });
+        }
+    }
+}

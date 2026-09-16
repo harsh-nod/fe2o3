@@ -170,7 +170,34 @@
             .split("impl ProductionRankedSemanticProgramV1")
             .next()
             .expect("bounded complete module transition");
-        assert!(module.contains("for root in source_order_roots.into_vec()"));
+        assert!(source.contains(
+            "include!(\"production_ranked_projection_v1/borrowed_source_authentication_v1.rs\");"
+        ));
+        let factored = include_str!("borrowed_source_authentication_v1.rs");
+        let split = factored
+            .split("fn split_authenticated_ranked_source_roots_v1(")
+            .nth(1)
+            .expect("shared source-order custody split")
+            .split("\nfn ")
+            .next()
+            .expect("bounded custody split");
+        assert!(split.contains("for root in source_order_roots.into_vec()"));
+        assert!(split.contains("lowering_roots.push("));
+        assert!(split.contains("verification_roots.push(AuthenticatedRankedVerificationRootV1"));
+        assert!(split.contains("(lowering_roots, verification_roots)"));
+        assert!(!split.contains("into_boxed_slice"));
+        let mut prior = 0;
+        for stage in [
+            "self.verify_equivalence()?;",
+            "split_authenticated_ranked_source_roots_v1(source_order_roots)",
+            "ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate",
+            "if receipt.root_count() != verification_roots.len()",
+            "roots: verification_roots.into_boxed_slice()",
+        ] {
+            let next = module.find(stage).expect("retained complete-module stage");
+            assert!(next >= prior, "reordered custody stage: {stage}");
+            prior = next;
+        }
         assert!(module.contains(
             "ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate"
         ));
@@ -178,6 +205,13 @@
         assert!(module.contains("AuthenticatedRankedVerificationRosterV1"));
         assert!(!module.contains("into_singleton_verified_receipt"));
         assert!(!module.contains("try_lower_after_ranked_checks"));
+        for forbidden in [
+            "from_unvalidated_ssa_projection_roster_candidate",
+            "into_singleton_verified_receipt",
+            "try_lower_after_ranked_checks",
+        ] {
+            assert!(!split.contains(forbidden));
+        }
         for forbidden in ["artifact", "publication", "load", "launch"] {
             assert!(
                 !receipt.contains(forbidden),

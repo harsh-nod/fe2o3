@@ -24956,6 +24956,7 @@ mod resource_tests {
     include!("production_semantic_kir_v1/tests/production_operation_contract_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_ordinary_helper_result_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
+    include!("production_semantic_kir_v1/tests/production_borrowed_n_ranked_v1_tests.rs");
 
     #[test]
     fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {

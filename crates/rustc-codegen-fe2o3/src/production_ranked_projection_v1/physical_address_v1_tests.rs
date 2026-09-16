@@ -656,3 +656,782 @@ fn physical_address_genuine_private_c_keeps_separate_partition_on_both_endpoints
         }
     }
 }
+mod borrowed_full_address_tests {
+    use super::*;
+    use fe2o3_lower_mir_kernel::{
+        ProductionBorrowedRankedCorrespondenceV1, ProductionProjectionArgumentComponentV1,
+        ProductionScopedCanonicalStoreAnalysisV1,
+    };
+
+    #[test]
+    fn full_expression_recording_preserves_actual_call_refusal() {
+        let source = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+        with_actual_policy3_canonical_view_v1(&source, Profile::Gfx942, |_, view, budget| {
+            let projection = RankedProjectionSourceV1::from_legacy(&source).unwrap();
+            let inputs = [ranked_root_input_1d(A_NAME, 247, 1)];
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            with_ranked_root_preparation_v1(&projection, &inputs, &references, |effects, partition| {
+                checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| {
+                    session.with_canonical_memory_scope_v1(|session| {
+                        let source_root = projection.source_launch().roots()[0];
+                        let selection = projection.semantic_ssa().source_semantic().select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
+                        let mut facts = session.for_source(source_root.selected_root(), selection.body());
+                        let old = project_and_verify_ranked_root_control_inner_v1(
+                            projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                            &partition[0], &mut facts,
+                        ).err().expect("the historical tuple-result expression path refuses");
+                        let mut recorder = canonical_memory_control_v1::CanonicalMemoryControlRecorderV1::new(&mut facts)?;
+                        let recorded = project_and_verify_ranked_root_control_with_address_claims_v1(
+                            projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                            &partition[0], &mut facts, Some(&mut recorder),
+                        ).err().expect("descriptive recording must not enable recorded-Call control");
+                        assert_eq!(format!("{old:?}"), format!("{recorded:?}"));
+                        Ok(())
+                    })
+                })
+            }).unwrap();
+        });
+    }
+
+    fn with_fixture(
+        profile: Profile,
+        capture: bool,
+        multiple: bool,
+        mutate: impl FnOnce(&mut [canonical_memory_control_v1::CanonicalMemoryControlRecorderV1]),
+        body: impl FnOnce(
+            &[ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>],
+            &ProductionBorrowedRankedCorrespondenceV1<'_>,
+            &[canonical_memory_control_v1::CanonicalMemoryControlRecorderV1],
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) {
+        with_index_fixture(
+            profile,
+            capture,
+            multiple,
+            false,
+            |recorders, _| mutate(recorders),
+            body,
+        );
+    }
+
+    fn with_index_fixture(
+        profile: Profile,
+        capture: bool,
+        multiple: bool,
+        formal_index: bool,
+        mutate: impl FnOnce(
+            &mut [canonical_memory_control_v1::CanonicalMemoryControlRecorderV1],
+            Option<SemanticLocalIdV1>,
+        ),
+        body: impl FnOnce(
+            &[ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>],
+            &ProductionBorrowedRankedCorrespondenceV1<'_>,
+            &[canonical_memory_control_v1::CanonicalMemoryControlRecorderV1],
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) {
+        // The seed provides admitted syntax only. This fresh owner is captured
+        // BEFORE its own materialization; no capture is grafted onto borrowed N.
+        let seed = genuine_dynamic_global_source_v1(GlobalWriteExpressionShapeV1::Parameter, 1);
+        let semantic = seed.semantic_ssa().source_semantic();
+        let mut functions = semantic.functions().to_vec();
+        let extra_index =
+            formal_index.then(|| {
+                let root = &functions[0];
+                let mut blocks = root.blocks().to_vec();
+                let mut removed = 0;
+                for block in &mut blocks {
+                    let statements = block.statements().iter().filter(|statement| {
+                    if matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment)
+                        if assignment.destination().local().index() == 8
+                            && assignment.destination().projections().is_empty())
+                    {
+                        removed += 1;
+                        false
+                    } else {
+                        true
+                    }
+                }).cloned().collect();
+                    *block = SemanticBasicBlockV1::new(
+                        block.identity(),
+                        block.source(),
+                        statements,
+                        block.terminator().clone(),
+                    )
+                    .unwrap();
+                }
+                assert_eq!(removed, 1);
+                let mut locals = root.locals().to_vec();
+                assert_eq!(locals[8].ty(), A_U64);
+                locals[8] = SemanticLocalDeclV1::new(
+                    locals[8].identity(),
+                    A_U64,
+                    SemanticLocalRoleV1::Argument(3),
+                    locals[8].source(),
+                );
+                let extra = SemanticLocalIdV1::from_index(locals.len() as u32);
+                locals.push(local(250, A_U64, SemanticLocalRoleV1::Argument(4)));
+                let old = root.abi();
+                assert_eq!(old.fixed_count(), 3);
+                let mut arguments = old.arguments().to_vec();
+                let mut ownership = old.source_argument_ownership().to_vec();
+                for _ in 0..2 {
+                    arguments.push(SemanticAbiArgumentV1::source(
+                        neutral_plain_direct_abi_value_v1(A_U64),
+                    ));
+                    ownership.push(SemanticSourceArgumentOwnershipV1::ByValue);
+                }
+                let abi = SemanticFunctionAbiV1::from_rustc(
+                    old.identity(),
+                    old.layout_identity(),
+                    old.canon_abi(),
+                    old.extern_abi(),
+                    old.can_unwind(),
+                    old.c_variadic(),
+                    5,
+                    arguments,
+                    old.return_value().clone(),
+                )
+                .unwrap()
+                .with_source_argument_ownership(ownership)
+                .unwrap();
+                functions[0] = ordinary_rebuild_v1(root, abi, locals, blocks);
+                extra
+            });
+        let mut inputs = vec![ranked_root_input_1d(A_NAME, 247, 1)];
+        if multiple {
+            let first = &functions[0];
+            let second = SemanticFunctionDeclV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(251)),
+                first.role(),
+                SemanticItemDefinitionIdentityV1::from_sha256(bytes(252)),
+                SemanticMonomorphizationIdentityV1::from_sha256(bytes(253)),
+                first.generic_type_arguments_identity(),
+                first.const_generic_arguments_identity(),
+                first.source(),
+                first.abi().clone(),
+                first.locals().to_vec(),
+                first.entry(),
+                first.blocks().to_vec(),
+            )
+            .unwrap()
+            .with_kernel_entry(SemanticKernelEntryV1::new(
+                SemanticLinkSymbolV1::new(b"full_address_second".to_vec()).unwrap(),
+                SemanticKernelBindingIdentityV1::from_sha256(bytes(248)),
+                first.kernel_entry().unwrap().source_contract(),
+            ));
+            functions.push(second);
+            inputs.push(ranked_root_input_1d("full_address_second", 248, 1));
+        }
+        let roots = (0..functions.len())
+            .map(|i| SemanticFunctionIdV1::from_index(i as u32))
+            .collect::<Vec<_>>();
+        let callables = roots
+            .iter()
+            .map(|root| SemanticCallableDeclV1::defined(*root))
+            .collect();
+        let admitted = InertSemanticMirRequestV1::new_with_callables(
+            semantic.target(),
+            semantic.types().to_vec(),
+            semantic.allocations().to_vec(),
+            semantic.statics().to_vec(),
+            semantic.vtables().to_vec(),
+            functions,
+            callables,
+            roots,
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+        let semantic_owner = ProductionSemanticMirOwnerV1::try_new(
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let mut ssa = ProductionSemanticSsaOwnerV1::try_new(
+            semantic_owner,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
+        drop(seed);
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(PREFIX).unwrap();
+        let capture_bytes = if capture {
+            let receipt = ssa
+                .try_capture_occurrences_with_budget_v1(&mut budget)
+                .unwrap();
+            budget.reserve_storage(receipt.retained_storage()).unwrap();
+            assert_eq!(ssa.occurrence_storage(), Some(receipt));
+            let view = ssa.occurrences_v1().unwrap();
+            for index in 0..inputs.len() {
+                let rows = view
+                    .function(SemanticFunctionIdV1::from_index(index as u32))
+                    .unwrap();
+                assert!(std::ptr::eq(rows.owner(), &ssa));
+                let source_use = rows.events().iter().find(|row| {
+                    row.site() == fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
+                        block: fe2o3_mir_model::SsaBlockIdV1::new(1), statement: 0,
+                    } && row.operand() == fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::Destination
+                        && row.role() == fe2o3_pliron::ProductionSemanticSsaEventRoleV1::ProjectionIndexUse(1)
+                }).expect("the exact Store index event must be captured");
+                assert!(source_use.is_promoted() && source_use.is_reachable());
+                assert!(
+                    matches!(source_use.resolved(), Some(fe2o3_mir_model::SsaResolvedEventV1::Use { variable, .. }) if variable.get() == 8)
+                );
+                if let Some(extra) = extra_index {
+                    use fe2o3_pliron::ProductionSemanticSsaEntryOriginV1 as Origin;
+                    let entry = rows
+                        .entry_definitions()
+                        .iter()
+                        .find(|entry| entry.variable().get() == 8)
+                        .unwrap();
+                    let other = rows
+                        .entry_definitions()
+                        .iter()
+                        .find(|entry| entry.variable().get() == extra.index())
+                        .unwrap();
+                    assert_eq!(entry.origin(), Origin::Argument(3));
+                    assert_eq!(other.origin(), Origin::Argument(4));
+                    assert!(entry.value().is_some() && other.value().is_some());
+                    assert_ne!(entry.value(), other.value());
+                    let Some(fe2o3_mir_model::SsaResolvedEventV1::Use { value, .. }) =
+                        source_use.resolved()
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(entry.value(), Some(value));
+                    assert_ne!(other.value(), Some(value));
+                }
+            }
+            receipt.retained_storage()
+        } else {
+            assert!(ssa.occurrences_v1().is_none());
+            0
+        };
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
+        let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+            ssa,
+            launch,
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )
+        .unwrap();
+        let source_bytes = source.executable_storage().retained_storage()
+            + source.assert_origin_storage().payload_storage();
+        budget.reserve_storage(source_bytes).unwrap();
+        let bound =
+            dialect_amdgcn::bind_production_target_v1(source.executable().module(), profile)
+                .unwrap();
+        let (input, input_storage) =
+            Owner::from_module_ref_with_verification_budget_v12(bound.module(), &mut budget)
+                .unwrap();
+        budget
+            .reserve_storage(input_storage.retained_storage())
+            .unwrap();
+        let observed =
+            fe2o3_pliron::optimize_native_neutral_kernel_ir_policy3_v1(&input, &mut budget)
+                .unwrap();
+        budget
+            .reserve_storage(observed.storage().retained_storage())
+            .unwrap();
+        let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
+        let output_bytes = checked.storage().retained_storage();
+        budget.reserve_storage(output_bytes).unwrap();
+        let coordinate_bytes;
+        {
+            let (coordinates, coordinates_storage) =
+                dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                    source.executable(),
+                    &input,
+                    profile,
+                    &mut budget,
+                )
+                .unwrap();
+            budget
+                .reserve_storage(coordinates_storage.retained_storage())
+                .unwrap();
+            coordinate_bytes = coordinates_storage.retained_storage();
+            let (view, view_storage) =
+                fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                    &source,
+                    &coordinates,
+                    &checked,
+                    &mut budget,
+                )
+                .unwrap();
+            budget
+                .reserve_storage(view_storage.retained_storage())
+                .unwrap();
+            let projection = RankedProjectionSourceV1::from_legacy(&source).unwrap();
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            let floor = budget.storage();
+            with_ranked_root_preparation_v1(
+                &projection,
+                &inputs,
+                &references,
+                |effects, partition| {
+                    checked_output_session_v1::with_checked_output_assertions_view_budget_v1(
+                        &view,
+                        &mut budget,
+                        |session| {
+                            session.with_canonical_memory_scope_v1(|session| {
+                                let mut full = Vec::new();
+                                let mut recorders = Vec::new();
+                                for (ordinal, source_root) in
+                                    projection.source_launch().roots().iter().enumerate()
+                                {
+                                    let selection = projection
+                                        .semantic_ssa()
+                                        .source_semantic()
+                                        .select_kernel_body_for_root_v1(source_root.selected_root())
+                                        .unwrap();
+                                    let mut facts = session
+                                        .for_source(source_root.selected_root(), selection.body());
+                                    let legacy = project_and_verify_ranked_root_control_inner_v1(
+                                        projection.semantic_ssa(),
+                                        effects,
+                                        selection,
+                                        &inputs[ordinal],
+                                        *source_root,
+                                        &partition[ordinal],
+                                        &mut facts,
+                                    )?;
+                                    let mut recorder =
+                                canonical_memory_control_v1::CanonicalMemoryControlRecorderV1::new(
+                                    &mut facts,
+                                )?;
+                                    let captured =
+                                project_and_verify_ranked_root_control_with_address_claims_v1(
+                                    projection.semantic_ssa(),
+                                    effects,
+                                    selection,
+                                    &inputs[ordinal],
+                                    *source_root,
+                                    &partition[ordinal],
+                                    &mut facts,
+                                    Some(&mut recorder),
+                                )?;
+                                    assert_eq!(captured.ranked_ir, legacy.ranked_ir);
+                                    assert_eq!(captured.access_sources, legacy.access_sources);
+                                    assert_eq!(
+                                        captured.all_kernel_checks_are_clean(),
+                                        legacy.all_kernel_checks_are_clean()
+                                    );
+                                    assert!(captured.all_kernel_checks_are_clean());
+                                    full.push(captured);
+                                    recorders.push(recorder);
+                                }
+                                mutate(&mut recorders, extra_index);
+                                with_prepared_canonical_memory_session_v1(
+                                    &projection,
+                                    &inputs,
+                                    effects,
+                                    partition,
+                                    session,
+                                    |analyses, budget| {
+                                        assert_eq!(analyses.len(), inputs.len());
+                                        for analysis in analyses {
+                                            assert!(std::ptr::eq(
+                                                analysis.output(),
+                                                checked.owner()
+                                            ));
+                                        }
+                                        with_authenticated_borrowed_ranked_source_roster_v1(
+                                            &source,
+                                            full.into_boxed_slice(),
+                                            budget,
+                                            |original, verification, budget| {
+                                                assert!(std::ptr::eq(
+                                                    original.materialized(),
+                                                    &source
+                                                ));
+                                                for root in verification.roots() {
+                                                    assert!(
+                                                !root
+                                                    .verification()
+                                                    .has_authenticated_functional_verification()
+                                            );
+                                                    assert!(
+                                                        root.verification()
+                                                            .aggregate_verus_execution()
+                                                            .is_none()
+                                                    );
+                                                }
+                                                Ok(body(analyses, original, &recorders, budget))
+                                            },
+                                        )
+                                        .expect("actual full-ranked R1 correspondence must succeed")
+                                    },
+                                )
+                            })
+                        },
+                    )
+                },
+            )
+            .unwrap();
+            assert!(references.as_slice().is_empty());
+            assert_eq!(budget.storage(), floor);
+            drop(view);
+            budget
+                .release_storage(view_storage.retained_storage())
+                .unwrap();
+        }
+        budget.release_storage(coordinate_bytes).unwrap();
+        drop(checked);
+        budget.release_storage(output_bytes).unwrap();
+        drop(input);
+        budget
+            .release_storage(input_storage.retained_storage())
+            .unwrap();
+        drop(source);
+        budget.release_storage(source_bytes).unwrap();
+        budget.release_storage(capture_bytes).unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+        assert!(budget.work() > 7);
+    }
+
+    #[test]
+    fn captured_scalar_formal_index_matches_exact_own_o_use_on_both_targets() {
+        use fe2o3_kernel_ir::{
+            CanonicalKirDefinitionCoordinateV1 as Def, CastKind, OperationKind, ScalarType, Type,
+        };
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_index_fixture(
+                profile,
+                true,
+                true,
+                true,
+                |_, extra| {
+                    assert!(extra.is_some());
+                },
+                |analyses, original, recorders, budget| {
+                    assert_eq!(analyses.len(), 2);
+                    let floor = budget.storage();
+                    let mut prior_work = budget.work();
+                    for (ordinal, analysis) in analyses.iter().enumerate() {
+                        analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                            let access = relation.access(0, budget)?.unwrap();
+                            let function = &relation.output().module().functions[access.gep().block.function.0 as usize];
+                            assert!(matches!(function.signature.parameters.as_slice(), [
+                                Type::Slice(_), Type::Slice(_), Type::Scalar(ScalarType::U32),
+                                Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64),
+                            ]));
+                            let body = function.body.as_ref().unwrap();
+                            let Def::Result { operation, result: 0 } = access.offset_definition() else {
+                                panic!("this source U64 index must reach its own INDEX cast result");
+                            };
+                            assert_eq!(operation.block.function, access.gep().block.function);
+                            let cast = &body.blocks[operation.block.block as usize].operations[operation.operation as usize];
+                            assert!(matches!(cast.kind, OperationKind::Cast {
+                                kind: CastKind::Bitcast, value, to: Type::INDEX,
+                            } if value == body.parameters[3]));
+                            assert_ne!(body.parameters[3], body.parameters[4]);
+                            let gep = &body.blocks[access.gep().block.block as usize].operations[access.gep().operation as usize];
+                            assert!(matches!(gep.kind, OperationKind::GetElementPointer { offset, .. }
+                                if offset == cast.results[0].id));
+                            for _ in 0..2 {
+                                let live = budget.storage();
+                                relation.check_borrowed_ranked_addresses_v1(
+                                    original, ordinal, recorders[ordinal].candidate(), budget,
+                                )?;
+                                assert_eq!(budget.storage(), live);
+                                assert!(budget.work() > prior_work);
+                                prior_work = budget.work();
+                            }
+                            Ok(())
+                        })?;
+                        assert_eq!(budget.storage(), floor);
+                    }
+                    Ok(())
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn captured_scalar_formal_index_rejects_same_typed_claimed_source_use_swap() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_index_fixture(
+                profile,
+                true,
+                false,
+                true,
+                |recorders, extra| {
+                    let extra = extra.unwrap();
+                    let claims = &mut recorders[0].candidate_mut().arguments;
+                    let index = claims
+                        .iter_mut()
+                        .find(|claim| {
+                            claim.source_local.index() == 8
+                                && claim.component
+                                    == ProductionProjectionArgumentComponentV1::Scalar
+                        })
+                        .unwrap();
+                    assert_ne!(index.source_local, extra);
+                    // Only an inert full claim is hostile. The exact captured
+                    // Store use still resolves to formal 3, never formal 4.
+                    index.source_local = extra;
+                },
+                |analyses, original, recorders, budget| {
+                    analyses[0].with_physical_address_relation_v1(budget, |relation, budget| {
+                        let floor = budget.storage();
+                        let before = budget.work();
+                        assert!(matches!(
+                            relation.check_borrowed_ranked_addresses_v1(
+                                original,
+                                0,
+                                recorders[0].candidate(),
+                                budget,
+                            ),
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "full address leaf source mapping differs"
+                            ))
+                        ));
+                        assert_eq!(budget.storage(), floor);
+                        assert!(budget.work() > before);
+                        Ok(())
+                    })
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn captured_full_addresses_match_same_actual_o_without_functional_authority() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for multiple in [false, true] {
+                with_fixture(
+                    profile,
+                    true,
+                    multiple,
+                    |_| {},
+                    |analyses, original, recorders, budget| {
+                        let floor = budget.storage();
+                        let mut history = budget.work();
+                        for (ordinal, analysis) in analyses.iter().enumerate() {
+                            analysis.with_physical_address_relation_v1(
+                                budget,
+                                |relation, budget| {
+                                    assert_eq!(relation.global_access_count(), 1);
+                                    for _ in 0..2 {
+                                        let live = budget.storage();
+                                        relation.check_borrowed_ranked_addresses_v1(
+                                            original,
+                                            ordinal,
+                                            recorders[ordinal].candidate(),
+                                            budget,
+                                        )?;
+                                        assert_eq!(budget.storage(), live);
+                                        assert!(budget.work() > history);
+                                        history = budget.work();
+                                    }
+                                    Ok(())
+                                },
+                            )?;
+                            assert_eq!(budget.storage(), floor);
+                        }
+                        Ok(())
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_address_join_refuses_uncaptured_source_after_real_r1_and_d() {
+        with_fixture(
+            Profile::Gfx942,
+            false,
+            false,
+            |_| {},
+            |analyses, original, recorders, budget| {
+                analyses[0].with_physical_address_relation_v1(budget, |relation, budget| {
+                    let floor = budget.storage();
+                    assert!(matches!(
+                        relation.check_borrowed_ranked_addresses_v1(
+                            original,
+                            0,
+                            recorders[0].candidate(),
+                            budget
+                        ),
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full address source SSA capture absent"
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), floor);
+                    Ok(())
+                })
+            },
+        );
+    }
+
+    #[test]
+    fn full_address_claim_mutations_reach_exact_join_after_r1_and_d() {
+        for mutation in 0..5 {
+            with_fixture(
+                Profile::Gfx942,
+                true,
+                false,
+                |recorders| {
+                    let claims = &mut recorders[0].candidate_mut().arguments;
+                    let index = claims
+                        .iter()
+                        .position(|row| {
+                            row.source_local.index() == 8
+                                && row.component == ProductionProjectionArgumentComponentV1::Scalar
+                        })
+                        .unwrap();
+                    let extent = claims
+                        .iter()
+                        .position(|row| {
+                            row.component == ProductionProjectionArgumentComponentV1::SliceLength
+                                && row.source_local.index() == 1
+                        })
+                        .unwrap();
+                    match mutation {
+                        0 => claims[index].source_local = SemanticLocalIdV1::from_index(7),
+                        1 => claims[extent].source_local = SemanticLocalIdV1::from_index(2),
+                        2 => {
+                            claims.remove(index);
+                        }
+                        3 => claims[extent] = claims[index],
+                        4 => {
+                            let value = claims[index].ranked_value;
+                            claims[index].ranked_value = claims[extent].ranked_value;
+                            claims[extent].ranked_value = value;
+                        }
+                        _ => unreachable!(),
+                    }
+                },
+                |analyses, original, recorders, budget| {
+                    analyses[0].with_physical_address_relation_v1(budget, |relation, budget| {
+                        let floor = budget.storage();
+                        let error = relation
+                            .check_borrowed_ranked_addresses_v1(
+                                original,
+                                0,
+                                recorders[0].candidate(),
+                                budget,
+                            )
+                            .unwrap_err();
+                        match mutation {
+                            0 | 1 | 4 => assert!(matches!(
+                                error,
+                                ProductionSourceOutputErrorV1::Invalid(
+                                    "full address leaf source mapping differs"
+                                )
+                            )),
+                            2 => assert!(matches!(
+                                error,
+                                ProductionSourceOutputErrorV1::Invalid(
+                                    "full address source claim absent"
+                                )
+                            )),
+                            3 => {
+                                assert!(matches!(error, ProductionSourceOutputErrorV1::Invalid(_)))
+                            }
+                            _ => unreachable!(),
+                        }
+                        assert_eq!(budget.storage(), floor);
+                        Ok(())
+                    })
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn full_address_scopes_keep_receipts_on_error_unwind_storage_denial_and_reentry() {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        with_fixture(
+            Profile::Gfx950,
+            true,
+            true,
+            |_| {},
+            |analyses, original, recorders, budget| {
+                let floor = budget.storage();
+                let result: Result<(), ProductionSourceOutputErrorV1> = analyses[0]
+                    .with_physical_address_relation_v1(budget, |relation, budget| {
+                        relation.check_borrowed_ranked_addresses_v1(
+                            original,
+                            0,
+                            recorders[0].candidate(),
+                            budget,
+                        )?;
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full-address callback marker",
+                        ))
+                    });
+                assert!(matches!(
+                    result,
+                    Err(ProductionSourceOutputErrorV1::Invalid(
+                        "full-address callback marker"
+                    ))
+                ));
+                assert_eq!(budget.storage(), floor);
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _: Result<(), ProductionSourceOutputErrorV1> = analyses[0]
+                        .with_physical_address_relation_v1(budget, |relation, budget| {
+                            relation.check_borrowed_ranked_addresses_v1(
+                                original,
+                                0,
+                                recorders[0].candidate(),
+                                budget,
+                            )?;
+                            std::panic::panic_any(0x333_u32);
+                        });
+                }))
+                .unwrap_err();
+                assert_eq!(panic.downcast_ref::<u32>(), Some(&0x333));
+                assert_eq!(budget.storage(), floor);
+                let before_second = budget.work();
+                analyses[1].with_physical_address_relation_v1(budget, |relation, budget| {
+                    let live = budget.storage();
+                    assert!(matches!(
+                        relation.check_borrowed_ranked_addresses_v1(
+                            original,
+                            0,
+                            recorders[1].candidate(),
+                            budget
+                        ),
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full address selected root differs"
+                        ))
+                    ));
+                    let padding = budget.storage_limit() - budget.storage();
+                    budget.reserve_storage(padding).unwrap();
+                    let denied = relation.check_borrowed_ranked_addresses_v1(
+                        original,
+                        1,
+                        recorders[1].candidate(),
+                        budget,
+                    );
+                    assert!(matches!(
+                        denied,
+                        Err(ProductionSourceOutputErrorV1::Resource(Resource::Storage(
+                            _
+                        )))
+                    ));
+                    assert_eq!(budget.storage(), live + padding);
+                    budget.release_storage(padding).unwrap();
+                    relation.check_borrowed_ranked_addresses_v1(
+                        original,
+                        1,
+                        recorders[1].candidate(),
+                        budget,
+                    )?;
+                    assert_eq!(budget.storage(), live);
+                    Ok(())
+                })?;
+                assert!(budget.work() > before_second);
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            },
+        );
+    }
+}

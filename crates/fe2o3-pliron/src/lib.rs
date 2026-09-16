@@ -13,8 +13,9 @@ mod production_analysis;
 
 pub use canonical_analysis_scope_v1::*;
 pub use fixed_policy_v3::{
-    POLICY3_EXECUTION_RECORD_BYTES_V1, Policy3ExecutionWitnessV1,
-    policy3_execution_receipt_digest_v1,
+    POLICY3_EXECUTION_RECORD_BYTES_V1, Policy3ExecutionClaimErrorV1, Policy3ExecutionWitnessV1,
+    UnauthenticatedPolicy3ExecutionClaimV1, policy3_execution_receipt_digest_v1,
+    read_unauthenticated_policy3_execution_claim_v1,
 };
 pub use graph_analysis_v1::*;
 pub use kir_bridge_v1::*;

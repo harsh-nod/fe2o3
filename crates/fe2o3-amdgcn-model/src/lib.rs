@@ -11,6 +11,7 @@
 mod device_math;
 mod gfx950;
 mod lowering;
+mod native_v12_text_descriptor_replay_v1;
 mod production_kir_to_llvm_replay_v1;
 mod production_limits_v1;
 mod production_refinement_v1;
@@ -20,6 +21,7 @@ mod scalar_v2;
 pub use device_math::*;
 pub use gfx950::*;
 pub use lowering::*;
+pub use native_v12_text_descriptor_replay_v1::*;
 pub use production_kir_to_llvm_replay_v1::*;
 pub use production_limits_v1::*;
 pub use production_refinement_v1::*;

@@ -379,3 +379,158 @@ fn policy3_empty_consuming_check_has_independent_exact_and_short_work() {
         assert_eq!(work.failed_work(), short.then_some(PRIOR + 51));
     }
 }
+
+// Intentionally synthetic framing input: only the separate kernel-opt replay
+// tests obtain wire bytes from genuine execution. This cannot mint a witness.
+fn synthetic_claim_frame(input: &Owner) -> [u8; POLICY3_EXECUTION_RECORD_BYTES_V1] {
+    let mut bytes = [0; POLICY3_EXECUTION_RECORD_BYTES_V1];
+    let mut writer = RecordWriter {
+        bytes: &mut bytes,
+        cursor: 0,
+    };
+    for value in [3, 1, 8, 0] {
+        writer.u16(value);
+    }
+    for _ in 0..2 {
+        writer.raw(input.canonical().identity().digest());
+        writer.u64(input.canonical().identity().canonical_length());
+    }
+    for value in [0, 17, 0, 0, 8, 0] {
+        writer.u64(value);
+    }
+    for cap in [
+        POLICY3_CANONICAL_CAP,
+        POLICY3_CANONICAL_CAP,
+        POLICY3_MAX_PASSES,
+        POLICY3_GRAPH_CAP,
+        POLICY3_SESSION_WORK_CAP,
+    ] {
+        writer.usize(cap).unwrap();
+    }
+    for _ in 0..4 {
+        writer.u64(0);
+    }
+    writer.raw(&[0; 32]);
+    for _ in 0..3 {
+        writer.u64(0);
+    }
+    writer.raw(&[0; 32]);
+    for pass in POLICY3_PASSES {
+        writer.raw(&[pass_tag(pass), 0]);
+        writer.u16(0);
+        for _ in 0..7 {
+            writer.u64(0);
+        }
+    }
+    assert_eq!(writer.cursor, POLICY3_EXECUTION_RECORD_BYTES_V1);
+    bytes
+}
+
+#[test]
+fn unauthenticated_claim_parses_closed_fields_and_rejects_endpoint_profile_roster_drift() {
+    use Policy3ExecutionClaimErrorV1 as E;
+    let (input, storage) = admit(&Module::new("m"));
+    let bytes = synthetic_claim_frame(&input);
+    let mut work = Work::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    let floor = PREFIX + storage + bytes.len();
+    budget.reserve_storage(floor).unwrap();
+    let claim =
+        read_unauthenticated_policy3_execution_claim_v1(&input, &input, &bytes, &mut budget)
+            .unwrap();
+    assert!(std::ptr::eq(claim.canonical_bytes(), &bytes));
+    assert_eq!(claim.declared_profile_work(), 17);
+    assert!(!claim.grants_authority());
+    // Every fixed control field, both endpoints, profile pass count, all five
+    // caps, and each pass row tag/boolean/reserved field are checked directly.
+    for (offset, value, expected) in [
+        (0, 2, E::Framing),
+        (2, 2, E::Framing),
+        (4, 7, E::Framing),
+        (6, 1, E::Framing),
+        (8, bytes[8] ^ 1, E::Endpoint),
+        (40, bytes[40] ^ 1, E::Endpoint),
+        (48, bytes[48] ^ 1, E::Endpoint),
+        (80, bytes[80] ^ 1, E::Endpoint),
+        (120, 7, E::Profile),
+    ] {
+        let mut bad = bytes;
+        bad[offset] = value;
+        assert_eq!(
+            read_unauthenticated_policy3_execution_claim_v1(&input, &input, &bad, &mut budget)
+                .err(),
+            Some(expected)
+        );
+    }
+    for offset in (136..176).step_by(8) {
+        let mut bad = bytes;
+        bad[offset] ^= 1;
+        assert_eq!(
+            read_unauthenticated_policy3_execution_claim_v1(&input, &input, &bad, &mut budget)
+                .err(),
+            Some(E::Profile)
+        );
+    }
+    for row in 0..8 {
+        for (field, value) in [(0, 255), (1, 2), (2, 1), (3, 1)] {
+            let mut bad = bytes;
+            bad[296 + row * 60 + field] = value;
+            assert_eq!(
+                read_unauthenticated_policy3_execution_claim_v1(&input, &input, &bad, &mut budget)
+                    .err(),
+                Some(E::Pass)
+            );
+        }
+    }
+    for length in [0, 7, 775] {
+        assert_eq!(
+            read_unauthenticated_policy3_execution_claim_v1(
+                &input,
+                &input,
+                &bytes[..length],
+                &mut budget
+            )
+            .err(),
+            Some(E::Framing)
+        );
+    }
+    let mut trailing = bytes.to_vec();
+    trailing.push(0);
+    assert_eq!(
+        read_unauthenticated_policy3_execution_claim_v1(&input, &input, &trailing, &mut budget)
+            .err(),
+        Some(E::Framing)
+    );
+    assert_eq!(budget.storage(), floor);
+}
+
+#[test]
+fn unauthenticated_claim_reader_has_independent_778_unit_prefix_and_no_owned_storage() {
+    let (input, storage) = admit(&Module::new("m"));
+    let bytes = synthetic_claim_frame(&input);
+    for short in [false, true] {
+        let mut work = Work::new(PRIOR + 778 - usize::from(short));
+        let mut budget = Budget::new(&mut work, PREFIX + storage + bytes.len());
+        budget.charge_work(PRIOR).unwrap();
+        budget
+            .reserve_storage(PREFIX + storage + bytes.len())
+            .unwrap();
+        let floor = budget.storage();
+        let result =
+            read_unauthenticated_policy3_execution_claim_v1(&input, &input, &bytes, &mut budget);
+        if short {
+            assert!(matches!(
+                result,
+                Err(Policy3ExecutionClaimErrorV1::Resource(Resource::Work(_)))
+            ));
+            assert_eq!(budget.work(), PRIOR + 2);
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(budget.work(), PRIOR + 778);
+        }
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.peak_storage(), floor);
+        assert_eq!(budget.failed_storage(), None);
+        assert_eq!(work.failed_work(), short.then_some(PRIOR + 778));
+    }
+}

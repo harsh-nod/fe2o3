@@ -409,6 +409,14 @@ pub(crate) fn bind_compiler_descriptor_source_v1(
         return Err(CompilerModuleConstructionError::DescriptorSymbolClosureMismatch);
     }
 
+    for kernel in source.table().kernels() {
+        if kernel.descriptor_symbol().as_str().strip_suffix(".kd")
+            != Some(kernel.entry_name().as_str())
+        {
+            return Err(CompilerModuleConstructionError::DescriptorSymbolClosureMismatch);
+        }
+    }
+
     append_descriptor_module_assembly(&mut module.llvm_ir, source.canonical_bytes());
     module.descriptor_source_identity = Some(source.identity());
     Ok(module)

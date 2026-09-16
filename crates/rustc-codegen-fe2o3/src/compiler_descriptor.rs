@@ -2334,6 +2334,159 @@ mod tests {
         assert_eq!(kernels[1].arguments()[3].access(), AccessMode::ReadWrite);
     }
 
+    fn reordered_descriptor_pair_fixture_v1() -> (Module, CompilerDescriptorSourceV1) {
+        let module = module_for(&["zeta", "alpha"]);
+        let llvm = construct_inert_compiler_module_text_v1(&module).unwrap();
+        let mut alpha = alpha_root();
+        let mut zeta = zeta_root();
+        // Opaque binding order intentionally differs from sorted LLVM exports.
+        alpha.kernel_binding = KernelBindingIdV1::from_bytes([0x7a; 32]);
+        zeta.kernel_binding = KernelBindingIdV1::from_bytes([0x61; 32]);
+        let source = construct_compiler_descriptor_source_v1(
+            &envelope(CodeObjectVersion::V6),
+            &module,
+            &llvm,
+            &[alpha, zeta],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            source
+                .table()
+                .kernels()
+                .iter()
+                .map(|row| row.entry_name().as_str())
+                .collect::<Vec<_>>(),
+            ["zeta", "alpha"]
+        );
+        (module, source)
+    }
+
+    fn swapped_descriptor_pair_source_v1(
+        source: &CompilerDescriptorSourceV1,
+    ) -> CompilerDescriptorSourceV1 {
+        let table = source.table();
+        assert_eq!(table.kernels().len(), 2);
+        let kernels = table
+            .kernels()
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                KernelDescriptorV1::new(
+                    row.kernel_id(),
+                    row.logical_name().clone(),
+                    row.entry_name().clone(),
+                    table.kernels()[1 - index].descriptor_symbol().clone(),
+                    row.source_evidence(),
+                    row.executable_ir_evidence(),
+                    row.capabilities().to_vec(),
+                    row.abi_layout(),
+                    row.launch().clone(),
+                    row.arguments().to_vec(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let table = DeviceDescriptorTableV1::new(
+            table.canonical_code_object_digest(),
+            table.code_object_version(),
+            table.compiler().clone(),
+            table.producer().clone(),
+            table.device_target(),
+            table.type_records().to_vec(),
+            table.layout_records().to_vec(),
+            kernels,
+        )
+        .unwrap();
+        let source = CompilerDescriptorSourceV1::new(table).unwrap();
+        // A real public structural decode still accepts this inert table.
+        assert_eq!(
+            CompilerDescriptorSourceV1::decode(source.canonical_bytes()).unwrap(),
+            source
+        );
+        source
+    }
+
+    #[test]
+    fn descriptor_pair_binding_accepts_reordered_complete_roster() {
+        let (module, source) = reordered_descriptor_pair_fixture_v1();
+        let llvm = construct_inert_compiler_module_text_v1(&module).unwrap();
+        assert_eq!(llvm.kernel_entries(), ["alpha", "zeta"]);
+        let prefix = llvm.llvm_ir().to_owned();
+        let identity = source.identity();
+        let bound = bind_compiler_descriptor_source_v1(llvm, &source).unwrap();
+        assert_eq!(bound.descriptor_source_identity(), Some(identity));
+        assert!(bound.llvm_ir().starts_with(&prefix));
+        assert_eq!(bound.llvm_ir().matches(".section .fe2o3.kd.v1").count(), 1);
+        assert!(!source.authenticates_compiler_origin());
+        assert!(!source.grants_launch_authority());
+    }
+
+    #[test]
+    fn descriptor_pair_binding_rejects_swap_that_preserves_both_legacy_sets() {
+        use crate::kernel_ir_codegen::CompilerModuleConstructionError;
+        let (module, source) = reordered_descriptor_pair_fixture_v1();
+        let swapped = swapped_descriptor_pair_source_v1(&source);
+        let llvm = construct_inert_compiler_module_text_v1(&module).unwrap();
+        let mut entries = swapped
+            .table()
+            .kernels()
+            .iter()
+            .map(|row| row.entry_name().as_str())
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        assert_eq!(
+            entries,
+            llvm.kernel_entries()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
+        let mut symbols = swapped
+            .table()
+            .kernels()
+            .iter()
+            .map(|row| row.descriptor_symbol().as_str())
+            .collect::<Vec<_>>();
+        symbols.sort_unstable();
+        assert_eq!(
+            symbols,
+            llvm.kernel_entries()
+                .iter()
+                .map(|entry| format!("{entry}.kd"))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            swapped.table().kernels().iter().all(|row| row
+                .descriptor_symbol()
+                .as_str()
+                .strip_suffix(".kd")
+                != Some(row.entry_name().as_str()))
+        );
+        assert_eq!(
+            bind_compiler_descriptor_source_v1(llvm, &swapped).unwrap_err(),
+            CompilerModuleConstructionError::DescriptorSymbolClosureMismatch
+        );
+    }
+
+    #[test]
+    fn descriptor_pair_binding_preserves_earlier_refusal_order() {
+        use crate::kernel_ir_codegen::CompilerModuleConstructionError;
+        let (module, source) = reordered_descriptor_pair_fixture_v1();
+        let swapped = swapped_descriptor_pair_source_v1(&source);
+        let incomplete = construct_inert_compiler_module_text_v1(&module_for(&["alpha"])).unwrap();
+        assert_eq!(
+            bind_compiler_descriptor_source_v1(incomplete, &swapped).unwrap_err(),
+            CompilerModuleConstructionError::DescriptorKernelEntryClosureMismatch
+        );
+        let llvm = construct_inert_compiler_module_text_v1(&module).unwrap();
+        let bound = bind_compiler_descriptor_source_v1(llvm, &source).unwrap();
+        assert_eq!(
+            bind_compiler_descriptor_source_v1(bound, &swapped).unwrap_err(),
+            CompilerModuleConstructionError::DescriptorSourceAlreadyBound
+        );
+    }
+
     #[test]
     fn general_v3_contract_field_names_are_identity_bound_and_lookalikes_stay_positional() {
         let positional_alpha_arguments = || {

@@ -288,6 +288,49 @@ fn source_output_address_ranked_operation_v1<'a>(
         .ok_or(Error::Invalid("physical ranked operation absent"))
 }
 
+fn source_output_address_leaf_node_v1(
+    leaf: ProductionConditionalMemoryIndexLeafV1<'_>,
+    mut paid: impl FnMut(usize) -> Result<(), ProductionSourceOutputErrorV1>,
+) -> Result<NormalizedScalarNodeV1<usize>, ProductionSourceOutputErrorV1> {
+    use NormalizedScalarNodeV1 as Node;
+    use ProductionConditionalMemoryIndexLeafV1 as Leaf;
+    use ProductionSourceOutputErrorV1 as Error;
+    Ok(match leaf {
+        Leaf::Formal(formal) => {
+            if formal.scalar() != source_output_address_u64_v1() {
+                return Err(Error::Invalid("physical index formal width unsupported"));
+            }
+            let SourceOutputAddressDefV1::FunctionArgument { argument, .. } = formal.output()
+            else {
+                return Err(Error::Invalid("physical index formal definition differs"));
+            };
+            paid(4)?;
+            let slot = argument
+                .checked_mul(2)
+                .and_then(|slot| {
+                    slot.checked_add(u32::from(
+                        formal.component() == ProductionProjectionArgumentComponentV1::SliceLength,
+                    ))
+                })
+                .and_then(|slot| PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2.checked_add(slot))
+                .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+            Node::Symbol {
+                symbol: slot,
+                scalar: source_output_address_u64_v1(),
+            }
+        }
+        Leaf::Literal(literal) => {
+            if literal.scalar() != source_output_address_u64_v1() {
+                return Err(Error::Invalid("physical index literal width unsupported"));
+            }
+            Node::Constant {
+                scalar: literal.scalar(),
+                bits: literal.bits(),
+            }
+        }
+    })
+}
+
 fn source_output_address_ranked_leaf_v1(
     analysis: &ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>,
     rows: &[SourceOutputAddressRankedDefinitionV1],
@@ -295,7 +338,6 @@ fn source_output_address_ranked_leaf_v1(
     context: &mut SourceOutputControlNormalizationV1<'_, '_, '_, '_, '_>,
 ) -> Result<usize, ProductionSourceOutputErrorV1> {
     use NormalizedScalarNodeV1 as Node;
-    use ProductionConditionalMemoryIndexLeafV1 as Leaf;
     use ProductionSourceOutputErrorV1 as Error;
     for _ in 0..=MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
         context
@@ -310,42 +352,12 @@ fn source_output_address_ranked_leaf_v1(
             context.inner.budget,
         )?;
         let node = match leaf {
-            Some(Leaf::Formal(formal)) => {
-                if formal.scalar() != source_output_address_u64_v1() {
-                    return Err(Error::Invalid("physical index formal width unsupported"));
-                }
-                let SourceOutputAddressDefV1::FunctionArgument { argument, .. } = formal.output()
-                else {
-                    return Err(Error::Invalid("physical index formal definition differs"));
-                };
+            Some(leaf) => source_output_address_leaf_node_v1(leaf, |units| {
                 context
                     .inner
-                    .paid(4)
-                    .ok_or_else(|| context.inner.failure())?;
-                let slot = argument
-                    .checked_mul(2)
-                    .and_then(|slot| {
-                        slot.checked_add(u32::from(
-                            formal.component()
-                                == ProductionProjectionArgumentComponentV1::SliceLength,
-                        ))
-                    })
-                    .and_then(|slot| PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2.checked_add(slot))
-                    .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
-                Node::Symbol {
-                    symbol: slot,
-                    scalar: source_output_address_u64_v1(),
-                }
-            }
-            Some(Leaf::Literal(literal)) => {
-                if literal.scalar() != source_output_address_u64_v1() {
-                    return Err(Error::Invalid("physical index literal width unsupported"));
-                }
-                Node::Constant {
-                    scalar: literal.scalar(),
-                    bits: literal.bits(),
-                }
-            }
+                    .paid(units)
+                    .ok_or_else(|| context.inner.failure())
+            })?,
             None => match source_output_address_ranked_operation_v1(
                 rows,
                 analysis.candidate.lowering,
@@ -1020,3 +1032,5 @@ impl<'source, 'output> ProductionScopedCanonicalStoreAnalysisV1<'_, 'source, 'ou
 }
 
 include!("production_semantic_kir_v1/tests/production_source_output_physical_address_v1_tests.rs");
+
+include!("production_source_output_functional_address_v1.rs");

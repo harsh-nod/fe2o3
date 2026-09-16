@@ -203,6 +203,170 @@ impl ProductionPreRankedKirOwnerV1 {
     }
 }
 
+/// Scoped source/ranked correspondence reports for one exact borrowed N owner.
+///
+/// The existing reports do not establish indexed-address or complete operational
+/// equivalence, termination, independent external-reference proof, or artifact
+/// authority. This borrow does not attach ranked custody or admit any O graph.
+/// No constructor, Clone, serialization or final-receipt conversion exists.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionBorrowedRankedCorrespondenceV1;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ProductionBorrowedRankedCorrespondenceV1<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{ProductionBorrowedRankedCorrespondenceV1,
+///     ProductionPreRankedKirOwnerV1, ProductionRankedSemanticProjectionRootV1,
+///     ProductionSemanticKirErrorV1};
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
+/// fn escape<'a>(source: &'a ProductionPreRankedKirOwnerV1,
+///     roots: &'a [ProductionRankedSemanticProjectionRootV1],
+///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>)
+///     -> Result<&'a ProductionBorrowedRankedCorrespondenceV1<'a>, ProductionSemanticKirErrorV1>
+/// {
+///     source.with_borrowed_ranked_correspondence_v1(roots, budget, |checked, _| Ok(checked))
+/// }
+/// ```
+pub struct ProductionBorrowedRankedCorrespondenceV1<'scope> {
+    materialized: &'scope ProductionPreRankedKirOwnerV1,
+    roots: &'scope [ProductionRankedSemanticProjectionRootV1],
+    reports: &'scope [ProductionMirPlironTranslationValidationV1],
+}
+
+impl ProductionBorrowedRankedCorrespondenceV1<'_> {
+    /// Exact source/N owner checked by this scope, never a rematerialized copy.
+    pub const fn materialized(&self) -> &ProductionPreRankedKirOwnerV1 {
+        self.materialized
+    }
+
+    /// Exact original executable N, not a bound or optimized replacement.
+    pub const fn executable(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
+        self.materialized.executable()
+    }
+
+    /// Exact ordered caller roster; its borrow retains identity beyond names.
+    pub const fn roots(&self) -> &[ProductionRankedSemanticProjectionRootV1] {
+        self.roots
+    }
+
+    /// Number of source roots checked before this callback was entered.
+    pub const fn root_count(&self) -> usize {
+        self.roots.len()
+    }
+
+    /// Existing inert translation report for the same root ordinal.
+    pub fn report(&self, ordinal: usize) -> Option<&ProductionMirPlironTranslationValidationV1> {
+        self.reports.get(ordinal)
+    }
+}
+
+impl ProductionPreRankedKirOwnerV1 {
+    /// Validates a full borrowed ranked roster against this exact source and N.
+    /// No source lowering, executable copy, O substitution or consuming ranked
+    /// attachment occurs. The callback receives the same caller budget.
+    ///
+    /// New wrapper/header and actual report-Vec capacity are paid on that ledger;
+    /// reports contain only fixed-size numeric fields. Existing source/SSA replay,
+    /// roster and translation internals keep their separately bounded source-phase
+    /// resource domains, not a newly claimed canonical whole-analysis meter.
+    /// Reports drop before incoming-floor restoration on Ok, Err and unwind;
+    /// work and first-failure history remain sticky. Caller-owned history and
+    /// retained owner reservations must not be replaced in place.
+    /// Before entry the caller must reserve BOTH this owner's executable-storage
+    /// and assertion-origin payload receipts, plus any separate SSA receipt.
+    /// This method charges only its new scope; it does not supply that entry
+    /// reservation. Cleanup/accounting failure takes precedence over callback
+    /// errors or panic; a panic payload resumes unchanged after valid cleanup.
+    pub fn with_borrowed_ranked_correspondence_v1<T>(
+        &self,
+        roots: &[ProductionRankedSemanticProjectionRootV1],
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        body: impl for<'scope> FnOnce(
+            &ProductionBorrowedRankedCorrespondenceV1<'scope>,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<T, ProductionSemanticKirErrorV1>,
+    ) -> Result<T, ProductionSemanticKirErrorV1> {
+        validate_source_ranked_roster_v1(&self.semantic_ssa, &self.source_launch, roots)?;
+        let floor = budget.storage();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            budget
+                .charge_work(2)
+                .map_err(SemanticKirAssertOriginErrorV1::from)?;
+            let header = std::mem::size_of::<ProductionBorrowedRankedCorrespondenceV1<'_>>()
+                .checked_add(std::mem::size_of::<
+                    Vec<ProductionMirPlironTranslationValidationV1>,
+                >())
+                .ok_or(SemanticKirAssertOriginErrorV1::Resource(
+                    AssertOriginResourceV1::Arithmetic,
+                ))?;
+            budget
+                .reserve_storage(header)
+                .map_err(SemanticKirAssertOriginErrorV1::from)?;
+            let mut reports = Vec::new();
+            assert_origin_reserve_v1(&mut reports, roots.len(), budget)?;
+            for root in roots {
+                budget
+                    .charge_work(1)
+                    .map_err(SemanticKirAssertOriginErrorV1::from)?;
+                let report = validate_materialized_ranked_root_v1(
+                    self.semantic_ssa.source_semantic(),
+                    self.executable.module(),
+                    &self.correspondence,
+                    root.function_name(),
+                    root,
+                    self.limits.max_operations,
+                )?;
+                assert_origin_push_v1(&mut reports, report, budget)?;
+            }
+            let checked = ProductionBorrowedRankedCorrespondenceV1 {
+                materialized: self,
+                roots,
+                reports: &reports,
+            };
+            body(&checked, budget)
+        }));
+        let cleanup = budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or(SemanticKirAssertOriginErrorV1::Resource(
+                AssertOriginResourceV1::Accounting,
+            ))
+            .and_then(|retained| {
+                budget
+                    .release_storage(retained)
+                    .map_err(SemanticKirAssertOriginErrorV1::from)
+            });
+        cleanup?;
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+}
+
+fn validate_materialized_ranked_root_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    executable: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    function_name: &str,
+    root: &ProductionRankedSemanticProjectionRootV1,
+    max_operations: usize,
+) -> Result<ProductionMirPlironTranslationValidationV1, ProductionSemanticKirErrorV1> {
+    validate_mir_pliron_translation_with_semantic_v1(
+        Some(semantic),
+        executable,
+        correspondence,
+        function_name,
+        &root.lowering,
+        &root.access_sources,
+        &root.executable_effect_sources,
+        max_operations,
+    )
+    .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)
+}
+
 /// Ranked checks attached to the exact previously materialized graph.
 /// Unlike the legacy receipt this cannot cause source re-materialization.
 #[must_use = "dropping the receipt abandons ranked and executable custody"]
@@ -295,17 +459,14 @@ impl ProductionSemanticKirOwnerV1 {
         let mut generic_checks = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
-            let translation_validation = validate_mir_pliron_translation_with_semantic_v1(
-                Some(semantic),
+            let translation_validation = validate_materialized_ranked_root_v1(
+                semantic,
                 executable.module(),
                 &correspondence,
                 &function_name,
-                &root.lowering,
-                &root.access_sources,
-                &root.executable_effect_sources,
+                &root,
                 limits.max_operations,
-            )
-            .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
+            )?;
             generic_checks.push(RetainedGenericKernelChecksV1 {
                 selected_root: root.selected_root,
                 launch_rank: root.launch_rank,

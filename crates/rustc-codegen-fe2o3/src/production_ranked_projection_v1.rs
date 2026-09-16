@@ -1416,58 +1416,9 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     }
 
     pub(crate) fn verify_equivalence(&self) -> Result<(), ProductionRankedVerificationErrorV1> {
-        self.materialized
-            .semantic_ssa()
-            .verify_replay()
-            .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
-        let semantic_owner = self.materialized.semantic_ssa().source_owner();
-        let semantic_bindings = self
-            .source_order_roots
-            .iter()
-            .map(ranked_verified_root_semantic_binding_v1)
-            .collect::<Vec<_>>();
-        validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
-        for root in &self.source_order_roots {
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_owner,
-                root.semantic_root,
-                &root.lowering,
-                &root.ranked_ir,
-                &root.access_sources,
-                &root.executable_effect_sources,
-            )
-            .map_err(ProductionRankedVerificationErrorV1::Custody)?;
-            let revalidated = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
-                semantic_owner,
-                &root.lowering,
-                &root.ranked_ir,
-            )
-            .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
-            if revalidated.as_inert().canonical_bytes()
-                != root
-                    .verification
-                    .middle_end_evidence
-                    .as_inert()
-                    .canonical_bytes()
-                || root
-                    .verification
-                    .has_authenticated_functional_verification()
-                    != root
-                        .lowering
-                        .has_retained_policy_checked_refinement_staging()
-                || !root
-                    .verification
-                    .retained_functional_verification_is_coherent()
-            {
-                return Err(ProductionRankedVerificationErrorV1::RosterMetadata(
-                    "changed per-root ranked verification custody",
-                ));
-            }
-            validate_ranked_root_induction_custody_v1(self.materialized.semantic_ssa(), root)?;
-        }
-        let records = ranked_roster_identity_records_v1(&self.source_order_roots);
-        require_exact_ranked_kernel_roster_identity_v1(
-            &records,
+        verify_authenticated_ranked_source_parts_v1(
+            &self.materialized,
+            &self.source_order_roots,
             self.canonical_roster_identity,
             &self.canonical_kernel_order,
         )
@@ -1489,42 +1440,8 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             canonical_kernel_order,
             canonical_roster_identity,
         } = self;
-        let mut lowering_roots = Vec::with_capacity(source_order_roots.len());
-        let mut verification_roots = Vec::with_capacity(source_order_roots.len());
-        for root in source_order_roots.into_vec() {
-            let ProductionRankedVerifiedRootCandidateV1 {
-                logical_name,
-                export_symbol,
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                lowering,
-                ranked_ir,
-                access_sources,
-                executable_effect_sources,
-                verification,
-            } = root;
-            lowering_roots.push(
-                fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionRootV1::new(
-                    semantic_root,
-                    source_rank,
-                    lowering,
-                    ranked_ir,
-                    access_sources,
-                    executable_effect_sources,
-                ),
-            );
-            verification_roots.push(AuthenticatedRankedVerificationRootV1 {
-                logical_name,
-                export_symbol,
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                verification,
-            });
-        }
+        let (lowering_roots, verification_roots) =
+            split_authenticated_ranked_source_roots_v1(source_order_roots);
         let receipt = fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(
             materialized,
             lowering_roots,
@@ -1597,65 +1514,8 @@ impl ProductionRankedSemanticProgramV1 {
             materialized,
             roots,
         } = self;
-        materialized
-            .semantic_ssa()
-            .verify_replay()
-            .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
-        let semantic_owner = materialized.semantic_ssa().source_owner();
-        let semantic_bindings = roots
-            .iter()
-            .map(ranked_root_program_semantic_binding_v1)
-            .collect::<Vec<_>>();
-        validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
-
-        let mut verified_roots = Vec::with_capacity(roots.len());
-        for root in roots.into_vec() {
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_owner,
-                root.semantic_root,
-                &root.lowering,
-                &root.ranked_ir,
-                &root.access_sources,
-                &root.executable_effect_sources,
-            )
-            .map_err(ProductionRankedVerificationErrorV1::Custody)?;
-            let ProductionRankedRootProgramV1 {
-                logical_name,
-                export_symbol,
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                semantic_u32_induction,
-                lowering,
-                ranked_ir,
-                access_sources,
-                executable_effect_sources,
-            } = root;
-            let verification = authenticate_ranked_root_v5(
-                semantic_owner,
-                &lowering,
-                &ranked_ir,
-                semantic_u32_induction,
-            )?;
-            verified_roots.push(ProductionRankedVerifiedRootCandidateV1 {
-                logical_name,
-                export_symbol,
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                lowering,
-                ranked_ir,
-                access_sources,
-                executable_effect_sources,
-                verification,
-            });
-        }
-        let source_order_roots = verified_roots.into_boxed_slice();
-        let records = ranked_roster_identity_records_v1(&source_order_roots);
-        let (canonical_roster_identity, canonical_kernel_order) =
-            derive_ranked_kernel_roster_identity_v1(&records)?;
+        let (source_order_roots, canonical_kernel_order, canonical_roster_identity) =
+            authenticate_ranked_source_parts_v1(&materialized, roots)?;
         let receipt = ProductionRankedSemanticProjectionRosterReceiptV1 {
             materialized,
             source_order_roots,
@@ -3371,6 +3231,29 @@ fn project_and_verify_ranked_root_control_inner_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_root_control_with_address_claims_v1(
+        semantic_ssa,
+        callable_effects,
+        selection,
+        input,
+        source_root,
+        reference_bindings,
+        assertion_facts,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_and_verify_ranked_root_control_with_address_claims_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    recorder: Option<&mut canonical_memory_control_v1::CanonicalMemoryControlRecorderV1>,
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let PreparedProjectedRankedGeometryV1 {
         mut blocks,
         sources,
@@ -3390,7 +3273,7 @@ fn project_and_verify_ranked_root_control_inner_v1(
         reference_bindings,
         assertion_facts,
         ProjectedGlobalWriteValuesV1::Expression,
-        None,
+        recorder,
     )?;
     let logical_name = input.logical_name.as_str();
     let source_launch = &input.source_launch;
@@ -3624,7 +3507,13 @@ fn prepare_projected_ranked_geometry_v1(
         &intrinsic.option_predicates,
         &intrinsic.direct_switch_predicates,
     )?;
-    let checked_control = if recorder.is_some() {
+    // Full Expression recording is observational; only the existing memory
+    // projection may use retained-call control preparation.
+    let checked_control = if recorder.is_some()
+        && matches!(
+            write_values,
+            ProjectedGlobalWriteValuesV1::CanonicalSourceUse
+        ) {
         checked_control_v1::prepare_with_recorded_calls_v1(
             semantic.types(),
             function,
@@ -24410,6 +24299,7 @@ mod tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");
     }
     include!("production_ranked_projection_v1/projection_02_tests.rs");
+    include!("production_ranked_projection_v1/borrowed_source_authentication_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
@@ -40008,3 +39898,4 @@ mod canonical_memory_control_v1 {
 }
 include!("production_ranked_projection_v1/canonical_memory_analysis_v1.rs");
 include!("production_ranked_projection_v1/checked_output_module_join_v1.rs");
+include!("production_ranked_projection_v1/borrowed_source_authentication_v1.rs");

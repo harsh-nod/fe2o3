@@ -1199,6 +1199,15 @@ enum AffineWork {
     Finish(ValueId),
 }
 
+// Only U64 literals enter the affine cache. Fixed-width arithmetic and dynamic
+// U64 ancestry remain outside the INDEX affine grammar.
+fn affine_result_is_supported(operation: &Operation) -> bool {
+    matches!(operation.results.as_slice(), [result]
+        if result.ty == Type::INDEX
+            || (result.ty == Type::Scalar(ScalarType::U64)
+                && matches!(operation.kind, OperationKind::Constant(Constant::U64(_)))))
+}
+
 /// Evaluates the supported affine operation graph once. The explicit stack
 /// avoids host stack growth on large generated expressions, while `visiting`
 /// turns any operation/phi recurrence into a deterministic unsupported result.
@@ -1211,8 +1220,7 @@ fn compute_affine_expressions(
     let roots = operations
         .iter()
         .filter_map(|(value, (operation, _))| {
-            matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX)
-                .then_some(*value)
+            affine_result_is_supported(operation).then_some(*value)
         })
         .collect::<Vec<_>>();
 
@@ -1242,19 +1250,25 @@ fn compute_affine_expressions(
                     let Some((operation, _)) = operations.get(&value) else {
                         continue;
                     };
-                    if !matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX)
-                    {
+                    if !affine_result_is_supported(operation) {
                         continue;
                     }
-                    if let OperationKind::Binary { lhs, rhs, .. } = operation.kind {
-                        for dependency in [rhs, lhs] {
-                            if let Some(dependency) = block_parameter_origins
-                                .get(&dependency)
-                                .copied()
-                                .unwrap_or(Some(dependency))
-                            {
-                                work.push(AffineWork::Enter(dependency));
-                            }
+                    let dependencies = match &operation.kind {
+                        OperationKind::Binary { lhs, rhs, .. } => [Some(*rhs), Some(*lhs)],
+                        OperationKind::Cast {
+                            kind: CastKind::Bitcast,
+                            value,
+                            to,
+                        } if *to == Type::INDEX => [Some(*value), None],
+                        _ => [None, None],
+                    };
+                    for dependency in dependencies.into_iter().flatten() {
+                        if let Some(dependency) = block_parameter_origins
+                            .get(&dependency)
+                            .copied()
+                            .unwrap_or(Some(dependency))
+                        {
+                            work.push(AffineWork::Enter(dependency));
                         }
                     }
                 }
@@ -1266,13 +1280,51 @@ fn compute_affine_expressions(
                     let expression = operations
                         .get(&value)
                         .and_then(|(operation, _)| {
-                            matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX)
-                                .then_some(*operation)
+                            affine_result_is_supported(operation).then_some(*operation)
                         })
-                        .map_or(Err(IndexExpressionError::Unsupported), |operation| {
-                            match &operation.kind {
-                                OperationKind::Constant(Constant::Index(value)) => {
+                        .map_or(
+                            Err(IndexExpressionError::Unsupported),
+                            |operation| match &operation.kind {
+                                OperationKind::Constant(Constant::Index(value))
+                                    if operation.results[0].ty == Type::INDEX =>
+                                {
                                     Ok(AffineExpression::constant(*value))
+                                }
+                                OperationKind::Constant(Constant::U64(value))
+                                    if operation.results[0].ty == Type::Scalar(ScalarType::U64) =>
+                                {
+                                    Ok(AffineExpression::constant(*value))
+                                }
+                                OperationKind::Cast {
+                                    kind: CastKind::Bitcast,
+                                    value,
+                                    to,
+                                } if *to == Type::INDEX => {
+                                    let origin = block_parameter_origins
+                                        .get(value)
+                                        .copied()
+                                        .unwrap_or(Some(*value))
+                                        .ok_or(IndexExpressionError::Unsupported)?;
+                                    let (source, _) = operations
+                                        .get(&origin)
+                                        .ok_or(IndexExpressionError::Unsupported)?;
+                                    if !matches!(source.results.as_slice(), [result]
+                                        if result.ty == Type::Scalar(ScalarType::U64))
+                                        || !matches!(
+                                            source.kind,
+                                            OperationKind::Constant(Constant::U64(_))
+                                        )
+                                    {
+                                        return Err(IndexExpressionError::Unsupported);
+                                    }
+                                    let literal: AffineExpression = expressions
+                                        .get(&origin)
+                                        .copied()
+                                        .unwrap_or(Err(IndexExpressionError::Unsupported))?;
+                                    if literal.invocation_coefficient != 0 {
+                                        return Err(IndexExpressionError::Unsupported);
+                                    }
+                                    Ok(literal)
                                 }
                                 OperationKind::Intrinsic(intrinsic)
                                     if intrinsic.kind
@@ -1304,15 +1356,11 @@ fn compute_affine_expressions(
                                         BinaryOp::Add => lhs
                                             .checked_add(rhs)
                                             .ok_or(IndexExpressionError::Overflow),
-                                        BinaryOp::Multiply
-                                            if lhs.invocation_coefficient == 0 =>
-                                        {
+                                        BinaryOp::Multiply if lhs.invocation_coefficient == 0 => {
                                             rhs.checked_multiply_constant(lhs.constant)
                                                 .ok_or(IndexExpressionError::Overflow)
                                         }
-                                        BinaryOp::Multiply
-                                            if rhs.invocation_coefficient == 0 =>
-                                        {
+                                        BinaryOp::Multiply if rhs.invocation_coefficient == 0 => {
                                             lhs.checked_multiply_constant(rhs.constant)
                                                 .ok_or(IndexExpressionError::Overflow)
                                         }
@@ -1323,8 +1371,8 @@ fn compute_affine_expressions(
                                     }
                                 }
                                 _ => Err(IndexExpressionError::Unsupported),
-                            }
-                        });
+                            },
+                        );
                     expressions.insert(value, expression);
                 }
             }
