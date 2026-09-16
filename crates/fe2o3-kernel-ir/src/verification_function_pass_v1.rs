@@ -114,7 +114,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         let base_location =
             function_diagnostic_location_v1(self.module, self.function, self.budget)?;
 
-        self.verify_definition_rosters(&base_location)?;
+        let has_execution_roles = self.verify_definition_rosters(&base_location)?;
         self.budget.charge_work(body.blocks.len())?;
         for block in &body.blocks {
             if block.terminator.is_none() {
@@ -167,20 +167,23 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 self.verify_terminator_v1(block, terminator, &location)?;
             }
         }
-        crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(
-            self.module,
-            self.function,
-            self.function_state,
-            self.control_flow,
-            self.diagnostics,
-            self.budget,
-        )
+        if has_execution_roles {
+            crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(
+                self.module,
+                self.function,
+                self.function_state,
+                self.control_flow,
+                self.diagnostics,
+                self.budget,
+            )?;
+        }
+        Ok(())
     }
 
     fn verify_definition_rosters(
         &mut self,
         base_location: &VerificationDiagnosticLocationV1<'_>,
-    ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
         let block_rows = self.function_state.block_rows();
         self.budget.charge_work(block_rows.len())?;
         for pair in block_rows.windows(2) {
@@ -199,7 +202,9 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
 
         let definition_rows = self.function_state.definition_rows();
         self.budget.charge_work(definition_rows.len())?;
+        let mut has_execution_roles = false;
         for row in definition_rows {
+            has_execution_roles |= matches!(row.value.ty, Type::Execution(_));
             if !matches!(
                 row.value.site,
                 VerificationDefinitionSiteV1::FunctionParameter
@@ -226,7 +231,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 )?;
             }
         }
-        Ok(())
+        Ok(has_execution_roles)
     }
 
     fn definition_location_v1<'m>(
