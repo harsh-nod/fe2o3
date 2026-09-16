@@ -216,6 +216,8 @@ fn allocation_credit_definite_rejection_refunds_but_other_failures_do_not() {
         } else {
             assert_eq!(after.used.get(K::RequestedAllocationBytes), 8);
             assert_eq!(after.quarantined_records, 1);
+            assert_eq!(context.backend.memory.len(), 1);
+            assert_eq!(context.backend.memory.values().next().unwrap(), &[0; 8]);
             assert!(allocate(&mut context, device, 1).is_err());
             assert_eq!(context.backend().allocation_calls, 1);
             assert!(!context.cleanup().is_complete());

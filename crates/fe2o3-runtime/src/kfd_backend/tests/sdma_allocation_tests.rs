@@ -214,7 +214,7 @@ fn sdma_allocation_diagnostic_panic_preserves_original_payload_and_all_prior_own
 }
 
 #[test]
-fn sdma_allocation_context_refunds_only_warm_capacity_and_preserves_cold_quarantine() {
+fn sdma_allocation_context_refunds_warm_rejection_and_cold_no_owner_settlement() {
     for configured in [false, true] {
         for warm in [false, true] {
             for kind in [
@@ -255,55 +255,50 @@ fn sdma_allocation_context_refunds_only_warm_capacity_and_preserves_cold_quarant
                         usage
                             .used
                             .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
-                        if warm { 0 } else { 8 }
+                        0
                     );
                     assert_eq!(
                         usage
                             .used
                             .get(crate::RuntimeResourceKindV1::AllocationRecords),
-                        u64::from(!warm)
-                    );
-                    assert_eq!(usage.quarantined_records, usize::from(!warm));
-                }
-                let steps = context
-                    .backend_mut_for_test_v1()
-                    .scripted_sdma
-                    .as_ref()
-                    .unwrap()
-                    .remaining_steps();
-                if configured && !warm {
-                    let usage = context.allocation_admission_usage_v1(device).unwrap();
-                    assert!(matches!(
-                        context.allocate(device, kind, 8, 8),
-                        Err(crate::RuntimeErrorV1::Validation(
-                            crate::RuntimeValidationErrorV1::Capacity
-                        ))
-                    ));
-                    assert_eq!(
-                        context.allocation_admission_usage_v1(device).unwrap(),
-                        usage
-                    );
-                    assert_eq!(
-                        context
-                            .backend_mut_for_test_v1()
-                            .scripted_sdma
-                            .as_ref()
-                            .unwrap()
-                            .remaining_steps(),
-                        steps
-                    );
-                    assert_eq!(context.cleanup().allocation_credit_records_v1(), 1);
-                } else {
-                    context.allocate(device, kind, 8, 8).unwrap();
-                    assert_eq!(
-                        context
-                            .backend_mut_for_test_v1()
-                            .scripted_sdma
-                            .as_ref()
-                            .unwrap()
-                            .remaining_steps(),
                         0
                     );
+                    assert_eq!(usage.used, crate::RuntimeResourceVectorV1::ZERO);
+                    assert_eq!(usage.reserved_records, 0);
+                    assert_eq!(usage.retained_records, 0);
+                    assert_eq!(usage.quarantined_records, 0);
+                    assert!(!usage.poisoned);
+                }
+                assert!(context.cleanup().is_complete());
+                context.allocate(device, kind, 8, 8).unwrap();
+                assert_eq!(
+                    context
+                        .backend_mut_for_test_v1()
+                        .scripted_sdma
+                        .as_ref()
+                        .unwrap()
+                        .remaining_steps(),
+                    0
+                );
+                if configured {
+                    let usage = context
+                        .allocation_admission_usage_v1(device)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(
+                        usage
+                            .used
+                            .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
+                        8
+                    );
+                    assert_eq!(
+                        usage
+                            .used
+                            .get(crate::RuntimeResourceKindV1::AllocationRecords),
+                        1
+                    );
+                    assert_eq!(usage.retained_records, 1);
+                    assert_eq!(usage.quarantined_records, 0);
                 }
                 let backend = context.backend_mut_for_test_v1();
                 assert!(!backend.terminal);
@@ -430,6 +425,216 @@ fn sdma_allocation_context_terminal_error_and_panic_keep_prior_owner_and_credits
                 drop(ManuallyDrop::into_inner(context));
             }
         }
+    }
+}
+
+fn cold_multi_fixture(kind: RuntimeMemoryKindV1) -> KfdMultiDeviceRuntimeBackendV1 {
+    let mut steps = vec![reject(kind, 8, false)];
+    steps.extend(success(kind));
+    let mut left = KfdRuntimeBackendV1::mock();
+    left.native_available = true;
+    left.scripted_sdma = Some(ScriptedSdmaDriverV1::new(steps));
+    let mut right = KfdRuntimeBackendV1::mock();
+    right.description.backend_device = 8;
+    right.description.name = "mock gfx942 right".into();
+    right.native_available = true;
+    right.scripted_sdma = Some(ScriptedSdmaDriverV1::new([]));
+    KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap()
+}
+
+#[test]
+fn sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry() {
+    for kind in [
+        RuntimeMemoryKindV1::HostVisible,
+        RuntimeMemoryKindV1::DeviceLocal,
+    ] {
+        // Scripted typed disposition tests forwarding, not native cold admission.
+        let mut context =
+            ManuallyDrop::new(crate::RuntimeContextV1::open(cold_multi_fixture(kind)).unwrap());
+        let left = context.devices()[0].id();
+        let right = context.devices()[1].id();
+        for device in [left, right] {
+            context
+                .configure_allocation_admission_v1(device, 8, 1)
+                .unwrap();
+        }
+        let before = context.allocation_admission_usage_v1(left).unwrap();
+        let other_before = context.allocation_admission_usage_v1(right).unwrap();
+        let backend = context.backend_mut_for_test_v1();
+        let route_id = backend.next_handle;
+        let local_id = backend.children[0].next_handle;
+        let other_id = backend.children[1].next_handle;
+        let Err(crate::RuntimeErrorV1::BackendQuiescent(error)) =
+            context.allocate(left, kind, 8, 8)
+        else {
+            panic!("cold child must forward settled failure");
+        };
+        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
+        assert!(!context.is_terminal());
+        assert_eq!(context.allocation_admission_usage_v1(left).unwrap(), before);
+        assert_eq!(
+            context.allocation_admission_usage_v1(right).unwrap(),
+            other_before
+        );
+        let backend = context.backend_mut_for_test_v1();
+        assert!(!backend.terminal);
+        assert!(backend.allocations.is_empty());
+        assert_eq!(backend.next_handle, route_id + 1);
+        assert_eq!(backend.children[0].next_handle, local_id + 1);
+        assert!(backend.children[0].allocations.is_empty());
+        assert_eq!(
+            backend.children[0]
+                .scripted_sdma
+                .as_ref()
+                .unwrap()
+                .live_owner_count(),
+            0
+        );
+        assert!(context.cleanup().is_complete());
+        context.allocate(left, kind, 8, 8).unwrap();
+        let usage = context
+            .allocation_admission_usage_v1(left)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            usage
+                .used
+                .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
+            8
+        );
+        assert_eq!(
+            usage
+                .used
+                .get(crate::RuntimeResourceKindV1::AllocationRecords),
+            1
+        );
+        assert_eq!(
+            (
+                usage.reserved_records,
+                usage.retained_records,
+                usage.quarantined_records
+            ),
+            (0, 1, 0)
+        );
+        assert_eq!(
+            context.allocation_admission_usage_v1(right).unwrap(),
+            other_before
+        );
+        let backend = context.backend_mut_for_test_v1();
+        assert_eq!(backend.allocations.len(), 1);
+        let route = backend.allocations.get(&(route_id + 1)).unwrap();
+        assert_eq!((route.child, route.local), (0, local_id + 1));
+        assert_eq!(backend.children[0].allocations.len(), 1);
+        let driver = backend.children[0].scripted_sdma.as_ref().unwrap();
+        assert_eq!(driver.remaining_steps(), 0);
+        assert_eq!(driver.live_owner_count(), 1);
+        assert_eq!(driver.unexpected_drops(), 0);
+        let other = &backend.children[1];
+        assert_eq!(other.next_handle, other_id);
+        assert!(!other.sdma_enabled && !other.terminal);
+        assert!(other.allocations.is_empty());
+        assert_eq!(other.scripted_sdma.as_ref().unwrap().live_owner_count(), 0);
+        for child in &mut backend.children {
+            disarm_scripted_drop_after_inspection_v1(child);
+        }
+        drop(ManuallyDrop::into_inner(context));
+    }
+}
+
+#[test]
+fn sdma_allocation_multi_device_legacy_api_preserves_cold_quiescent_failure() {
+    for kind in [
+        RuntimeMemoryKindV1::HostVisible,
+        RuntimeMemoryKindV1::DeviceLocal,
+    ] {
+        let mut backend = ManuallyDrop::new(cold_multi_fixture(kind));
+        assert!(matches!(
+            backend.allocate_v1(7, kind, 8, 8),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(!backend.terminal);
+        assert!(backend.allocations.is_empty());
+        assert!(backend.children[0].allocations.is_empty());
+        for child in &mut backend.children {
+            disarm_scripted_drop_after_inspection_v1(child);
+        }
+        drop(ManuallyDrop::into_inner(backend));
+    }
+}
+
+#[test]
+fn sdma_allocation_context_does_not_upgrade_later_hidden_cleanup_quiescence() {
+    for warm in [false, true] {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend.native_available = true;
+        backend.sdma_enabled = warm;
+        backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::Allocate {
+                kind: ScriptedBufferKindV1::Device,
+                byte_len: 8,
+            },
+            ScriptedSdmaStepV1::Promote(ScriptedFailureModeV1::Success),
+            reject(RuntimeMemoryKindV1::HostVisible, 8, false),
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ]));
+        let mut context = ManuallyDrop::new(crate::RuntimeContextV1::open(backend).unwrap());
+        let device = context.devices()[0].id();
+        context
+            .configure_allocation_admission_v1(device, 8, 1)
+            .unwrap();
+        assert!(matches!(
+            context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
+            Err(crate::RuntimeErrorV1::BackendQuiescent(_))
+        ));
+        assert!(!context.is_terminal());
+        let usage = context
+            .allocation_admission_usage_v1(device)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            usage
+                .used
+                .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
+            8
+        );
+        assert_eq!(
+            usage
+                .used
+                .get(crate::RuntimeResourceKindV1::AllocationRecords),
+            1
+        );
+        assert_eq!(
+            (
+                usage.reserved_records,
+                usage.retained_records,
+                usage.quarantined_records
+            ),
+            (0, 0, 1)
+        );
+        let backend = context.backend_mut_for_test_v1();
+        assert!(backend.allocations.is_empty());
+        assert_eq!(backend.staged_context_bytes, 0);
+        let driver = backend.scripted_sdma.as_ref().unwrap();
+        assert_eq!(driver.live_owner_count(), 0);
+        assert_eq!(driver.remaining_steps(), 0);
+        assert_eq!(driver.unexpected_drops(), 0);
+        assert!(matches!(
+            context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
+            Err(crate::RuntimeErrorV1::Validation(
+                crate::RuntimeValidationErrorV1::Capacity
+            ))
+        ));
+        assert_eq!(
+            context
+                .allocation_admission_usage_v1(device)
+                .unwrap()
+                .unwrap(),
+            usage
+        );
+        assert_eq!(context.cleanup().allocation_credit_records_v1(), 1);
+        disarm_scripted_drop_after_inspection_v1(context.backend_mut_for_test_v1());
+        drop(ManuallyDrop::into_inner(context));
     }
 }
 

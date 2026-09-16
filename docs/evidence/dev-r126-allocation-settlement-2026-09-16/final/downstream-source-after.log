@@ -1,0 +1,8 @@
+crates/fe2o3-runtime/src/context.rs: OK
+crates/fe2o3-runtime/src/context/allocation_admission.rs: OK
+crates/fe2o3-runtime/src/context/tests/allocation_admission_tests.rs: OK
+crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs: OK
+crates/fe2o3-runtime/src/worker.rs: OK
+crates/fe2o3-runtime/src/worker/tests/allocation_outcome_tests.rs: OK

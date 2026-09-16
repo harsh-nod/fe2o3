@@ -3730,6 +3730,7 @@ fn read_frame_v1(input: &mut impl Read) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod allocation_outcome_tests;
     use crate::{
         RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeAsyncEngineConfigV1,
         RuntimeAsyncEngineV1, RuntimeAsyncEventErrorV1, RuntimeAsyncProgressConfigV1,
@@ -4130,6 +4131,7 @@ mod tests {
     struct ProtocolBackendV1 {
         next: u64,
         calls: Vec<&'static str>,
+        settled_allocation: bool,
         last_atomic: Option<RuntimeAtomicLaunchContractV1>,
         last_collective: Option<RuntimeCollectiveLaunchContractV1>,
     }
@@ -4197,7 +4199,33 @@ mod tests {
             _byte_len: u64,
             _alignment: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            if self.settled_allocation {
+                self.calls.push("allocate_legacy_quiescent");
+                return Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                    "settled allocation",
+                )));
+            }
             Ok(self.handle("allocate"))
+        }
+
+        fn allocate_with_outcome_v1(
+            &mut self,
+            device: u64,
+            kind: RuntimeMemoryKindV1,
+            byte_len: u64,
+            alignment: u64,
+        ) -> Result<
+            crate::RuntimeBackendAllocationOutcomeV1<Self::Error>,
+            RuntimeBackendFailureV1<Self::Error>,
+        > {
+            if self.settled_allocation {
+                self.calls.push("allocate_settled");
+                return Ok(crate::RuntimeBackendAllocationOutcomeV1::SettledNoOwner(
+                    TestCodecError("settled allocation"),
+                ));
+            }
+            self.allocate_v1(device, kind, byte_len, alignment)
+                .map(crate::RuntimeBackendAllocationOutcomeV1::Allocated)
         }
 
         fn release_allocation_v1(

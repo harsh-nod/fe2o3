@@ -1,0 +1,1224 @@
+diff --git a/crates/fe2o3-runtime/src/context.rs b/crates/fe2o3-runtime/src/context.rs
+index a3d69e843..58fa2e909 100644
+--- a/crates/fe2o3-runtime/src/context.rs
++++ b/crates/fe2o3-runtime/src/context.rs
+@@ -425,6 +425,25 @@ pub enum RuntimeBackendFailureV1<E> {
+     Terminal(E),
+ }
+ 
++/// Allocation-specific custody outcome, stronger than generic quiescence.
++#[derive(Debug)]
++pub enum RuntimeBackendAllocationOutcomeV1<E> {
++    /// Transfers custody of a nonzero, unique live allocation handle.
++    Allocated(u64),
++    /// The attempt failed, but no requested allocation owner or pending allocation
++    /// root remains. Native disposal and model/currentness settlement are complete,
++    /// no preexisting logical allocation owner is consumed, and the backend
++    /// remains live and retryable. Internal queue, pool, and model bookkeeping
++    /// may advance.
++    ///
++    /// Backend-owned queue infrastructure created by this attempt may remain;
++    /// this outcome authorizes refund of only the requested allocation bytes and
++    /// record. Generic quiescence, a missing public handle, or an empty allocation
++    /// index alone does not establish this outcome. Context preserves the original
++    /// error as `BackendQuiescent` after refunding the attempt's charge.
++    SettledNoOwner(E),
++}
++
+ /// Sealed-resource backend SPI implemented by KFD, HSA, or a worker client.
+ ///
+ /// Implementations must return nonzero handles that are unique among live
+@@ -502,6 +521,23 @@ pub trait RuntimeBackendV1 {
+         alignment: u64,
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+ 
++    /// Allocates with an optional explicit no-owner settlement guarantee.
++    ///
++    /// The default preserves every legacy failure unchanged. Implementations
++    /// must not upgrade generic `Quiescent` failures without establishing the
++    /// stronger [`RuntimeBackendAllocationOutcomeV1::SettledNoOwner`] contract.
++    fn allocate_with_outcome_v1(
++        &mut self,
++        device: u64,
++        kind: RuntimeMemoryKindV1,
++        byte_len: u64,
++        alignment: u64,
++    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
++    {
++        self.allocate_v1(device, kind, byte_len, alignment)
++            .map(RuntimeBackendAllocationOutcomeV1::Allocated)
++    }
++
+     fn release_allocation_v1(
+         &mut self,
+         allocation: u64,
+@@ -1740,7 +1776,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let result = if credits.is_some() {
+             match catch_unwind(AssertUnwindSafe(|| {
+                 self.backend
+-                    .allocate_v1(backend_device, kind, byte_len, alignment)
++                    .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
+             })) {
+                 Ok(result) => result,
+                 Err(payload) => {
+@@ -1751,10 +1787,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             }
+         } else {
+             self.backend
+-                .allocate_v1(backend_device, kind, byte_len, alignment)
++                .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
+         };
+         let backend_allocation = match result {
+-            Ok(handle) => handle,
++            Ok(RuntimeBackendAllocationOutcomeV1::Allocated(handle)) => handle,
++            Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error)) => {
++                if let Some(credits) = credits
++                    && let Err(invariant) = credits.release_after_disposal()
++                {
++                    self.terminal = true;
++                    panic!(
++                        "allocation credit owner invariant failed after settlement: {invariant:?}"
++                    );
++                }
++                return Err(RuntimeErrorV1::BackendQuiescent(error));
++            }
+             Err(failure) => {
+                 if let Some(credits) = credits {
+                     if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
+@@ -3281,6 +3328,7 @@ pub enum RuntimePollV1 {
+ mod tests {
+     use super::*;
+     mod allocation_admission_tests;
++    mod allocation_outcome_tests;
+     mod submission_identity_tests;
+ 
+     #[derive(Debug)]
+diff --git a/crates/fe2o3-runtime/src/context/allocation_admission.rs b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+index d77670255..d8c71e433 100644
+--- a/crates/fe2o3-runtime/src/context/allocation_admission.rs
++++ b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+@@ -115,7 +115,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     /// successful allocation retains its charge through completion and every
+     /// failed release, until the backend confirms actual disposal. An uncertain
+     /// allocation attempt retains quarantined credits even without a returned
+-    /// handle. Only definite pre-mutation rejection refunds that attempt.
++    /// handle. Definite pre-mutation rejection or an explicit allocation-specific
++    /// settled no-owner outcome refunds that attempt; generic quiescence does not.
+     ///
+     /// This opt-in profile does not account padded native backing, cached pools,
+     /// executable/control residency, allocator overhead or arbitrary engine
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_admission_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_admission_tests.rs
+index 49b5a8377..8b8aa611a 100644
+--- a/crates/fe2o3-runtime/src/context/tests/allocation_admission_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_admission_tests.rs
+@@ -216,6 +216,8 @@ fn allocation_credit_definite_rejection_refunds_but_other_failures_do_not() {
+         } else {
+             assert_eq!(after.used.get(K::RequestedAllocationBytes), 8);
+             assert_eq!(after.quarantined_records, 1);
++            assert_eq!(context.backend.memory.len(), 1);
++            assert_eq!(context.backend.memory.values().next().unwrap(), &[0; 8]);
+             assert!(allocate(&mut context, device, 1).is_err());
+             assert_eq!(context.backend().allocation_calls, 1);
+             assert!(!context.cleanup().is_complete());
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+new file mode 100644
+index 000000000..2304bf012
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+@@ -0,0 +1,347 @@
++use super::*;
++use crate::{RuntimeResourceKindV1 as K, RuntimeResourceVectorV1};
++use std::sync::{
++    Arc,
++    atomic::{AtomicUsize, Ordering},
++};
++
++struct Diagnostic {
++    drops: Arc<AtomicUsize>,
++}
++
++impl fmt::Debug for Diagnostic {
++    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
++        panic!("allocation settlement must not debug-format the diagnostic")
++    }
++}
++
++impl fmt::Display for Diagnostic {
++    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
++        panic!("allocation settlement must not format the diagnostic")
++    }
++}
++
++impl Error for Diagnostic {}
++
++impl Drop for Diagnostic {
++    fn drop(&mut self) {
++        self.drops.fetch_add(1, Ordering::SeqCst);
++    }
++}
++
++// Keep MockBackend on the default SPI so legacy failure tests exercise that path.
++#[derive(Default)]
++struct AllocationOnlyBackend {
++    inner: MockBackend,
++    diagnostic: Option<Box<Diagnostic>>,
++    panic_before_outcome: bool,
++    attempts: usize,
++}
++
++impl RuntimeBackendV1 for AllocationOnlyBackend {
++    type Error = Box<Diagnostic>;
++
++    fn enumerate_devices_v1(
++        &mut self,
++    ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
++        Ok(self.inner.enumerate_devices_v1().unwrap())
++    }
++
++    fn allocate_v1(
++        &mut self,
++        device: u64,
++        kind: RuntimeMemoryKindV1,
++        bytes: u64,
++        alignment: u64,
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        match self.allocate_with_outcome_v1(device, kind, bytes, alignment)? {
++            RuntimeBackendAllocationOutcomeV1::Allocated(handle) => Ok(handle),
++            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
++                Err(RuntimeBackendFailureV1::Quiescent(error))
++            }
++        }
++    }
++
++    fn allocate_with_outcome_v1(
++        &mut self,
++        device: u64,
++        kind: RuntimeMemoryKindV1,
++        bytes: u64,
++        alignment: u64,
++    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
++    {
++        self.attempts += 1;
++        if let Some(error) = self.diagnostic.take() {
++            if self.panic_before_outcome {
++                std::panic::resume_unwind(error);
++            }
++            return Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error));
++        }
++        Ok(RuntimeBackendAllocationOutcomeV1::Allocated(
++            self.inner
++                .allocate_v1(device, kind, bytes, alignment)
++                .unwrap(),
++        ))
++    }
++
++    fn release_allocation_v1(
++        &mut self,
++        allocation: u64,
++    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.inner.release_allocation_v1(allocation).unwrap();
++        Ok(())
++    }
++
++    fn create_stream_v1(&mut self, _: u64) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn destroy_stream_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn write_allocation_v1(
++        &mut self,
++        _: u64,
++        _: u64,
++        _: &[u8],
++    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn read_allocation_v1(
++        &mut self,
++        _: u64,
++        _: u64,
++        _: &mut [u8],
++    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn load_module_v1(
++        &mut self,
++        _: u64,
++        _: &[u8],
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn unload_module_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn resolve_kernel_v1(
++        &mut self,
++        _: u64,
++        _: &str,
++        _: [u8; 32],
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn submit_v1(
++        &mut self,
++        _: BackendLaunchV1<'_>,
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn poll_v1(&mut self, _: u64) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn wait_v1(
++        &mut self,
++        _: u64,
++        _: Instant,
++    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn release_submission_v1(
++        &mut self,
++        _: u64,
++    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn record_event_v1(
++        &mut self,
++        _: u64,
++        _: u64,
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn release_event_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++    fn peer_copy_v1(
++        &mut self,
++        _: u64,
++        _: BackendMemoryRegionV1,
++        _: BackendMemoryRegionV1,
++        _: &[u64],
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        unreachable!()
++    }
++}
++
++#[test]
++fn allocation_settlement_preserves_diagnostic_identity_neighbors_and_exact_credit_vector() {
++    for configured in [false, true] {
++        for neighbor in [false, true] {
++            let mut context = RuntimeContextV1::open(AllocationOnlyBackend::default()).unwrap();
++            let device = context.devices()[0].id();
++            let other = context.devices()[1].id();
++            if configured {
++                context
++                    .configure_allocation_admission_v1(
++                        device,
++                        if neighbor { 16 } else { 8 },
++                        if neighbor { 2 } else { 1 },
++                    )
++                    .unwrap();
++                context
++                    .configure_allocation_admission_v1(other, 8, 1)
++                    .unwrap();
++            }
++            let mut retained = vec![
++                context
++                    .allocate(other, RuntimeMemoryKindV1::HostVisible, 8, 8)
++                    .unwrap(),
++            ];
++            if neighbor {
++                retained.push(
++                    context
++                        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++                        .unwrap(),
++                );
++            }
++            let before = context.allocation_admission_usage_v1(device).unwrap();
++            let other_before = context.allocation_admission_usage_v1(other).unwrap();
++            let memory = context.backend.inner.memory.clone();
++            let backend_handles = context.backend_allocations.clone();
++            let allocation_count = context.allocations.len();
++            let attempts = context.backend.attempts;
++            for retry in 1..=3 {
++                let drops = Arc::new(AtomicUsize::new(0));
++                let error = Box::new(Diagnostic {
++                    drops: drops.clone(),
++                });
++                let address = &*error as *const Diagnostic;
++                context.backend.diagnostic = Some(error);
++                let Err(RuntimeErrorV1::BackendQuiescent(error)) =
++                    context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++                else {
++                    panic!("wrong settled outcome");
++                };
++                assert_eq!(&*error as *const Diagnostic, address);
++                assert_eq!(drops.load(Ordering::SeqCst), 0);
++                assert!(!context.is_terminal());
++                assert_eq!(context.backend.attempts, attempts + retry);
++                assert_eq!(context.allocations.len(), allocation_count);
++                assert_eq!(context.backend_allocations, backend_handles);
++                assert_eq!(context.backend.inner.memory, memory);
++                assert!(context.backend.inner.cleanup_log.is_empty());
++                assert_eq!(
++                    context.allocation_admission_usage_v1(device).unwrap(),
++                    before
++                );
++                assert_eq!(
++                    context.allocation_admission_usage_v1(other).unwrap(),
++                    other_before
++                );
++                drop(error);
++                assert_eq!(drops.load(Ordering::SeqCst), 1);
++            }
++            let allocation = context
++                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++                .unwrap();
++            assert_eq!(context.backend.attempts, attempts + 4);
++            if configured {
++                let usage = context
++                    .allocation_admission_usage_v1(device)
++                    .unwrap()
++                    .unwrap();
++                assert_eq!(
++                    usage.used.get(K::RequestedAllocationBytes),
++                    if neighbor { 16 } else { 8 }
++                );
++                assert_eq!(
++                    usage.used.get(K::AllocationRecords),
++                    if neighbor { 2 } else { 1 }
++                );
++                assert_eq!(usage.quarantined_records, 0);
++            }
++            context.release_allocation(allocation).unwrap();
++            assert_eq!(
++                context.allocation_admission_usage_v1(device).unwrap(),
++                before
++            );
++            assert!(context.release_allocation(allocation).is_err());
++            assert_eq!(context.backend.inner.cleanup_log.len(), 1);
++            for allocation in retained {
++                context.release_allocation(allocation).unwrap();
++            }
++            for device in [device, other] {
++                if configured {
++                    let usage = context
++                        .allocation_admission_usage_v1(device)
++                        .unwrap()
++                        .unwrap();
++                    assert_eq!(usage.used, RuntimeResourceVectorV1::ZERO);
++                    assert_eq!(
++                        (
++                            usage.reserved_records,
++                            usage.retained_records,
++                            usage.quarantined_records
++                        ),
++                        (0, 0, 0)
++                    );
++                }
++            }
++            assert!(context.cleanup().is_complete());
++            assert!(context.shutdown().is_ok());
++        }
++    }
++}
++
++#[test]
++fn allocation_panic_before_settled_outcome_keeps_credit_and_original_payload() {
++    let mut context = RuntimeContextV1::open(AllocationOnlyBackend::default()).unwrap();
++    let device = context.devices()[0].id();
++    context
++        .configure_allocation_admission_v1(device, 8, 1)
++        .unwrap();
++    let drops = Arc::new(AtomicUsize::new(0));
++    let error = Box::new(Diagnostic {
++        drops: drops.clone(),
++    });
++    let address = &*error as *const Diagnostic;
++    context.backend.diagnostic = Some(error);
++    context.backend.panic_before_outcome = true;
++    let payload = catch_unwind(AssertUnwindSafe(|| {
++        context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++    }))
++    .unwrap_err()
++    .downcast::<Diagnostic>()
++    .unwrap();
++    assert_eq!(&*payload as *const Diagnostic, address);
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    assert!(context.is_terminal());
++    let usage = context
++        .allocation_admission_usage_v1(device)
++        .unwrap()
++        .unwrap();
++    assert_eq!(usage.used.get(K::RequestedAllocationBytes), 8);
++    assert_eq!(usage.used.get(K::AllocationRecords), 1);
++    assert_eq!(usage.quarantined_records, 1);
++    assert!(context.allocations.is_empty() && context.backend.inner.memory.is_empty());
++    assert!(matches!(
++        context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::ContextTerminal
++        ))
++    ));
++    assert_eq!(context.backend.attempts, 1);
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(device)
++            .unwrap()
++            .unwrap(),
++        usage
++    );
++    assert!(context.backend_allocations.is_empty());
++    assert_eq!(context.cleanup().allocation_credit_records_v1(), 1);
++    drop(payload);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 90d0a8217..5fd2208d8 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -80,9 +80,10 @@ use crate::{
+     MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
+     MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
+     RuntimeAtomicBackendV1, RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1,
+-    RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
+-    RuntimeCollectiveBackendV1, RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1,
+-    RuntimeFlushBackendV1, RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
++    RuntimeBackendAllocationOutcomeV1, RuntimeBackendFailureV1, RuntimeBackendV1,
++    RuntimeCancellationBackendV1, RuntimeCapabilitiesV1, RuntimeCollectiveBackendV1,
++    RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1,
++    RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
+ };
+ 
+ mod allocation_table;
+@@ -5769,6 +5770,22 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+         byte_len: u64,
+         alignment: u64,
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        match self.allocate_with_outcome_v1(device, kind, byte_len, alignment)? {
++            RuntimeBackendAllocationOutcomeV1::Allocated(handle) => Ok(handle),
++            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
++                Err(RuntimeBackendFailureV1::Quiescent(error))
++            }
++        }
++    }
++
++    fn allocate_with_outcome_v1(
++        &mut self,
++        device: u64,
++        kind: RuntimeMemoryKindV1,
++        byte_len: u64,
++        alignment: u64,
++    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
++    {
+         self.require_live()?;
+         self.require_device(device)?;
+         if byte_len == 0 || alignment == 0 || !alignment.is_power_of_two() {
+@@ -5813,13 +5830,22 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+         let sdma_storage = if self.native_available {
+             let ready_before = self.sdma_allocation_ready_v1();
+             self.ensure_sdma_queue_v1()?;
+-            let buffer = self.allocate_sdma_owner_v1(
++            let buffer = match self.allocate_sdma_owner_v1(
+                 kind,
+                 len,
+                 alignment,
+                 ready_before,
+                 "KFD persistent SDMA allocation",
+-            )?;
++            ) {
++                Ok(buffer) => buffer,
++                // This helper reports cold Quiescent only after the lower typed
++                // RetryableCapacity disposition established settled empty custody.
++                // Queue creation and later initialization failures cannot mint it.
++                Err(RuntimeBackendFailureV1::Quiescent(error)) if !ready_before => {
++                    return Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error));
++                }
++                Err(failure) => return Err(failure),
++            };
+             match kind {
+                 RuntimeMemoryKindV1::HostVisible => {
+                     let buffer = self.initialize_sdma_host_v1(
+@@ -5892,7 +5918,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+                 alignment,
+             }
+         }));
+-        Ok(id)
++        Ok(RuntimeBackendAllocationOutcomeV1::Allocated(id))
+     }
+ 
+     fn release_allocation_v1(
+@@ -11041,6 +11067,22 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+         byte_len: u64,
+         alignment: u64,
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        match self.allocate_with_outcome_v1(device, kind, byte_len, alignment)? {
++            RuntimeBackendAllocationOutcomeV1::Allocated(handle) => Ok(handle),
++            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
++                Err(RuntimeBackendFailureV1::Quiescent(error))
++            }
++        }
++    }
++
++    fn allocate_with_outcome_v1(
++        &mut self,
++        device: u64,
++        kind: RuntimeMemoryKindV1,
++        byte_len: u64,
++        alignment: u64,
++    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
++    {
+         self.require_live()?;
+         let child = self.child_for_device(device)?;
+         Self::reserve_route(
+@@ -11048,10 +11090,17 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+             "multi-device allocation route allocation failed",
+         )?;
+         let id = self.next_id()?;
+-        let result = self.children[child].allocate_v1(device, kind, byte_len, alignment);
+-        let local = self.latch(result)?;
+-        self.allocations.insert(id, RoutedHandleV1 { child, local });
+-        Ok(id)
++        let result =
++            self.children[child].allocate_with_outcome_v1(device, kind, byte_len, alignment);
++        match self.latch(result)? {
++            RuntimeBackendAllocationOutcomeV1::Allocated(local) => {
++                self.allocations.insert(id, RoutedHandleV1 { child, local });
++                Ok(RuntimeBackendAllocationOutcomeV1::Allocated(id))
++            }
++            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
++                Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error))
++            }
++        }
+     }
+ 
+     fn release_allocation_v1(
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+index 48e7c5121..ec1747991 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+@@ -214,7 +214,7 @@ fn sdma_allocation_diagnostic_panic_preserves_original_payload_and_all_prior_own
+ }
+ 
+ #[test]
+-fn sdma_allocation_context_refunds_only_warm_capacity_and_preserves_cold_quarantine() {
++fn sdma_allocation_context_refunds_warm_rejection_and_cold_no_owner_settlement() {
+     for configured in [false, true] {
+         for warm in [false, true] {
+             for kind in [
+@@ -255,55 +255,50 @@ fn sdma_allocation_context_refunds_only_warm_capacity_and_preserves_cold_quarant
+                         usage
+                             .used
+                             .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
+-                        if warm { 0 } else { 8 }
++                        0
+                     );
+                     assert_eq!(
+                         usage
+                             .used
+                             .get(crate::RuntimeResourceKindV1::AllocationRecords),
+-                        u64::from(!warm)
++                        0
+                     );
+-                    assert_eq!(usage.quarantined_records, usize::from(!warm));
++                    assert_eq!(usage.used, crate::RuntimeResourceVectorV1::ZERO);
++                    assert_eq!(usage.reserved_records, 0);
++                    assert_eq!(usage.retained_records, 0);
++                    assert_eq!(usage.quarantined_records, 0);
++                    assert!(!usage.poisoned);
+                 }
+-                let steps = context
+-                    .backend_mut_for_test_v1()
+-                    .scripted_sdma
+-                    .as_ref()
+-                    .unwrap()
+-                    .remaining_steps();
+-                if configured && !warm {
+-                    let usage = context.allocation_admission_usage_v1(device).unwrap();
+-                    assert!(matches!(
+-                        context.allocate(device, kind, 8, 8),
+-                        Err(crate::RuntimeErrorV1::Validation(
+-                            crate::RuntimeValidationErrorV1::Capacity
+-                        ))
+-                    ));
++                assert!(context.cleanup().is_complete());
++                context.allocate(device, kind, 8, 8).unwrap();
++                assert_eq!(
++                    context
++                        .backend_mut_for_test_v1()
++                        .scripted_sdma
++                        .as_ref()
++                        .unwrap()
++                        .remaining_steps(),
++                    0
++                );
++                if configured {
++                    let usage = context
++                        .allocation_admission_usage_v1(device)
++                        .unwrap()
++                        .unwrap();
+                     assert_eq!(
+-                        context.allocation_admission_usage_v1(device).unwrap(),
+                         usage
++                            .used
++                            .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                        8
+                     );
+                     assert_eq!(
+-                        context
+-                            .backend_mut_for_test_v1()
+-                            .scripted_sdma
+-                            .as_ref()
+-                            .unwrap()
+-                            .remaining_steps(),
+-                        steps
+-                    );
+-                    assert_eq!(context.cleanup().allocation_credit_records_v1(), 1);
+-                } else {
+-                    context.allocate(device, kind, 8, 8).unwrap();
+-                    assert_eq!(
+-                        context
+-                            .backend_mut_for_test_v1()
+-                            .scripted_sdma
+-                            .as_ref()
+-                            .unwrap()
+-                            .remaining_steps(),
+-                        0
++                        usage
++                            .used
++                            .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                        1
+                     );
++                    assert_eq!(usage.retained_records, 1);
++                    assert_eq!(usage.quarantined_records, 0);
+                 }
+                 let backend = context.backend_mut_for_test_v1();
+                 assert!(!backend.terminal);
+@@ -433,6 +428,216 @@ fn sdma_allocation_context_terminal_error_and_panic_keep_prior_owner_and_credits
+     }
+ }
+ 
++fn cold_multi_fixture(kind: RuntimeMemoryKindV1) -> KfdMultiDeviceRuntimeBackendV1 {
++    let mut steps = vec![reject(kind, 8, false)];
++    steps.extend(success(kind));
++    let mut left = KfdRuntimeBackendV1::mock();
++    left.native_available = true;
++    left.scripted_sdma = Some(ScriptedSdmaDriverV1::new(steps));
++    let mut right = KfdRuntimeBackendV1::mock();
++    right.description.backend_device = 8;
++    right.description.name = "mock gfx942 right".into();
++    right.native_available = true;
++    right.scripted_sdma = Some(ScriptedSdmaDriverV1::new([]));
++    KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap()
++}
++
++#[test]
++fn sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry() {
++    for kind in [
++        RuntimeMemoryKindV1::HostVisible,
++        RuntimeMemoryKindV1::DeviceLocal,
++    ] {
++        // Scripted typed disposition tests forwarding, not native cold admission.
++        let mut context =
++            ManuallyDrop::new(crate::RuntimeContextV1::open(cold_multi_fixture(kind)).unwrap());
++        let left = context.devices()[0].id();
++        let right = context.devices()[1].id();
++        for device in [left, right] {
++            context
++                .configure_allocation_admission_v1(device, 8, 1)
++                .unwrap();
++        }
++        let before = context.allocation_admission_usage_v1(left).unwrap();
++        let other_before = context.allocation_admission_usage_v1(right).unwrap();
++        let backend = context.backend_mut_for_test_v1();
++        let route_id = backend.next_handle;
++        let local_id = backend.children[0].next_handle;
++        let other_id = backend.children[1].next_handle;
++        let Err(crate::RuntimeErrorV1::BackendQuiescent(error)) =
++            context.allocate(left, kind, 8, 8)
++        else {
++            panic!("cold child must forward settled failure");
++        };
++        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++        assert!(!context.is_terminal());
++        assert_eq!(context.allocation_admission_usage_v1(left).unwrap(), before);
++        assert_eq!(
++            context.allocation_admission_usage_v1(right).unwrap(),
++            other_before
++        );
++        let backend = context.backend_mut_for_test_v1();
++        assert!(!backend.terminal);
++        assert!(backend.allocations.is_empty());
++        assert_eq!(backend.next_handle, route_id + 1);
++        assert_eq!(backend.children[0].next_handle, local_id + 1);
++        assert!(backend.children[0].allocations.is_empty());
++        assert_eq!(
++            backend.children[0]
++                .scripted_sdma
++                .as_ref()
++                .unwrap()
++                .live_owner_count(),
++            0
++        );
++        assert!(context.cleanup().is_complete());
++        context.allocate(left, kind, 8, 8).unwrap();
++        let usage = context
++            .allocation_admission_usage_v1(left)
++            .unwrap()
++            .unwrap();
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++            8
++        );
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::AllocationRecords),
++            1
++        );
++        assert_eq!(
++            (
++                usage.reserved_records,
++                usage.retained_records,
++                usage.quarantined_records
++            ),
++            (0, 1, 0)
++        );
++        assert_eq!(
++            context.allocation_admission_usage_v1(right).unwrap(),
++            other_before
++        );
++        let backend = context.backend_mut_for_test_v1();
++        assert_eq!(backend.allocations.len(), 1);
++        let route = backend.allocations.get(&(route_id + 1)).unwrap();
++        assert_eq!((route.child, route.local), (0, local_id + 1));
++        assert_eq!(backend.children[0].allocations.len(), 1);
++        let driver = backend.children[0].scripted_sdma.as_ref().unwrap();
++        assert_eq!(driver.remaining_steps(), 0);
++        assert_eq!(driver.live_owner_count(), 1);
++        assert_eq!(driver.unexpected_drops(), 0);
++        let other = &backend.children[1];
++        assert_eq!(other.next_handle, other_id);
++        assert!(!other.sdma_enabled && !other.terminal);
++        assert!(other.allocations.is_empty());
++        assert_eq!(other.scripted_sdma.as_ref().unwrap().live_owner_count(), 0);
++        for child in &mut backend.children {
++            disarm_scripted_drop_after_inspection_v1(child);
++        }
++        drop(ManuallyDrop::into_inner(context));
++    }
++}
++
++#[test]
++fn sdma_allocation_multi_device_legacy_api_preserves_cold_quiescent_failure() {
++    for kind in [
++        RuntimeMemoryKindV1::HostVisible,
++        RuntimeMemoryKindV1::DeviceLocal,
++    ] {
++        let mut backend = ManuallyDrop::new(cold_multi_fixture(kind));
++        assert!(matches!(
++            backend.allocate_v1(7, kind, 8, 8),
++            Err(RuntimeBackendFailureV1::Quiescent(_))
++        ));
++        assert!(!backend.terminal);
++        assert!(backend.allocations.is_empty());
++        assert!(backend.children[0].allocations.is_empty());
++        for child in &mut backend.children {
++            disarm_scripted_drop_after_inspection_v1(child);
++        }
++        drop(ManuallyDrop::into_inner(backend));
++    }
++}
++
++#[test]
++fn sdma_allocation_context_does_not_upgrade_later_hidden_cleanup_quiescence() {
++    for warm in [false, true] {
++        let mut backend = KfdRuntimeBackendV1::mock();
++        backend.native_available = true;
++        backend.sdma_enabled = warm;
++        backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new([
++            ScriptedSdmaStepV1::Allocate {
++                kind: ScriptedBufferKindV1::Device,
++                byte_len: 8,
++            },
++            ScriptedSdmaStepV1::Promote(ScriptedFailureModeV1::Success),
++            reject(RuntimeMemoryKindV1::HostVisible, 8, false),
++            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
++            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++        ]));
++        let mut context = ManuallyDrop::new(crate::RuntimeContextV1::open(backend).unwrap());
++        let device = context.devices()[0].id();
++        context
++            .configure_allocation_admission_v1(device, 8, 1)
++            .unwrap();
++        assert!(matches!(
++            context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++            Err(crate::RuntimeErrorV1::BackendQuiescent(_))
++        ));
++        assert!(!context.is_terminal());
++        let usage = context
++            .allocation_admission_usage_v1(device)
++            .unwrap()
++            .unwrap();
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++            8
++        );
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::AllocationRecords),
++            1
++        );
++        assert_eq!(
++            (
++                usage.reserved_records,
++                usage.retained_records,
++                usage.quarantined_records
++            ),
++            (0, 0, 1)
++        );
++        let backend = context.backend_mut_for_test_v1();
++        assert!(backend.allocations.is_empty());
++        assert_eq!(backend.staged_context_bytes, 0);
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert_eq!(driver.live_owner_count(), 0);
++        assert_eq!(driver.remaining_steps(), 0);
++        assert_eq!(driver.unexpected_drops(), 0);
++        assert!(matches!(
++            context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++            Err(crate::RuntimeErrorV1::Validation(
++                crate::RuntimeValidationErrorV1::Capacity
++            ))
++        ));
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap(),
++            usage
++        );
++        assert_eq!(context.cleanup().allocation_credit_records_v1(), 1);
++        disarm_scripted_drop_after_inspection_v1(context.backend_mut_for_test_v1());
++        drop(ManuallyDrop::into_inner(context));
++    }
++}
++
+ #[test]
+ fn sdma_allocation_driver_selection_panic_keeps_neighbors_and_seals() {
+     for kind in [
+diff --git a/crates/fe2o3-runtime/src/worker.rs b/crates/fe2o3-runtime/src/worker.rs
+index 9b45129f8..84dafc8d1 100644
+--- a/crates/fe2o3-runtime/src/worker.rs
++++ b/crates/fe2o3-runtime/src/worker.rs
+@@ -3730,6 +3730,7 @@ fn read_frame_v1(input: &mut impl Read) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    mod allocation_outcome_tests;
+     use crate::{
+         RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeAsyncEngineConfigV1,
+         RuntimeAsyncEngineV1, RuntimeAsyncEventErrorV1, RuntimeAsyncProgressConfigV1,
+@@ -4130,6 +4131,7 @@ mod tests {
+     struct ProtocolBackendV1 {
+         next: u64,
+         calls: Vec<&'static str>,
++        settled_allocation: bool,
+         last_atomic: Option<RuntimeAtomicLaunchContractV1>,
+         last_collective: Option<RuntimeCollectiveLaunchContractV1>,
+     }
+@@ -4197,9 +4199,35 @@ mod tests {
+             _byte_len: u64,
+             _alignment: u64,
+         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++            if self.settled_allocation {
++                self.calls.push("allocate_legacy_quiescent");
++                return Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
++                    "settled allocation",
++                )));
++            }
+             Ok(self.handle("allocate"))
+         }
+ 
++        fn allocate_with_outcome_v1(
++            &mut self,
++            device: u64,
++            kind: RuntimeMemoryKindV1,
++            byte_len: u64,
++            alignment: u64,
++        ) -> Result<
++            crate::RuntimeBackendAllocationOutcomeV1<Self::Error>,
++            RuntimeBackendFailureV1<Self::Error>,
++        > {
++            if self.settled_allocation {
++                self.calls.push("allocate_settled");
++                return Ok(crate::RuntimeBackendAllocationOutcomeV1::SettledNoOwner(
++                    TestCodecError("settled allocation"),
++                ));
++            }
++            self.allocate_v1(device, kind, byte_len, alignment)
++                .map(crate::RuntimeBackendAllocationOutcomeV1::Allocated)
++        }
++
+         fn release_allocation_v1(
+             &mut self,
+             _allocation: u64,
+diff --git a/crates/fe2o3-runtime/src/worker/tests/allocation_outcome_tests.rs b/crates/fe2o3-runtime/src/worker/tests/allocation_outcome_tests.rs
+new file mode 100644
+index 000000000..d3483d917
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/worker/tests/allocation_outcome_tests.rs
+@@ -0,0 +1,249 @@
++use super::*;
++use crate::{
++    RuntimeBackendAllocationOutcomeV1, RuntimeResourceKindV1 as K, RuntimeValidationErrorV1,
++};
++
++const ALLOCATION_QUIESCENT_SERVER: &str = r#"
++import struct
++import sys
++
++stdin = sys.stdin.buffer
++stdout = sys.stdout.buffer
++version = sys.argv[1]
++
++def read_exact(size):
++    data = b''
++    while len(data) < size:
++        part = stdin.read(size - len(data))
++        if not part:
++            raise EOFError()
++        data += part
++    return data
++
++def read_frame():
++    return read_exact(struct.unpack('<I', read_exact(4))[0])
++
++def write_frame(payload):
++    stdout.write(struct.pack('<I', len(payload)) + payload)
++    stdout.flush()
++
++def blob(value):
++    return struct.pack('<I', len(value)) + value
++
++def expect(request):
++    if read_frame() != request:
++        sys.exit(71)
++
++handshake = b'fe2o3-runtime-worker-' + version.encode()
++if version != 'v1':
++    handshake += b';extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1'
++if version == 'v5':
++    handshake += b',semantic-launch-v1'
++write_frame(handshake)
++allocation = bytes((4,)) + struct.pack('<QBQQ', 1, 1, 8, 8)
++failure = bytes((2,)) + blob(b'backend quiescent')
++expect(allocation)
++write_frame(failure)
++expect(bytes((1,)))
++write_frame(bytes((0,)) + struct.pack('<IQ', 1, 1) + blob(b'allocation-device') + blob(b'gfx942') + struct.pack('<QH', 1024, 10))
++if version != 'v1':
++    expect(bytes((19,)) + struct.pack('<Q', 1))
++    write_frame(bytes((0,)) + struct.pack('<IH', 2, 0))
++expect(allocation)
++write_frame(failure)
++# No retry or allocation release may reach the worker after Context quarantine.
++expect(bytes((2,)) + struct.pack('<Q', 1))
++write_frame(bytes((0,)) + struct.pack('<Q', 41))
++expect(bytes((3,)) + struct.pack('<Q', 41))
++write_frame(bytes((0,)))
++try:
++    sys.exit(0 if not read_frame() else 72)
++except EOFError:
++    sys.exit(0)
++"#;
++
++fn command(version: &str) -> RuntimeWorkerCommandV1 {
++    RuntimeWorkerCommandV1::new("python3")
++        .argument("-u")
++        .argument("-c")
++        .argument(ALLOCATION_QUIESCENT_SERVER)
++        .argument(version)
++}
++
++fn exercise<B: RuntimeBackendV1>(mut backend: B) {
++    assert!(matches!(
++        backend.allocate_with_outcome_v1(1, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++        Err(RuntimeBackendFailureV1::Quiescent(_))
++    ));
++    let mut context = RuntimeContextV1::open(backend).unwrap();
++    let device = context.devices()[0].id();
++    context
++        .configure_allocation_admission_v1(device, 8, 1)
++        .unwrap();
++    assert!(matches!(
++        context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++        Err(RuntimeErrorV1::BackendQuiescent(_))
++    ));
++    assert!(!context.is_terminal());
++    let usage = context
++        .allocation_admission_usage_v1(device)
++        .unwrap()
++        .unwrap();
++    assert_eq!(usage.used.get(K::RequestedAllocationBytes), 8);
++    assert_eq!(usage.used.get(K::AllocationRecords), 1);
++    assert_eq!(
++        (
++            usage.reserved_records,
++            usage.retained_records,
++            usage.quarantined_records
++        ),
++        (0, 0, 1)
++    );
++    assert!(matches!(
++        context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::Capacity
++        ))
++    ));
++    assert!(
++        context
++            .configure_allocation_admission_v1(device, 16, 2)
++            .is_err()
++    );
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(device)
++            .unwrap()
++            .unwrap(),
++        usage
++    );
++    let report = context.cleanup();
++    assert!(!report.is_complete());
++    assert_eq!(report.allocation_credit_records_v1(), 1);
++    assert!(report.retained().is_empty());
++    assert!(report.failures().is_empty());
++    assert!(!report.is_terminal());
++    let failure = match context.shutdown() {
++        Ok(_) => panic!("quarantined credit cannot disappear through shutdown"),
++        Err(failure) => failure,
++    };
++    assert_eq!(failure.report().allocation_credit_records_v1(), 1);
++    assert!(failure.report().retained().is_empty());
++    assert!(failure.report().failures().is_empty());
++    assert!(!failure.report().is_terminal());
++    let mut context = failure.into_context();
++    let stream = context.create_stream(device).unwrap();
++    context.destroy_stream(stream).unwrap();
++    assert!(!context.is_terminal());
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(device)
++            .unwrap()
++            .unwrap(),
++        usage
++    );
++    // Normal transport Drop owns termination/reaping, not successful Context shutdown.
++    drop(context);
++}
++
++#[test]
++fn v1_allocation_quiescence_keeps_context_credit_quarantined_over_child_process() {
++    if std::process::Command::new("python3")
++        .arg("--version")
++        .output()
++        .is_err()
++    {
++        return;
++    }
++    let backend = RuntimeWorkerBackendV1::spawn(
++        &command("v1"),
++        RuntimeBinaryCodecV1,
++        Duration::from_secs(5),
++        Duration::from_secs(5),
++    )
++    .unwrap();
++    #[cfg(target_os = "linux")]
++    let pid = backend.transport.child.id();
++    exercise(backend);
++    #[cfg(target_os = "linux")]
++    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
++}
++
++#[test]
++fn v4_allocation_quiescence_keeps_context_credit_quarantined_over_child_process() {
++    if std::process::Command::new("python3")
++        .arg("--version")
++        .output()
++        .is_err()
++    {
++        return;
++    }
++    let backend = RuntimeWorkerBackendV4::spawn(
++        &command("v4"),
++        RuntimeBinaryCodecV4,
++        Duration::from_secs(5),
++        Duration::from_secs(5),
++    )
++    .unwrap();
++    #[cfg(target_os = "linux")]
++    let pid = backend.inner.transport.child.id();
++    exercise(backend);
++    #[cfg(target_os = "linux")]
++    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
++}
++
++#[test]
++fn v5_allocation_quiescence_keeps_context_credit_quarantined_over_child_process() {
++    if std::process::Command::new("python3")
++        .arg("--version")
++        .output()
++        .is_err()
++    {
++        return;
++    }
++    let backend = RuntimeWorkerBackendV5::spawn(
++        &command("v5"),
++        RuntimeBinaryCodecV5,
++        Duration::from_secs(5),
++        Duration::from_secs(5),
++    )
++    .unwrap();
++    #[cfg(target_os = "linux")]
++    let pid = backend.inner.inner.transport.child.id();
++    exercise(backend);
++    #[cfg(target_os = "linux")]
++    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
++}
++
++#[test]
++fn allocation_dispatchers_erase_settlement_authority_to_legacy_quiescence() {
++    let mut backend = ProtocolBackendV1 {
++        settled_allocation: true,
++        ..Default::default()
++    };
++    assert!(matches!(
++        backend.allocate_with_outcome_v1(1, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
++        Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(_))
++    ));
++    backend.calls.clear();
++    let request = RuntimeBinaryCodecV1
++        .encode_request_v1(RuntimeWorkerOperationV1::Allocate {
++            device: 1,
++            kind: RuntimeMemoryKindV1::DeviceLocal,
++            byte_len: 8,
++            alignment: 8,
++        })
++        .unwrap();
++    let message = b"backend quiescent";
++    let mut expected = vec![2];
++    expected.extend_from_slice(&(message.len() as u32).to_le_bytes());
++    expected.extend_from_slice(message);
++    for response in [
++        dispatch_binary_request_v1(&mut backend, &request),
++        dispatch_binary_request_v4(&mut backend, &request),
++        dispatch_binary_request_v5(&mut backend, &request),
++    ] {
++        assert_eq!(response.unwrap(), expected);
++    }
++    assert_eq!(backend.calls, ["allocate_legacy_quiescent"; 3]);
++}

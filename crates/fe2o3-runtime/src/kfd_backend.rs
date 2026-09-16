@@ -80,9 +80,10 @@ use crate::{
     MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
     MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
     RuntimeAtomicBackendV1, RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1,
-    RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
-    RuntimeCollectiveBackendV1, RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1,
-    RuntimeFlushBackendV1, RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
+    RuntimeBackendAllocationOutcomeV1, RuntimeBackendFailureV1, RuntimeBackendV1,
+    RuntimeCancellationBackendV1, RuntimeCapabilitiesV1, RuntimeCollectiveBackendV1,
+    RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1,
+    RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
 };
 
 mod allocation_table;
@@ -5769,6 +5770,22 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         byte_len: u64,
         alignment: u64,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        match self.allocate_with_outcome_v1(device, kind, byte_len, alignment)? {
+            RuntimeBackendAllocationOutcomeV1::Allocated(handle) => Ok(handle),
+            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
+                Err(RuntimeBackendFailureV1::Quiescent(error))
+            }
+        }
+    }
+
+    fn allocate_with_outcome_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
+    {
         self.require_live()?;
         self.require_device(device)?;
         if byte_len == 0 || alignment == 0 || !alignment.is_power_of_two() {
@@ -5813,13 +5830,22 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         let sdma_storage = if self.native_available {
             let ready_before = self.sdma_allocation_ready_v1();
             self.ensure_sdma_queue_v1()?;
-            let buffer = self.allocate_sdma_owner_v1(
+            let buffer = match self.allocate_sdma_owner_v1(
                 kind,
                 len,
                 alignment,
                 ready_before,
                 "KFD persistent SDMA allocation",
-            )?;
+            ) {
+                Ok(buffer) => buffer,
+                // This helper reports cold Quiescent only after the lower typed
+                // RetryableCapacity disposition established settled empty custody.
+                // Queue creation and later initialization failures cannot mint it.
+                Err(RuntimeBackendFailureV1::Quiescent(error)) if !ready_before => {
+                    return Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error));
+                }
+                Err(failure) => return Err(failure),
+            };
             match kind {
                 RuntimeMemoryKindV1::HostVisible => {
                     let buffer = self.initialize_sdma_host_v1(
@@ -5892,7 +5918,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 alignment,
             }
         }));
-        Ok(id)
+        Ok(RuntimeBackendAllocationOutcomeV1::Allocated(id))
     }
 
     fn release_allocation_v1(
@@ -11041,6 +11067,22 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         byte_len: u64,
         alignment: u64,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        match self.allocate_with_outcome_v1(device, kind, byte_len, alignment)? {
+            RuntimeBackendAllocationOutcomeV1::Allocated(handle) => Ok(handle),
+            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
+                Err(RuntimeBackendFailureV1::Quiescent(error))
+            }
+        }
+    }
+
+    fn allocate_with_outcome_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
+    {
         self.require_live()?;
         let child = self.child_for_device(device)?;
         Self::reserve_route(
@@ -11048,10 +11090,17 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             "multi-device allocation route allocation failed",
         )?;
         let id = self.next_id()?;
-        let result = self.children[child].allocate_v1(device, kind, byte_len, alignment);
-        let local = self.latch(result)?;
-        self.allocations.insert(id, RoutedHandleV1 { child, local });
-        Ok(id)
+        let result =
+            self.children[child].allocate_with_outcome_v1(device, kind, byte_len, alignment);
+        match self.latch(result)? {
+            RuntimeBackendAllocationOutcomeV1::Allocated(local) => {
+                self.allocations.insert(id, RoutedHandleV1 { child, local });
+                Ok(RuntimeBackendAllocationOutcomeV1::Allocated(id))
+            }
+            RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error) => {
+                Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error))
+            }
+        }
     }
 
     fn release_allocation_v1(

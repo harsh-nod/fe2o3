@@ -1,0 +1,50 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.07s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 42 tests
+test authorized_execution::tests::telemetry_identities_bind_every_generic_kernel_and_allocation_axis ... ok
+test context::tests::allocation_admission_tests::allocation_credit_configuration_cannot_forget_live_or_quarantined_custody ... ok
+test context::tests::allocation_admission_tests::allocation_credit_devices_and_contexts_are_isolated ... ok
+test context::tests::allocation_admission_tests::allocation_credit_definite_rejection_refunds_but_other_failures_do_not ... ok
+test context::tests::allocation_admission_tests::allocation_credit_invalid_backend_handles_retain_terminal_custody ... ok
+test context::tests::allocation_admission_tests::allocation_credit_preflight_errors_do_not_enter_backend_or_debit ... ok
+test context::tests::allocation_admission_tests::allocation_credit_profile_cannot_be_installed_over_unaccounted_handles ... ok
+test context::tests::allocation_admission_tests::allocation_credit_vector_rejection_is_atomic_and_precedes_backend_entry ... ok
+test context::tests::allocation_admission_tests::allocation_record_limit_is_independent_of_byte_limit ... ok
+test context::tests::allocation_admission_tests::allocation_credit_release_failures_preserve_exact_charge_and_success_refunds_once ... ok
+test context::tests::allocation_outcome_tests::allocation_panic_before_settled_outcome_keeps_credit_and_original_payload ... ok
+test context::tests::allocation_outcome_tests::allocation_settlement_preserves_diagnostic_identity_neighbors_and_exact_credit_vector ... ok
+test context::tests::rejected_event_cleanup_blocks_module_and_allocation_release ... ok
+test kfd_backend::retained_release_tests::native_runtime_allocation_shutdown_selects_retained_directional_release ... ignored, requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID
+test kfd_backend::native_budget::host_pool_tests::host_pool_zero_limits_leave_allocation_enabled_and_terminal_usage_is_not_zero ... ok
+test kfd_backend::qualification_drain_capture::tests::queued_observations_are_immutable_allocation_free_and_not_native_evidence ... ok
+test context::tests::allocation_admission_tests::allocation_credit_adapter_panic_seals_context_and_never_refunds ... ok
+test kfd_backend::tests::cooperative_copy_rejects_native_allocation_custody_before_mutation ... ok
+test kfd_backend::tests::direct_kfd_allocation_custody_is_bounded_and_fifo_indexed ... ok
+test kfd_backend::tests::direct_kfd_compute_sdma_overlap_is_allocation_scoped ... ok
+test kfd_backend::tests::native_copy_rejects_parent_cooperative_allocation_custody_before_child_call ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_context_does_not_upgrade_later_hidden_cleanup_quiescence ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_context_terminal_error_and_panic_keep_prior_owner_and_credits ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_context_refunds_warm_rejection_and_cold_no_owner_settlement ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_capacity_preserves_neighbors_and_retries_after_warm_or_cold_admission ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_driver_selection_panic_keeps_neighbors_and_seals ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_multi_device_forwards_only_settled_no_owner_and_routes_retry ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_diagnostic_panic_preserves_original_payload_and_all_prior_owners ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_multi_device_legacy_api_preserves_cold_quiescent_failure ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_terminal_capacity_protocol_error_and_panic_seal_without_new_owner ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_restore_shell_reuses_allocation_and_drops_exactly_once ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_zero_initialization_capacity_is_quiescent_only_after_hidden_cleanup ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_cold_guard_and_validation_are_inert ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_context_refunds_capacity_and_cold_busy_without_settling_compute ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_host_initialization_failure_retains_new_and_existing_owners ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_context_initialization_failure_retains_hidden_owners_and_quarantines ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_readiness_requires_owner_and_native_availability ... ok
+test kfd_backend::tests::staged_allocation_capacity_failure_is_fallible ... ok
+test kfd_backend::tests::staging_budgets_reject_before_allocation_and_release_exact_accounting ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_preserves_primary_auxiliary_and_queued_compute_through_retry ... ok
+test kfd_backend::tests::sdma_pending_allocation_tests::sdma_pending_allocation_terminal_error_and_panic_retain_original_compute ... ok
+test kfd_backend::tests::sdma_allocation_tests::sdma_allocation_staging_capacity_preserves_first_and_second_chunk_visibility ... ok
+
+test result: ok. 41 passed; 0 failed; 1 ignored; 0 measured; 802 filtered out; finished in 0.37s
+

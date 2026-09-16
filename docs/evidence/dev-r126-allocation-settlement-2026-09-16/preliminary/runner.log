@@ -1,0 +1,5 @@
+source-before exit=0
+rustc exit=0
+cargo exit=0
+python exit=0
+clippy exit=101

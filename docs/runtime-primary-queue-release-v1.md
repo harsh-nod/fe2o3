@@ -734,8 +734,8 @@ Pooled APIs share the same checkout and fresh-allocation implementation.
 Runtime allocation captures queue readiness before initialization. Proven
 capacity rejection on an already established primary/SDMA route is `Rejected`;
 if this call created queues, it is `Quiescent`. Host-side activity bookkeeping
-and model revisions can still advance. Configured Context admission refunds
-only `Rejected`; a cold `Quiescent` failure retains quarantined credit even
+and model revisions can still advance. At that packet, configured Context
+admission refunded only `Rejected`; a cold `Quiescent` failure retained credit even
 without an allocation handle. This conservative behavior is not full memory
 parity. Errors after successful allocation, including recovered promotion and
 zero-initialization followed by successful cleanup, are also `Quiescent`.
@@ -794,12 +794,35 @@ still need dedicated integrated qualification; Scripted has no real pipeline
 publication path. Formal correspondence, full R126 acceptance and matched
 HIP/HSA benchmarks remain open.
 
+## Allocation-Specific Settlement
+
+`RuntimeBackendV1::allocate_with_outcome_v1` now supplies an additive
+`Allocated`/`SettledNoOwner` outcome. Its default preserves legacy errors.
+Context refunds only the explicit settled attempt's requested-byte/record token,
+then returns the original diagnostic as `BackendQuiescent`. Queue infrastructure
+and pool/model bookkeeping may remain; no requested owner or pending allocation
+root may remain. Generic quiescence or an empty allocation index is insufficient.
+
+Direct KFD grants this outcome only for cold typed backing-capacity rejection
+from the lower allocation helper after settled model retake. Queue creation,
+promotion, initialization and hidden-cleanup errors do not grant it. The
+multi-device router forwards it without installing an allocation route, and
+legacy allocation calls still return `Quiescent`. Worker V1/V4/V5 keep their
+existing wire semantics and therefore still quarantine these failed attempts.
+
+Nine added CPU tests cover exact diagnostic/panic identity, repeated refund and
+retry, neighboring allocations and device isolation, direct multi-device routing,
+later cleanup quarantine, canonical Worker dispatch and child-process accounting.
+The [development receipt](evidence/dev-r126-allocation-settlement-2026-09-16/README.md)
+records final-source validation separately from native, formal and performance
+qualification. This closes the direct Context credit-recovery implementation
+gap, not all allocation-failure recovery or full memory parity.
+
 ## Remaining Qualification
 
-Cold no-handle credit recovery remains a separate behavioral gap. It needs an
-allocation-specific settled-no-owner outcome before Context may refund the
-attempt's allocation credits. Legacy backends must retain conservative behavior;
-neither a capacity error string nor generic `Quiescent` grants that authority.
+Allocation settlement still needs native cold-admission/failure qualification,
+formal implementation correspondence and a separately negotiated Worker protocol
+extension before its stronger guarantee can cross the process boundary.
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated

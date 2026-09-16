@@ -1,0 +1,31 @@
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.41s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_resource_accounting-0c3d31953eefbdf2)
+
+running 23 tests
+test batch::tests::batch_uses_existing_account_records_and_independent_tokens ... ok
+test batch::tests::complete_record_roster_must_be_available_before_any_member_is_admitted ... ok
+test batch::tests::complete_owner_interval_is_checked_before_generation_assignment ... ok
+test batch::tests::corrupt_record_counters_poison_without_debit_or_owner_advance ... ok
+test batch::tests::cross_member_arithmetic_overflow_has_no_partial_debit ... ok
+test batch::tests::duplicate_or_invalid_free_slots_poison_without_issuing_any_token ... ok
+test batch::tests::equal_capacity_accounts_cannot_exchange_batch_member_credits ... ok
+test batch::tests::late_member_capacity_and_final_dimension_failure_leave_all_state_unchanged ... ok
+test batch::tests::quarantined_member_keeps_only_its_charge_after_sibling_disposal ... ok
+test batch::tests::occupied_slot_in_free_roster_cannot_overwrite_an_existing_owner ... ok
+test batch::tests::concurrent_scalar_and_batch_admission_share_one_ledger_and_owner_arena ... ok
+test batch::tests::zero_cost_members_still_consume_independent_owner_records ... ok
+test batch::tests::concurrent_batches_conserve_complete_rosters ... ok
+test tests::account_configuration_has_a_fixed_record_bound ... ok
+test tests::abandoned_retained_token_preserves_charge_after_all_external_handles_drop ... ok
+test tests::account_identity_is_bound_in_the_token_not_chosen_during_release ... ok
+test tests::bounded_record_and_generation_exhaustion_are_failure_atomic ... ok
+test tests::complete_vector_rejection_changes_neither_usage_nor_record_identity ... ok
+test tests::unissued_drop_and_definite_rejection_refund_exactly_once ... ok
+test tests::slot_reuse_changes_owner_and_stale_release_never_refunds ... ok
+test tests::poisoned_account_cannot_refund_or_admit_more_custody ... ok
+test tests::concurrent_complete_vector_admission_preserves_conservation ... ok
+test batch::tests::invalid_member_count_is_atomic_but_corrupt_zero_owner_poisons ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

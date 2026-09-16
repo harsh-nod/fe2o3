@@ -115,7 +115,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// successful allocation retains its charge through completion and every
     /// failed release, until the backend confirms actual disposal. An uncertain
     /// allocation attempt retains quarantined credits even without a returned
-    /// handle. Only definite pre-mutation rejection refunds that attempt.
+    /// handle. Definite pre-mutation rejection or an explicit allocation-specific
+    /// settled no-owner outcome refunds that attempt; generic quiescence does not.
     ///
     /// This opt-in profile does not account padded native backing, cached pools,
     /// executable/control residency, allocator overhead or arbitrary engine

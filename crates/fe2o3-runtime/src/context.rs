@@ -425,6 +425,25 @@ pub enum RuntimeBackendFailureV1<E> {
     Terminal(E),
 }
 
+/// Allocation-specific custody outcome, stronger than generic quiescence.
+#[derive(Debug)]
+pub enum RuntimeBackendAllocationOutcomeV1<E> {
+    /// Transfers custody of a nonzero, unique live allocation handle.
+    Allocated(u64),
+    /// The attempt failed, but no requested allocation owner or pending allocation
+    /// root remains. Native disposal and model/currentness settlement are complete,
+    /// no preexisting logical allocation owner is consumed, and the backend
+    /// remains live and retryable. Internal queue, pool, and model bookkeeping
+    /// may advance.
+    ///
+    /// Backend-owned queue infrastructure created by this attempt may remain;
+    /// this outcome authorizes refund of only the requested allocation bytes and
+    /// record. Generic quiescence, a missing public handle, or an empty allocation
+    /// index alone does not establish this outcome. Context preserves the original
+    /// error as `BackendQuiescent` after refunding the attempt's charge.
+    SettledNoOwner(E),
+}
+
 /// Sealed-resource backend SPI implemented by KFD, HSA, or a worker client.
 ///
 /// Implementations must return nonzero handles that are unique among live
@@ -501,6 +520,23 @@ pub trait RuntimeBackendV1 {
         byte_len: u64,
         alignment: u64,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+
+    /// Allocates with an optional explicit no-owner settlement guarantee.
+    ///
+    /// The default preserves every legacy failure unchanged. Implementations
+    /// must not upgrade generic `Quiescent` failures without establishing the
+    /// stronger [`RuntimeBackendAllocationOutcomeV1::SettledNoOwner`] contract.
+    fn allocate_with_outcome_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<RuntimeBackendAllocationOutcomeV1<Self::Error>, RuntimeBackendFailureV1<Self::Error>>
+    {
+        self.allocate_v1(device, kind, byte_len, alignment)
+            .map(RuntimeBackendAllocationOutcomeV1::Allocated)
+    }
 
     fn release_allocation_v1(
         &mut self,
@@ -1740,7 +1776,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let result = if credits.is_some() {
             match catch_unwind(AssertUnwindSafe(|| {
                 self.backend
-                    .allocate_v1(backend_device, kind, byte_len, alignment)
+                    .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
             })) {
                 Ok(result) => result,
                 Err(payload) => {
@@ -1751,10 +1787,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
         } else {
             self.backend
-                .allocate_v1(backend_device, kind, byte_len, alignment)
+                .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
         };
         let backend_allocation = match result {
-            Ok(handle) => handle,
+            Ok(RuntimeBackendAllocationOutcomeV1::Allocated(handle)) => handle,
+            Ok(RuntimeBackendAllocationOutcomeV1::SettledNoOwner(error)) => {
+                if let Some(credits) = credits
+                    && let Err(invariant) = credits.release_after_disposal()
+                {
+                    self.terminal = true;
+                    panic!(
+                        "allocation credit owner invariant failed after settlement: {invariant:?}"
+                    );
+                }
+                return Err(RuntimeErrorV1::BackendQuiescent(error));
+            }
             Err(failure) => {
                 if let Some(credits) = credits {
                     if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
@@ -3281,6 +3328,7 @@ pub enum RuntimePollV1 {
 mod tests {
     use super::*;
     mod allocation_admission_tests;
+    mod allocation_outcome_tests;
     mod submission_identity_tests;
 
     #[derive(Debug)]
