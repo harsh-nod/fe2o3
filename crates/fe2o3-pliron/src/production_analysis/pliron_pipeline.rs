@@ -908,6 +908,9 @@ fn require_production_pliron_checks_v2(
         }
     })?;
     let race_upper_bound = preflight_race_resource_upper_bound_v1(
+        context,
+        function,
+        analyses.function_inventory().ok(),
         input_census,
         sparse,
         execution_layout,

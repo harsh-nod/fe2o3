@@ -20,14 +20,19 @@ use dialect_kernel::{
     is_supported_allocation_effect_contract_v1,
 };
 use pliron::{
-    builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation,
-    value::Value,
+    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    common_traits::Named,
+    context::Context,
+    op::Op,
+    operation::Operation,
+    value::{DefiningEntity, Value},
 };
 
 use crate::production_analysis::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::production_analysis::pliron_analysis_witness::{
     MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1, evaluate_raw_index_at_invocation_v1,
 };
+use crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::production_analysis::pliron_invocation_trace::{
     PlironExecutionLayoutV1, PlironTraceFailureV1, static_invocation_shape_for_resource_v1,
 };
@@ -76,6 +81,228 @@ fn checked_race_sum_v1(items: &[usize]) -> Result<usize, ProductionAnalysisResou
     })
 }
 
+const RACE_NAME_CENSUS_SCRATCH_V1: usize = 16;
+// "allocation origin " plus the full decimal u64 origin.
+const RACE_ALLOCATION_NAME_BYTES_V1: usize = 18 + 20;
+
+#[derive(Clone, Copy, Debug)]
+struct RaceNameCensusV1 {
+    name_storage: usize,
+    scan_work: usize,
+    execution_lookup_work: usize,
+}
+
+#[derive(Default)]
+struct RaceNameScanV1 {
+    operands: usize,
+    results: usize,
+    arguments: usize,
+    attributes: usize,
+    ranked_accesses: usize,
+    allocation_effects: usize,
+    max_view_name: usize,
+    max_index_name: usize,
+}
+
+fn race_name_census_error_v1() -> ProductionAnalysisResourceLimitV1 {
+    ProductionAnalysisResourceLimitV1 {
+        phase: ProductionAnalysisResourcePhaseV1::RaceFreedom,
+        resource: "race name census mismatch",
+    }
+}
+
+fn race_name_prefix_v1(
+    total: &mut usize,
+    count: usize,
+    limit: usize,
+) -> Result<(), ProductionAnalysisResourceLimitV1> {
+    *total = total
+        .checked_add(count)
+        .ok_or_else(race_resource_overflow_v1)?;
+    if *total > limit {
+        return Err(race_name_census_error_v1());
+    }
+    Ok(())
+}
+
+fn race_name_lookup_work_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    checked_race_sum_v1(&[
+        census.max_operation_arity.max(census.block_arguments),
+        checked_race_mul_v1(census.attributes, 20)?,
+    ])
+}
+
+fn race_name_scan_work_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<usize, ProductionAnalysisResourceLimitV1> {
+    checked_race_sum_v1(&[
+        32,
+        checked_race_mul_v1(census.blocks, 8)?,
+        checked_race_mul_v1(census.operations, 12)?,
+        checked_race_mul_v1(census.operands, 4)?,
+        checked_race_mul_v1(
+            checked_race_sum_v1(&[census.operands, census.operations])?,
+            checked_race_sum_v1(&[race_name_lookup_work_v1(census)?, 80])?,
+        )?,
+    ])
+}
+
+// Check each defining span before a name/type query performs its index search.
+fn require_race_name_value_v1(
+    context: &Context,
+    function: &FuncOp,
+    value: Value,
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<(), ProductionAnalysisResourceLimitV1> {
+    let region = function.get_region(context);
+    let (arity, attributes, parent) = match value.defining_entity() {
+        DefiningEntity::Op(pointer) => {
+            let definition = pointer.deref(context);
+            (
+                definition.get_num_results(),
+                definition.attributes.0.len(),
+                definition
+                    .get_parent_block()
+                    .and_then(|block| block.deref(context).get_parent_region()),
+            )
+        }
+        DefiningEntity::Block(pointer) => {
+            let definition = pointer.deref(context);
+            (
+                definition.get_num_arguments(),
+                definition.attributes.0.len(),
+                definition.get_parent_region(),
+            )
+        }
+    };
+    if parent != Some(region)
+        || arity > census.max_operation_arity.max(census.block_arguments)
+        || attributes > census.attributes
+    {
+        return Err(race_name_census_error_v1());
+    }
+    Ok(())
+}
+
+// Immediate, private same-manager inventory use; this is not a cached owner.
+fn collect_race_name_census_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    census: ProductionAnalysisInputCensusV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+    mut name_bytes: impl FnMut(Value) -> Option<usize>,
+) -> Result<RaceNameCensusV1, ProductionAnalysisResourceLimitV1> {
+    let work = race_name_scan_work_v1(census)?;
+    limits.require(
+        ProductionAnalysisResourcePhaseV1::RaceFreedom,
+        ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            ProductionAnalysisResourcePhaseV1::RaceFreedom,
+            work,
+            0,
+            RACE_NAME_CENSUS_SCRATCH_V1,
+        )?,
+    )?;
+    if inventory.blocks().len() != census.blocks
+        || inventory.operations().len() != census.operations
+    {
+        return Err(race_name_census_error_v1());
+    }
+    let epoch = context
+        .ir_mutation_attempt_epoch()
+        .map_err(|_| race_name_census_error_v1())?;
+    let mut scan = RaceNameScanV1::default();
+    race_name_prefix_v1(
+        &mut scan.attributes,
+        function.get_operation().deref(context).attributes.0.len(),
+        census.attributes,
+    )?;
+    for pointer in inventory.blocks() {
+        let block = pointer.deref(context);
+        if block.get_parent_region() != Some(function.get_region(context)) {
+            return Err(race_name_census_error_v1());
+        }
+        race_name_prefix_v1(
+            &mut scan.arguments,
+            block.get_num_arguments(),
+            census.block_arguments,
+        )?;
+        race_name_prefix_v1(
+            &mut scan.attributes,
+            block.attributes.0.len(),
+            census.attributes,
+        )?;
+    }
+    for site in inventory.operations() {
+        let pointer = site.pointer();
+        let raw = pointer.deref(context);
+        if raw.get_parent_block() != inventory.blocks().get(site.block()).copied()
+            || raw
+                .get_num_operands()
+                .checked_add(raw.get_num_results())
+                .ok_or_else(race_resource_overflow_v1)?
+                > census.max_operation_arity
+        {
+            return Err(race_name_census_error_v1());
+        }
+        race_name_prefix_v1(&mut scan.operands, raw.get_num_operands(), census.operands)?;
+        race_name_prefix_v1(&mut scan.results, raw.get_num_results(), census.results)?;
+        race_name_prefix_v1(
+            &mut scan.attributes,
+            raw.attributes.0.len(),
+            census.attributes,
+        )?;
+        if Operation::is_op::<AllocationEffectOp>(pointer, context) {
+            race_name_prefix_v1(&mut scan.allocation_effects, 1, census.allocation_effects)?;
+        }
+        let Some(access) = Operation::get_op::<RankedAccessOp>(pointer, context) else {
+            continue;
+        };
+        race_name_prefix_v1(&mut scan.ranked_accesses, 1, census.ranked_accesses)?;
+        if raw.get_num_operands() == 0 {
+            return Err(race_name_census_error_v1());
+        }
+        for operand in raw.operands() {
+            require_race_name_value_v1(context, function, operand, census)?;
+        }
+        // checked_success performs a type query; its last-operand search was
+        // bounded above. Borrow the same index range without allocating indices().
+        let end = raw.get_num_operands() - usize::from(access.checked_success(context).is_some());
+        if end == 0 {
+            return Err(race_name_census_error_v1());
+        }
+        let view_bytes = name_bytes(raw.get_operand(0)).ok_or_else(race_resource_overflow_v1)?;
+        scan.max_view_name = scan.max_view_name.max(view_bytes);
+        for index in 1..end {
+            let bytes = name_bytes(raw.get_operand(index)).ok_or_else(race_resource_overflow_v1)?;
+            scan.max_index_name = scan.max_index_name.max(bytes);
+        }
+    }
+    if scan.operands != census.operands
+        || scan.results != census.results
+        || scan.arguments != census.block_arguments
+        || scan.attributes != census.attributes
+        || scan.ranked_accesses != census.ranked_accesses
+        || scan.allocation_effects != census.allocation_effects
+        || context
+            .ir_mutation_attempt_epoch()
+            .map_err(|_| race_name_census_error_v1())?
+            != epoch
+    {
+        return Err(race_name_census_error_v1());
+    }
+    Ok(RaceNameCensusV1 {
+        name_storage: scan
+            .max_view_name
+            .max(scan.max_index_name)
+            .max(RACE_ALLOCATION_NAME_BYTES_V1),
+        scan_work: work,
+        execution_lookup_work: race_name_lookup_work_v1(census)?,
+    })
+}
+
 fn raw_index_evaluation_resource_upper_bound_v1(
     operations: usize,
     queries: usize,
@@ -120,17 +347,26 @@ fn raw_index_evaluation_resource_upper_bound_v1(
 /// exact enumeration is bounded by the authenticated static launch and the
 /// effect-instance cap. A successful report is clean and retains no findings.
 pub(crate) fn preflight_race_resource_upper_bound_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: Option<&BoundedPlironFunctionInventoryV1>,
     census: ProductionAnalysisInputCensusV1,
     sparse: &SparseIndexAnalysisV1,
     layout: Option<PlironExecutionLayoutV1>,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    let inventory = inventory.ok_or_else(race_name_census_error_v1)?;
+    let names =
+        collect_race_name_census_v1(context, function, inventory, census, limits, |value| {
+            value.unique_name_byte_len(context)
+        })?;
     let extents = layout
         .as_ref()
         .map(|layout| layout.global_extents.as_slice())
         .unwrap_or_else(|| sparse.launch_extents());
     race_resource_upper_bound_for_shape_v1(
         census,
+        names,
         static_invocation_shape_for_resource_v1(sparse, layout),
         presburger_invocation_shape_for_resource_v1(extents),
         limits,
@@ -204,6 +440,7 @@ fn presburger_relation_resource_upper_bound_v1(
 
 fn race_resource_upper_bound_for_shape_v1(
     census: ProductionAnalysisInputCensusV1,
+    names: RaceNameCensusV1,
     invocation_shape: Option<(usize, usize)>,
     presburger_shape: Option<(usize, usize)>,
     limits: ProductionAnalysisResourceLimitsV1,
@@ -211,6 +448,7 @@ fn race_resource_upper_bound_for_shape_v1(
     finish_race_resource_preflight_v1(
         calculate_race_resource_upper_bound_for_shape_v1(
             census,
+            names,
             invocation_shape,
             presburger_shape,
         ),
@@ -344,6 +582,7 @@ fn write_race_resource_preflight_v1(
 
 fn calculate_race_resource_upper_bound_for_shape_v1(
     census: ProductionAnalysisInputCensusV1,
+    names: RaceNameCensusV1,
     invocation_shape: Option<(usize, usize)>,
     presburger_shape: Option<(usize, usize)>,
 ) -> Result<RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitV1> {
@@ -392,6 +631,17 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
         checked_race_mul_v1(pairs, MAX_RANKED_MEMORY_RANK * MAX_RANKED_MEMORY_RANK + 16)?
     };
     let work = checked_race_sum_v1(&[
+        names.scan_work,
+        checked_race_mul_v1(
+            effects
+                .checked_add(1)
+                .ok_or_else(race_resource_overflow_v1)?,
+            checked_race_sum_v1(&[
+                names.execution_lookup_work,
+                checked_race_mul_v1(names.name_storage, 4)?,
+                64,
+            ])?,
+        )?,
         checked_race_mul_v1(census.operations, 32)?,
         checked_race_mul_v1(census.successors, MAX_RANKED_MEMORY_RANK + 4)?,
         symbolic_work,
@@ -408,10 +658,7 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
         raw_evaluation_work,
         presburger_work,
     ])?;
-    let name_storage = census
-        .identifier_bytes
-        .checked_add(usize::BITS as usize)
-        .ok_or_else(race_resource_overflow_v1)?;
+    let name_storage = names.name_storage;
     let effect_state = checked_race_mul_v1(
         effects,
         MAX_RANKED_MEMORY_RANK
@@ -450,6 +697,8 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
     let retained_findings = checked_race_mul_v1(retained_finding_count, per_finding_storage)?;
     let attempted_finding = per_finding_storage;
     let temporary = checked_race_sum_v1(&[
+        checked_race_mul_v1(name_storage, 2)?,
+        RACE_NAME_CENSUS_SCRATCH_V1,
         effect_state,
         address_state,
         attempted_finding,
