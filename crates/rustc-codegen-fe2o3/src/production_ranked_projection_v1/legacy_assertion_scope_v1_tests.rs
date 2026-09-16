@@ -1750,7 +1750,7 @@ mod legacy_scope_tests {
                     0,
                 )?;
                 assert_eq!(input.source_argument, 0);
-                assert_eq!(input.element_width, 4);
+                assert_eq!(input.element_width, 32);
             }
             assert!(
                 facts
