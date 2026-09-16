@@ -77,6 +77,15 @@ type RootArgument = ReservedMarker;
 )]
 pub struct ReservedMarker;
 
+#[cfg(any(
+    feature = "reserved-capability-spoof",
+    feature = "reserved-capability-control"
+))]
+const RESERVED_FRONTEND_CONTRACT: &[u8] = &[
+    70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
+    0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+];
+
 #[used]
 // Keep the exact legacy six-field registration shape that this adversarial
 // fixture attempts to spoof.
@@ -123,10 +132,7 @@ static __fe2o3_kernel_frontend_contract_v1_local_marker: (
     1,
     1,
     "local_marker",
-    &[
-        70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0,
-        0, 1, 0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-    ],
+    RESERVED_FRONTEND_CONTRACT,
     fe2o3_kernel_local_marker,
 );
 

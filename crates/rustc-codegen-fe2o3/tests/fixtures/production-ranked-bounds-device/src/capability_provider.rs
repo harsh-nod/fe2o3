@@ -55,10 +55,20 @@ pub fn provider_context_nested(_authority: Nested, mut output: DisjointSlice<u32
 }
 
 #[cfg(feature = "provider_context_reference")]
+#[inline(never)]
+fn context_reference_result() -> Option<Borrowed> {
+    None
+}
+
+#[cfg(feature = "provider_context_reference")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn provider_context_reference(_authority: Borrowed, mut output: DisjointSlice<u32>) {
+pub fn provider_context_reference(mut output: DisjointSlice<u32>) {
+    let value = match context_reference_result() {
+        None => 1,
+        Some(_) => 2,
+    };
     if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = 7;
+        *slot = value;
     }
 }
 

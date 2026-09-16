@@ -4,6 +4,7 @@ fn staged_generative_providers_reject_without_export_authority() {
     const REASON: &str = "reserved capability type has no authenticated production owner";
     let target = ScratchTarget::new();
     let build_dir = target.path().join("provider-target");
+    let mut failures = Vec::new();
     for feature in [
         "provider_context",
         "provider_context_alias",
@@ -21,13 +22,15 @@ fn staged_generative_providers_reject_without_export_authority() {
             simulation_export_command_for_feature("gfx942", &bundle, &build_dir, Some(5), feature),
             "reject staged nominal authority",
         );
-        assert!(
-            !result.status.success() && result.stderr.contains(REASON),
-            "{feature} did not reach the nominal capability refusal:\n{}",
-            result.stderr,
-        );
+        if result.status.success() || !result.stderr.contains(REASON) {
+            failures.push(format!(
+                "{feature} did not reach the nominal capability refusal:\n{}",
+                result.stderr,
+            ));
+        }
         assert!(!bundle.exists(), "{feature} emitted a simulation bundle");
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 
     let bundle = target.path().join("provider-gfx950.fe2sim");
     let result = output(
