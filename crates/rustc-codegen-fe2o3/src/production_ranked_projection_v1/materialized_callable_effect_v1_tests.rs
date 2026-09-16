@@ -7,13 +7,6 @@ fn materialized_aggregate_helper_v1() -> fe2o3_lower_mir_kernel::ProductionPreRa
 fn materialized_helper_v1(
     aggregate: bool,
 ) -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
-    materialized_helper_with_gap_v1(aggregate, false)
-}
-
-fn materialized_helper_with_gap_v1(
-    aggregate: bool,
-    gap: bool,
-) -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
     let root = assertion_root_with_access(
         vec![
             (A_UNIT, SemanticLocalRoleV1::Return),
@@ -24,13 +17,7 @@ fn materialized_helper_with_gap_v1(
             block(
                 120,
                 vec![],
-                neutral_test_call_v1(
-                    if gap { 2 } else { 1 },
-                    vec![typed_constant(A_U32, 3, 4)],
-                    1,
-                    A_U32,
-                    1,
-                ),
+                neutral_test_call_v1(1, vec![typed_constant(A_U32, 3, 4)], 1, A_U32, 1),
             ),
             block(121, vec![], SemanticTerminatorKindV1::Return),
         ],
@@ -95,34 +82,79 @@ fn materialized_helper_with_gap_v1(
         )],
     )
     .unwrap();
-    let mut functions = vec![root];
-    if gap {
-        functions.push(
-            SemanticFunctionDeclV1::new(
-                SemanticFunctionIdentityV1::from_sha256(bytes(247)),
-                helper.role(),
-                helper.item_definition_identity(),
-                helper.monomorphization_identity(),
-                helper.generic_type_arguments_identity(),
-                helper.const_generic_arguments_identity(),
-                helper.source(),
-                helper.abi().clone(),
-                helper.locals().to_vec(),
-                helper.entry(),
-                helper.blocks().to_vec(),
-            )
-            .unwrap(),
-        );
-    }
-    functions.push(helper);
-    assertion_materialized_functions(assertion_types(), functions)
+    assertion_materialized_functions(assertion_types(), vec![root, helper])
+}
+
+fn materialized_helper_shared_roots_v1() -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+    let original = materialized_aggregate_helper_v1();
+    let semantic = original.semantic_ssa().source_semantic();
+    let root = &semantic.functions()[0];
+    let second = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(249)),
+        root.role(),
+        root.item_definition_identity(),
+        root.monomorphization_identity(),
+        root.generic_type_arguments_identity(),
+        root.const_generic_arguments_identity(),
+        root.source(),
+        root.abi().clone(),
+        root.locals().to_vec(),
+        root.entry(),
+        root.blocks().to_vec(),
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"shared_helper_second".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(246)),
+        root.kernel_entry().unwrap().source_contract(),
+    ));
+    let mut functions = semantic.functions().to_vec();
+    functions.push(second);
+    let callables = (0..functions.len())
+        .map(|index| {
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index as u32))
+        })
+        .collect();
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        callables,
+        vec![
+            SemanticFunctionIdV1::from_index(0),
+            SemanticFunctionIdV1::from_index(2),
+        ],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    let ssa = ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap(),
+        fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    materialize_ranked_fixture_v1(
+        ssa,
+        &[
+            ranked_root_input_1d(A_NAME, 247, 64),
+            ranked_root_input_1d("shared_helper_second", 246, 64),
+        ],
+    )
+    .unwrap()
 }
 
 #[test]
 fn materialized_helper_effects_use_canonical_not_semantic_function_ordinals() {
-    let owner = materialized_helper_with_gap_v1(true, true);
+    let owner = materialized_helper_shared_roots_v1();
     let helper = owner.empty_effect_helpers().iter().next().unwrap();
-    assert_eq!(helper.semantic_function().index(), 2);
+    assert_eq!(helper.semantic_function().index(), 1);
     let actual_ordinal = owner
         .executable()
         .module()
