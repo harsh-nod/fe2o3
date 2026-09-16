@@ -1,0 +1,104 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs:37:52
+    |
+ 37 |           let result = catch_unwind(AssertUnwindSafe(|| {
+    |  ____________________________________________________^
+ 38 | |             assert!(matches!(
+ 39 | |                 self.terminal_sdma_custody,
+ 40 | |                 Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(_))
+...   |
+ 56 | |             ops.recycle(buffer)
+ 57 | |         }));
+    | |_________^
+    |
+   ::: crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:564:5
+    |
+564 | /     Recovered {
+565 | |         detail: SdmaOwnerDiagnosticV1,
+566 | |         buffer: SdmaBufferOwnerV1,
+567 | |     },
+    | |_____- the largest variant contains at least 256 bytes
+    |
+    = help: try reducing the size of `kfd_backend::kfd_backend_sdma_seam::SdmaRecycleFailureV1`, for example by boxing large elements or replacing it with `Box<kfd_backend::kfd_backend_sdma_seam::SdmaRecycleFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-runtime/src/kfd_backend/sdma_synchronous.rs:159:10
+    |
+159 |       ) -> Result<DirectionalSdmaCompletedOwnerV1, DirectionalSdmaSynchronousExecutionFailureV1> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:538:5
+    |
+538 | /     RetryableBeforePublication {
+539 | |         detail: SdmaOwnerDiagnosticV1,
+540 | |         pair: DirectionalSdmaPairOwnerV1,
+541 | |     },
+    | |_____- the variant `RetryableBeforePublication` contains at least 648 bytes
+542 | /     RetryableTimeout {
+543 | |         detail: SdmaOwnerDiagnosticV1,
+544 | |         submission: DirectionalSdmaSubmissionOwnerV1,
+545 | |     },
+    | |_____- the variant `RetryableTimeout` contains at least 824 bytes
+546 | /     ProcessTeardown {
+547 | |         detail: SdmaOwnerDiagnosticV1,
+548 | |         custody: SdmaTerminalCustodyV1,
+549 | |     },
+    | |_____- the largest variant contains at least 1472 bytes
+    |
+    = help: try reducing the size of `kfd_backend::kfd_backend_sdma_seam::DirectionalSdmaSynchronousExecutionFailureV1`, for example by boxing large elements or replacing it with `Box<kfd_backend::kfd_backend_sdma_seam::DirectionalSdmaSynchronousExecutionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/fe2o3-runtime/src/kfd_backend.rs:4013:10
+     |
+4013 |     ) -> Result<(), DirectionalSdmaDeviceOwnerV1> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:176:5
+     |
+ 176 |     Native(Gfx942DirectionalQueuePersistentAllocationV1),
+     |     ---------------------------------------------------- the largest variant contains at least 392 bytes
+     |
+     = help: try reducing the size of `kfd_backend::kfd_backend_sdma_seam::DirectionalSdmaDeviceOwnerV1`, for example by boxing large elements or replacing it with `Box<kfd_backend::kfd_backend_sdma_seam::DirectionalSdmaDeviceOwnerV1>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-runtime` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs:37:52
+    |
+ 37 |           let result = catch_unwind(AssertUnwindSafe(|| {
+    |  ____________________________________________________^
+ 38 | |             assert!(matches!(
+ 39 | |                 self.terminal_sdma_custody,
+ 40 | |                 Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(_))
+...   |
+ 56 | |             ops.recycle(buffer)
+ 57 | |         }));
+    | |_________^
+    |
+   ::: crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:564:5
+    |
+564 | /     Recovered {
+565 | |         detail: SdmaOwnerDiagnosticV1,
+566 | |         buffer: SdmaBufferOwnerV1,
+567 | |     },
+    | |_____- the variant `Recovered` contains at least 256 bytes
+...
+572 | /     ProcessTeardown {
+573 | |         detail: SdmaOwnerDiagnosticV1,
+574 | |         custody: SdmaTerminalCustodyV1,
+575 | |     },
+    | |_____- the largest variant contains at least 1472 bytes
+    |
+    = help: try reducing the size of `kfd_backend::kfd_backend_sdma_seam::SdmaRecycleFailureV1`, for example by boxing large elements or replacing it with `Box<kfd_backend::kfd_backend_sdma_seam::SdmaRecycleFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: could not compile `fe2o3-runtime` (lib test) due to 3 previous errors

@@ -1,0 +1,63 @@
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/focused-v2.log:125: new blank line at EOF.
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/focused-v3.log:125: new blank line at EOF.
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/gnu-build.command:1: trailing whitespace.
++cargo test --locked --offline -p fe2o3-runtime --all-features --lib --no-run --message-format=json 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/gnu-runtime-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-5617a78400e220da --test-threads=4 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/gnu-runtime-full.log:841: new blank line at EOF.
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/musl-build.command:1: trailing whitespace.
++cargo test --locked --offline -p fe2o3-runtime --all-features --lib --target x86_64-unknown-linux-musl --no-run --message-format=json 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/musl-runtime-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-a15f8f773b8327ee --test-threads=4 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/musl-runtime-full.log:841: new blank line at EOF.
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/no-default.command:1: trailing whitespace.
++cargo check --locked --offline -p fe2o3-runtime --no-default-features 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source-after.command:1: trailing whitespace.
++sha256sum --check /home/harsh/.codex-tmp/r126-runtime-sync.Q2AAUj/source-files.sha256 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source-before.command:1: trailing whitespace.
++sha256sum --check /home/harsh/.codex-tmp/r126-runtime-sync.Q2AAUj/source-files.sha256 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:66: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:272: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:292: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:302: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:306: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:324: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:332: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:343: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:365: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:386: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:603: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:630: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:640: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:644: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:700: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:849: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:953: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:955: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:959: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/source.patch:971: trailing whitespace.
++ 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/unsafe-policy.command:1: trailing whitespace.
++cargo test --locked --offline -p cargo-fe2o3 --test unsafe_source_policy 
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/unsafe-policy.log:16: new blank line at EOF.
+docs/evidence/dev-r126-runtime-synchronous-2026-09-16/whitespace.command:1: trailing whitespace.
++git diff --check HEAD 

@@ -111,9 +111,11 @@ pub use qualification_drain_capture::{
 };
 mod kfd_backend_sdma_seam;
 mod sdma_demotion;
+mod sdma_host_read;
 mod sdma_host_write;
 mod sdma_promotion;
 mod sdma_recycle;
+mod sdma_synchronous;
 use compute_dispatch::*;
 use compute_state::*;
 #[cfg(test)]
@@ -823,6 +825,7 @@ enum ActiveSdmaPhaseV1 {
 // failure path, so these move-only owners intentionally remain inline.
 #[allow(dead_code, clippy::large_enum_variant)]
 enum KfdRuntimeTerminalSdmaCustodyV1 {
+    Synchronous(sdma_synchronous::SynchronousSdmaCustodyV1),
     Buffer(SdmaBufferOwnerV1),
     Device(DirectionalSdmaDeviceOwnerV1),
     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
@@ -3993,6 +3996,25 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.try_normalize_h2d_ready_v1(allocation)
+            .map_err(|device| {
+                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(
+                    device,
+                ));
+                self.terminal_error(
+                    "persistent-compute ready normalization slot changed unexpectedly",
+                )
+            })
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "failed normalization returns its original device owner without allocating"
+    )]
+    fn try_normalize_h2d_ready_v1(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), DirectionalSdmaDeviceOwnerV1> {
         let is_ready = self.allocations.get(&allocation).is_some_and(|record| {
             matches!(
                 record.sdma_storage,
@@ -4023,10 +4045,7 @@ impl KfdRuntimeBackendV1 {
             )
         });
         if !slot_matches {
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(device));
-            return Err(self.terminal_error(
-                "persistent-compute ready normalization slot changed unexpectedly",
-            ));
+            return Err(device);
         }
         let record = self
             .allocations
@@ -4661,149 +4680,6 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
-    fn restore_synchronous_directional_storage_v1(
-        &mut self,
-        allocation: u64,
-        pair: DirectionalSdmaPairOwnerV1,
-    ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
-            matches!(
-                record.sdma_storage,
-                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous)
-            )
-        });
-        if !slot_matches {
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Pair {
-                device: pair.device,
-                host: pair.host,
-            });
-            return Err(self.terminal_error(
-                "synchronous directional SDMA restoration slot changed unexpectedly",
-            ));
-        }
-        self.allocations
-            .get_mut(&allocation)
-            .expect("synchronous device allocation remains indexed")
-            .sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(pair.device));
-        Ok(pair.host)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn execute_synchronous_directional_sdma_v1(
-        &mut self,
-        allocation: u64,
-        direction: Gfx942PersistentSdmaDirectionV1,
-        host: SdmaBufferOwnerV1,
-        host_offset: u64,
-        device_offset: u64,
-        copy_bytes: u32,
-        operation: &'static str,
-    ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        self.normalize_h2d_ready_v1(allocation)?;
-        let device_ready = self.allocations.get(&allocation).is_some_and(|record| {
-            record
-                .sdma_storage
-                .is_available_for_kind_v1(RuntimeMemoryKindV1::DeviceLocal)
-        });
-        if !device_ready {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "persistent device allocation is retained by pending work",
-            ));
-        }
-        let device = match std::mem::replace(
-            &mut self
-                .allocations
-                .get_mut(&allocation)
-                .expect("preflighted synchronous device remains indexed")
-                .sdma_storage,
-            KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
-        ) {
-            KfdRuntimeSdmaStorageV1::Device(device) => *device,
-            _ => unreachable!("preflighted synchronous device remains available"),
-        };
-        let request = DirectionalSdmaCopyRequestV1 {
-            host_offset,
-            device_offset,
-            copy_bytes,
-        };
-        let completed = match self.directional_sdma_ops_v1().execute_synchronous_single(
-            DirectionalSdmaPairOwnerV1 { device, host },
-            direction,
-            request,
-            Duration::from_secs(30),
-        ) {
-            Ok(completed) => completed,
-            Err(failure) => {
-                return match failure {
-                    DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
-                        detail,
-                        pair,
-                    } => {
-                        let host =
-                            self.restore_synchronous_directional_storage_v1(allocation, pair)?;
-                        self.recycle_transient_sdma_buffer_v1(host, operation)?;
-                        Err(Self::rejected(
-                            KfdRuntimeBackendErrorKindV1::Native,
-                            format!("KFD {operation} publication: {detail}"),
-                        ))
-                    }
-                    DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
-                        detail,
-                        submission,
-                    } => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::Pending(submission),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD {operation} completion became ambiguous: {detail}"
-                        )))
-                    }
-                    DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                        detail,
-                        custody,
-                    } => {
-                        self.retain_sdma_seam_terminal_v1(custody);
-                        Err(self.terminal_error(format!(
-                            "KFD {operation} execution became ambiguous: {detail}"
-                        )))
-                    }
-                };
-            }
-        };
-        if completed.direction() != direction
-            || completed.host_offset() != host_offset
-            || completed.device_offset() != device_offset
-            || completed.copy_bytes() != copy_bytes
-            || completed.packet_count() != 1
-        {
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
-                completed,
-            ));
-            return Err(self.terminal_error(format!(
-                "KFD {operation} completion metadata changed unexpectedly"
-            )));
-        }
-        let pair = match self.directional_sdma_ops_v1().retire(completed) {
-            Ok(pair) => pair,
-            Err(SdmaTransitionFailureV1::Retryable { custody, .. }) => {
-                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
-                    custody,
-                ));
-                return Err(
-                    self.terminal_error(format!("KFD {operation} frontier retirement failed"))
-                );
-            }
-            Err(SdmaTransitionFailureV1::ProcessTeardown { custody, .. }) => {
-                self.retain_sdma_seam_terminal_v1(custody);
-                return Err(
-                    self.terminal_error(format!("KFD {operation} frontier retirement failed"))
-                );
-            }
-        };
-        self.restore_synchronous_directional_storage_v1(allocation, pair)
-    }
-
     fn upload_sdma_range_v1(
         &mut self,
         allocation: u64,
@@ -4856,7 +4732,7 @@ impl KfdRuntimeBackendV1 {
             .get(&allocation)
             .is_some_and(|record| matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Host(_)));
         if is_host {
-            return self.write_indexed_sdma_host_v1(
+            return self.access_indexed_sdma_host_v1(
                 allocation,
                 "KFD persistent host write",
                 |ops, buffer| ops.write_host(buffer, byte_offset, bytes),
@@ -4899,7 +4775,7 @@ impl KfdRuntimeBackendV1 {
             self.upload_sdma_range_v1(allocation, 0, bytes)?;
             return Ok(None);
         }
-        self.write_indexed_sdma_host_v1(
+        self.access_indexed_sdma_host_v1(
             allocation,
             "KFD persistent authenticated host write",
             |ops, buffer| ops.write_full_host_authenticated(buffer, bytes),
@@ -4985,40 +4861,7 @@ impl KfdRuntimeBackendV1 {
             .get(&allocation)
             .is_some_and(|record| matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Host(_)));
         if is_host {
-            let buffer = match &self
-                .allocations
-                .get(&allocation)
-                .expect("admitted host allocation remains indexed")
-                .sdma_storage
-            {
-                KfdRuntimeSdmaStorageV1::Host(buffer) => buffer,
-                _ => unreachable!("checked host storage"),
-            };
-            let result = {
-                #[cfg(test)]
-                let scripted = self.scripted_sdma.as_mut();
-                #[cfg(test)]
-                let mut ops = if let Some(driver) = scripted {
-                    kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Scripted(driver)
-                } else {
-                    kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
-                        self.queue
-                            .as_mut()
-                            .expect("persistent SDMA allocation retains queue"),
-                    )
-                };
-                #[cfg(not(test))]
-                let mut ops = kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
-                    self.queue
-                        .as_mut()
-                        .expect("persistent SDMA allocation retains queue"),
-                );
-                ops.read_host(buffer, byte_offset, destination.len() as u64)
-            };
-            let bytes = result.map_err(|error| {
-                self.terminal_error(format!("KFD persistent host read: {error}"))
-            })?;
-            destination.copy_from_slice(&bytes);
+            self.read_indexed_sdma_host_into_v1(allocation, byte_offset, destination)?;
             return Ok(true);
         }
 
@@ -5041,18 +4884,7 @@ impl KfdRuntimeBackendV1 {
             copy_bytes,
             "download",
         )?;
-        let readback =
-            self.directional_sdma_ops_v1()
-                .read_host(&staging, 0, destination.len() as u64);
-        let bytes = match readback {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.recycle_transient_sdma_buffer_v1(staging, "download")?;
-                return Err(self.terminal_error(format!("KFD download readback: {error}")));
-            }
-        };
-        destination.copy_from_slice(&bytes);
-        self.recycle_transient_sdma_buffer_v1(staging, "download")?;
+        self.readback_and_recycle_transient_sdma_v1(staging, destination)?;
         Ok(true)
     }
 
@@ -12749,9 +12581,11 @@ mod retained_release_tests;
 #[cfg(test)]
 mod tests {
     mod sdma_demotion_tests;
+    mod sdma_host_read_tests;
     mod sdma_host_write_tests;
     mod sdma_promotion_tests;
     mod sdma_recycle_tests;
+    mod sdma_synchronous_tests;
 
     use super::kfd_backend_sdma_seam::{
         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,
@@ -12831,18 +12665,12 @@ mod tests {
 
     #[test]
     fn synchronous_directional_runtime_routes_only_through_fused_single_execute() {
-        let source = include_str!("kfd_backend.rs");
-        let synchronous = source
-            .split("fn execute_synchronous_directional_sdma_v1(")
-            .nth(1)
-            .unwrap()
-            .split("fn upload_sdma_range_v1(")
-            .next()
-            .unwrap();
+        let synchronous = include_str!("kfd_backend/sdma_synchronous.rs");
         assert!(synchronous.contains(".execute_synchronous_single("));
         assert!(!synchronous.contains(".submit("));
         assert!(!synchronous.contains(".wait("));
-        assert!(synchronous.contains(".retire(completed)"));
+        assert!(synchronous.contains("retire_native_directional_completed_v1(parts)"));
+        assert!(synchronous.contains("fill_restore_shell_v1(shell, pair.device)"));
 
         let seam = include_str!("kfd_backend/kfd_backend_sdma_seam.rs");
         let fused = seam

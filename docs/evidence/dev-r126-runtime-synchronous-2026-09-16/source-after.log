@@ -1,0 +1,8 @@
+crates/fe2o3-runtime/src/kfd_backend.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/sdma_host_read.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/sdma_synchronous.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_read_tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/tests/sdma_synchronous_tests.rs: OK

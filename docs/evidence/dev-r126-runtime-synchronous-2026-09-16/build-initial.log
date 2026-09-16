@@ -1,0 +1,36 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0599]: no method named `contains` found for enum `kfd_backend::kfd_backend_sdma_seam::SdmaOwnerDiagnosticV1` in the current scope
+    --> crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:3902:30
+     |
+ 494 | pub(super) enum SdmaOwnerDiagnosticV1 {
+     | ------------------------------------- method `contains` not found for this enum
+...
+3902 |                 }) if detail.contains("non-timeout retryable custody") => submission,
+     |                              ^^^^^^^^ method not found in `kfd_backend::kfd_backend_sdma_seam::SdmaOwnerDiagnosticV1`
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `RangeBounds`
+             candidate #2: `bitflags::traits::Flags`
+
+error[E0624]: method `retire` is private
+    --> crates/fe2o3-runtime/src/kfd_backend/sdma_synchronous.rs:262:33
+     |
+ 262 |               let result = driver.retire(completed);
+     |                                   ^^^^^^ private method
+     |
+    ::: crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:2972:9
+     |
+2972 | /         pub(super) fn retire(
+2973 | |             &mut self,
+2974 | |             completed: ScriptedCompletedOwnerV1,
+2975 | |         ) -> Result<
+2976 | |             DirectionalSdmaPairOwnerV1,
+2977 | |             SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>,
+2978 | |         > {
+     | |_________- private method defined here
+
+Some errors have detailed explanations: E0599, E0624.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `fe2o3-runtime` (lib test) due to 2 previous errors

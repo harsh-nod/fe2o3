@@ -83,8 +83,14 @@ constructed tests exercise shared mapped operations and actual failure prefixes;
 GNU/musl each pass 1,366 KFD and 798 runtime tests, and eight MI300X regression
 probes pass. The [development receipt](evidence/dev-r126-sdma-synchronous-2026-09-16/README.md)
 records final regression status separately from milestone acceptance.
-Next are runtime outer synchronous-copy normalization/retirement/readback
-custody and typed capacity rejection.
+Runtime outer synchronous-copy normalization, retirement and readback custody
+are now implemented, with typed diagnostics and restoration into the original
+device box. Eighteen new tests cover exact owners, error/panic precedence and
+public read visibility; GNU/musl each pass 816 runtime tests with six ignored.
+See the [runtime synchronous receipt](evidence/dev-r126-runtime-synchronous-2026-09-16/README.md).
+Native validation of this delta remains pending while the shared MI300X is busy;
+the preceding lower-driver hardware results do not qualify this new source.
+Next are typed healthy capacity rejection and pending-compute allocation.
 Allocation during pending compute is still disabled. These are
 development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
 CPU/test checkpoint.

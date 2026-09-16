@@ -1,4 +1,4 @@
-//! Borrowed host writes keep owners rooted through error conversion and unwind.
+//! Borrowed host access keeps owners rooted through error conversion and unwind.
 
 #![forbid(unsafe_code)]
 
@@ -54,7 +54,7 @@ impl KfdRuntimeBackendV1 {
         unreachable!("failed host write cannot settle successfully")
     }
 
-    pub(super) fn write_indexed_sdma_host_v1<T>(
+    pub(super) fn access_indexed_sdma_host_v1<T>(
         &mut self,
         allocation: u64,
         operation: &'static str,

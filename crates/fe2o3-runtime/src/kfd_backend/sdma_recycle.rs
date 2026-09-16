@@ -17,17 +17,28 @@ pub(super) enum SdmaRecycleTargetV1 {
 }
 
 impl KfdRuntimeBackendV1 {
-    #[allow(
-        clippy::result_large_err,
-        reason = "returned-owner failures cross the unwind boundary without allocating"
-    )]
     pub(super) fn recycle_sdma_owner_v1(
         &mut self,
         buffer: SdmaBufferOwnerV1,
         target: SdmaRecycleTargetV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer));
+        self.recycle_rooted_sdma_owner_v1(target)
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "returned-owner failures cross the unwind boundary without allocating"
+    )]
+    pub(super) fn recycle_rooted_sdma_owner_v1(
+        &mut self,
+        target: SdmaRecycleTargetV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let result = catch_unwind(AssertUnwindSafe(|| {
+            assert!(matches!(
+                self.terminal_sdma_custody,
+                Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(_))
+            ));
             #[cfg(test)]
             let mut ops = if let Some(driver) = self.scripted_sdma.as_mut() {
                 DirectionalSdmaOpsV1::Scripted(driver)

@@ -1,0 +1,55 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+warning: variants `ReadFault`, `ReadLength`, `RetirePanic`, and `RetireCompletedRetry` are never constructed
+    --> crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:2123:9
+     |
+2100 |     pub(crate) enum ScriptedSdmaStepV1 {
+     |                     ------------------ variants in this enum
+...
+2123 |         ReadFault {
+     |         ^^^^^^^^^
+...
+2128 |         ReadLength {
+     |         ^^^^^^^^^^
+...
+2159 |         RetirePanic,
+     |         ^^^^^^^^^^^
+2160 |         RetireCompletedRetry,
+     |         ^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `ScriptedSdmaStepV1` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `pair` and `requests` are never used
+    --> crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:2292:23
+     |
+2291 |     impl ScriptedSubmissionOwnerV1 {
+     |     ------------------------------ methods in this implementation
+2292 |         pub(crate) fn pair(&self) -> &DirectionalSdmaPairOwnerV1 {
+     |                       ^^^^
+...
+2296 |         pub(crate) fn requests(&self) -> &[DirectionalSdmaCopyRequestV1] {
+     |                       ^^^^^^^^
+
+warning: method `pair` is never used
+    --> crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:2302:23
+     |
+2301 |     impl ScriptedCompletedOwnerV1 {
+     |     ----------------------------- method in this implementation
+2302 |         pub(crate) fn pair(&self) -> &DirectionalSdmaPairOwnerV1 {
+     |                       ^^^^
+
+warning: methods `wait_custody` and `retirement_custody` are never used
+    --> crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:2402:23
+     |
+2367 |     impl ScriptedSdmaDriverV1 {
+     |     ------------------------- methods in this implementation
+...
+2402 |         pub(crate) fn wait_custody(&self) -> Option<&ScriptedSubmissionOwnerV1> {
+     |                       ^^^^^^^^^^^^
+...
+2406 |         pub(crate) fn retirement_custody(&self) -> Option<&ScriptedCompletedOwnerV1> {
+     |                       ^^^^^^^^^^^^^^^^^^
+
+warning: `fe2o3-runtime` (lib test) generated 4 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 38s
+  Executable unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)

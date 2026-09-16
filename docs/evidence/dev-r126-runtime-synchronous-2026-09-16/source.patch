@@ -1,0 +1,2897 @@
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 1d5e53b4e..1ed87ef06 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -111,9 +111,11 @@ pub use qualification_drain_capture::{
+ };
+ mod kfd_backend_sdma_seam;
+ mod sdma_demotion;
++mod sdma_host_read;
+ mod sdma_host_write;
+ mod sdma_promotion;
+ mod sdma_recycle;
++mod sdma_synchronous;
+ use compute_dispatch::*;
+ use compute_state::*;
+ #[cfg(test)]
+@@ -823,6 +825,7 @@ enum ActiveSdmaPhaseV1 {
+ // failure path, so these move-only owners intentionally remain inline.
+ #[allow(dead_code, clippy::large_enum_variant)]
+ enum KfdRuntimeTerminalSdmaCustodyV1 {
++    Synchronous(sdma_synchronous::SynchronousSdmaCustodyV1),
+     Buffer(SdmaBufferOwnerV1),
+     Device(DirectionalSdmaDeviceOwnerV1),
+     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
+@@ -3993,6 +3996,25 @@ impl KfdRuntimeBackendV1 {
+         &mut self,
+         allocation: u64,
+     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.try_normalize_h2d_ready_v1(allocation)
++            .map_err(|device| {
++                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(
++                    device,
++                ));
++                self.terminal_error(
++                    "persistent-compute ready normalization slot changed unexpectedly",
++                )
++            })
++    }
++
++    #[allow(
++        clippy::result_large_err,
++        reason = "failed normalization returns its original device owner without allocating"
++    )]
++    fn try_normalize_h2d_ready_v1(
++        &mut self,
++        allocation: u64,
++    ) -> Result<(), DirectionalSdmaDeviceOwnerV1> {
+         let is_ready = self.allocations.get(&allocation).is_some_and(|record| {
+             matches!(
+                 record.sdma_storage,
+@@ -4023,10 +4045,7 @@ impl KfdRuntimeBackendV1 {
+             )
+         });
+         if !slot_matches {
+-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(device));
+-            return Err(self.terminal_error(
+-                "persistent-compute ready normalization slot changed unexpectedly",
+-            ));
++            return Err(device);
+         }
+         let record = self
+             .allocations
+@@ -4661,149 +4680,6 @@ impl KfdRuntimeBackendV1 {
+         Ok(())
+     }
+ 
+-    fn restore_synchronous_directional_storage_v1(
+-        &mut self,
+-        allocation: u64,
+-        pair: DirectionalSdmaPairOwnerV1,
+-    ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+-        let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
+-            matches!(
+-                record.sdma_storage,
+-                KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous)
+-            )
+-        });
+-        if !slot_matches {
+-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Pair {
+-                device: pair.device,
+-                host: pair.host,
+-            });
+-            return Err(self.terminal_error(
+-                "synchronous directional SDMA restoration slot changed unexpectedly",
+-            ));
+-        }
+-        self.allocations
+-            .get_mut(&allocation)
+-            .expect("synchronous device allocation remains indexed")
+-            .sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(pair.device));
+-        Ok(pair.host)
+-    }
+-
+-    #[allow(clippy::too_many_arguments)]
+-    fn execute_synchronous_directional_sdma_v1(
+-        &mut self,
+-        allocation: u64,
+-        direction: Gfx942PersistentSdmaDirectionV1,
+-        host: SdmaBufferOwnerV1,
+-        host_offset: u64,
+-        device_offset: u64,
+-        copy_bytes: u32,
+-        operation: &'static str,
+-    ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+-        self.normalize_h2d_ready_v1(allocation)?;
+-        let device_ready = self.allocations.get(&allocation).is_some_and(|record| {
+-            record
+-                .sdma_storage
+-                .is_available_for_kind_v1(RuntimeMemoryKindV1::DeviceLocal)
+-        });
+-        if !device_ready {
+-            return Err(Self::rejected(
+-                KfdRuntimeBackendErrorKindV1::Busy,
+-                "persistent device allocation is retained by pending work",
+-            ));
+-        }
+-        let device = match std::mem::replace(
+-            &mut self
+-                .allocations
+-                .get_mut(&allocation)
+-                .expect("preflighted synchronous device remains indexed")
+-                .sdma_storage,
+-            KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
+-        ) {
+-            KfdRuntimeSdmaStorageV1::Device(device) => *device,
+-            _ => unreachable!("preflighted synchronous device remains available"),
+-        };
+-        let request = DirectionalSdmaCopyRequestV1 {
+-            host_offset,
+-            device_offset,
+-            copy_bytes,
+-        };
+-        let completed = match self.directional_sdma_ops_v1().execute_synchronous_single(
+-            DirectionalSdmaPairOwnerV1 { device, host },
+-            direction,
+-            request,
+-            Duration::from_secs(30),
+-        ) {
+-            Ok(completed) => completed,
+-            Err(failure) => {
+-                return match failure {
+-                    DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
+-                        detail,
+-                        pair,
+-                    } => {
+-                        let host =
+-                            self.restore_synchronous_directional_storage_v1(allocation, pair)?;
+-                        self.recycle_transient_sdma_buffer_v1(host, operation)?;
+-                        Err(Self::rejected(
+-                            KfdRuntimeBackendErrorKindV1::Native,
+-                            format!("KFD {operation} publication: {detail}"),
+-                        ))
+-                    }
+-                    DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
+-                        detail,
+-                        submission,
+-                    } => {
+-                        self.retain_terminal_sdma_custody_v1(
+-                            KfdRuntimeTerminalSdmaCustodyV1::Pending(submission),
+-                        );
+-                        Err(self.terminal_error(format!(
+-                            "KFD {operation} completion became ambiguous: {detail}"
+-                        )))
+-                    }
+-                    DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                        detail,
+-                        custody,
+-                    } => {
+-                        self.retain_sdma_seam_terminal_v1(custody);
+-                        Err(self.terminal_error(format!(
+-                            "KFD {operation} execution became ambiguous: {detail}"
+-                        )))
+-                    }
+-                };
+-            }
+-        };
+-        if completed.direction() != direction
+-            || completed.host_offset() != host_offset
+-            || completed.device_offset() != device_offset
+-            || completed.copy_bytes() != copy_bytes
+-            || completed.packet_count() != 1
+-        {
+-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
+-                completed,
+-            ));
+-            return Err(self.terminal_error(format!(
+-                "KFD {operation} completion metadata changed unexpectedly"
+-            )));
+-        }
+-        let pair = match self.directional_sdma_ops_v1().retire(completed) {
+-            Ok(pair) => pair,
+-            Err(SdmaTransitionFailureV1::Retryable { custody, .. }) => {
+-                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
+-                    custody,
+-                ));
+-                return Err(
+-                    self.terminal_error(format!("KFD {operation} frontier retirement failed"))
+-                );
+-            }
+-            Err(SdmaTransitionFailureV1::ProcessTeardown { custody, .. }) => {
+-                self.retain_sdma_seam_terminal_v1(custody);
+-                return Err(
+-                    self.terminal_error(format!("KFD {operation} frontier retirement failed"))
+-                );
+-            }
+-        };
+-        self.restore_synchronous_directional_storage_v1(allocation, pair)
+-    }
+-
+     fn upload_sdma_range_v1(
+         &mut self,
+         allocation: u64,
+@@ -4856,7 +4732,7 @@ impl KfdRuntimeBackendV1 {
+             .get(&allocation)
+             .is_some_and(|record| matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Host(_)));
+         if is_host {
+-            return self.write_indexed_sdma_host_v1(
++            return self.access_indexed_sdma_host_v1(
+                 allocation,
+                 "KFD persistent host write",
+                 |ops, buffer| ops.write_host(buffer, byte_offset, bytes),
+@@ -4899,7 +4775,7 @@ impl KfdRuntimeBackendV1 {
+             self.upload_sdma_range_v1(allocation, 0, bytes)?;
+             return Ok(None);
+         }
+-        self.write_indexed_sdma_host_v1(
++        self.access_indexed_sdma_host_v1(
+             allocation,
+             "KFD persistent authenticated host write",
+             |ops, buffer| ops.write_full_host_authenticated(buffer, bytes),
+@@ -4985,40 +4861,7 @@ impl KfdRuntimeBackendV1 {
+             .get(&allocation)
+             .is_some_and(|record| matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Host(_)));
+         if is_host {
+-            let buffer = match &self
+-                .allocations
+-                .get(&allocation)
+-                .expect("admitted host allocation remains indexed")
+-                .sdma_storage
+-            {
+-                KfdRuntimeSdmaStorageV1::Host(buffer) => buffer,
+-                _ => unreachable!("checked host storage"),
+-            };
+-            let result = {
+-                #[cfg(test)]
+-                let scripted = self.scripted_sdma.as_mut();
+-                #[cfg(test)]
+-                let mut ops = if let Some(driver) = scripted {
+-                    kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Scripted(driver)
+-                } else {
+-                    kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
+-                        self.queue
+-                            .as_mut()
+-                            .expect("persistent SDMA allocation retains queue"),
+-                    )
+-                };
+-                #[cfg(not(test))]
+-                let mut ops = kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
+-                    self.queue
+-                        .as_mut()
+-                        .expect("persistent SDMA allocation retains queue"),
+-                );
+-                ops.read_host(buffer, byte_offset, destination.len() as u64)
+-            };
+-            let bytes = result.map_err(|error| {
+-                self.terminal_error(format!("KFD persistent host read: {error}"))
+-            })?;
+-            destination.copy_from_slice(&bytes);
++            self.read_indexed_sdma_host_into_v1(allocation, byte_offset, destination)?;
+             return Ok(true);
+         }
+ 
+@@ -5041,18 +4884,7 @@ impl KfdRuntimeBackendV1 {
+             copy_bytes,
+             "download",
+         )?;
+-        let readback =
+-            self.directional_sdma_ops_v1()
+-                .read_host(&staging, 0, destination.len() as u64);
+-        let bytes = match readback {
+-            Ok(bytes) => bytes,
+-            Err(error) => {
+-                self.recycle_transient_sdma_buffer_v1(staging, "download")?;
+-                return Err(self.terminal_error(format!("KFD download readback: {error}")));
+-            }
+-        };
+-        destination.copy_from_slice(&bytes);
+-        self.recycle_transient_sdma_buffer_v1(staging, "download")?;
++        self.readback_and_recycle_transient_sdma_v1(staging, destination)?;
+         Ok(true)
+     }
+ 
+@@ -12749,9 +12581,11 @@ mod retained_release_tests;
+ #[cfg(test)]
+ mod tests {
+     mod sdma_demotion_tests;
++    mod sdma_host_read_tests;
+     mod sdma_host_write_tests;
+     mod sdma_promotion_tests;
+     mod sdma_recycle_tests;
++    mod sdma_synchronous_tests;
+ 
+     use super::kfd_backend_sdma_seam::{
+         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,
+@@ -12831,18 +12665,12 @@ mod tests {
+ 
+     #[test]
+     fn synchronous_directional_runtime_routes_only_through_fused_single_execute() {
+-        let source = include_str!("kfd_backend.rs");
+-        let synchronous = source
+-            .split("fn execute_synchronous_directional_sdma_v1(")
+-            .nth(1)
+-            .unwrap()
+-            .split("fn upload_sdma_range_v1(")
+-            .next()
+-            .unwrap();
++        let synchronous = include_str!("kfd_backend/sdma_synchronous.rs");
+         assert!(synchronous.contains(".execute_synchronous_single("));
+         assert!(!synchronous.contains(".submit("));
+         assert!(!synchronous.contains(".wait("));
+-        assert!(synchronous.contains(".retire(completed)"));
++        assert!(synchronous.contains("retire_native_directional_completed_v1(parts)"));
++        assert!(synchronous.contains("fill_restore_shell_v1(shell, pair.device)"));
+ 
+         let seam = include_str!("kfd_backend/kfd_backend_sdma_seam.rs");
+         let fused = seam
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+index d376ad3c6..de90a65e6 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+@@ -493,16 +493,32 @@ pub(super) enum SdmaTransitionFailureV1<R, D = String> {
+ 
+ pub(super) enum SdmaOwnerDiagnosticV1 {
+     Native(ComputeAqlQueueSessionErrorV1),
++    Message(String),
++    Static(&'static str),
++    UnexpectedRetryable(ComputeAqlQueueSessionErrorV1),
+     #[cfg(test)]
+     Scripted(String),
++    #[cfg(test)]
++    UnexpectedScriptedRetryable(String),
+ }
+ 
+ impl core::fmt::Display for SdmaOwnerDiagnosticV1 {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         match self {
+             Self::Native(error) => core::fmt::Display::fmt(error, f),
++            Self::Message(detail) => f.write_str(detail),
++            Self::Static(detail) => f.write_str(detail),
++            Self::UnexpectedRetryable(error) => write!(
++                f,
++                "directional SDMA synchronous wait returned non-timeout retryable custody: {error}"
++            ),
+             #[cfg(test)]
+             Self::Scripted(detail) => f.write_str(detail),
++            #[cfg(test)]
++            Self::UnexpectedScriptedRetryable(detail) => write!(
++                f,
++                "directional SDMA synchronous wait returned non-timeout retryable custody: {detail}"
++            ),
+         }
+     }
+ }
+@@ -520,15 +536,15 @@ pub(super) enum DirectionalSdmaExecutionFailureV1 {
+ 
+ pub(super) enum DirectionalSdmaSynchronousExecutionFailureV1 {
+     RetryableBeforePublication {
+-        detail: String,
++        detail: SdmaOwnerDiagnosticV1,
+         pair: DirectionalSdmaPairOwnerV1,
+     },
+     RetryableTimeout {
+-        detail: String,
++        detail: SdmaOwnerDiagnosticV1,
+         submission: DirectionalSdmaSubmissionOwnerV1,
+     },
+     ProcessTeardown {
+-        detail: String,
++        detail: SdmaOwnerDiagnosticV1,
+         custody: SdmaTerminalCustodyV1,
+     },
+ }
+@@ -592,16 +608,19 @@ pub(super) enum DirectionalSdmaOpsV1<'a> {
+     Scripted(&'a mut ScriptedSdmaDriverV1),
+ }
+ 
+-fn retire_native_directional_completed_v1(
++pub(super) fn retire_native_directional_completed_v1(
+     (device, host, frontier): fe2o3_kfd::Gfx942PersistentComputeReadyPartsV1,
+-) -> Result<DirectionalSdmaPairOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>> {
++) -> Result<
++    DirectionalSdmaPairOwnerV1,
++    SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1, SdmaOwnerDiagnosticV1>,
++> {
+     match device.retire_settled_frontier_v1(frontier) {
+         Ok(device) => Ok(DirectionalSdmaPairOwnerV1 {
+             device: DirectionalSdmaDeviceOwnerV1::Native(device),
+             host: SdmaBufferOwnerV1::Native(host),
+         }),
+         Err(failure) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+-            detail: "frontier retirement failed".to_owned(),
++            detail: SdmaOwnerDiagnosticV1::Static("frontier retirement failed"),
+             custody: SdmaTerminalCustodyV1::Native(
+                 NativeDirectionalSdmaTerminalCustodyV1::Retirement { failure, host },
+             ),
+@@ -1068,7 +1087,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+         if let Err(detail) = validate_window_requests_v1(core::slice::from_ref(&request)) {
+             return Err(
+                 DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
+-                    detail,
++                    detail: SdmaOwnerDiagnosticV1::Message(detail),
+                     pair,
+                 },
+             );
+@@ -1101,7 +1120,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                             allocation,
+                             host,
+                         } => DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
+-                            detail: error.to_string(),
++                            detail: SdmaOwnerDiagnosticV1::Native(error),
+                             pair: DirectionalSdmaPairOwnerV1 {
+                                 device: DirectionalSdmaDeviceOwnerV1::Native(allocation),
+                                 host: SdmaBufferOwnerV1::Native(host),
+@@ -1110,7 +1129,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                         Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::ProcessTeardown(
+                             custody,
+                         ) => DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                            detail: error.to_string(),
++                            detail: SdmaOwnerDiagnosticV1::Native(error),
+                             custody: SdmaTerminalCustodyV1::Native(
+                                 NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(custody),
+                             ),
+@@ -1129,7 +1148,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                                 && is_timeout =>
+                         {
+                             DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
+-                                detail: error.to_string(),
++                                detail: SdmaOwnerDiagnosticV1::Native(error),
+                                 submission: DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                     submission,
+                                     host_offset: request.host_offset,
+@@ -1142,9 +1161,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                                 && submission.copy_bytes() == request.copy_bytes =>
+                         {
+                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                                detail: format!(
+-                                    "directional SDMA synchronous wait returned non-timeout retryable custody: {error}"
+-                                ),
++                                detail: SdmaOwnerDiagnosticV1::UnexpectedRetryable(error),
+                                 custody: SdmaTerminalCustodyV1::Native(
+                                     NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                         DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+@@ -1158,8 +1175,9 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                         }
+                         Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission) => {
+                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                                detail: "directional SDMA synchronous wait metadata changed unexpectedly"
+-                                    .to_owned(),
++                                detail: SdmaOwnerDiagnosticV1::Static(
++                                    "directional SDMA synchronous wait metadata changed unexpectedly",
++                                ),
+                                 custody: SdmaTerminalCustodyV1::Native(
+                                     NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                         DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+@@ -1174,7 +1192,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                         Gfx942DirectionalPersistentSdmaExecutionCustodyV1::ProcessTeardown(
+                             custody,
+                         ) => DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                            detail: error.to_string(),
++                            detail: SdmaOwnerDiagnosticV1::Native(error),
+                             custody: SdmaTerminalCustodyV1::Native(
+                                 NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(custody),
+                             ),
+@@ -1199,7 +1217,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                     Err(SdmaTransitionFailureV1::Retryable { detail, custody }) => {
+                         return Err(
+                             DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
+-                                detail,
++                                detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                                 pair: custody,
+                             },
+                         );
+@@ -1207,7 +1225,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                     Err(SdmaTransitionFailureV1::ProcessTeardown { detail, custody }) => {
+                         return Err(
+                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                                detail,
++                                detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                                 custody,
+                             },
+                         );
+@@ -1217,16 +1235,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                     Ok(DirectionalSdmaWaitV1::Completed(completed)) => Ok(completed),
+                     Ok(DirectionalSdmaWaitV1::Timeout(submission)) => Err(
+                         DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
+-                            detail: "scripted wait timed out".to_owned(),
++                            detail: SdmaOwnerDiagnosticV1::Static("scripted wait timed out"),
+                             submission,
+                         },
+                     ),
+                     Err(DirectionalSdmaExecutionFailureV1::Retryable { detail, submission }) => {
+                         Err(
+                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                                detail: format!(
+-                                    "directional SDMA synchronous wait returned non-timeout retryable custody: {detail}"
+-                                ),
++                                detail: SdmaOwnerDiagnosticV1::UnexpectedScriptedRetryable(detail),
+                                 custody: scripted_mismatch_submission(
+                                     submission,
+                                     "synchronous non-timeout retryable wait",
+@@ -1237,7 +1253,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                     Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown { detail, custody }) => {
+                         Err(
+                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                                detail,
++                                detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                                 custody,
+                             },
+                         )
+@@ -1247,8 +1263,9 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+             #[cfg(test)]
+             (_, device, host) => Err(
+                 DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+-                    detail: "directional SDMA owner/driver mismatch during synchronous execution"
+-                        .to_owned(),
++                    detail: SdmaOwnerDiagnosticV1::Static(
++                        "directional SDMA owner/driver mismatch during synchronous execution",
++                    ),
+                     custody: scripted_mismatch_pair(device, host, "synchronous execution"),
+                 },
+             ),
+@@ -1598,8 +1615,10 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+     pub(super) fn retire(
+         &mut self,
+         completed: DirectionalSdmaCompletedOwnerV1,
+-    ) -> Result<DirectionalSdmaPairOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>>
+-    {
++    ) -> Result<
++        DirectionalSdmaPairOwnerV1,
++        SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1, SdmaOwnerDiagnosticV1>,
++    > {
+         match (self, completed) {
+             (Self::Native(_), DirectionalSdmaCompletedOwnerV1::NativeSingle { completed, .. }) => {
+                 retire_native_directional_completed_v1(completed.into_parts())
+@@ -1609,11 +1628,26 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+             }
+             #[cfg(test)]
+             (Self::Scripted(driver), DirectionalSdmaCompletedOwnerV1::Scripted(completed)) => {
+-                driver.retire(completed)
++                driver.retire(completed).map_err(|failure| match failure {
++                    SdmaTransitionFailureV1::Retryable { detail, custody } => {
++                        SdmaTransitionFailureV1::Retryable {
++                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
++                            custody,
++                        }
++                    }
++                    SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
++                        SdmaTransitionFailureV1::ProcessTeardown {
++                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
++                            custody,
++                        }
++                    }
++                })
+             }
+             #[cfg(test)]
+             (_, completed) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+-                detail: "directional SDMA owner/driver mismatch during retirement".to_owned(),
++                detail: SdmaOwnerDiagnosticV1::Static(
++                    "directional SDMA owner/driver mismatch during retirement",
++                ),
+                 custody: scripted_mismatch_completed(completed, "retirement"),
+             }),
+         }
+@@ -2086,6 +2120,16 @@ mod scripted {
+             offset: u64,
+             byte_len: u64,
+         },
++        ReadFault {
++            offset: u64,
++            byte_len: u64,
++            panic: bool,
++        },
++        ReadLength {
++            offset: u64,
++            byte_len: u64,
++            returned_len: usize,
++        },
+         Promote(ScriptedFailureModeV1),
+         PromotePanic,
+         PromoteComputeReady(ScriptedFailureModeV1),
+@@ -2112,6 +2156,8 @@ mod scripted {
+         Poll(ScriptedExecutionOutcomeV1),
+         Wait(ScriptedExecutionOutcomeV1),
+         Retire(ScriptedFailureModeV1),
++        RetirePanic,
++        RetireCompletedRetry,
+         PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1),
+         WaitSameDevice(ScriptedSameDeviceExecutionOutcomeV1),
+         RetireSameDevice(ScriptedFailureModeV1),
+@@ -2242,6 +2288,22 @@ mod scripted {
+         pub(super) packet_count: usize,
+     }
+ 
++    impl ScriptedSubmissionOwnerV1 {
++        pub(crate) fn pair(&self) -> &DirectionalSdmaPairOwnerV1 {
++            &self.pair
++        }
++
++        pub(crate) fn requests(&self) -> &[DirectionalSdmaCopyRequestV1] {
++            self.requests.as_slice()
++        }
++    }
++
++    impl ScriptedCompletedOwnerV1 {
++        pub(crate) fn pair(&self) -> &DirectionalSdmaPairOwnerV1 {
++            &self.pair
++        }
++    }
++
+     pub(super) enum ScriptedPersistentComputeReadyFailureV1 {
+         Recovered(DirectionalSdmaPairOwnerV1),
+         ForeignQueue {
+@@ -2287,6 +2349,8 @@ mod scripted {
+         promotion_custody: Option<ScriptedBufferOwnerV1>,
+         demotion_custody: Option<ScriptedDeviceOwnerV1>,
+         recycle_custody: Option<ScriptedBufferOwnerV1>,
++        wait_custody: Option<ScriptedSubmissionOwnerV1>,
++        retirement_custody: Option<ScriptedCompletedOwnerV1>,
+     }
+ 
+     impl core::fmt::Debug for ScriptedSdmaDriverV1 {
+@@ -2308,6 +2372,8 @@ mod scripted {
+                 promotion_custody: None,
+                 demotion_custody: None,
+                 recycle_custody: None,
++                wait_custody: None,
++                retirement_custody: None,
+             }
+         }
+ 
+@@ -2333,6 +2399,14 @@ mod scripted {
+             self.recycle_custody.as_ref()
+         }
+ 
++        pub(crate) fn wait_custody(&self) -> Option<&ScriptedSubmissionOwnerV1> {
++            self.wait_custody.as_ref()
++        }
++
++        pub(crate) fn retirement_custody(&self) -> Option<&ScriptedCompletedOwnerV1> {
++            self.retirement_custody.as_ref()
++        }
++
+         pub(crate) fn demotion_custody(&self) -> Option<(u64, &[u8])> {
+             self.demotion_custody
+                 .as_ref()
+@@ -2556,13 +2630,25 @@ mod scripted {
+             if !self.owns_buffer(buffer) {
+                 return Err("scripted SDMA read owner belongs to another driver".to_owned());
+             }
+-            match self.pop()? {
++            let (fault, returned_len) = match self.pop()? {
+                 ScriptedSdmaStepV1::Read {
+                     offset: expected_offset,
+                     byte_len: expected_len,
+-                } if expected_offset == offset && expected_len == byte_len => {}
++                } if expected_offset == offset && expected_len == byte_len => (None, None),
++                ScriptedSdmaStepV1::ReadFault {
++                    offset: expected_offset,
++                    byte_len: expected_len,
++                    panic,
++                } if expected_offset == offset && expected_len == byte_len => (Some(panic), None),
++                ScriptedSdmaStepV1::ReadLength {
++                    offset: expected_offset,
++                    byte_len: expected_len,
++                    returned_len,
++                } if expected_offset == offset && expected_len == byte_len => {
++                    (None, Some(returned_len))
++                }
+                 step => return Err(format!("scripted SDMA read mismatch: {step:?}")),
+-            }
++            };
+             if buffer.kind != ScriptedBufferKindV1::Host {
+                 return Err("scripted SDMA read requires host storage".to_owned());
+             }
+@@ -2572,6 +2658,15 @@ mod scripted {
+                 .checked_add(len)
+                 .filter(|end| *end <= buffer.bytes.len())
+                 .ok_or("scripted read exceeds buffer")?;
++            if let Some(panic) = fault {
++                if panic {
++                    std::panic::panic_any("scripted SDMA host read panic");
++                }
++                return Err("scripted SDMA host read failure".to_owned());
++            }
++            if let Some(returned_len) = returned_len {
++                return Ok(vec![0x6b; returned_len].into_boxed_slice());
++            }
+             Ok(buffer.bytes[start..end].into())
+         }
+ 
+@@ -2891,9 +2986,11 @@ mod scripted {
+             &mut self,
+             submission: ScriptedSubmissionOwnerV1,
+         ) -> Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1> {
+-            if !self.owns_submission(&submission) {
++            assert!(self.wait_custody.is_none());
++            self.wait_custody = Some(submission);
++            if !self.owns_submission(self.wait_custody.as_ref().unwrap()) {
+                 return Err(scripted_submission_mismatch(
+-                    submission,
++                    self.wait_custody.take().unwrap(),
+                     "wait owner belongs to another driver".to_owned(),
+                 ));
+             }
+@@ -2901,13 +2998,18 @@ mod scripted {
+                 Ok(ScriptedSdmaStepV1::Wait(outcome)) => outcome,
+                 Ok(step) => {
+                     return Err(scripted_submission_mismatch(
+-                        submission,
++                        self.wait_custody.take().unwrap(),
+                         format!("wait mismatch: {step:?}"),
+                     ));
+                 }
+-                Err(detail) => return Err(scripted_submission_mismatch(submission, detail)),
++                Err(detail) => {
++                    return Err(scripted_submission_mismatch(
++                        self.wait_custody.take().unwrap(),
++                        detail,
++                    ));
++                }
+             };
+-            match execute_outcome(submission, outcome, "wait")? {
++            match execute_outcome_in_place(&mut self.wait_custody, outcome, "wait")? {
+                 DirectionalSdmaPollV1::Completed(completed) => {
+                     Ok(DirectionalSdmaWaitV1::Completed(completed))
+                 }
+@@ -2956,30 +3058,50 @@ mod scripted {
+             DirectionalSdmaPairOwnerV1,
+             SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>,
+         > {
+-            if !self.owns_completed(&completed) {
++            assert!(self.retirement_custody.is_none());
++            self.retirement_custody = Some(completed);
++            if !self.owns_completed(self.retirement_custody.as_ref().unwrap()) {
+                 return Err(scripted_completed_mismatch(
+-                    completed,
++                    self.retirement_custody.take().unwrap(),
+                     "retirement owner belongs to another driver".to_owned(),
+                 ));
+             }
+             let outcome = match self.pop() {
+                 Ok(ScriptedSdmaStepV1::Retire(outcome)) => outcome,
++                Ok(ScriptedSdmaStepV1::RetirePanic) => {
++                    std::panic::panic_any("scripted SDMA retirement panic")
++                }
++                Ok(ScriptedSdmaStepV1::RetireCompletedRetry) => {
++                    return Err(SdmaTransitionFailureV1::Retryable {
++                        detail: "scripted retirement retryable".to_owned(),
++                        custody: DirectionalSdmaCompletedOwnerV1::Scripted(
++                            self.retirement_custody.take().unwrap(),
++                        ),
++                    });
++                }
+                 Ok(step) => {
+                     return Err(scripted_completed_mismatch(
+-                        completed,
++                        self.retirement_custody.take().unwrap(),
+                         format!("retirement mismatch: {step:?}"),
+                     ));
+                 }
+-                Err(detail) => return Err(scripted_completed_mismatch(completed, detail)),
++                Err(detail) => {
++                    return Err(scripted_completed_mismatch(
++                        self.retirement_custody.take().unwrap(),
++                        detail,
++                    ));
++                }
+             };
+             match outcome {
+-                ScriptedFailureModeV1::Success => Ok(completed.pair),
++                ScriptedFailureModeV1::Success => Ok(self.retirement_custody.take().unwrap().pair),
+                 ScriptedFailureModeV1::Retryable | ScriptedFailureModeV1::ProcessTeardown => {
+                     Err(SdmaTransitionFailureV1::ProcessTeardown {
+                         detail: "scripted retirement failure".to_owned(),
+                         custody: SdmaTerminalCustodyV1::Scripted(
+                             ScriptedTerminalCustodyV1::Completed(
+-                                DirectionalSdmaCompletedOwnerV1::Scripted(completed),
++                                DirectionalSdmaCompletedOwnerV1::Scripted(
++                                    self.retirement_custody.take().unwrap(),
++                                ),
+                             ),
+                         ),
+                     })
+@@ -3174,15 +3296,27 @@ mod scripted {
+         submission: ScriptedSubmissionOwnerV1,
+         outcome: ScriptedExecutionOutcomeV1,
+         operation: &'static str,
++    ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
++        execute_outcome_in_place(&mut Some(submission), outcome, operation)
++    }
++
++    fn execute_outcome_in_place(
++        slot: &mut Option<ScriptedSubmissionOwnerV1>,
++        outcome: ScriptedExecutionOutcomeV1,
++        operation: &'static str,
+     ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
+         match outcome {
+             ScriptedExecutionOutcomeV1::Pending => Ok(DirectionalSdmaPollV1::Pending(
+-                DirectionalSdmaSubmissionOwnerV1::Scripted(submission),
++                DirectionalSdmaSubmissionOwnerV1::Scripted(
++                    slot.take().expect("retained scripted submission"),
++                ),
+             )),
+             ScriptedExecutionOutcomeV1::Retryable => {
+                 Err(DirectionalSdmaExecutionFailureV1::Retryable {
+                     detail: format!("scripted {operation} retryable"),
+-                    submission: DirectionalSdmaSubmissionOwnerV1::Scripted(submission),
++                    submission: DirectionalSdmaSubmissionOwnerV1::Scripted(
++                        slot.take().expect("retained scripted submission"),
++                    ),
+                 })
+             }
+             ScriptedExecutionOutcomeV1::ProcessTeardown => {
+@@ -3190,7 +3324,9 @@ mod scripted {
+                     detail: format!("scripted {operation} teardown"),
+                     custody: SdmaTerminalCustodyV1::Scripted(
+                         ScriptedTerminalCustodyV1::Submission(
+-                            DirectionalSdmaSubmissionOwnerV1::Scripted(submission),
++                            DirectionalSdmaSubmissionOwnerV1::Scripted(
++                                slot.take().expect("retained scripted submission"),
++                            ),
+                         ),
+                     ),
+                 })
+@@ -3198,21 +3334,22 @@ mod scripted {
+             ScriptedExecutionOutcomeV1::Completed {
+                 direction,
+                 copy_bytes,
+-            } => complete_scripted_submission(submission, direction, copy_bytes, None),
++            } => complete_scripted_submission(slot, direction, copy_bytes, None),
+             ScriptedExecutionOutcomeV1::CompletedWindow {
+                 direction,
+                 copy_bytes,
+                 requests,
+-            } => complete_scripted_submission(submission, direction, copy_bytes, requests),
++            } => complete_scripted_submission(slot, direction, copy_bytes, requests),
+         }
+     }
+ 
+     fn complete_scripted_submission(
+-        mut submission: ScriptedSubmissionOwnerV1,
++        slot: &mut Option<ScriptedSubmissionOwnerV1>,
+         direction: Option<Gfx942PersistentSdmaDirectionV1>,
+         copy_bytes: Option<u32>,
+         reported_requests: Option<Vec<DirectionalSdmaCopyRequestV1>>,
+     ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
++        let submission = slot.as_mut().expect("retained scripted submission");
+         for request in submission.requests.as_slice() {
+             let len = usize::try_from(request.copy_bytes).expect("u32 fits usize");
+             let host_start = usize::try_from(request.host_offset)
+@@ -3244,6 +3381,9 @@ mod scripted {
+             .first()
+             .map(|request| (request.host_offset, request.device_offset))
+             .unwrap_or((0, 0));
++        let submission = slot
++            .take()
++            .expect("completed copy retains original submission");
+         Ok(DirectionalSdmaPollV1::Completed(
+             DirectionalSdmaCompletedOwnerV1::Scripted(ScriptedCompletedOwnerV1 {
+                 pair: submission.pair,
+@@ -3879,7 +4019,7 @@ mod window_tests {
+                         SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Submission(
+                             submission,
+                         )),
+-                }) if detail.contains("non-timeout retryable custody") => submission,
++                }) if detail.to_string().contains("non-timeout retryable custody") => submission,
+                 _ => panic!("synchronous non-timeout retryable custody must not become timeout"),
+             };
+         let completed = match ops.wait(submission, Duration::ZERO) {
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_host_read.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_host_read.rs
+new file mode 100644
+index 000000000..27b34d58b
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_host_read.rs
+@@ -0,0 +1,60 @@
++//! Readback retains borrowed staging until copying and recycling have settled.
++
++#![forbid(unsafe_code)]
++
++use super::kfd_backend_sdma_seam::DirectionalSdmaOpsV1;
++use super::sdma_host_write::resume_sdma_owner_panic_v1;
++use super::sdma_recycle::SdmaRecycleTargetV1;
++use super::*;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++impl KfdRuntimeBackendV1 {
++    pub(super) fn read_indexed_sdma_host_into_v1(
++        &mut self,
++        allocation: u64,
++        offset: u64,
++        destination: &mut [u8],
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.access_indexed_sdma_host_v1(allocation, "KFD persistent host read", |ops, buffer| {
++            let bytes = ops.read_host(buffer, offset, destination.len() as u64)?;
++            destination.copy_from_slice(&bytes);
++            Ok(())
++        })
++    }
++
++    pub(super) fn readback_and_recycle_transient_sdma_v1(
++        &mut self,
++        buffer: SdmaBufferOwnerV1,
++        destination: &mut [u8],
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            let Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer)) = &self.terminal_sdma_custody
++            else {
++                unreachable!("readback retains the staging buffer");
++            };
++            #[cfg(test)]
++            let mut ops = if let Some(driver) = self.scripted_sdma.as_mut() {
++                DirectionalSdmaOpsV1::Scripted(driver)
++            } else {
++                DirectionalSdmaOpsV1::Native(
++                    self.queue.as_mut().expect("SDMA readback retains queue"),
++                )
++            };
++            #[cfg(not(test))]
++            let mut ops = DirectionalSdmaOpsV1::Native(
++                self.queue.as_mut().expect("SDMA readback retains queue"),
++            );
++            let bytes = ops.read_host(buffer, 0, destination.len() as u64)?;
++            destination.copy_from_slice(&bytes);
++            Ok::<(), String>(())
++        }));
++        let readback = match result {
++            Ok(result) => result,
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
++        };
++        // Ordinary read failures still attempt cleanup; cleanup failure has precedence.
++        self.recycle_rooted_sdma_owner_v1(SdmaRecycleTargetV1::Transient("download"))?;
++        readback.map_err(|error| self.terminal_error(format!("KFD download readback: {error}")))
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs
+index c257f5e21..195917407 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs
+@@ -1,4 +1,4 @@
+-//! Borrowed host writes keep owners rooted through error conversion and unwind.
++//! Borrowed host access keeps owners rooted through error conversion and unwind.
+ 
+ #![forbid(unsafe_code)]
+ 
+@@ -54,7 +54,7 @@ impl KfdRuntimeBackendV1 {
+         unreachable!("failed host write cannot settle successfully")
+     }
+ 
+-    pub(super) fn write_indexed_sdma_host_v1<T>(
++    pub(super) fn access_indexed_sdma_host_v1<T>(
+         &mut self,
+         allocation: u64,
+         operation: &'static str,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs
+index 4a46ee65a..de2464bbd 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_recycle.rs
+@@ -17,17 +17,28 @@ pub(super) enum SdmaRecycleTargetV1 {
+ }
+ 
+ impl KfdRuntimeBackendV1 {
++    pub(super) fn recycle_sdma_owner_v1(
++        &mut self,
++        buffer: SdmaBufferOwnerV1,
++        target: SdmaRecycleTargetV1,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer));
++        self.recycle_rooted_sdma_owner_v1(target)
++    }
++
+     #[allow(
+         clippy::result_large_err,
+         reason = "returned-owner failures cross the unwind boundary without allocating"
+     )]
+-    pub(super) fn recycle_sdma_owner_v1(
++    pub(super) fn recycle_rooted_sdma_owner_v1(
+         &mut self,
+-        buffer: SdmaBufferOwnerV1,
+         target: SdmaRecycleTargetV1,
+     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+-        self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer));
+         let result = catch_unwind(AssertUnwindSafe(|| {
++            assert!(matches!(
++                self.terminal_sdma_custody,
++                Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(_))
++            ));
+             #[cfg(test)]
+             let mut ops = if let Some(driver) = self.scripted_sdma.as_mut() {
+                 DirectionalSdmaOpsV1::Scripted(driver)
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_synchronous.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_synchronous.rs
+new file mode 100644
+index 000000000..5c89dbc24
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_synchronous.rs
+@@ -0,0 +1,353 @@
++//! Runtime custody spans normalization, the fused lower copy and retirement.
++
++#![forbid(unsafe_code)]
++
++use super::kfd_backend_sdma_seam::{
++    DirectionalSdmaOpsV1, SdmaOwnerDiagnosticV1, SdmaTerminalCustodyV1,
++    retire_native_directional_completed_v1,
++};
++use super::sdma_host_write::resume_sdma_owner_panic_v1;
++use super::*;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++#[allow(dead_code, clippy::large_enum_variant)]
++pub(super) enum SynchronousSdmaPhaseV1 {
++    Host(SdmaBufferOwnerV1),
++    Pair(DirectionalSdmaPairOwnerV1),
++    LowerOwned,
++    Pending(DirectionalSdmaSubmissionOwnerV1),
++    Completed(DirectionalSdmaCompletedOwnerV1),
++    RetiredPair(DirectionalSdmaPairOwnerV1),
++    Terminal(SdmaTerminalCustodyV1),
++}
++
++pub(super) struct SynchronousSdmaCustodyV1 {
++    pub(super) allocation: u64,
++    pub(super) direction: Gfx942PersistentSdmaDirectionV1,
++    pub(super) request: DirectionalSdmaCopyRequestV1,
++    pub(super) operation: &'static str,
++    pub(super) shell: Option<Box<MaybeUninit<DirectionalSdmaDeviceOwnerV1>>>,
++    pub(super) phase: SynchronousSdmaPhaseV1,
++}
++
++impl SynchronousSdmaCustodyV1 {
++    fn take_pair(&mut self) -> DirectionalSdmaPairOwnerV1 {
++        assert!(matches!(
++            self.phase,
++            SynchronousSdmaPhaseV1::Pair(_) | SynchronousSdmaPhaseV1::RetiredPair(_)
++        ));
++        match std::mem::replace(&mut self.phase, SynchronousSdmaPhaseV1::LowerOwned) {
++            SynchronousSdmaPhaseV1::Pair(pair) | SynchronousSdmaPhaseV1::RetiredPair(pair) => pair,
++            _ => unreachable!("checked synchronous pair"),
++        }
++    }
++
++    fn take_completed(&mut self) -> DirectionalSdmaCompletedOwnerV1 {
++        assert!(matches!(self.phase, SynchronousSdmaPhaseV1::Completed(_)));
++        let SynchronousSdmaPhaseV1::Completed(completed) =
++            std::mem::replace(&mut self.phase, SynchronousSdmaPhaseV1::LowerOwned)
++        else {
++            unreachable!("checked synchronous completion");
++        };
++        completed
++    }
++}
++
++impl KfdRuntimeBackendV1 {
++    pub(super) fn synchronous_copy_root_v1(&mut self) -> &mut SynchronousSdmaCustodyV1 {
++        let Some(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(root)) =
++            &mut self.terminal_sdma_custody
++        else {
++            unreachable!("synchronous copy retains its runtime root");
++        };
++        root
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    pub(super) fn execute_synchronous_directional_sdma_v1(
++        &mut self,
++        allocation: u64,
++        direction: Gfx942PersistentSdmaDirectionV1,
++        host: SdmaBufferOwnerV1,
++        host_offset: u64,
++        device_offset: u64,
++        copy_bytes: u32,
++        operation: &'static str,
++    ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(
++            SynchronousSdmaCustodyV1 {
++                allocation,
++                direction,
++                request: DirectionalSdmaCopyRequestV1 {
++                    host_offset,
++                    device_offset,
++                    copy_bytes,
++                },
++                operation,
++                shell: None,
++                phase: SynchronousSdmaPhaseV1::Host(host),
++            },
++        ));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            if let Err(device) = self.try_normalize_h2d_ready_v1(allocation) {
++                let root = self.synchronous_copy_root_v1();
++                let SynchronousSdmaPhaseV1::Host(host) =
++                    std::mem::replace(&mut root.phase, SynchronousSdmaPhaseV1::LowerOwned)
++                else {
++                    unreachable!("normalization retains the host input");
++                };
++                root.phase =
++                    SynchronousSdmaPhaseV1::Pair(DirectionalSdmaPairOwnerV1 { device, host });
++                return Err(self.terminal_error(
++                    "persistent-compute ready normalization slot changed unexpectedly",
++                ));
++            }
++            if !self.allocations.get(&allocation).is_some_and(|record| {
++                record.kind == RuntimeMemoryKindV1::DeviceLocal
++                    && matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Device(_))
++            }) {
++                let host = self.take_synchronous_host_v1();
++                self.recycle_transient_sdma_buffer_v1(host, operation)?;
++                return Err(Self::rejected(
++                    KfdRuntimeBackendErrorKindV1::Busy,
++                    "persistent device allocation is retained by pending work",
++                ));
++            }
++            self.extract_synchronous_device_v1();
++            let result = self.run_synchronous_lower_v1();
++            self.settle_synchronous_execution_v1(result, |detail| detail.to_string())?;
++            self.retire_synchronous_completion_v1()?;
++            self.restore_synchronous_pair_v1()?;
++            Ok(self.take_synchronous_host_v1())
++        }));
++        match result {
++            Ok(result) => result,
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || {
++                if !self.terminal {
++                    self.poison_terminal_v1();
++                }
++            }),
++        }
++    }
++
++    pub(super) fn extract_synchronous_device_v1(&mut self) {
++        let root = self.synchronous_copy_root_v1();
++        assert!(matches!(root.phase, SynchronousSdmaPhaseV1::Host(_)));
++        assert!(root.shell.is_none());
++        let allocation = root.allocation;
++        let storage = &mut self.allocations.get_mut(&allocation).unwrap().sdma_storage;
++        assert!(matches!(storage, KfdRuntimeSdmaStorageV1::Device(_)));
++        let KfdRuntimeSdmaStorageV1::Device(device) = std::mem::replace(
++            storage,
++            KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
++        ) else {
++            unreachable!("checked synchronous device");
++        };
++        let (device, shell) = take_restore_shell_v1(device);
++        let root = self.synchronous_copy_root_v1();
++        let SynchronousSdmaPhaseV1::Host(host) =
++            std::mem::replace(&mut root.phase, SynchronousSdmaPhaseV1::LowerOwned)
++        else {
++            unreachable!("checked synchronous host");
++        };
++        root.shell = Some(shell);
++        root.phase = SynchronousSdmaPhaseV1::Pair(DirectionalSdmaPairOwnerV1 { device, host });
++    }
++
++    #[allow(
++        clippy::result_large_err,
++        reason = "returned owners reach runtime custody before diagnostics or allocation"
++    )]
++    pub(super) fn run_synchronous_lower_v1(
++        &mut self,
++    ) -> Result<DirectionalSdmaCompletedOwnerV1, DirectionalSdmaSynchronousExecutionFailureV1> {
++        let Some(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(root)) =
++            &mut self.terminal_sdma_custody
++        else {
++            unreachable!("installed synchronous input");
++        };
++        assert!(matches!(root.phase, SynchronousSdmaPhaseV1::Pair(_)));
++        #[cfg(test)]
++        let mut ops = if let Some(driver) = self.scripted_sdma.as_mut() {
++            DirectionalSdmaOpsV1::Scripted(driver)
++        } else {
++            DirectionalSdmaOpsV1::Native(
++                self.queue.as_mut().expect("synchronous copy retains queue"),
++            )
++        };
++        #[cfg(not(test))]
++        let mut ops = DirectionalSdmaOpsV1::Native(
++            self.queue.as_mut().expect("synchronous copy retains queue"),
++        );
++        let pair = root.take_pair();
++        ops.execute_synchronous_single(pair, root.direction, root.request, Duration::from_secs(30))
++    }
++
++    pub(super) fn settle_synchronous_execution_v1(
++        &mut self,
++        result: Result<
++            DirectionalSdmaCompletedOwnerV1,
++            DirectionalSdmaSynchronousExecutionFailureV1,
++        >,
++        diagnostic: impl FnOnce(&SdmaOwnerDiagnosticV1) -> String,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let outcome = catch_unwind(AssertUnwindSafe(|| {
++            let root = self.synchronous_copy_root_v1();
++            let operation = root.operation;
++            match result {
++                Ok(completed) => root.phase = SynchronousSdmaPhaseV1::Completed(completed),
++                Err(DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
++                    detail,
++                    pair,
++                }) => {
++                    root.phase = SynchronousSdmaPhaseV1::Pair(pair);
++                    self.restore_synchronous_pair_v1()?;
++                    let host = self.take_synchronous_host_v1();
++                    self.recycle_transient_sdma_buffer_v1(host, operation)?;
++                    return Err(Self::rejected(
++                        KfdRuntimeBackendErrorKindV1::Native,
++                        format!("KFD {operation} publication: {}", diagnostic(&detail)),
++                    ));
++                }
++                Err(DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
++                    detail,
++                    submission,
++                }) => {
++                    root.phase = SynchronousSdmaPhaseV1::Pending(submission);
++                    return Err(self.terminal_error(format!(
++                        "KFD {operation} completion became ambiguous: {}",
++                        diagnostic(&detail)
++                    )));
++                }
++                Err(DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
++                    detail,
++                    custody,
++                }) => {
++                    root.phase = SynchronousSdmaPhaseV1::Terminal(custody);
++                    return Err(self.terminal_error(format!(
++                        "KFD {operation} execution became ambiguous: {}",
++                        diagnostic(&detail)
++                    )));
++                }
++            }
++            let root = self.synchronous_copy_root_v1();
++            let SynchronousSdmaPhaseV1::Completed(completed) = &root.phase else {
++                unreachable!("installed synchronous completion");
++            };
++            if completed.direction() != root.direction
++                || completed.host_offset() != root.request.host_offset
++                || completed.device_offset() != root.request.device_offset
++                || completed.copy_bytes() != root.request.copy_bytes
++                || completed.packet_count() != 1
++            {
++                return Err(self.terminal_error(format!(
++                    "KFD {operation} completion metadata changed unexpectedly"
++                )));
++            }
++            Ok(())
++        }));
++        match outcome {
++            Ok(result) => result,
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
++        }
++    }
++
++    pub(super) fn retire_synchronous_completion_v1(
++        &mut self,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let Some(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(root)) =
++            &mut self.terminal_sdma_custody
++        else {
++            unreachable!("installed synchronous completion");
++        };
++        #[cfg(test)]
++        if matches!(
++            root.phase,
++            SynchronousSdmaPhaseV1::Completed(DirectionalSdmaCompletedOwnerV1::Scripted(_))
++        ) {
++            let driver = self
++                .scripted_sdma
++                .as_mut()
++                .expect("synchronous retirement retains driver");
++            let result = DirectionalSdmaOpsV1::Scripted(driver).retire(root.take_completed());
++            return self.settle_synchronous_retirement_v1(result);
++        }
++        let parts = match root.take_completed() {
++            DirectionalSdmaCompletedOwnerV1::NativeSingle { completed, .. } => {
++                completed.into_parts()
++            }
++            DirectionalSdmaCompletedOwnerV1::NativeWindow { completed } => completed.into_parts(),
++            #[cfg(test)]
++            DirectionalSdmaCompletedOwnerV1::Scripted(_) => {
++                unreachable!("handled scripted completion")
++            }
++        };
++        // Frontier retirement is a pure owner transition, independent of the queue driver.
++        let result = retire_native_directional_completed_v1(parts);
++        self.settle_synchronous_retirement_v1(result)
++    }
++
++    pub(super) fn settle_synchronous_retirement_v1(
++        &mut self,
++        result: Result<
++            DirectionalSdmaPairOwnerV1,
++            SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1, SdmaOwnerDiagnosticV1>,
++        >,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let root = self.synchronous_copy_root_v1();
++        let operation = root.operation;
++        match result {
++            Ok(pair) => {
++                root.phase = SynchronousSdmaPhaseV1::RetiredPair(pair);
++                Ok(())
++            }
++            Err(SdmaTransitionFailureV1::Retryable { custody, .. }) => {
++                root.phase = SynchronousSdmaPhaseV1::Completed(custody);
++                Err(self.terminal_error(format!("KFD {operation} frontier retirement failed")))
++            }
++            Err(SdmaTransitionFailureV1::ProcessTeardown { custody, .. }) => {
++                root.phase = SynchronousSdmaPhaseV1::Terminal(custody);
++                Err(self.terminal_error(format!("KFD {operation} frontier retirement failed")))
++            }
++        }
++    }
++
++    pub(super) fn restore_synchronous_pair_v1(
++        &mut self,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let allocation = self.synchronous_copy_root_v1().allocation;
++        if !self.allocations.get(&allocation).is_some_and(|record| {
++            record.kind == RuntimeMemoryKindV1::DeviceLocal
++                && matches!(
++                    record.sdma_storage,
++                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous)
++                )
++        }) {
++            return Err(self.terminal_error(
++                "synchronous directional SDMA restoration slot changed unexpectedly",
++            ));
++        }
++        let root = self.synchronous_copy_root_v1();
++        assert!(root.shell.is_some());
++        let pair = root.take_pair();
++        let shell = root.shell.take().unwrap();
++        root.phase = SynchronousSdmaPhaseV1::Host(pair.host);
++        self.allocations.get_mut(&allocation).unwrap().sdma_storage =
++            KfdRuntimeSdmaStorageV1::Device(fill_restore_shell_v1(shell, pair.device));
++        Ok(())
++    }
++
++    pub(super) fn take_synchronous_host_v1(&mut self) -> SdmaBufferOwnerV1 {
++        let root = self.synchronous_copy_root_v1();
++        assert!(matches!(root.phase, SynchronousSdmaPhaseV1::Host(_)));
++        assert!(root.shell.is_none());
++        let Some(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(SynchronousSdmaCustodyV1 {
++            phase: SynchronousSdmaPhaseV1::Host(host),
++            ..
++        })) = self.terminal_sdma_custody.take()
++        else {
++            unreachable!("checked synchronous host return");
++        };
++        host
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_read_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_read_tests.rs
+new file mode 100644
+index 000000000..27190f19b
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_read_tests.rs
+@@ -0,0 +1,554 @@
++use super::sdma_host_write_tests::{
++    assert_terminal_retries_inert, discard_scripted_fixture, fixture, host_observation,
++    retained_host, snapshot,
++};
++use super::*;
++use std::mem::ManuallyDrop;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++const DEVICE_PATTERN: [u8; 8] = [0x61, 0x28, 0xdf, 0x03, 0x9a, 0xf1, 0x42, 0x7e];
++
++fn seed_device(backend: &mut KfdRuntimeBackendV1, device: u64) {
++    let KfdRuntimeSdmaStorageV1::Device(owner) =
++        &mut backend.allocations.get_mut(&device).unwrap().sdma_storage
++    else {
++        panic!()
++    };
++    owner
++        .scripted_bytes_mut()
++        .unwrap()
++        .copy_from_slice(&DEVICE_PATTERN);
++}
++
++fn no_host_read(backend: &KfdRuntimeBackendV1) {
++    assert!(
++        !backend
++            .profiler
++            .as_ref()
++            .unwrap()
++            .recorded_events_for_test_v1()
++            .iter()
++            .any(|entry| matches!(entry.event, KfdRuntimeProfileEventKindV1::HostRead { .. }))
++    );
++}
++
++fn read_step(mode: u8) -> ScriptedSdmaStepV1 {
++    match mode {
++        0 | 1 => ScriptedSdmaStepV1::ReadFault {
++            offset: 0,
++            byte_len: 8,
++            panic: mode == 1,
++        },
++        _ => ScriptedSdmaStepV1::ReadLength {
++            offset: 0,
++            byte_len: 8,
++            returned_len: if mode == 2 { 7 } else { 9 },
++        },
++    }
++}
++
++#[test]
++fn sdma_host_read_indexed_failures_retain_bytes_certificate_and_unchanged_destination() {
++    for mode in 0..4 {
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                ScriptedSdmaStepV1::Write {
++                    offset: 0,
++                    byte_len: 8,
++                },
++                read_step(mode),
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        backend.write_allocation_v1(host, 0, &[0x73; 8]).unwrap();
++        let KfdRuntimeSdmaStorageV1::Host(owner) = &backend.allocations[&host].sdma_storage else {
++            panic!()
++        };
++        assert_eq!(
++            host_observation(owner).2,
++            Some(Sha256::digest([0x73; 8]).into())
++        );
++        let steps = backend.scripted_sdma.as_ref().unwrap().remaining_steps();
++        backend.read_allocation_v1(host, 0, &mut []).unwrap();
++        assert!(matches!(
++            backend.read_allocation_v1(host, 1, &mut [0; 8]),
++            Err(RuntimeBackendFailureV1::Rejected(_))
++        ));
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().remaining_steps(),
++            steps
++        );
++        let before = snapshot(&backend, host, device);
++        let events = backend
++            .profiler
++            .as_ref()
++            .unwrap()
++            .recorded_events_for_test_v1()
++            .to_vec();
++        let mut destination = [0xff; 8];
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.read_allocation_v1(host, 0, &mut destination)
++        }));
++        if mode == 0 {
++            let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                panic!()
++            };
++            assert_eq!(
++                error.detail(),
++                "KFD persistent host read: scripted SDMA host read failure"
++            );
++        } else {
++            let payload = result.unwrap_err();
++            if mode == 1 {
++                assert_eq!(
++                    payload.downcast_ref::<&str>(),
++                    Some(&"scripted SDMA host read panic")
++                );
++            }
++        }
++        assert_eq!(destination, [0xff; 8]);
++        assert_eq!(snapshot(&backend, host, device), before);
++        assert!(backend.terminal_sdma_custody.is_none());
++        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 1);
++        assert_eq!(
++            backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1(),
++            events
++        );
++        assert_terminal_retries_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_host_read_transient_errors_preserve_cleanup_precedence_and_copy_visibility() {
++    for read_fails in [false, true] {
++        for recycle in [
++            ScriptedRecycleOutcomeV1::Success,
++            ScriptedRecycleOutcomeV1::Recovered,
++            ScriptedRecycleOutcomeV1::Ambiguous,
++            ScriptedRecycleOutcomeV1::Panic,
++        ] {
++            let mut steps = scripted_sync_copy_steps_v1(
++                Gfx942PersistentSdmaDirectionV1::DeviceToHost,
++                0,
++                8,
++                ScriptedFailureModeV1::Success,
++            );
++            let n = steps.len();
++            if read_fails {
++                steps[n - 2] = read_step(0);
++            }
++            steps[n - 1] = ScriptedSdmaStepV1::Recycle(recycle);
++            let (backend, _, host, device) = fixture(8, steps);
++            let mut backend = ManuallyDrop::new(backend);
++            seed_device(&mut backend, device);
++            let before = snapshot(&backend, host, device);
++            let expected_id = backend.scripted_sdma.as_ref().unwrap().live_owner_count() as u64 + 1;
++            let mut destination = [0xff; 8];
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                backend.read_allocation_v1(device, 0, &mut destination)
++            }));
++            assert_eq!(
++                destination,
++                if read_fails {
++                    [0xff; 8]
++                } else {
++                    DEVICE_PATTERN
++                }
++            );
++            match recycle {
++                ScriptedRecycleOutcomeV1::Panic => assert_eq!(
++                    result.unwrap_err().downcast_ref::<&str>(),
++                    Some(&"scripted recycle panic")
++                ),
++                ScriptedRecycleOutcomeV1::Success if !read_fails => result.unwrap().unwrap(),
++                _ => {
++                    let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                        panic!()
++                    };
++                    let expected = match recycle {
++                        ScriptedRecycleOutcomeV1::Success => {
++                            "KFD download readback: scripted SDMA host read failure"
++                        }
++                        ScriptedRecycleOutcomeV1::Recovered => {
++                            "KFD download transient release became ambiguous: scripted recycle recovered"
++                        }
++                        ScriptedRecycleOutcomeV1::Ambiguous => {
++                            "KFD download transient release became ambiguous: scripted recycle ambiguous"
++                        }
++                        ScriptedRecycleOutcomeV1::Panic => unreachable!(),
++                    };
++                    assert_eq!(error.detail(), expected);
++                }
++            }
++            let driver = backend.scripted_sdma.as_ref().unwrap();
++            assert_eq!(driver.remaining_steps(), 0);
++            assert_eq!(driver.unexpected_drops(), 0);
++            if recycle == ScriptedRecycleOutcomeV1::Recovered {
++                assert_eq!(
++                    host_observation(retained_host(&backend)),
++                    (expected_id, DEVICE_PATTERN.to_vec(), None)
++                );
++            } else if matches!(
++                recycle,
++                ScriptedRecycleOutcomeV1::Ambiguous | ScriptedRecycleOutcomeV1::Panic
++            ) {
++                assert_eq!(
++                    driver.recycle_custody().unwrap().observation(),
++                    (expected_id, DEVICE_PATTERN.as_slice(), None)
++                );
++            }
++            assert_eq!(
++                driver.live_owner_count(),
++                if recycle == ScriptedRecycleOutcomeV1::Success {
++                    2
++                } else {
++                    3
++                }
++            );
++            if read_fails || recycle != ScriptedRecycleOutcomeV1::Success {
++                assert_eq!(snapshot(&backend, host, device), before);
++                no_host_read(&backend);
++                assert_terminal_retries_inert(&mut backend, host, device);
++            } else {
++                assert!(!backend.terminal);
++                assert!(backend.terminal_sdma_custody.is_none());
++                assert_eq!(
++                    backend
++                        .profiler
++                        .as_ref()
++                        .unwrap()
++                        .recorded_events_for_test_v1()
++                        .iter()
++                        .filter(|entry| matches!(
++                            entry.event,
++                            KfdRuntimeProfileEventKindV1::HostRead { .. }
++                        ))
++                        .count(),
++                    1
++                );
++            }
++            discard_scripted_fixture(backend);
++        }
++    }
++}
++
++#[test]
++fn sdma_host_read_transient_panics_retain_staging_without_attempting_recycle() {
++    for mode in 1..4 {
++        let mut steps = scripted_sync_copy_steps_v1(
++            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
++            0,
++            8,
++            ScriptedFailureModeV1::Success,
++        );
++        let n = steps.len();
++        steps[n - 2] = read_step(mode);
++        let (backend, _, host, device) = fixture(8, steps);
++        let mut backend = ManuallyDrop::new(backend);
++        seed_device(&mut backend, device);
++        let before = snapshot(&backend, host, device);
++        let mut destination = [0xff; 8];
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.read_allocation_v1(device, 0, &mut destination)
++        }));
++        let payload = result.unwrap_err();
++        if mode == 1 {
++            assert_eq!(
++                payload.downcast_ref::<&str>(),
++                Some(&"scripted SDMA host read panic")
++            );
++        }
++        assert_eq!(destination, [0xff; 8]);
++        assert_eq!(snapshot(&backend, host, device), before);
++        assert_eq!(
++            host_observation(retained_host(&backend)),
++            (3, DEVICE_PATTERN.to_vec(), None)
++        );
++        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 1);
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++            3
++        );
++        no_host_read(&backend);
++        assert_terminal_retries_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_host_read_missing_driver_and_wrong_recycle_phase_preserve_original_root() {
++    for transient in [false, true] {
++        let (backend, _, host, device) = fixture(8, []);
++        let mut backend = ManuallyDrop::new(backend);
++        let stage = if transient {
++            Some(backend.scripted_sdma.as_ref().unwrap().test_host_owner(8))
++        } else {
++            None
++        };
++        let expected = stage.as_ref().map(host_observation);
++        let driver = backend.scripted_sdma.take();
++        let mut destination = [0xff; 8];
++        let result = catch_unwind(AssertUnwindSafe(|| match stage {
++            Some(stage) => backend.readback_and_recycle_transient_sdma_v1(stage, &mut destination),
++            None => backend.read_indexed_sdma_host_into_v1(host, 0, &mut destination),
++        }));
++        assert!(result.is_err());
++        backend.scripted_sdma = driver;
++        assert_eq!(destination, [0xff; 8]);
++        if let Some(expected) = expected {
++            assert_eq!(host_observation(retained_host(&backend)), expected);
++        }
++        assert_terminal_retries_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++    let (backend, _, _, _) = fixture(8, []);
++    let mut backend = ManuallyDrop::new(backend);
++    let owner = backend.scripted_sdma.as_ref().unwrap().test_device_owner(8);
++    let id = owner.scripted_owner_id();
++    backend.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(owner));
++    assert!(
++        catch_unwind(AssertUnwindSafe(|| backend.recycle_rooted_sdma_owner_v1(
++            crate::kfd_backend::sdma_recycle::SdmaRecycleTargetV1::Transient("download")
++        )))
++        .is_err()
++    );
++    let Some(KfdRuntimeTerminalSdmaCustodyV1::Device(owner)) = &backend.terminal_sdma_custody
++    else {
++        panic!("wrong-phase owner must stay rooted")
++    };
++    assert_eq!(owner.scripted_owner_id(), id);
++    assert_eq!(
++        backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++        0
++    );
++    assert!(backend.terminal);
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn sdma_host_read_second_chunk_error_or_panic_preserves_exact_visible_prefix() {
++    let chunk = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize;
++    for panic in [false, true] {
++        let (backend, _, host, device) = fixture(
++            chunk + 11,
++            [
++                ScriptedSdmaStepV1::Read {
++                    offset: 3,
++                    byte_len: chunk as u64,
++                },
++                ScriptedSdmaStepV1::ReadFault {
++                    offset: 3 + chunk as u64,
++                    byte_len: 8,
++                    panic,
++                },
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let before = snapshot(&backend, host, device);
++        let mut destination = vec![0xff; chunk + 8];
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.read_allocation_v1(host, 3, &mut destination)
++        }));
++        if panic {
++            assert_eq!(
++                result.unwrap_err().downcast_ref::<&str>(),
++                Some(&"scripted SDMA host read panic")
++            );
++        } else {
++            assert!(matches!(
++                result.unwrap(),
++                Err(RuntimeBackendFailureV1::Terminal(_))
++            ));
++        }
++        assert!(destination[..chunk].iter().all(|&byte| byte == 0));
++        assert_eq!(&destination[chunk..], &[0xff; 8]);
++        assert_eq!(snapshot(&backend, host, device), before);
++        no_host_read(&backend);
++        assert_terminal_retries_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_host_read_context_preserves_credits_and_latches_caught_panic_on_retry() {
++    for configured in [false, true] {
++        for panic in [false, true] {
++            let mut backend = KfdRuntimeBackendV1::mock();
++            backend.native_available = true;
++            backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new([
++                ScriptedSdmaStepV1::AllocateHostFilled {
++                    byte_len: 8,
++                    fill: 0xa5,
++                },
++                ScriptedSdmaStepV1::Write {
++                    offset: 0,
++                    byte_len: 8,
++                },
++                ScriptedSdmaStepV1::ReadFault {
++                    offset: 0,
++                    byte_len: 8,
++                    panic,
++                },
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ]));
++            let mut context = ManuallyDrop::new(crate::RuntimeContextV1::open(backend).unwrap());
++            let device = context.devices()[0].id();
++            if configured {
++                context
++                    .configure_allocation_admission_v1(device, 8, 1)
++                    .unwrap();
++            }
++            let allocation = context
++                .allocate(device, RuntimeMemoryKindV1::HostVisible, 8, 8)
++                .unwrap();
++            let observe_host = |backend: &KfdRuntimeBackendV1| {
++                let (&id, record) = backend.allocations.ordinary_iter().next().unwrap();
++                let KfdRuntimeSdmaStorageV1::Host(owner) = &record.sdma_storage else {
++                    panic!()
++                };
++                (
++                    id,
++                    host_observation(owner),
++                    Arc::clone(&record.bytes),
++                    record.bytes.as_ptr() as usize,
++                    record.content_sha256,
++                )
++            };
++            let original_host = observe_host(context.backend_mut_for_test_v1());
++            let original_usage = context.allocation_admission_usage_v1(device).unwrap();
++            let mut destination = [0xff; 8];
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                context.read_allocation(allocation, 0, &mut destination)
++            }));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<&str>(),
++                    Some(&"scripted SDMA host read panic")
++                );
++                assert!(!context.is_terminal());
++            } else {
++                assert!(matches!(
++                    result.unwrap(),
++                    Err(crate::RuntimeErrorV1::BackendTerminal(_))
++                ));
++                assert!(context.is_terminal());
++            }
++            assert_eq!(destination, [0xff; 8]);
++            if configured {
++                let usage = context
++                    .allocation_admission_usage_v1(device)
++                    .unwrap()
++                    .unwrap();
++                assert_eq!(
++                    usage
++                        .used
++                        .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                    8
++                );
++                assert_eq!(
++                    usage
++                        .used
++                        .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                    1
++                );
++                assert_eq!(usage.quarantined_records, 0);
++            }
++            assert!(
++                context
++                    .read_allocation(allocation, 0, &mut destination)
++                    .is_err()
++            );
++            assert!(context.is_terminal());
++            assert_eq!(
++                context.allocation_admission_usage_v1(device).unwrap(),
++                original_usage
++            );
++            let backend = context.backend_mut_for_test_v1();
++            assert_eq!(observe_host(backend), original_host);
++            assert!(backend.terminal);
++            assert_eq!(backend.allocations.len(), 1);
++            let driver = backend.scripted_sdma.as_ref().unwrap();
++            assert_eq!(driver.remaining_steps(), 1);
++            assert_eq!(driver.live_owner_count(), 1);
++            assert_eq!(driver.unexpected_drops(), 0);
++            disarm_scripted_drop_after_inspection_v1(backend);
++            drop(ManuallyDrop::into_inner(context));
++        }
++    }
++}
++
++#[test]
++fn sdma_host_read_and_synchronous_roots_abort_on_unfinished_drop() {
++    use std::os::unix::process::ExitStatusExt;
++    const CHILD: &str = "FE2O3_TEST_RUNTIME_SYNC_READ_DROP";
++    const TEST: &str = "kfd_backend::tests::sdma_host_read_tests::sdma_host_read_and_synchronous_roots_abort_on_unfinished_drop";
++    if let Some(mode) = std::env::var_os(CHILD) {
++        rustix::process::setrlimit(
++            rustix::process::Resource::Core,
++            rustix::process::Rlimit {
++                current: Some(0),
++                maximum: Some(0),
++            },
++        )
++        .unwrap();
++        let (mut backend, _, _, device) = fixture(8, []);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        if mode == "read" {
++            let driver = backend.scripted_sdma.take();
++            assert!(
++                catch_unwind(AssertUnwindSafe(
++                    || backend.readback_and_recycle_transient_sdma_v1(stage, &mut [0; 8])
++                ))
++                .is_err()
++            );
++            backend.scripted_sdma = driver;
++        } else {
++            backend.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(
++                crate::kfd_backend::sdma_synchronous::SynchronousSdmaCustodyV1 {
++                    allocation: device,
++                    direction: Gfx942PersistentSdmaDirectionV1::HostToDevice,
++                    request: DirectionalSdmaCopyRequestV1 {
++                        host_offset: 0,
++                        device_offset: 0,
++                        copy_bytes: 8,
++                    },
++                    operation: "upload",
++                    shell: None,
++                    phase: crate::kfd_backend::sdma_synchronous::SynchronousSdmaPhaseV1::Host(
++                        stage,
++                    ),
++                },
++            ));
++            assert!(!backend.terminal);
++        }
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++            3
++        );
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++            0
++        );
++        eprintln!("retained copy/read owner; dropping unfinished backend");
++        drop(backend);
++        panic!("unfinished copy/read Drop returned");
++    }
++    for mode in ["read", "synchronous"] {
++        let output = std::process::Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", TEST, "--nocapture"])
++            .env(CHILD, mode)
++            .output()
++            .unwrap();
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        assert_eq!(output.status.signal(), Some(6), "{stderr}");
++        assert!(stderr.contains("retained copy/read owner; dropping unfinished backend"));
++        assert!(!stderr.contains("unfinished copy/read Drop returned"));
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_synchronous_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_synchronous_tests.rs
+new file mode 100644
+index 000000000..a1d4b8603
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_synchronous_tests.rs
+@@ -0,0 +1,972 @@
++use super::sdma_host_write_tests::{discard_scripted_fixture, fixture, host_observation};
++use super::*;
++use crate::kfd_backend::kfd_backend_sdma_seam::{ScriptedTerminalCustodyV1, SdmaOwnerDiagnosticV1};
++use crate::kfd_backend::sdma_synchronous::{SynchronousSdmaCustodyV1, SynchronousSdmaPhaseV1};
++use std::mem::ManuallyDrop;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++type PairFacts = (u64, Vec<u8>, (u64, Vec<u8>, Option<[u8; 32]>));
++
++fn pair_facts(pair: &DirectionalSdmaPairOwnerV1) -> PairFacts {
++    (
++        pair.device.scripted_owner_id().unwrap(),
++        pair.device.scripted_bytes().unwrap().to_vec(),
++        host_observation(&pair.host),
++    )
++}
++
++fn root(backend: &KfdRuntimeBackendV1) -> &SynchronousSdmaCustodyV1 {
++    let Some(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(root)) = &backend.terminal_sdma_custody
++    else {
++        panic!("synchronous root must survive");
++    };
++    root
++}
++
++fn pending(owner: &DirectionalSdmaSubmissionOwnerV1) -> &DirectionalSdmaPairOwnerV1 {
++    match owner {
++        DirectionalSdmaSubmissionOwnerV1::Scripted(submission) => submission.pair(),
++        _ => panic!("scripted pending"),
++    }
++}
++
++fn completed_pair(owner: &DirectionalSdmaCompletedOwnerV1) -> &DirectionalSdmaPairOwnerV1 {
++    match owner {
++        DirectionalSdmaCompletedOwnerV1::Scripted(completed) => completed.pair(),
++        _ => panic!("scripted completed"),
++    }
++}
++
++fn retained_pair(backend: &KfdRuntimeBackendV1) -> &DirectionalSdmaPairOwnerV1 {
++    match &root(backend).phase {
++        SynchronousSdmaPhaseV1::Pair(pair) | SynchronousSdmaPhaseV1::RetiredPair(pair) => pair,
++        SynchronousSdmaPhaseV1::Pending(owner) => pending(owner),
++        SynchronousSdmaPhaseV1::Completed(owner) => completed_pair(owner),
++        SynchronousSdmaPhaseV1::Terminal(SdmaTerminalCustodyV1::Scripted(custody)) => match custody
++        {
++            ScriptedTerminalCustodyV1::Pair(pair) => pair,
++            ScriptedTerminalCustodyV1::Submission(owner) => pending(owner),
++            ScriptedTerminalCustodyV1::Completed(owner) => completed_pair(owner),
++            _ => panic!("terminal copy pair"),
++        },
++        SynchronousSdmaPhaseV1::LowerOwned => {
++            let driver = backend.scripted_sdma.as_ref().unwrap();
++            if let Some(submission) = driver.wait_custody() {
++                submission.pair()
++            } else {
++                driver.retirement_custody().unwrap().pair()
++            }
++        }
++        _ => panic!("copy must retain both owners"),
++    }
++}
++
++fn device_box(backend: &KfdRuntimeBackendV1, device: u64) -> (usize, u64) {
++    let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&device].sdma_storage else {
++        panic!("indexed device")
++    };
++    (
++        &**owner as *const DirectionalSdmaDeviceOwnerV1 as usize,
++        owner.scripted_owner_id().unwrap(),
++    )
++}
++
++fn install(backend: &mut KfdRuntimeBackendV1, device: u64, host: SdmaBufferOwnerV1) {
++    backend.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Synchronous(
++        SynchronousSdmaCustodyV1 {
++            allocation: device,
++            direction: Gfx942PersistentSdmaDirectionV1::HostToDevice,
++            request: DirectionalSdmaCopyRequestV1 {
++                host_offset: 0,
++                device_offset: 0,
++                copy_bytes: 8,
++            },
++            operation: "upload",
++            shell: None,
++            phase: SynchronousSdmaPhaseV1::Host(host),
++        },
++    ));
++    backend.extract_synchronous_device_v1();
++}
++
++fn assert_terminal_inert(backend: &mut KfdRuntimeBackendV1, host: u64, device: u64) {
++    assert!(backend.terminal);
++    let observe = |backend: &KfdRuntimeBackendV1| {
++        let indexed = backend
++            .allocations
++            .ordinary_iter()
++            .map(|(&id, record)| {
++                (
++                    id,
++                    (record.device, record.kind, record.alignment),
++                    (
++                        Arc::clone(&record.bytes),
++                        record.bytes.as_ptr() as usize,
++                        record.content_sha256,
++                        record.last_full_host_write.clone(),
++                        record.native_dirty.clone(),
++                    ),
++                    (
++                        record.sdma_backed,
++                        record.sdma_initialized,
++                        record.sdma_shadow_dirty,
++                        record.scripted_three_binding_replay,
++                    ),
++                    format!("{:?}", record.sdma_storage),
++                )
++            })
++            .collect::<Vec<_>>();
++        let root = root(backend);
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        (
++            indexed,
++            pair_facts(retained_pair(backend)),
++            (
++                root.shell.as_ref().map(|shell| shell.as_ptr() as usize),
++                root.allocation,
++                root.direction,
++                root.request,
++                std::mem::discriminant(&root.phase),
++            ),
++            (backend.staged_context_bytes, backend.next_handle),
++            (
++                driver.remaining_steps(),
++                driver.live_owner_count(),
++                driver.wait_custody().is_some(),
++                driver.retirement_custody().is_some(),
++            ),
++            backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1()
++                .to_vec(),
++        )
++    };
++    let before = observe(backend);
++    assert!(matches!(
++        backend.allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    assert!(matches!(
++        backend.write_allocation_v1(device, 0, &[1]),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    assert!(matches!(
++        backend.read_allocation_v1(host, 0, &mut [0; 1]),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    assert!(matches!(
++        backend.release_allocation_v1(device),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    assert!(matches!(
++        backend.shutdown_native_v1(),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    assert!(matches!(
++        backend.finish_profiler_v1(),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    assert_eq!(observe(backend), before);
++    assert_eq!(
++        backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++        0
++    );
++}
++
++fn submit(outcome: ScriptedFailureModeV1) -> ScriptedSdmaStepV1 {
++    scripted_submit_step_v1(
++        Gfx942PersistentSdmaDirectionV1::HostToDevice,
++        0,
++        0,
++        8,
++        outcome,
++    )
++}
++
++fn completed() -> ScriptedSdmaStepV1 {
++    ScriptedSdmaStepV1::Wait(ScriptedExecutionOutcomeV1::Completed {
++        direction: None,
++        copy_bytes: None,
++    })
++}
++
++fn execute(
++    backend: &mut KfdRuntimeBackendV1,
++    device: u64,
++    stage: SdmaBufferOwnerV1,
++) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++    backend.execute_synchronous_directional_sdma_v1(
++        device,
++        Gfx942PersistentSdmaDirectionV1::HostToDevice,
++        stage,
++        0,
++        0,
++        8,
++        "upload",
++    )
++}
++
++#[test]
++fn sdma_synchronous_success_reuses_box_and_exact_offset_owners_in_both_directions() {
++    for direction in [
++        Gfx942PersistentSdmaDirectionV1::HostToDevice,
++        Gfx942PersistentSdmaDirectionV1::DeviceToHost,
++    ] {
++        let (backend, _, host, device) = fixture(
++            23,
++            [
++                ScriptedSdmaStepV1::Write {
++                    offset: 0,
++                    byte_len: 17,
++                },
++                scripted_submit_step_v1(direction, 3, 5, 12, ScriptedFailureModeV1::Success),
++                completed(),
++                ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let device_before = device_box(&backend, device);
++        let observe_neighbor = |backend: &KfdRuntimeBackendV1| {
++            let record = &backend.allocations[&host];
++            let KfdRuntimeSdmaStorageV1::Host(owner) = &record.sdma_storage else {
++                panic!()
++            };
++            (
++                (record.device, record.kind, record.alignment),
++                (
++                    Arc::clone(&record.bytes),
++                    record.bytes.as_ptr() as usize,
++                    record.content_sha256,
++                    record.last_full_host_write.clone(),
++                    record.native_dirty.clone(),
++                ),
++                host_observation(owner),
++                (
++                    record.sdma_backed,
++                    record.sdma_initialized,
++                    record.sdma_shadow_dirty,
++                    record.scripted_three_binding_replay,
++                ),
++            )
++        };
++        let neighbor = observe_neighbor(&backend);
++        let staged_bytes = backend.staged_context_bytes;
++        let mut stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(17);
++        backend
++            .directional_sdma_ops_v1()
++            .write_host(&mut stage, 0, &[0x71; 17])
++            .unwrap();
++        let stage_id = host_observation(&stage).0;
++        let (returned, allocations) = counted_allocations_for_test_v1(|| {
++            backend
++                .execute_synchronous_directional_sdma_v1(device, direction, stage, 3, 5, 12, "copy")
++        });
++        let returned = returned.unwrap();
++        assert_eq!(allocations, 0);
++        assert_eq!(device_box(&backend, device), device_before);
++        assert!(backend.terminal_sdma_custody.is_none());
++        assert!(!backend.terminal);
++        let mut host_bytes = vec![0x71; 17];
++        let mut device_bytes = vec![0; 23];
++        match direction {
++            Gfx942PersistentSdmaDirectionV1::HostToDevice => device_bytes[5..17].fill(0x71),
++            Gfx942PersistentSdmaDirectionV1::DeviceToHost => host_bytes[3..15].fill(0),
++        }
++        assert_eq!(host_observation(&returned), (stage_id, host_bytes, None));
++        let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&device].sdma_storage
++        else {
++            panic!()
++        };
++        assert_eq!(owner.scripted_bytes().unwrap(), device_bytes);
++        assert_eq!(observe_neighbor(&backend), neighbor);
++        assert_eq!(backend.staged_context_bytes, staged_bytes);
++        backend
++            .recycle_transient_sdma_buffer_v1(returned, "copy")
++            .unwrap();
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++            2
++        );
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++            0
++        );
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_retry_restores_original_box_before_cleanup_and_remains_healthy() {
++    let (backend, _, _, device) = fixture(
++        8,
++        [
++            submit(ScriptedFailureModeV1::Retryable),
++            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            submit(ScriptedFailureModeV1::Success),
++            completed(),
++            ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++        ],
++    );
++    let mut backend = ManuallyDrop::new(backend);
++    let original = device_box(&backend, device);
++    let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++    let Err(RuntimeBackendFailureV1::Rejected(error)) = execute(&mut backend, device, stage) else {
++        panic!("retryable publication")
++    };
++    assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Native);
++    assert_eq!(
++        error.detail(),
++        "KFD upload publication: scripted submission retryable"
++    );
++    assert_eq!(device_box(&backend, device), original);
++    assert!(!backend.terminal);
++    assert!(backend.terminal_sdma_custody.is_none());
++    let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++    let returned = execute(&mut backend, device, stage).unwrap();
++    assert_eq!(device_box(&backend, device), original);
++    backend
++        .recycle_transient_sdma_buffer_v1(returned, "upload")
++        .unwrap();
++    assert_eq!(
++        backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++        0
++    );
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn sdma_synchronous_timeout_and_teardown_retain_exact_pair_and_shell() {
++    for (outcome, phase, message) in [
++        (
++            ScriptedExecutionOutcomeV1::Pending,
++            "pending",
++            "KFD upload completion became ambiguous: scripted wait timed out",
++        ),
++        (
++            ScriptedExecutionOutcomeV1::Retryable,
++            "terminal",
++            "KFD upload execution became ambiguous: directional SDMA synchronous wait returned non-timeout retryable custody: scripted wait retryable",
++        ),
++        (
++            ScriptedExecutionOutcomeV1::ProcessTeardown,
++            "terminal",
++            "KFD upload execution became ambiguous: scripted wait teardown",
++        ),
++    ] {
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                submit(ScriptedFailureModeV1::Success),
++                ScriptedSdmaStepV1::Wait(outcome),
++                ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let (address, owner) = device_box(&backend, device);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        let expected = (owner, vec![0; 8], host_observation(&stage));
++        let Err(RuntimeBackendFailureV1::Terminal(error)) = execute(&mut backend, device, stage)
++        else {
++            panic!("terminal copy")
++        };
++        assert_eq!(error.detail(), message);
++        assert_eq!(
++            matches!(root(&backend).phase, SynchronousSdmaPhaseV1::Pending(_)),
++            phase == "pending"
++        );
++        assert_eq!(
++            root(&backend).shell.as_ref().unwrap().as_ptr() as usize,
++            address
++        );
++        assert_eq!(pair_facts(retained_pair(&backend)), expected);
++        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 1);
++        assert_terminal_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_metadata_corruption_precedes_retirement_and_keeps_completed_pair() {
++    let request = DirectionalSdmaCopyRequestV1 {
++        host_offset: 0,
++        device_offset: 0,
++        copy_bytes: 8,
++    };
++    for outcome in [
++        ScriptedExecutionOutcomeV1::Completed {
++            direction: Some(Gfx942PersistentSdmaDirectionV1::DeviceToHost),
++            copy_bytes: None,
++        },
++        ScriptedExecutionOutcomeV1::Completed {
++            direction: None,
++            copy_bytes: Some(7),
++        },
++        ScriptedExecutionOutcomeV1::CompletedWindow {
++            direction: None,
++            copy_bytes: None,
++            requests: Some(vec![DirectionalSdmaCopyRequestV1 {
++                host_offset: 1,
++                ..request
++            }]),
++        },
++        ScriptedExecutionOutcomeV1::CompletedWindow {
++            direction: None,
++            copy_bytes: None,
++            requests: Some(vec![DirectionalSdmaCopyRequestV1 {
++                device_offset: 1,
++                ..request
++            }]),
++        },
++        ScriptedExecutionOutcomeV1::CompletedWindow {
++            direction: None,
++            copy_bytes: None,
++            requests: Some(vec![]),
++        },
++        ScriptedExecutionOutcomeV1::CompletedWindow {
++            direction: None,
++            copy_bytes: None,
++            requests: Some(vec![request, request]),
++        },
++    ] {
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                submit(ScriptedFailureModeV1::Success),
++                ScriptedSdmaStepV1::Wait(outcome),
++                ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let (address, owner) = device_box(&backend, device);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        let expected = (owner, vec![0; 8], host_observation(&stage));
++        let Err(RuntimeBackendFailureV1::Terminal(error)) = execute(&mut backend, device, stage)
++        else {
++            panic!()
++        };
++        assert_eq!(
++            error.detail(),
++            "KFD upload completion metadata changed unexpectedly"
++        );
++        assert!(matches!(
++            root(&backend).phase,
++            SynchronousSdmaPhaseV1::Completed(_)
++        ));
++        assert_eq!(
++            root(&backend).shell.as_ref().unwrap().as_ptr() as usize,
++            address
++        );
++        assert_eq!(pair_facts(retained_pair(&backend)), expected);
++        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 1);
++        assert_terminal_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_retirement_rejection_teardown_and_panic_preserve_owners() {
++    for case in 0..3 {
++        let step = match case {
++            0 => ScriptedSdmaStepV1::RetireCompletedRetry,
++            1 => ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::ProcessTeardown),
++            _ => ScriptedSdmaStepV1::RetirePanic,
++        };
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                submit(ScriptedFailureModeV1::Success),
++                completed(),
++                step,
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let (address, owner) = device_box(&backend, device);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        let expected = (owner, vec![0; 8], host_observation(&stage));
++        match catch_unwind(AssertUnwindSafe(|| execute(&mut backend, device, stage))) {
++            Ok(Err(RuntimeBackendFailureV1::Terminal(error))) if case < 2 => {
++                assert_eq!(error.detail(), "KFD upload frontier retirement failed")
++            }
++            Err(payload) if case == 2 => assert_eq!(
++                payload.downcast_ref::<&str>(),
++                Some(&"scripted SDMA retirement panic")
++            ),
++            _ => panic!("retirement failure"),
++        }
++        match (&root(&backend).phase, case) {
++            (SynchronousSdmaPhaseV1::Completed(_), 0)
++            | (SynchronousSdmaPhaseV1::Terminal(_), 1)
++            | (SynchronousSdmaPhaseV1::LowerOwned, 2) => {}
++            _ => panic!("retained retirement phase"),
++        }
++        assert_eq!(
++            root(&backend).shell.as_ref().unwrap().as_ptr() as usize,
++            address
++        );
++        assert_eq!(pair_facts(retained_pair(&backend)), expected);
++        assert_terminal_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_driver_selection_and_actual_scripted_copy_panics_keep_custody() {
++    for missing_driver in [true, false] {
++        let count = if missing_driver { 8 } else { 9 };
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                scripted_submit_step_v1(
++                    Gfx942PersistentSdmaDirectionV1::HostToDevice,
++                    0,
++                    0,
++                    count,
++                    ScriptedFailureModeV1::Success,
++                ),
++                completed(),
++                ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let (address, owner) = device_box(&backend, device);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        let expected = (owner, vec![0; 8], host_observation(&stage));
++        let driver = if missing_driver {
++            backend.scripted_sdma.take()
++        } else {
++            None
++        };
++        // Oversized copying deliberately bypasses public range admission at this private seam.
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.execute_synchronous_directional_sdma_v1(
++                device,
++                Gfx942PersistentSdmaDirectionV1::HostToDevice,
++                stage,
++                0,
++                0,
++                count,
++                "upload",
++            )
++        }));
++        assert!(result.is_err());
++        if missing_driver {
++            backend.scripted_sdma = driver;
++        } else {
++            assert_eq!(
++                backend
++                    .scripted_sdma
++                    .as_ref()
++                    .unwrap()
++                    .wait_custody()
++                    .unwrap()
++                    .requests()[0]
++                    .copy_bytes,
++                9
++            );
++        }
++        assert_eq!(pair_facts(retained_pair(&backend)), expected);
++        assert_eq!(
++            root(&backend).shell.as_ref().unwrap().as_ptr() as usize,
++            address
++        );
++        assert_terminal_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_restoration_rejects_changed_slots_before_recycling_or_diagnostics() {
++    for case in 0..6 {
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                submit(ScriptedFailureModeV1::Retryable),
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let (address, owner) = device_box(&backend, device);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        let expected = (owner, vec![0; 8], host_observation(&stage));
++        install(&mut backend, device, stage);
++        let result = backend.run_synchronous_lower_v1();
++        let removed = if case == 0 {
++            backend.allocations.remove(&device)
++        } else {
++            None
++        };
++        match case {
++            1 => {
++                backend.allocations.get_mut(&device).unwrap().kind =
++                    RuntimeMemoryKindV1::HostVisible
++            }
++            2 => {
++                let replacement = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++                backend.allocations.get_mut(&device).unwrap().sdma_storage =
++                    KfdRuntimeSdmaStorageV1::Host(replacement);
++            }
++            3 => backend.synchronous_copy_root_v1().allocation = u64::MAX,
++            4 => {
++                backend.allocations.get_mut(&device).unwrap().sdma_storage =
++                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(827))
++            }
++            5 => {
++                let replacement = backend.scripted_sdma.as_ref().unwrap().test_device_owner(8);
++                backend.allocations.get_mut(&device).unwrap().sdma_storage =
++                    KfdRuntimeSdmaStorageV1::Device(Box::new(replacement));
++            }
++            _ => {}
++        }
++        let replacement_host = if case == 2 {
++            let KfdRuntimeSdmaStorageV1::Host(owner) = &backend.allocations[&device].sdma_storage
++            else {
++                panic!()
++            };
++            Some(host_observation(owner))
++        } else {
++            None
++        };
++        let replacement_device = if case == 5 {
++            Some(device_box(&backend, device))
++        } else {
++            None
++        };
++        let Err(RuntimeBackendFailureV1::Terminal(error)) =
++            backend.settle_synchronous_execution_v1(result, |_| panic!("diagnostic must not run"))
++        else {
++            panic!()
++        };
++        assert_eq!(
++            error.detail(),
++            "synchronous directional SDMA restoration slot changed unexpectedly"
++        );
++        assert_eq!(pair_facts(retained_pair(&backend)), expected);
++        assert_eq!(
++            root(&backend).shell.as_ref().unwrap().as_ptr() as usize,
++            address
++        );
++        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 1);
++        if let Some(expected) = replacement_host {
++            let KfdRuntimeSdmaStorageV1::Host(owner) = &backend.allocations[&device].sdma_storage
++            else {
++                panic!()
++            };
++            assert_eq!(host_observation(owner), expected);
++        }
++        if let Some(expected) = replacement_device {
++            assert_eq!(device_box(&backend, device), expected);
++            let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&device].sdma_storage
++            else {
++                panic!()
++            };
++            assert_eq!(owner.scripted_bytes().unwrap(), &[0; 8]);
++        }
++        assert_terminal_inert(&mut backend, host, device);
++        drop(removed);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_typed_diagnostic_panic_keeps_first_payload_and_retained_terminal_owners() {
++    for teardown in [false, true] {
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                submit(ScriptedFailureModeV1::Success),
++                ScriptedSdmaStepV1::Wait(if teardown {
++                    ScriptedExecutionOutcomeV1::ProcessTeardown
++                } else {
++                    ScriptedExecutionOutcomeV1::Pending
++                }),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++        install(&mut backend, device, stage);
++        let expected = pair_facts(retained_pair(&backend));
++        let detail = SdmaOwnerDiagnosticV1::Native(
++            fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract("typed synchronous cause"),
++        );
++        let failure = match backend.run_synchronous_lower_v1() {
++            Err(DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
++                submission,
++                ..
++            }) if !teardown => DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
++                detail,
++                submission,
++            },
++            Err(DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
++                custody, ..
++            }) if teardown => {
++                DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown { detail, custody }
++            }
++            _ => panic!("expected exact scripted failure"),
++        };
++        let payload = Box::new(517_u64);
++        let address = &*payload as *const u64;
++        let caught = catch_unwind(AssertUnwindSafe(|| {
++            backend.settle_synchronous_execution_v1(Err(failure), |detail| {
++                assert!(matches!(
++                    detail,
++                    SdmaOwnerDiagnosticV1::Native(
++                        fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                            "typed synchronous cause"
++                        )
++                    )
++                ));
++                std::panic::resume_unwind(payload)
++            })
++        }))
++        .unwrap_err()
++        .downcast::<u64>()
++        .unwrap();
++        assert_eq!(&*caught as *const u64, address);
++        assert_eq!(*caught, 517);
++        assert_eq!(pair_facts(retained_pair(&backend)), expected);
++        assert_terminal_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_synchronous_normalizes_genuine_h2d_ready_without_changing_device_identity() {
++    let len = HOST_VISIBLE_MEMORY_PAGE_BYTES_V1 as usize;
++    let mut steps = vec![
++        ScriptedSdmaStepV1::Write {
++            offset: 0,
++            byte_len: len,
++        },
++        scripted_submit_step_v1(
++            Gfx942PersistentSdmaDirectionV1::HostToDevice,
++            0,
++            0,
++            len as u32,
++            ScriptedFailureModeV1::Success,
++        ),
++        ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
++            direction: None,
++            copy_bytes: None,
++        }),
++    ];
++    steps.extend([
++        scripted_submit_step_v1(
++            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
++            0,
++            0,
++            8,
++            ScriptedFailureModeV1::Success,
++        ),
++        completed(),
++        ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++        ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++    ]);
++    let (backend, stream, host, device) = fixture(len, steps);
++    let mut backend = ManuallyDrop::new(backend);
++    let original = device_box(&backend, device).1;
++    backend
++        .write_allocation_v1(host, 0, &vec![0x5a; len])
++        .unwrap();
++    let (source, destination) = scripted_copy_regions_v1(host, device, len as u64);
++    let submission = backend
++        .copy_async_v1(stream, source, destination, &[])
++        .unwrap();
++    assert_eq!(
++        backend.poll_v1(submission).unwrap(),
++        BackendPollV1::Succeeded
++    );
++    assert!(matches!(
++        backend.allocations[&device].sdma_storage,
++        KfdRuntimeSdmaStorageV1::H2dReady(_)
++    ));
++    let digest = backend.allocations[&device].content_sha256;
++    let shadow = Arc::clone(&backend.allocations[&device].bytes);
++    let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++    let returned = backend
++        .execute_synchronous_directional_sdma_v1(
++            device,
++            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
++            stage,
++            0,
++            0,
++            8,
++            "download",
++        )
++        .unwrap();
++    assert_eq!(device_box(&backend, device).1, original);
++    assert_eq!(host_observation(&returned).1, vec![0x5a; 8]);
++    assert_eq!(backend.allocations[&device].content_sha256, digest);
++    assert!(Arc::ptr_eq(&backend.allocations[&device].bytes, &shadow));
++    backend
++        .recycle_transient_sdma_buffer_v1(returned, "download")
++        .unwrap();
++    assert_eq!(
++        backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++        0
++    );
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn sdma_synchronous_busy_and_publication_rejection_recycle_before_original_error() {
++    for busy in [false, true] {
++        for recycle in [
++            ScriptedRecycleOutcomeV1::Success,
++            ScriptedRecycleOutcomeV1::Recovered,
++            ScriptedRecycleOutcomeV1::Panic,
++        ] {
++            let mut steps = Vec::new();
++            if !busy {
++                steps.push(submit(ScriptedFailureModeV1::Retryable));
++            }
++            steps.push(ScriptedSdmaStepV1::Recycle(recycle));
++            let (backend, _, host, device) = fixture(8, steps);
++            let mut backend = ManuallyDrop::new(backend);
++            let original = device_box(&backend, device);
++            let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++            let expected = host_observation(&stage);
++            let allocation = if busy { u64::MAX } else { device };
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                execute(&mut backend, allocation, stage)
++            }));
++            match recycle {
++                ScriptedRecycleOutcomeV1::Success => {
++                    let Err(RuntimeBackendFailureV1::Rejected(error)) = result.unwrap() else {
++                        panic!()
++                    };
++                    assert_eq!(
++                        error.kind(),
++                        if busy {
++                            KfdRuntimeBackendErrorKindV1::Busy
++                        } else {
++                            KfdRuntimeBackendErrorKindV1::Native
++                        }
++                    );
++                    assert_eq!(
++                        error.detail(),
++                        if busy {
++                            "persistent device allocation is retained by pending work"
++                        } else {
++                            "KFD upload publication: scripted submission retryable"
++                        }
++                    );
++                    assert!(!backend.terminal);
++                    assert!(backend.terminal_sdma_custody.is_none());
++                    assert_eq!(
++                        backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++                        2
++                    );
++                }
++                ScriptedRecycleOutcomeV1::Recovered => {
++                    let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                        panic!()
++                    };
++                    assert_eq!(
++                        error.detail(),
++                        "KFD upload transient release became ambiguous: scripted recycle recovered"
++                    );
++                    assert_eq!(
++                        host_observation(super::sdma_host_write_tests::retained_host(&backend)),
++                        expected
++                    );
++                }
++                ScriptedRecycleOutcomeV1::Panic => {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<&str>(),
++                        Some(&"scripted recycle panic")
++                    );
++                    let retained = backend
++                        .scripted_sdma
++                        .as_ref()
++                        .unwrap()
++                        .recycle_custody()
++                        .unwrap()
++                        .observation();
++                    assert_eq!((retained.0, retained.1.to_vec(), retained.2), expected);
++                }
++                _ => unreachable!(),
++            }
++            assert_eq!(device_box(&backend, device), original);
++            assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 0);
++            assert_eq!(
++                backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++                0
++            );
++            if recycle != ScriptedRecycleOutcomeV1::Success {
++                super::sdma_host_write_tests::assert_terminal_retries_inert(
++                    &mut backend,
++                    host,
++                    device,
++                );
++            }
++            discard_scripted_fixture(backend);
++        }
++    }
++}
++
++#[test]
++fn sdma_synchronous_publication_diagnostic_panic_follows_restoration_and_cleanup() {
++    let (backend, _, host, device) = fixture(
++        8,
++        [
++            submit(ScriptedFailureModeV1::Retryable),
++            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++        ],
++    );
++    let mut backend = ManuallyDrop::new(backend);
++    let original = device_box(&backend, device);
++    let stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
++    install(&mut backend, device, stage);
++    let Err(DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
++        pair, ..
++    }) = backend.run_synchronous_lower_v1()
++    else {
++        panic!()
++    };
++    let payload = Box::new(619_u64);
++    let address = &*payload as *const u64;
++    let caught = catch_unwind(AssertUnwindSafe(|| {
++        backend.settle_synchronous_execution_v1(
++            Err(
++                DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
++                    detail: SdmaOwnerDiagnosticV1::Native(
++                        fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                            "typed publication cause",
++                        ),
++                    ),
++                    pair,
++                },
++            ),
++            |detail| {
++                assert!(matches!(
++                    detail,
++                    SdmaOwnerDiagnosticV1::Native(
++                        fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                            "typed publication cause"
++                        )
++                    )
++                ));
++                std::panic::resume_unwind(payload)
++            },
++        )
++    }))
++    .unwrap_err()
++    .downcast::<u64>()
++    .unwrap();
++    assert_eq!(&*caught as *const u64, address);
++    assert_eq!(*caught, 619);
++    assert_eq!(device_box(&backend, device), original);
++    assert!(backend.terminal_sdma_custody.is_none());
++    assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 0);
++    assert_eq!(
++        backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++        2
++    );
++    super::sdma_host_write_tests::assert_terminal_retries_inert(&mut backend, host, device);
++    discard_scripted_fixture(backend);
++}

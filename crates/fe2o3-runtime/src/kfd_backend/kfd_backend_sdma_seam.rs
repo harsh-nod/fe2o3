@@ -493,16 +493,32 @@ pub(super) enum SdmaTransitionFailureV1<R, D = String> {
 
 pub(super) enum SdmaOwnerDiagnosticV1 {
     Native(ComputeAqlQueueSessionErrorV1),
+    Message(String),
+    Static(&'static str),
+    UnexpectedRetryable(ComputeAqlQueueSessionErrorV1),
     #[cfg(test)]
     Scripted(String),
+    #[cfg(test)]
+    UnexpectedScriptedRetryable(String),
 }
 
 impl core::fmt::Display for SdmaOwnerDiagnosticV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Native(error) => core::fmt::Display::fmt(error, f),
+            Self::Message(detail) => f.write_str(detail),
+            Self::Static(detail) => f.write_str(detail),
+            Self::UnexpectedRetryable(error) => write!(
+                f,
+                "directional SDMA synchronous wait returned non-timeout retryable custody: {error}"
+            ),
             #[cfg(test)]
             Self::Scripted(detail) => f.write_str(detail),
+            #[cfg(test)]
+            Self::UnexpectedScriptedRetryable(detail) => write!(
+                f,
+                "directional SDMA synchronous wait returned non-timeout retryable custody: {detail}"
+            ),
         }
     }
 }
@@ -520,15 +536,15 @@ pub(super) enum DirectionalSdmaExecutionFailureV1 {
 
 pub(super) enum DirectionalSdmaSynchronousExecutionFailureV1 {
     RetryableBeforePublication {
-        detail: String,
+        detail: SdmaOwnerDiagnosticV1,
         pair: DirectionalSdmaPairOwnerV1,
     },
     RetryableTimeout {
-        detail: String,
+        detail: SdmaOwnerDiagnosticV1,
         submission: DirectionalSdmaSubmissionOwnerV1,
     },
     ProcessTeardown {
-        detail: String,
+        detail: SdmaOwnerDiagnosticV1,
         custody: SdmaTerminalCustodyV1,
     },
 }
@@ -592,16 +608,19 @@ pub(super) enum DirectionalSdmaOpsV1<'a> {
     Scripted(&'a mut ScriptedSdmaDriverV1),
 }
 
-fn retire_native_directional_completed_v1(
+pub(super) fn retire_native_directional_completed_v1(
     (device, host, frontier): fe2o3_kfd::Gfx942PersistentComputeReadyPartsV1,
-) -> Result<DirectionalSdmaPairOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>> {
+) -> Result<
+    DirectionalSdmaPairOwnerV1,
+    SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1, SdmaOwnerDiagnosticV1>,
+> {
     match device.retire_settled_frontier_v1(frontier) {
         Ok(device) => Ok(DirectionalSdmaPairOwnerV1 {
             device: DirectionalSdmaDeviceOwnerV1::Native(device),
             host: SdmaBufferOwnerV1::Native(host),
         }),
         Err(failure) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-            detail: "frontier retirement failed".to_owned(),
+            detail: SdmaOwnerDiagnosticV1::Static("frontier retirement failed"),
             custody: SdmaTerminalCustodyV1::Native(
                 NativeDirectionalSdmaTerminalCustodyV1::Retirement { failure, host },
             ),
@@ -1068,7 +1087,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         if let Err(detail) = validate_window_requests_v1(core::slice::from_ref(&request)) {
             return Err(
                 DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
-                    detail,
+                    detail: SdmaOwnerDiagnosticV1::Message(detail),
                     pair,
                 },
             );
@@ -1101,7 +1120,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                             allocation,
                             host,
                         } => DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
-                            detail: error.to_string(),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                             pair: DirectionalSdmaPairOwnerV1 {
                                 device: DirectionalSdmaDeviceOwnerV1::Native(allocation),
                                 host: SdmaBufferOwnerV1::Native(host),
@@ -1110,7 +1129,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                         Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::ProcessTeardown(
                             custody,
                         ) => DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                            detail: error.to_string(),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                             custody: SdmaTerminalCustodyV1::Native(
                                 NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(custody),
                             ),
@@ -1129,7 +1148,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                 && is_timeout =>
                         {
                             DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
-                                detail: error.to_string(),
+                                detail: SdmaOwnerDiagnosticV1::Native(error),
                                 submission: DirectionalSdmaSubmissionOwnerV1::NativeSingle {
                                     submission,
                                     host_offset: request.host_offset,
@@ -1142,9 +1161,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                 && submission.copy_bytes() == request.copy_bytes =>
                         {
                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                                detail: format!(
-                                    "directional SDMA synchronous wait returned non-timeout retryable custody: {error}"
-                                ),
+                                detail: SdmaOwnerDiagnosticV1::UnexpectedRetryable(error),
                                 custody: SdmaTerminalCustodyV1::Native(
                                     NativeDirectionalSdmaTerminalCustodyV1::Published(
                                         DirectionalSdmaSubmissionOwnerV1::NativeSingle {
@@ -1158,8 +1175,9 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                         }
                         Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission) => {
                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                                detail: "directional SDMA synchronous wait metadata changed unexpectedly"
-                                    .to_owned(),
+                                detail: SdmaOwnerDiagnosticV1::Static(
+                                    "directional SDMA synchronous wait metadata changed unexpectedly",
+                                ),
                                 custody: SdmaTerminalCustodyV1::Native(
                                     NativeDirectionalSdmaTerminalCustodyV1::Published(
                                         DirectionalSdmaSubmissionOwnerV1::NativeSingle {
@@ -1174,7 +1192,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                         Gfx942DirectionalPersistentSdmaExecutionCustodyV1::ProcessTeardown(
                             custody,
                         ) => DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                            detail: error.to_string(),
+                            detail: SdmaOwnerDiagnosticV1::Native(error),
                             custody: SdmaTerminalCustodyV1::Native(
                                 NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(custody),
                             ),
@@ -1199,7 +1217,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     Err(SdmaTransitionFailureV1::Retryable { detail, custody }) => {
                         return Err(
                             DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
-                                detail,
+                                detail: SdmaOwnerDiagnosticV1::Scripted(detail),
                                 pair: custody,
                             },
                         );
@@ -1207,7 +1225,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     Err(SdmaTransitionFailureV1::ProcessTeardown { detail, custody }) => {
                         return Err(
                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                                detail,
+                                detail: SdmaOwnerDiagnosticV1::Scripted(detail),
                                 custody,
                             },
                         );
@@ -1217,16 +1235,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     Ok(DirectionalSdmaWaitV1::Completed(completed)) => Ok(completed),
                     Ok(DirectionalSdmaWaitV1::Timeout(submission)) => Err(
                         DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
-                            detail: "scripted wait timed out".to_owned(),
+                            detail: SdmaOwnerDiagnosticV1::Static("scripted wait timed out"),
                             submission,
                         },
                     ),
                     Err(DirectionalSdmaExecutionFailureV1::Retryable { detail, submission }) => {
                         Err(
                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                                detail: format!(
-                                    "directional SDMA synchronous wait returned non-timeout retryable custody: {detail}"
-                                ),
+                                detail: SdmaOwnerDiagnosticV1::UnexpectedScriptedRetryable(detail),
                                 custody: scripted_mismatch_submission(
                                     submission,
                                     "synchronous non-timeout retryable wait",
@@ -1237,7 +1253,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown { detail, custody }) => {
                         Err(
                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                                detail,
+                                detail: SdmaOwnerDiagnosticV1::Scripted(detail),
                                 custody,
                             },
                         )
@@ -1247,8 +1263,9 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
             #[cfg(test)]
             (_, device, host) => Err(
                 DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                    detail: "directional SDMA owner/driver mismatch during synchronous execution"
-                        .to_owned(),
+                    detail: SdmaOwnerDiagnosticV1::Static(
+                        "directional SDMA owner/driver mismatch during synchronous execution",
+                    ),
                     custody: scripted_mismatch_pair(device, host, "synchronous execution"),
                 },
             ),
@@ -1598,8 +1615,10 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
     pub(super) fn retire(
         &mut self,
         completed: DirectionalSdmaCompletedOwnerV1,
-    ) -> Result<DirectionalSdmaPairOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>>
-    {
+    ) -> Result<
+        DirectionalSdmaPairOwnerV1,
+        SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1, SdmaOwnerDiagnosticV1>,
+    > {
         match (self, completed) {
             (Self::Native(_), DirectionalSdmaCompletedOwnerV1::NativeSingle { completed, .. }) => {
                 retire_native_directional_completed_v1(completed.into_parts())
@@ -1609,11 +1628,26 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
             }
             #[cfg(test)]
             (Self::Scripted(driver), DirectionalSdmaCompletedOwnerV1::Scripted(completed)) => {
-                driver.retire(completed)
+                driver.retire(completed).map_err(|failure| match failure {
+                    SdmaTransitionFailureV1::Retryable { detail, custody } => {
+                        SdmaTransitionFailureV1::Retryable {
+                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                            custody,
+                        }
+                    }
+                    SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
+                        SdmaTransitionFailureV1::ProcessTeardown {
+                            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+                            custody,
+                        }
+                    }
+                })
             }
             #[cfg(test)]
             (_, completed) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-                detail: "directional SDMA owner/driver mismatch during retirement".to_owned(),
+                detail: SdmaOwnerDiagnosticV1::Static(
+                    "directional SDMA owner/driver mismatch during retirement",
+                ),
                 custody: scripted_mismatch_completed(completed, "retirement"),
             }),
         }
@@ -2086,6 +2120,16 @@ mod scripted {
             offset: u64,
             byte_len: u64,
         },
+        ReadFault {
+            offset: u64,
+            byte_len: u64,
+            panic: bool,
+        },
+        ReadLength {
+            offset: u64,
+            byte_len: u64,
+            returned_len: usize,
+        },
         Promote(ScriptedFailureModeV1),
         PromotePanic,
         PromoteComputeReady(ScriptedFailureModeV1),
@@ -2112,6 +2156,8 @@ mod scripted {
         Poll(ScriptedExecutionOutcomeV1),
         Wait(ScriptedExecutionOutcomeV1),
         Retire(ScriptedFailureModeV1),
+        RetirePanic,
+        RetireCompletedRetry,
         PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1),
         WaitSameDevice(ScriptedSameDeviceExecutionOutcomeV1),
         RetireSameDevice(ScriptedFailureModeV1),
@@ -2242,6 +2288,22 @@ mod scripted {
         pub(super) packet_count: usize,
     }
 
+    impl ScriptedSubmissionOwnerV1 {
+        pub(crate) fn pair(&self) -> &DirectionalSdmaPairOwnerV1 {
+            &self.pair
+        }
+
+        pub(crate) fn requests(&self) -> &[DirectionalSdmaCopyRequestV1] {
+            self.requests.as_slice()
+        }
+    }
+
+    impl ScriptedCompletedOwnerV1 {
+        pub(crate) fn pair(&self) -> &DirectionalSdmaPairOwnerV1 {
+            &self.pair
+        }
+    }
+
     pub(super) enum ScriptedPersistentComputeReadyFailureV1 {
         Recovered(DirectionalSdmaPairOwnerV1),
         ForeignQueue {
@@ -2287,6 +2349,8 @@ mod scripted {
         promotion_custody: Option<ScriptedBufferOwnerV1>,
         demotion_custody: Option<ScriptedDeviceOwnerV1>,
         recycle_custody: Option<ScriptedBufferOwnerV1>,
+        wait_custody: Option<ScriptedSubmissionOwnerV1>,
+        retirement_custody: Option<ScriptedCompletedOwnerV1>,
     }
 
     impl core::fmt::Debug for ScriptedSdmaDriverV1 {
@@ -2308,6 +2372,8 @@ mod scripted {
                 promotion_custody: None,
                 demotion_custody: None,
                 recycle_custody: None,
+                wait_custody: None,
+                retirement_custody: None,
             }
         }
 
@@ -2331,6 +2397,14 @@ mod scripted {
 
         pub(crate) fn recycle_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
             self.recycle_custody.as_ref()
+        }
+
+        pub(crate) fn wait_custody(&self) -> Option<&ScriptedSubmissionOwnerV1> {
+            self.wait_custody.as_ref()
+        }
+
+        pub(crate) fn retirement_custody(&self) -> Option<&ScriptedCompletedOwnerV1> {
+            self.retirement_custody.as_ref()
         }
 
         pub(crate) fn demotion_custody(&self) -> Option<(u64, &[u8])> {
@@ -2556,13 +2630,25 @@ mod scripted {
             if !self.owns_buffer(buffer) {
                 return Err("scripted SDMA read owner belongs to another driver".to_owned());
             }
-            match self.pop()? {
+            let (fault, returned_len) = match self.pop()? {
                 ScriptedSdmaStepV1::Read {
                     offset: expected_offset,
                     byte_len: expected_len,
-                } if expected_offset == offset && expected_len == byte_len => {}
+                } if expected_offset == offset && expected_len == byte_len => (None, None),
+                ScriptedSdmaStepV1::ReadFault {
+                    offset: expected_offset,
+                    byte_len: expected_len,
+                    panic,
+                } if expected_offset == offset && expected_len == byte_len => (Some(panic), None),
+                ScriptedSdmaStepV1::ReadLength {
+                    offset: expected_offset,
+                    byte_len: expected_len,
+                    returned_len,
+                } if expected_offset == offset && expected_len == byte_len => {
+                    (None, Some(returned_len))
+                }
                 step => return Err(format!("scripted SDMA read mismatch: {step:?}")),
-            }
+            };
             if buffer.kind != ScriptedBufferKindV1::Host {
                 return Err("scripted SDMA read requires host storage".to_owned());
             }
@@ -2572,6 +2658,15 @@ mod scripted {
                 .checked_add(len)
                 .filter(|end| *end <= buffer.bytes.len())
                 .ok_or("scripted read exceeds buffer")?;
+            if let Some(panic) = fault {
+                if panic {
+                    std::panic::panic_any("scripted SDMA host read panic");
+                }
+                return Err("scripted SDMA host read failure".to_owned());
+            }
+            if let Some(returned_len) = returned_len {
+                return Ok(vec![0x6b; returned_len].into_boxed_slice());
+            }
             Ok(buffer.bytes[start..end].into())
         }
 
@@ -2891,9 +2986,11 @@ mod scripted {
             &mut self,
             submission: ScriptedSubmissionOwnerV1,
         ) -> Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1> {
-            if !self.owns_submission(&submission) {
+            assert!(self.wait_custody.is_none());
+            self.wait_custody = Some(submission);
+            if !self.owns_submission(self.wait_custody.as_ref().unwrap()) {
                 return Err(scripted_submission_mismatch(
-                    submission,
+                    self.wait_custody.take().unwrap(),
                     "wait owner belongs to another driver".to_owned(),
                 ));
             }
@@ -2901,13 +2998,18 @@ mod scripted {
                 Ok(ScriptedSdmaStepV1::Wait(outcome)) => outcome,
                 Ok(step) => {
                     return Err(scripted_submission_mismatch(
-                        submission,
+                        self.wait_custody.take().unwrap(),
                         format!("wait mismatch: {step:?}"),
                     ));
                 }
-                Err(detail) => return Err(scripted_submission_mismatch(submission, detail)),
+                Err(detail) => {
+                    return Err(scripted_submission_mismatch(
+                        self.wait_custody.take().unwrap(),
+                        detail,
+                    ));
+                }
             };
-            match execute_outcome(submission, outcome, "wait")? {
+            match execute_outcome_in_place(&mut self.wait_custody, outcome, "wait")? {
                 DirectionalSdmaPollV1::Completed(completed) => {
                     Ok(DirectionalSdmaWaitV1::Completed(completed))
                 }
@@ -2956,30 +3058,50 @@ mod scripted {
             DirectionalSdmaPairOwnerV1,
             SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>,
         > {
-            if !self.owns_completed(&completed) {
+            assert!(self.retirement_custody.is_none());
+            self.retirement_custody = Some(completed);
+            if !self.owns_completed(self.retirement_custody.as_ref().unwrap()) {
                 return Err(scripted_completed_mismatch(
-                    completed,
+                    self.retirement_custody.take().unwrap(),
                     "retirement owner belongs to another driver".to_owned(),
                 ));
             }
             let outcome = match self.pop() {
                 Ok(ScriptedSdmaStepV1::Retire(outcome)) => outcome,
+                Ok(ScriptedSdmaStepV1::RetirePanic) => {
+                    std::panic::panic_any("scripted SDMA retirement panic")
+                }
+                Ok(ScriptedSdmaStepV1::RetireCompletedRetry) => {
+                    return Err(SdmaTransitionFailureV1::Retryable {
+                        detail: "scripted retirement retryable".to_owned(),
+                        custody: DirectionalSdmaCompletedOwnerV1::Scripted(
+                            self.retirement_custody.take().unwrap(),
+                        ),
+                    });
+                }
                 Ok(step) => {
                     return Err(scripted_completed_mismatch(
-                        completed,
+                        self.retirement_custody.take().unwrap(),
                         format!("retirement mismatch: {step:?}"),
                     ));
                 }
-                Err(detail) => return Err(scripted_completed_mismatch(completed, detail)),
+                Err(detail) => {
+                    return Err(scripted_completed_mismatch(
+                        self.retirement_custody.take().unwrap(),
+                        detail,
+                    ));
+                }
             };
             match outcome {
-                ScriptedFailureModeV1::Success => Ok(completed.pair),
+                ScriptedFailureModeV1::Success => Ok(self.retirement_custody.take().unwrap().pair),
                 ScriptedFailureModeV1::Retryable | ScriptedFailureModeV1::ProcessTeardown => {
                     Err(SdmaTransitionFailureV1::ProcessTeardown {
                         detail: "scripted retirement failure".to_owned(),
                         custody: SdmaTerminalCustodyV1::Scripted(
                             ScriptedTerminalCustodyV1::Completed(
-                                DirectionalSdmaCompletedOwnerV1::Scripted(completed),
+                                DirectionalSdmaCompletedOwnerV1::Scripted(
+                                    self.retirement_custody.take().unwrap(),
+                                ),
                             ),
                         ),
                     })
@@ -3175,14 +3297,26 @@ mod scripted {
         outcome: ScriptedExecutionOutcomeV1,
         operation: &'static str,
     ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
+        execute_outcome_in_place(&mut Some(submission), outcome, operation)
+    }
+
+    fn execute_outcome_in_place(
+        slot: &mut Option<ScriptedSubmissionOwnerV1>,
+        outcome: ScriptedExecutionOutcomeV1,
+        operation: &'static str,
+    ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
         match outcome {
             ScriptedExecutionOutcomeV1::Pending => Ok(DirectionalSdmaPollV1::Pending(
-                DirectionalSdmaSubmissionOwnerV1::Scripted(submission),
+                DirectionalSdmaSubmissionOwnerV1::Scripted(
+                    slot.take().expect("retained scripted submission"),
+                ),
             )),
             ScriptedExecutionOutcomeV1::Retryable => {
                 Err(DirectionalSdmaExecutionFailureV1::Retryable {
                     detail: format!("scripted {operation} retryable"),
-                    submission: DirectionalSdmaSubmissionOwnerV1::Scripted(submission),
+                    submission: DirectionalSdmaSubmissionOwnerV1::Scripted(
+                        slot.take().expect("retained scripted submission"),
+                    ),
                 })
             }
             ScriptedExecutionOutcomeV1::ProcessTeardown => {
@@ -3190,7 +3324,9 @@ mod scripted {
                     detail: format!("scripted {operation} teardown"),
                     custody: SdmaTerminalCustodyV1::Scripted(
                         ScriptedTerminalCustodyV1::Submission(
-                            DirectionalSdmaSubmissionOwnerV1::Scripted(submission),
+                            DirectionalSdmaSubmissionOwnerV1::Scripted(
+                                slot.take().expect("retained scripted submission"),
+                            ),
                         ),
                     ),
                 })
@@ -3198,21 +3334,22 @@ mod scripted {
             ScriptedExecutionOutcomeV1::Completed {
                 direction,
                 copy_bytes,
-            } => complete_scripted_submission(submission, direction, copy_bytes, None),
+            } => complete_scripted_submission(slot, direction, copy_bytes, None),
             ScriptedExecutionOutcomeV1::CompletedWindow {
                 direction,
                 copy_bytes,
                 requests,
-            } => complete_scripted_submission(submission, direction, copy_bytes, requests),
+            } => complete_scripted_submission(slot, direction, copy_bytes, requests),
         }
     }
 
     fn complete_scripted_submission(
-        mut submission: ScriptedSubmissionOwnerV1,
+        slot: &mut Option<ScriptedSubmissionOwnerV1>,
         direction: Option<Gfx942PersistentSdmaDirectionV1>,
         copy_bytes: Option<u32>,
         reported_requests: Option<Vec<DirectionalSdmaCopyRequestV1>>,
     ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
+        let submission = slot.as_mut().expect("retained scripted submission");
         for request in submission.requests.as_slice() {
             let len = usize::try_from(request.copy_bytes).expect("u32 fits usize");
             let host_start = usize::try_from(request.host_offset)
@@ -3244,6 +3381,9 @@ mod scripted {
             .first()
             .map(|request| (request.host_offset, request.device_offset))
             .unwrap_or((0, 0));
+        let submission = slot
+            .take()
+            .expect("completed copy retains original submission");
         Ok(DirectionalSdmaPollV1::Completed(
             DirectionalSdmaCompletedOwnerV1::Scripted(ScriptedCompletedOwnerV1 {
                 pair: submission.pair,
@@ -3879,7 +4019,7 @@ mod window_tests {
                         SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Submission(
                             submission,
                         )),
-                }) if detail.contains("non-timeout retryable custody") => submission,
+                }) if detail.to_string().contains("non-timeout retryable custody") => submission,
                 _ => panic!("synchronous non-timeout retryable custody must not become timeout"),
             };
         let completed = match ops.wait(submission, Duration::ZERO) {

@@ -1,0 +1,137 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.59s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 111 tests
+test kfd_backend::kfd_backend_sdma_seam::scripted::scripted_cpu_write_invalidates_authenticated_full_content ... ok
+test kfd_backend::kfd_backend_sdma_seam::scripted::scripted_request_direction_preserves_h2d_source_and_invalidates_d2h_destination ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::one_packet_window_rejection_returns_the_exact_pair_without_consuming_publication ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::ordered_window_validation_rejects_reorder_duplicates_and_noncanonical_packets ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::same_device_wait_timeout_returns_the_exact_pair_for_later_completion ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::synchronous_single_seam_preserves_success_retry_and_timeout_custody ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::scripted_ready_promotion_does_not_rehash_host_bytes ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::wait_timeout_classification_uses_only_the_typed_lower_variant ... ok
+test kfd_backend::sdma_host_write::tests::host_write_original_panic_survives_secondary_poison_and_payload_drop_panics ... ok
+test kfd_backend::native_budget::host_pool_tests::host_pool_both_startup_paths_retain_queue_and_forward_before_any_sdma_activity ... ok
+test kfd_backend::tests::direct_kfd_sdma_capacity_rejection_precedes_native_reconciliation ... ok
+test kfd_backend::tests::direct_kfd_partial_sdma_continuation_is_observed_and_not_cancellable ... ok
+test kfd_backend::tests::direct_kfd_compute_sdma_overlap_is_allocation_scoped ... ok
+test kfd_backend::tests::direct_kfd_sdma_direction_preflight_is_explicit ... ok
+test kfd_backend::tests::direct_kfd_sdma_window_plan_covers_256_mib_as_63_plus_2_packets ... ok
+test kfd_backend::tests::direct_kfd_sdma_dependency_depth_is_bounded_before_mutation ... ok
+test kfd_backend::tests::direct_kfd_sdma_submit_defers_dirty_native_reconciliation ... ok
+test kfd_backend::tests::direct_kfd_sdma_window_plan_honors_packet_boundaries ... ok
+test kfd_backend::tests::direct_kfd_submission_capacity_counts_compute_sdma_and_completed ... ok
+test kfd_backend::tests::disjoint_d2h_sdma_retires_without_releasing_persistent_compute ... ok
+test kfd_backend::tests::disjoint_sdma_dependency_and_invalid_coexistence_rosters_never_publish ... ok
+test kfd_backend::tests::disjoint_sdma_publishes_and_retains_timeout_custody_during_persistent_compute ... ok
+test kfd_backend::tests::profiler_omits_successful_host_read_events_after_sdma_read_failures ... ok
+test kfd_backend::tests::disjoint_compute_sdma_failures_preserve_the_other_native_owner ... ok
+test kfd_backend::tests::disjoint_three_binding_compute_sdma_publish_in_both_orders ... ok
+test kfd_backend::tests::scripted_same_device_sdma_clean_retry_after_progress_is_quiescent ... ok
+test kfd_backend::tests::scripted_same_device_sdma_identity_changes_are_terminal_and_absorb_pair ... ok
+test kfd_backend::tests::scripted_same_device_sdma_initial_retry_restores_both_allocations ... ok
+test kfd_backend::tests::scripted_same_device_sdma_prepublication_cancel_preserves_pair ... ok
+test kfd_backend::tests::scripted_same_device_sdma_remains_on_window_route_and_dirties_only_destination ... ok
+test kfd_backend::tests::scripted_same_device_sdma_uses_authoritative_device_content_without_shadow_download ... ok
+test kfd_backend::tests::profiler_records_sdma_host_and_device_reads_with_exact_content_and_ranges ... ok
+test kfd_backend::tests::profiler_records_only_complete_sdma_chunked_reads ... ok
+test kfd_backend::tests::scripted_sdma_clean_retry_after_prior_window_progress_is_quiescent ... ok
+test kfd_backend::tests::scripted_sdma_cross_driver_and_mixed_pair_mismatches_retain_without_consuming_fifo ... ok
+test kfd_backend::tests::scripted_sdma_demotion_and_recycle_recovery_are_retryable_without_loss ... ok
+test kfd_backend::tests::scripted_sdma_demotion_and_submit_teardown_retain_exact_runtime_custody ... ok
+test kfd_backend::tests::scripted_sdma_dependency_pending_is_observed_without_publication ... ok
+test kfd_backend::tests::scripted_sdma_device_release_executes_scrub_before_demotion_and_recycle ... ok
+
+running 1 test
+test kfd_backend::tests::scripted_sdma_chunk_n_download_and_shadow_failure_are_quiescent ... ok
+test kfd_backend::tests::scripted_sdma_chunk_n_upload_and_zero_failures_mark_device_shadow_dirty ... ok
+test kfd_backend::tests::scripted_sdma_hidden_zero_failure_cleans_unreachable_allocation ... ok
+test kfd_backend::tests::scripted_sdma_host_read_and_ambiguous_recycle_follow_runtime_policy ... ok
+test kfd_backend::tests::scripted_sdma_initial_submit_retry_is_conclusive_and_releasable ... ok
+test kfd_backend::tests::scripted_sdma_metadata_and_retirement_failures_retain_terminal_custody ... ok
+test kfd_backend::tests::scripted_sdma_exact_linear_limit_uses_one_owned_single_transition ... ok
+test kfd_backend::tests::scripted_sdma_poll_and_wait_keep_distinct_native_routes ... ok
+test kfd_backend::tests::scripted_sdma_poll_pending_and_completion_preserve_facade_owner ... ok
+test kfd_backend::tests::scripted_sdma_poll_teardown_and_sync_timeout_fail_closed_with_custody ... ok
+test kfd_backend::tests::scripted_sdma_multi_packet_window_completes_as_one_owned_transition ... ok
+test kfd_backend::tests::scripted_sdma_promotion_retry_and_teardown_preserve_exact_custody ... ok
+test kfd_backend::tests::scripted_sdma_wait_changed_completion_identity_is_terminal ... ok
+test kfd_backend::tests::scripted_sdma_wait_completes_h2d_promotion_and_same_device_copy ... ok
+test kfd_backend::tests::scripted_sdma_wait_completion_leaves_continuation_for_explicit_flush ... ok
+test kfd_backend::tests::scripted_sdma_wait_non_timeout_retry_and_teardown_are_terminal_with_custody ... ok
+test kfd_backend::tests::scripted_sdma_window_aggregate_offset_substitution_is_terminal ... ok
+test kfd_backend::tests::scripted_sdma_wait_completes_directional_scalar_and_window_owners ... ok
+test kfd_backend::tests::scripted_sdma_zero_deadline_wait_observes_once_and_restores_every_index ... ok
+test kfd_backend::tests::scripted_sdma_window_reordered_completion_is_terminal_with_exact_custody ... ok
+test kfd_backend::tests::scripted_unpublished_sdma_dependency_rejection_is_terminal_and_reindexed ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_driver_selection_panic_keeps_original_device ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_rejection_after_real_scrub_preserves_shadow_and_retries_scrub ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_public_context_preserves_retry_credits_and_quarantines_terminal_failure ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_restore_shell_reuses_allocation_and_drops_exactly_once ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_retry_preserves_original_box_neighbor_and_refunds_once ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_restoration_rejects_missing_wrong_kind_and_occupied_slots ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_terminal_and_lower_panic_retain_exact_owner_and_charge ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_typed_diagnostic_panic_roots_both_failure_classes_before_format ... ok
+
+running 1 test
+test kfd_backend::kfd_backend_sdma_seam::scripted::scripted_authenticated_write_preserves_max_linear_chunk_schedule ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_context_preserves_credits_and_latches_caught_panic_on_retry ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_indexed_failures_retain_bytes_certificate_and_unchanged_destination ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_missing_driver_and_wrong_recycle_phase_preserve_original_root ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_second_chunk_error_or_panic_preserves_exact_visible_prefix ... ok
+test kfd_backend::tests::scripted_sdma_drop_still_aborts_with_live_or_terminal_custody ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_transient_panics_retain_staging_without_attempting_recycle ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_transient_errors_preserve_cleanup_precedence_and_copy_visibility ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_fresh_initialization_retains_exact_prefix_before_any_commit ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_public_context_seals_on_error_or_following_caught_backend_panic ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_indexed_partial_and_authenticated_faults_keep_owner_and_old_shadow ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_second_upload_chunk_failure_retains_new_staging_and_completed_device_prefix ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_success_initializes_and_uploads_then_releases_original_owners ... ok
+test kfd_backend::tests::sdma_demotion_tests::sdma_demotion_terminal_drop_aborts_with_runtime_and_lower_roots ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_upload_staging_failure_never_consumes_device_or_recycles ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_diagnostic_panic_roots_retryable_and_terminal_owners ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_driver_selection_panic_keeps_untransferred_runtime_root ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_lower_panic_seals_backend_without_losing_driver_root ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_native_diagnostic_stays_typed_until_rooted_formatting ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_ordinary_rejection_keeps_neighbors_and_exact_error ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_public_context_handles_configured_and_unconfigured_panic ... ok
+test kfd_backend::tests::sdma_host_read_tests::sdma_host_read_and_synchronous_roots_abort_on_unfinished_drop ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_device_retry_preserves_scrub_and_does_not_repeat_demotion ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_diagnostics_panic_only_after_returned_custody_is_rooted ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_indexed_host_recovery_preserves_certificate_and_refunds_only_on_retry ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_indexed_lower_panic_keeps_placeholder_charge_and_original_lower_owner ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_missing_driver_retains_input_before_selection_panics ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_public_context_distinguishes_retryable_credits_from_quarantine ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_restoration_rejects_missing_wrong_kind_and_occupied_slots_without_overwrite ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_terminal_backend_drop_aborts_without_discarding_retained_owner ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_transient_failures_retain_runtime_or_lower_owner_and_seal_backend ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_driver_selection_and_actual_scripted_copy_panics_keep_custody ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_metadata_corruption_precedes_retirement_and_keeps_completed_pair ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_normalizes_genuine_h2d_ready_without_changing_device_identity ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_restoration_rejects_changed_slots_before_recycling_or_diagnostics ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_retirement_rejection_teardown_and_panic_preserve_owners ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_retry_restores_original_box_before_cleanup_and_remains_healthy ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_success_reuses_box_and_exact_offset_owners_in_both_directions ... FAILED
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_timeout_and_teardown_retain_exact_pair_and_shell ... ok
+test kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_typed_diagnostic_panic_keeps_first_payload_and_retained_timeout ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_terminal_drop_aborts_with_runtime_or_lower_custody ... ok
+test kfd_backend::tests::sdma_recycle_tests::sdma_recycle_terminal_drop_aborts_with_runtime_and_lower_custody ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_second_indexed_chunk_failure_never_certifies_or_commits_partial_image ... ok
+
+failures:
+
+---- kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_success_reuses_box_and_exact_offset_owners_in_both_directions stdout ----
+
+thread 'kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_success_reuses_box_and_exact_offset_owners_in_both_directions' (4020212) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/sdma_synchronous_tests.rs:249:9:
+assertion `left == right` failed
+  left: "AllocationRecordV1 { device: 7, kind: HostVisible, alignment: 8, bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], content_sha256: None, last_full_host_write: None, native_dirty: [], sdma_storage: Host(Scripted(ScriptedBufferOwnerV1 { token: ScriptedOwnerTokenV1 { id: 1, role: Buffer(Host), ledger: RefCell { value: ScriptedCustodyLedgerV1 { next_id: 3, owners: {2: Device, 3: Buffer(Host), 1: Buffer(Host)}, unexpected_drops: 0 } }, armed: true }, kind: Host, bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], full_content_certificate: None })), sdma_backed: true, sdma_initialized: true, sdma_shadow_dirty: false, scripted_three_binding_replay: false }"
+ right: "AllocationRecordV1 { device: 7, kind: HostVisible, alignment: 8, bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], content_sha256: None, last_full_host_write: None, native_dirty: [], sdma_storage: Host(Scripted(ScriptedBufferOwnerV1 { token: ScriptedOwnerTokenV1 { id: 1, role: Buffer(Host), ledger: RefCell { value: ScriptedCustodyLedgerV1 { next_id: 2, owners: {2: Device, 1: Buffer(Host)}, unexpected_drops: 0 } }, armed: true }, kind: Host, bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], full_content_certificate: None })), sdma_backed: true, sdma_initialized: true, sdma_shadow_dirty: false, scripted_three_binding_replay: false }"
+
+
+failures:
+    kfd_backend::tests::sdma_synchronous_tests::sdma_synchronous_success_reuses_box_and_exact_offset_owners_in_both_directions
+
+test result: FAILED. 110 passed; 1 failed; 0 ignored; 0 measured; 709 filtered out; finished in 1.96s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

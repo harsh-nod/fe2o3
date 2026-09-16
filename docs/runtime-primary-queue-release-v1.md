@@ -572,8 +572,8 @@ after a caller catches a backend panic; the backend is already terminal and the
 next valid backend call seals the Context without native work. This packet does
 not change that facade policy, admit pending-compute allocation, qualify native
 partial writes, add executable/formal correspondence or establish performance.
-Directional promotion, demotion and recycle/release are now covered below.
-Synchronous copy and typed capacity disposition remain open, followed by
+Directional promotion, demotion, recycle/release and synchronous-copy custody
+are now covered below. Typed capacity disposition remains open, followed by
 owner-roster preflight and pending-compute qualification.
 
 ## Directional Promotion Custody
@@ -697,17 +697,37 @@ Fourteen constructed tests cover real mapping/model transitions, callback and
 backend failures, exact packet/owner identity, timeout and public reentry/Drop.
 Eight isolated MI300X regression probes pass, including patterned device copies
 in both directions. See the [development receipt](evidence/dev-r126-sdma-synchronous-2026-09-16/README.md)
-for final regression status and limitations. The runtime outer normalization,
-retirement and readback paths remain the next ownership work; this does not
-accept R126, A1/A2, formal correspondence or HIP/HSA performance.
+for final regression status and limitations. This does not accept R126, A1/A2,
+formal correspondence or HIP/HSA performance.
+
+## Runtime Synchronous Copy And Readback Custody
+
+The runtime now roots host staging before normalization and preserves the
+original device-box shell across fused execution, typed diagnostics, completed
+metadata checks and callback-free native frontier retirement. Restoration
+requires the exact synchronous allocation slot before refilling the original
+box. Busy and prepublication rejection settle staging cleanup first. Indexed
+host access and transient readback retain owners through read/copy panic;
+ordinary read errors preserve cleanup-error precedence.
+
+Eighteen new tests cover exact bytes/owners, offset copies, healthy retry,
+metadata and restoration-slot corruption, timeout/teardown, actual scripted
+copy/retirement panic, diagnostic panic, partial read visibility and Context
+credits. GNU/musl each pass 816 runtime tests with six ignored. The synchronous
+core success path counts zero heap allocations in its scripted fixture; public
+readback still allocates its intermediate byte slice. See the
+[development receipt](evidence/dev-r126-runtime-synchronous-2026-09-16/README.md).
+Fresh native validation is pending while the shared MI300X is busy. Typed
+capacity disposition and pending-compute allocation remain next; R125 is still
+the accepted CPU/test checkpoint.
 
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
-   ownership changes with pending compute after completing synchronous-copy
-   custody and typed capacity disposition. Lower fresh-allocation outputs now
+   ownership changes with pending compute after qualifying synchronous-copy
+   custody and completing typed capacity disposition. Lower fresh-allocation outputs now
    remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "archive-whitespace-unfiltered",
+    "command": "git diff --cached --check",
+    "exit_code": 2,
+    "wall_time_seconds": 0.000011311
+  },
+  {
+    "name": "archive-whitespace-source-docs",
+    "command": "git diff --cached --check -- crates docs/runtime-a1-a2-swarm-current.md docs/runtime-primary-queue-release-v1.md docs/evidence/dev-r126-runtime-synchronous-2026-09-16/README.md",
+    "exit_code": 0,
+    "wall_time_seconds": 0.000012627
+  }
+]
