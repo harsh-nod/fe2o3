@@ -1,7 +1,7 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use fe2o3_kfd::topology::{GfxTarget, discover_default_topology_for_target};
-    use fe2o3_kfd::{DeviceSelector, OpenedKfd, gfx950_device_observation_profile_sha256_v1};
+    use fe2o3_kfd::{DeviceSelector, OpenedKfd};
 
     let mut arguments = std::env::args().skip(1);
     let selector = arguments.next();
@@ -28,10 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unique_id(),
         ],
     };
-    let profile: String = gfx950_device_observation_profile_sha256_v1()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
     let descriptor_count =
         || -> Result<usize, std::io::Error> { Ok(std::fs::read_dir("/proc/self/fd")?.count()) };
     let before = descriptor_count()?;
@@ -41,6 +37,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .bind_gfx950_xnack_minus(DeviceSelector::UniqueId(unique_id))?;
         device.check_observable_currentness()?;
         device.check_observable_currentness()?;
+        let profile: String = device
+            .observation_profile_sha256_v1()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         let observation = device.observation();
         println!(
             "target=gfx950:xnack- profile_sha256={} gpu_id={} unique_id={} render_minor={} drm_device={:?} descriptors={} apertures={} currentness=contracted-clear authority=checked-observation-only explicit_vm_acquisition=false vm_authority=false memory=false queue=false dispatch=false xnack_set=false",

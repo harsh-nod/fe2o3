@@ -3,6 +3,19 @@
 use super::*;
 
 #[cfg(feature = "engineering-gfx950")]
+#[path = "device_gfx950_mi350_2.rs"]
+mod mi350_2;
+
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) fn gfx950_mi350_2_platform_matches(
+    kernel: &str,
+    version: Option<&str>,
+    source: Option<&str>,
+) -> bool {
+    mi350_2::match_platform(kernel, version, source).is_some()
+}
+
+#[cfg(feature = "engineering-gfx950")]
 #[path = "device_gfx950_group_currentness.rs"]
 mod group_currentness;
 #[cfg(feature = "engineering-gfx950")]
@@ -42,7 +55,8 @@ pub const GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1: &str = concat!(
     "authority=checked-observation-only,no-model-admission,no-explicit-vm-acquisition,no-vm-authority,no-memory,no-queue,no-dispatch,no-gfx942-conversion\n",
 );
 
-/// SHA-256 of the canonical checked-observation profile.
+/// SHA-256 of the original canonical checked-observation profile.
+/// Use the bound device's `observation_profile_sha256_v1` for its selected profile.
 pub fn gfx950_device_observation_profile_sha256_v1() -> [u8; 32] {
     Sha256::digest(GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1).into()
 }
@@ -83,6 +97,7 @@ pub struct CheckedGfx950XnackMinusDevice {
     process: ProcessIncarnationObservation,
     reset_fence: crate::currentness::ResetEventFence,
     currentness_poisoned: bool,
+    observation_profile_manifest: &'static str,
     not_send_sync: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
@@ -98,6 +113,12 @@ impl fmt::Debug for CheckedGfx950XnackMinusDevice {
 }
 
 impl CheckedGfx950XnackMinusDevice {
+    /// Identifies the exact platform profile selected during binding.
+    /// This is checked-observation provenance, not execution authority.
+    pub fn observation_profile_sha256_v1(&self) -> [u8; 32] {
+        Sha256::digest(self.observation_profile_manifest).into()
+    }
+
     #[cfg(feature = "engineering-gfx950")]
     pub(crate) fn kfd_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         use std::os::fd::AsFd;
@@ -296,7 +317,7 @@ impl KfdWithAdmittedUapi {
             self.opened.node_observation(),
         )?;
         let snapshot = topology::discover_default_topology_for_target(topology::GfxTarget::Gfx950)?;
-        validate_platform(
+        let observation_profile_manifest = validate_platform(
             snapshot.kernel_release().as_str(),
             snapshot.amdgpu_module().version(),
             snapshot.amdgpu_module().srcversion(),
@@ -381,6 +402,7 @@ impl KfdWithAdmittedUapi {
             process: process_before,
             reset_fence,
             currentness_poisoned: false,
+            observation_profile_manifest,
             not_send_sync: std::marker::PhantomData,
         })
     }
@@ -390,7 +412,11 @@ fn validate_platform(
     kernel: &str,
     version: Option<&str>,
     source: Option<&str>,
-) -> Result<(), DeviceBindingError> {
+) -> Result<&'static str, DeviceBindingError> {
+    #[cfg(feature = "engineering-gfx950")]
+    if let Some(manifest) = mi350_2::match_platform(kernel, version, source) {
+        return Ok(manifest);
+    }
     if kernel != GFX950_ADMITTED_KERNEL_RELEASE_V1 {
         return Err(DeviceBindingError::UnsupportedKernelRelease(
             kernel.to_owned(),
@@ -406,7 +432,7 @@ fn validate_platform(
             source.map(str::to_owned),
         ));
     }
-    Ok(())
+    Ok(GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1)
 }
 
 #[derive(Clone, Copy)]
@@ -608,6 +634,19 @@ mod tests {
         for changed in [None, Some(ADMITTED_AMDGPU_MODULE_SRCVERSION_V1), Some("")] {
             assert!(validate_platform(kernel, version, changed).is_err());
         }
+    }
+
+    #[cfg(not(feature = "engineering-gfx950"))]
+    #[test]
+    fn mi350_2_is_not_admitted_without_engineering_feature() {
+        assert!(
+            validate_platform(
+                "5.18.2-mi300-build-140423-ubuntu-22.04+",
+                Some("6.16.13"),
+                Some("975C4B2AA8AD01E2EA472C0"),
+            )
+            .is_err()
+        );
     }
 
     #[test]

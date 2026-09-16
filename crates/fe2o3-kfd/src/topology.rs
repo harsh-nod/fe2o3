@@ -12,6 +12,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "topology_gfx950_xcp.rs"]
+mod gfx950_xcp;
+
 /// Kernel-owned topology tree used by the first Linux KFD profile.
 pub const DEFAULT_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology";
 pub const DEFAULT_BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
@@ -335,6 +339,16 @@ impl PartitionProfile {
     }
 }
 
+/// Contract used to correlate a KFD node with its DRM/PCI observations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderIdentityCorrelationV1 {
+    SameDeviceUid,
+    /// Exact engineering SPX/XCP0 mapping through the driver's parent render.
+    /// The KFD XCD and PCI board UIDs are different identity domains.
+    #[cfg(feature = "engineering-gfx950")]
+    Gfx950EngineeringXcp0ViaParentRenderV1,
+}
+
 /// DRM and PCI evidence correlated with one KFD GPU observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenderNodeObservation {
@@ -344,6 +358,10 @@ pub struct RenderNodeObservation {
     pci_address: PciAddress,
     pci_revision: u8,
     unique_id: u64,
+    kfd_unique_id: u64,
+    identity_correlation: RenderIdentityCorrelationV1,
+    #[cfg(feature = "engineering-gfx950")]
+    xcp_sysfs_identity: Option<gfx950_xcp::XcpSysfsIdentity>,
     partition: PartitionProfile,
 }
 
@@ -368,8 +386,17 @@ impl RenderNodeObservation {
         self.pci_revision
     }
 
+    /// PCI board identity; not necessarily the KFD partition/XCD identity.
     pub const fn unique_id(&self) -> u64 {
         self.unique_id
+    }
+
+    pub const fn kfd_unique_id(&self) -> u64 {
+        self.kfd_unique_id
+    }
+
+    pub const fn identity_correlation(&self) -> RenderIdentityCorrelationV1 {
+        self.identity_correlation
     }
 
     pub const fn partition(&self) -> PartitionProfile {
@@ -2296,6 +2323,7 @@ fn correlate_render_node(
     gpu: &GpuTopologyNode,
     paths: &DiscoveryPaths<'_>,
     sysfs_devices_root: &Path,
+    identity_correlation: RenderIdentityCorrelationV1,
 ) -> Result<RenderNodeObservation, TopologyError> {
     let link = paths
         .device_character_root
@@ -2355,7 +2383,9 @@ fn correlate_render_node(
     }
 
     let unique_id = read_hex_scalar(&pci_path.join("unique_id"), false, None)?;
-    if unique_id != gpu.unique_id {
+    if identity_correlation == RenderIdentityCorrelationV1::SameDeviceUid
+        && unique_id != gpu.unique_id
+    {
         return Err(mismatch(gpu.node_id, "unique_id", gpu.unique_id, unique_id));
     }
     let vendor_id = read_hex_scalar(&pci_path.join("vendor"), true, Some(4))?;
@@ -2381,6 +2411,13 @@ fn correlate_render_node(
         compute: read_compute_partition(&pci_path.join("current_compute_partition"))?,
         memory: read_memory_partition(&pci_path.join("current_memory_partition"))?,
     };
+    #[cfg(feature = "engineering-gfx950")]
+    let xcp_sysfs_identity = match identity_correlation {
+        RenderIdentityCorrelationV1::SameDeviceUid => None,
+        RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1 => Some(
+            gfx950_xcp::observe_parent(gpu, &render_path, &pci_path, unique_id, partition)?,
+        ),
+    };
     if ensure_directory(&pci_path)? != pci_identity
         || ensure_directory(&render_path)? != render_identity
     {
@@ -2394,6 +2431,10 @@ fn correlate_render_node(
         pci_address,
         pci_revision: pci_revision as u8,
         unique_id,
+        kfd_unique_id: gpu.unique_id,
+        identity_correlation,
+        #[cfg(feature = "engineering-gfx950")]
+        xcp_sysfs_identity,
         partition,
     })
 }
@@ -2406,12 +2447,23 @@ fn discover_host_topology_for_target(
     let boot_id = read_boot_id(paths.boot_id)?;
     let kernel_release = read_kernel_release(paths.os_release)?;
     let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
+    let identity_correlation =
+        select_render_identity_correlation(target, &kernel_release, &amdgpu_module);
     ensure_directory(paths.device_character_root)?;
     ensure_directory(paths.sysfs_devices_root)?;
     let sysfs_devices_root = canonicalize(paths.sysfs_devices_root)?;
     let mut render_nodes = Vec::with_capacity(topology.gpu_nodes.len());
     for gpu in &topology.gpu_nodes {
-        render_nodes.push(correlate_render_node(gpu, paths, &sysfs_devices_root)?);
+        render_nodes.push(correlate_render_node(
+            gpu,
+            paths,
+            &sysfs_devices_root,
+            identity_correlation,
+        )?);
+    }
+    #[cfg(feature = "engineering-gfx950")]
+    if identity_correlation == RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1 {
+        gfx950_xcp::validate_inventory(&render_nodes)?;
     }
     let generation_after = read_scalar(&paths.topology_root.join("generation_id"))?;
     if generation_after != topology.provenance.generation {
@@ -2442,6 +2494,25 @@ fn discover_host_topology_for_target(
         amdgpu_module,
         render_nodes,
     })
+}
+
+fn select_render_identity_correlation(
+    target: GfxTarget,
+    kernel: &KernelRelease,
+    module: &AmdgpuModuleObservation,
+) -> RenderIdentityCorrelationV1 {
+    #[cfg(feature = "engineering-gfx950")]
+    if target == GfxTarget::Gfx950
+        && crate::device::gfx950_mi350_2_platform_matches(
+            kernel.as_str(),
+            module.version(),
+            module.srcversion(),
+        )
+    {
+        return RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1;
+    }
+    let _ = (target, kernel, module);
+    RenderIdentityCorrelationV1::SameDeviceUid
 }
 
 #[cfg(test)]
@@ -2843,6 +2914,7 @@ mod tests {
                 &self.gpu,
                 &self.paths(),
                 &canonicalize(&self.devices_root).unwrap(),
+                RenderIdentityCorrelationV1::SameDeviceUid,
             )
         }
     }
@@ -2850,6 +2922,238 @@ mod tests {
     impl Drop for RenderFixture {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.base).unwrap();
+        }
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    mod gfx950_xcp_tests {
+        use super::*;
+
+        fn fixture() -> RenderFixture {
+            let mut f = RenderFixture::valid();
+            f.gpu.target = GfxTarget::Gfx950;
+            f.gpu.pci_device_id = 0x75a0;
+            f.gpu.fw_version = 41;
+            f.gpu.sdma_fw_version = 12;
+            f.gpu.capacity.simd_count = 1024;
+            f.gpu.capacity.lds_size_in_kb = 160;
+            fs::write(&f.os_release, "5.18.2-mi300-build-140423-ubuntu-22.04+\n").unwrap();
+            fs::write(
+                f.module_root.join("srcversion"),
+                "975C4B2AA8AD01E2EA472C0\n",
+            )
+            .unwrap();
+            fs::write(f.pci_path.join("device"), "0x75a0\n").unwrap();
+            fs::write(f.pci_path.join("unique_id"), "5678\n").unwrap();
+            fs::create_dir(f.pci_path.join("xcp")).unwrap();
+            fs::write(f.pci_path.join("xcp/xcp_metrics"), []).unwrap();
+            f
+        }
+
+        fn correlate(f: &RenderFixture) -> Result<RenderNodeObservation, TopologyError> {
+            let policy = select_render_identity_correlation(
+                f.gpu.target,
+                &read_kernel_release(&f.os_release)?,
+                &observe_amdgpu_module(&f.module_root)?,
+            );
+            correlate_render_node(&f.gpu, &f.paths(), &canonicalize(&f.devices_root)?, policy)
+        }
+
+        #[test]
+        fn xcp0_profile_retains_both_uid_domains_and_explicit_contract() {
+            let f = fixture();
+            let observed = correlate(&f).unwrap();
+            assert_eq!(observed.unique_id(), 0x5678);
+            assert_eq!(observed.kfd_unique_id(), 0x1234);
+            assert_eq!(
+                observed.identity_correlation(),
+                RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1
+            );
+            assert_eq!(correlate(&f).unwrap(), observed);
+            assert!(f.correlate().is_err());
+        }
+
+        #[test]
+        fn xcp0_route_is_selected_by_profile_not_mismatch_fallback() {
+            let mut f = fixture();
+            fs::write(f.pci_path.join("unique_id"), "1234\n").unwrap();
+            assert_eq!(
+                correlate(&f).unwrap().identity_correlation(),
+                RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1
+            );
+            fs::remove_file(f.pci_path.join("xcp/xcp_metrics")).unwrap();
+            assert!(correlate(&f).is_err());
+            f.gpu.target = GfxTarget::Gfx942;
+            assert_eq!(
+                correlate(&f).unwrap().identity_correlation(),
+                RenderIdentityCorrelationV1::SameDeviceUid
+            );
+        }
+
+        #[test]
+        fn xcp0_requires_exact_platform_and_target() {
+            for (field, value) in [
+                ("kernel", "6.8.0-124-generic\n"),
+                ("version", "6.16.12\n"),
+                ("srcversion", "703B1127E578BC5D4BD6615\n"),
+            ] {
+                let f = fixture();
+                let path = if field == "kernel" {
+                    f.os_release.clone()
+                } else {
+                    f.module_root.join(field)
+                };
+                fs::write(path, value).unwrap();
+                assert!(correlate(&f).is_err(), "accepted {field}");
+            }
+            let mut f = fixture();
+            f.gpu.target = GfxTarget::Gfx942;
+            assert!(correlate(&f).is_err());
+        }
+
+        #[test]
+        fn xcp0_mutation_of_either_uid_changes_retained_observation() {
+            let mut f = fixture();
+            let before = correlate(&f).unwrap();
+            fs::write(f.pci_path.join("unique_id"), "5679\n").unwrap();
+            assert_ne!(correlate(&f).unwrap(), before);
+            fs::write(f.pci_path.join("unique_id"), "5678\n").unwrap();
+            f.gpu.unique_id += 1;
+            assert_ne!(correlate(&f).unwrap(), before);
+            f.gpu.unique_id = 0;
+            assert!(correlate(&f).is_err());
+            f.gpu.unique_id = 0x1234;
+            fs::write(f.pci_path.join("unique_id"), "0\n").unwrap();
+            assert!(correlate(&f).is_err());
+        }
+
+        #[test]
+        fn xcp0_rejects_other_partitions_and_every_geometry_mutation() {
+            for (field, value) in [
+                ("current_compute_partition", "CPX\n"),
+                ("current_memory_partition", "NPS4\n"),
+            ] {
+                let f = fixture();
+                fs::write(f.pci_path.join(field), value).unwrap();
+                assert!(correlate(&f).is_err());
+            }
+            let mutations: &[fn(&mut GpuTopologyNode)] = &[
+                |g| g.capacity.simd_count += 1,
+                |g| g.capacity.simd_per_cu += 1,
+                |g| g.capacity.xcc_count += 1,
+                |g| g.capacity.array_count += 1,
+                |g| g.capacity.simd_arrays_per_engine += 1,
+                |g| g.capacity.lds_size_in_kb += 1,
+                |g| g.capacity.max_waves_per_simd += 1,
+                |g| g.capacity.compute_queue_count += 1,
+                |g| g.capacity.wavefront_size = 32,
+                |g| g.fw_version += 1,
+                |g| g.sdma_fw_version += 1,
+            ];
+            for mutate in mutations {
+                let mut f = fixture();
+                mutate(&mut f.gpu);
+                assert!(correlate(&f).is_err());
+            }
+        }
+
+        #[test]
+        fn xcp0_rejects_wrong_pci_location_and_render_minor() {
+            let mut f = fixture();
+            f.gpu.location_id += 1;
+            assert!(correlate(&f).is_err());
+            f.gpu.location_id -= 1;
+            f.gpu.drm_render_minor += 1;
+            assert!(correlate(&f).is_err());
+            f.gpu.drm_render_minor -= 1;
+            fs::write(f.pci_path.join("drm/renderD128/dev"), "226:129\n").unwrap();
+            assert!(correlate(&f).is_err());
+        }
+
+        #[test]
+        fn xcp0_rejects_virtual_render_with_same_device_symlink() {
+            use std::os::unix::fs::symlink;
+            let f = fixture();
+            let render = f.devices_root.join("platform/synthetic-xcp/drm/renderD128");
+            fs::create_dir_all(&render).unwrap();
+            fs::write(render.join("dev"), "226:128\n").unwrap();
+            symlink(&f.pci_path, render.join("device")).unwrap();
+            let link = f.device_character_root.join("226:128");
+            fs::remove_file(&link).unwrap();
+            symlink(&render, link).unwrap();
+            assert!(matches!(
+                correlate(&f),
+                Err(TopologyError::RenderCorrelationMismatch {
+                    field: "XCP0 PCI ancestry",
+                    ..
+                })
+            ));
+        }
+
+        #[test]
+        fn xcp0_rejects_missing_symlinked_or_nonregular_evidence() {
+            use std::os::unix::fs::symlink;
+            for variant in 0..4 {
+                let f = fixture();
+                let xcp = f.pci_path.join("xcp");
+                let metrics = xcp.join("xcp_metrics");
+                fs::remove_file(&metrics).unwrap();
+                match variant {
+                    0 => {}
+                    1 => {
+                        symlink(f.pci_path.join("unique_id"), &metrics).unwrap();
+                    }
+                    2 => {
+                        fs::create_dir(&metrics).unwrap();
+                    }
+                    _ => {
+                        fs::remove_dir(&xcp).unwrap();
+                        symlink(&f.pci_path, &xcp).unwrap();
+                    }
+                }
+                assert!(correlate(&f).is_err());
+            }
+        }
+
+        #[test]
+        fn xcp0_replaced_evidence_and_duplicate_parent_change_or_reject_identity() {
+            let f = fixture();
+            let before = correlate(&f).unwrap();
+            let metrics = f.pci_path.join("xcp/xcp_metrics");
+            fs::rename(&metrics, f.pci_path.join("xcp/retained-old-metrics")).unwrap();
+            fs::write(&metrics, []).unwrap();
+            assert_ne!(correlate(&f).unwrap(), before);
+            assert!(gfx950_xcp::validate_inventory(&[before.clone(), before]).is_err());
+        }
+
+        #[test]
+        fn xcp0_directory_replacement_changes_retained_identity() {
+            let f = fixture();
+            let before = correlate(&f).unwrap();
+            let path = f.pci_path.join("xcp");
+            let retained = f.pci_path.join("retained-old-xcp");
+            fs::rename(&path, &retained).unwrap();
+            fs::create_dir(&path).unwrap();
+            fs::rename(retained.join("xcp_metrics"), path.join("xcp_metrics")).unwrap();
+            let after = correlate(&f).unwrap();
+            assert_eq!(before.unique_id(), after.unique_id());
+            assert_eq!(before.kfd_unique_id(), after.kfd_unique_id());
+            assert_ne!(before, after);
+        }
+
+        #[test]
+        fn missing_module_observations_cannot_select_xcp0_contract() {
+            for field in ["version", "srcversion"] {
+                let f = fixture();
+                fs::remove_file(f.module_root.join(field)).unwrap();
+                let policy = select_render_identity_correlation(
+                    GfxTarget::Gfx950,
+                    &read_kernel_release(&f.os_release).unwrap(),
+                    &observe_amdgpu_module(&f.module_root).unwrap(),
+                );
+                assert_eq!(policy, RenderIdentityCorrelationV1::SameDeviceUid);
+                assert!(correlate(&f).is_err());
+            }
         }
     }
 
