@@ -975,7 +975,9 @@ fn hash_type(digest: &mut Sha256, ty: &Type, depth: usize) -> Result<(), Simulat
     match ty {
         Type::Unit => digest.update([0]),
         Type::Scalar(scalar) => digest.update([1, scalar_tag(*scalar)]),
-        Type::Vector(_) => return Err(SimulationBundleErrorV1::InvalidKernelAbi),
+        Type::Vector(_) | Type::Execution(_) => {
+            return Err(SimulationBundleErrorV1::InvalidKernelAbi);
+        }
         Type::Pointer(pointer) => {
             digest.update([
                 2,
@@ -1246,6 +1248,39 @@ mod tests {
         BasicBlock, BlockId, DebugSourceMapFileV1, DebugSourceMapSpanV1, Function, Kernel,
         LaunchDomain, LaunchExtent, Signature, Terminator, WorkgroupSize,
     };
+
+    #[test]
+    fn execution_v15_roles_cannot_enter_legacy_bundle_abi() {
+        use crate::{AccessMode, AddressSpace, ExecutionRoleV15};
+        for role in [
+            ExecutionRoleV15::Context,
+            ExecutionRoleV15::Workgroup,
+            ExecutionRoleV15::MaskedTileU32 {
+                lanes: 3,
+                elements: 2,
+            },
+            ExecutionRoleV15::LaneFragmentU32 {
+                lanes: 3,
+                elements: 2,
+            },
+        ] {
+            let direct = Type::Execution(role);
+            for ty in [
+                direct.clone(),
+                Type::pointer(direct.clone(), AddressSpace::Private, AccessMode::ReadWrite),
+                Type::slice(
+                    Type::pointer(direct, AddressSpace::Global, AccessMode::ReadOnly),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+            ] {
+                assert!(matches!(
+                    hash_types(&mut Sha256::new(), &[ty]),
+                    Err(SimulationBundleErrorV1::InvalidKernelAbi),
+                ));
+            }
+        }
+    }
 
     fn module() -> Module {
         let mut module = Module::new("bundle_test");

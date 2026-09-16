@@ -383,3 +383,147 @@ fn execution_so3_ordering_preserves_both_axes_even_for_invalid_raw_ir() {
     assert!(old.union(execution).has_ordered_execution());
     assert!(!old.union(execution).is_empty());
 }
+
+#[test]
+fn execution_so3_borrowed_memory_effects_match_owned_and_stop_on_failure() {
+    for execution in operations()
+        .into_iter()
+        .chain([ExecutionOperationV15::MaskedTileLoadU32 {
+            workgroup: ValueId(0),
+            input: ValueId(1),
+            base: ValueId(2),
+            lanes: 0,
+            elements: 0,
+        }])
+    {
+        let load = matches!(execution, ExecutionOperationV15::MaskedTileLoadU32 { .. });
+        let operation = Operation::new(vec![], OperationKind::Execution(execution));
+        let expected = if load {
+            vec![MemoryEffect::Read(AddressSpace::Global)]
+        } else {
+            vec![]
+        };
+        let mut observed = Vec::new();
+        operation
+            .try_visit_local_memory_effects_v1(|effect| {
+                observed.push(effect.to_owned());
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        assert_eq!(observed, expected);
+        assert_eq!(observed, operation.memory_effects());
+        let mut visits = 0;
+        let result = operation.try_visit_local_memory_effects_v1(|_| {
+            visits += 1;
+            Err("stop")
+        });
+        assert_eq!(visits, usize::from(load));
+        assert_eq!(result, if load { Err("stop") } else { Ok(()) });
+    }
+}
+
+#[test]
+fn execution_so3_formal_memory_analysis_refuses_every_execution_operation() {
+    use ExecutionOperationV15 as Op;
+    use ExecutionRoleV15 as Role;
+    let chain = [
+        Op::ContextIssue,
+        Op::WorkgroupDerive {
+            context: ValueId(2),
+        },
+        Op::MaskedTileLoadU32 {
+            workgroup: ValueId(3),
+            input: ValueId(0),
+            base: ValueId(1),
+            lanes: 1,
+            elements: 1,
+        },
+        Op::TileIntoFragmentU32 {
+            tile: ValueId(4),
+            lanes: 1,
+            elements: 1,
+        },
+        Op::FragmentIntoPartsU32 {
+            fragment: ValueId(5),
+            lanes: 1,
+            elements: 1,
+        },
+        Op::ScopeEnd {
+            workgroup: ValueId(3),
+            discarded: vec![],
+        },
+    ];
+    let results = [
+        vec![ValueDef::new(ValueId(2), Type::Execution(Role::Context))],
+        vec![ValueDef::new(ValueId(3), Type::Execution(Role::Workgroup))],
+        vec![ValueDef::new(
+            ValueId(4),
+            Type::Execution(Role::MaskedTileU32 {
+                lanes: 1,
+                elements: 1,
+            }),
+        )],
+        vec![ValueDef::new(
+            ValueId(5),
+            Type::Execution(Role::LaneFragmentU32 {
+                lanes: 1,
+                elements: 1,
+            }),
+        )],
+        vec![
+            ValueDef::new(ValueId(6), Type::Scalar(ScalarType::U32)),
+            ValueDef::new(ValueId(7), Type::BOOL),
+        ],
+        vec![],
+    ];
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = chain
+        .into_iter()
+        .zip(results)
+        .map(|(operation, results)| Operation::new(results, OperationKind::Execution(operation)))
+        .collect();
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut module = Module::new("execution-formal-refusal");
+    module.functions.push(Function::kernel_entry(
+        "entry",
+        Signature::new(
+            vec![
+                Type::slice(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+                Type::INDEX,
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    ));
+    let kernel = KernelId::new("kernel");
+    module.kernels.push(Kernel::new(
+        "kernel",
+        "entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+    verify_module_ref(&module).unwrap();
+    let analysis = derive_kernel_memory_obligations(
+        &module,
+        &kernel,
+        ExplicitLaunchExtent1d::Exact(1),
+        FormalIndexWidth::Bits64,
+    )
+    .unwrap();
+    assert!(!analysis.is_complete());
+    assert!(analysis.obligations().accesses().is_empty());
+    let expected: Vec<_> = (0..6)
+        .map(
+            |operation| FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
+                location: FunctionOperationLocation::new(BlockId(0), operation),
+            },
+        )
+        .collect();
+    assert_eq!(analysis.incomplete_reasons(), expected);
+}

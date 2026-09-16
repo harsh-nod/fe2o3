@@ -15,7 +15,7 @@ pub(super) fn matrix_type_message_work_upper_v1<S: MatrixOperationIssueSinkV1>(
         ty = match ty {
             Type::Pointer(pointer) => pointer.pointee.as_ref(),
             Type::Slice(slice) => slice.element.as_ref(),
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) => break,
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => break,
         };
     }
     Ok(MATRIX_FIXED_MESSAGE_WORK_UPPER_V1

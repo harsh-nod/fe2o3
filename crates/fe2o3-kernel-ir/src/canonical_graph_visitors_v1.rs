@@ -144,6 +144,10 @@ impl Operation {
         use KirLocalMemoryEffectRefV1 as Effect;
         use OperationKind as Op;
         match &self.kind {
+            Op::Execution(crate::ExecutionOperationV15::MaskedTileLoadU32 { .. }) => {
+                visitor(Effect::Read(AddressSpace::Global))?
+            }
+            Op::Execution(_) => {}
             Op::Alloca { address_space, .. } => visitor(Effect::Allocate(*address_space))?,
             Op::Load { access, .. } | Op::GuardedLoad { access, .. } => {
                 visitor(Effect::Read(access.address_space))?
