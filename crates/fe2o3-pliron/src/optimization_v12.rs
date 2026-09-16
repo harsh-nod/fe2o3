@@ -134,13 +134,17 @@ fn execution_resources_v12(
     })
 }
 
-// Resource admission only; every variant executes the same literal pass roster.
-// The native variant is reachable only from the closed neutral lease entry.
+// Private admission selects a trusted fixed roster, never a decoded pass list.
+// Historical target/native variants retain the exact policy-2 resource profile.
 enum ExecutionAdmissionV1<'a> {
     Target {
         occurrences: Option<&'a crate::kir_occurrence_capture_v1::Capture>,
     },
     Native {
+        occurrences: &'a crate::kir_occurrence_capture_v1::Capture,
+        limits: crate::kir_occurrence_capture_v1::Limits,
+    },
+    Policy3 {
         occurrences: &'a crate::kir_occurrence_capture_v1::Capture,
         limits: crate::kir_occurrence_capture_v1::Limits,
     },
@@ -189,6 +193,56 @@ fn native_execution_resources_v1(
     Ok((profile, capture))
 }
 
+fn policy3_execution_resources_v1(
+    canonical_bytes: usize,
+    registered_node_bound: usize,
+) -> Result<
+    (
+        PlironOptimizationResourcesV12,
+        crate::kir_optimization_map_v12::CaptureLimitsV12,
+    ),
+    PlironOptimizationErrorV12,
+> {
+    use crate::kir_optimization_map_v12::CaptureLimitsV12;
+    let arithmetic = || {
+        PlironOptimizationErrorV12::Resources(
+            CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+        )
+    };
+    let (mut profile, old) = native_execution_resources_v1(canonical_bytes, registered_node_bound)?;
+    let capture = CaptureLimitsV12::for_bytes(canonical_bytes)
+        .and_then(|cap| cap.for_policy3_nodes(registered_node_bound))
+        .map_err(PlironOptimizationErrorV12::Mapping)?;
+    let volume = canonical_bytes
+        .checked_add(32_768)
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(arithmetic)?;
+    // Versioned logical allowance for opaque upstream DomInfo / pass hooks.
+    // Dynamic CSE key/comparison/traversal work and visible scratch capacities
+    // are charged separately through the same caller ledger, not this profile.
+    let opaque_work = volume.checked_mul(128).ok_or_else(arithmetic)?;
+    let opaque_storage = volume.checked_mul(64).ok_or_else(arithmetic)?;
+    profile.work = profile
+        .work
+        .checked_sub(old.work().map_err(PlironOptimizationErrorV12::Mapping)?)
+        .and_then(|n| n.checked_add(capture.work().ok()?))
+        .and_then(|n| n.checked_add(opaque_work))
+        .ok_or_else(arithmetic)?;
+    profile.persistent = profile
+        .persistent
+        .checked_sub(old.storage().map_err(PlironOptimizationErrorV12::Mapping)?)
+        .and_then(|n| n.checked_add(capture.storage().ok()?))
+        .ok_or_else(arithmetic)?;
+    profile.temporary = profile
+        .temporary
+        .checked_add(opaque_storage)
+        .ok_or_else(arithmetic)?;
+    profile.report = size_of::<PlironOptimizationReportV1>()
+        .checked_add(8 * size_of::<PlironOptimizationPassReportV1>())
+        .ok_or_else(arithmetic)?;
+    Ok((profile, capture))
+}
+
 impl KirPlironGraphV12<'_> {
     /// Runs the fixed production policy once on this exact V12 candidate.
     ///
@@ -224,6 +278,7 @@ impl KirPlironGraphV12<'_> {
             budget,
             ExecutionAdmissionV1::Target { occurrences },
         )
+        .map(|(report, profile, _)| (report, profile))
     }
 
     pub(crate) fn execute_native_neutral_policy_v1(
@@ -242,6 +297,29 @@ impl KirPlironGraphV12<'_> {
                 limits,
             },
         )
+        .map(|(report, profile, _)| (report, profile))
+    }
+
+    pub(crate) fn execute_native_policy3_v1(
+        &mut self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        occurrences: &crate::kir_occurrence_capture_v1::Capture,
+        limits: crate::kir_occurrence_capture_v1::Limits,
+    ) -> Result<
+        (
+            PlironOptimizationReportV1,
+            PlironOptimizationResourcesV12,
+            usize,
+        ),
+        PlironOptimizationErrorV12,
+    > {
+        self.execute_admitted_production_optimization_v1(
+            budget,
+            ExecutionAdmissionV1::Policy3 {
+                occurrences,
+                limits,
+            },
+        )
     }
 
     fn execute_admitted_production_optimization_v1(
@@ -249,9 +327,14 @@ impl KirPlironGraphV12<'_> {
         budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
         admission: ExecutionAdmissionV1<'_>,
     ) -> Result<
-        (PlironOptimizationReportV1, PlironOptimizationResourcesV12),
+        (
+            PlironOptimizationReportV1,
+            PlironOptimizationResourcesV12,
+            usize,
+        ),
         PlironOptimizationErrorV12,
     > {
+        use crate::fixed_policy_v3::FixedPolicy;
         self.validate_custody_v12()
             .map_err(PlironOptimizationErrorV12::Bridge)?;
         if self.optimization_started {
@@ -259,17 +342,38 @@ impl KirPlironGraphV12<'_> {
         }
         let canonical_bytes = usize::try_from(self.input().canonical_bytes())
             .map_err(|_| PlironOptimizationErrorV12::Accounting)?;
-        let (profile, native_capture, occurrences) = match admission {
-            ExecutionAdmissionV1::Target { occurrences } => {
-                (execution_resources_v12(canonical_bytes)?, None, occurrences)
-            }
+        let (profile, native_capture, occurrences, policy) = match admission {
+            ExecutionAdmissionV1::Target { occurrences } => (
+                execution_resources_v12(canonical_bytes)?,
+                None,
+                occurrences,
+                FixedPolicy::Historical2,
+            ),
             ExecutionAdmissionV1::Native {
                 occurrences,
                 limits,
             } => {
                 let (profile, capture) =
                     native_execution_resources_v1(canonical_bytes, limits.nodes)?;
-                (profile, Some(capture), Some(occurrences))
+                (
+                    profile,
+                    Some(capture),
+                    Some(occurrences),
+                    FixedPolicy::Historical2,
+                )
+            }
+            ExecutionAdmissionV1::Policy3 {
+                occurrences,
+                limits,
+            } => {
+                let (profile, capture) =
+                    policy3_execution_resources_v1(canonical_bytes, limits.nodes)?;
+                (
+                    profile,
+                    Some(capture),
+                    Some(occurrences),
+                    FixedPolicy::Checked3,
+                )
             }
         };
         let retained = self
@@ -287,35 +391,55 @@ impl KirPlironGraphV12<'_> {
         let result = (|| {
             let mut passes = Vec::new();
             passes
-                .try_reserve_exact(7)
+                .try_reserve_exact(policy.passes().len())
                 .map_err(|_| CanonicalKernelIrVerificationResourceErrorV1::Allocation)?;
-            passes.extend(KIR_PLIRON_PRODUCTION_PASSES_V12);
+            passes.extend_from_slice(policy.passes());
             let limits = PlironOptimizationLimitsV1::new(256, 32_768, 25_268_224)
                 .map_err(|_| PlironOptimizationErrorV12::Accounting)?;
             let plan = PlironOptimizationPlanV1::new(passes, limits)
                 .map_err(|_| PlironOptimizationErrorV12::Accounting)?;
             let capture = match native_capture {
-                Some(limits) => self.begin_optimization_capture_with_limits_v1(limits),
+                Some(limits) => self.begin_optimization_capture_for_policy_v1(limits, policy),
                 None => self.begin_optimization_capture_v12(),
             }
             .map_err(PlironOptimizationErrorV12::Mapping)?;
             self.retained_storage = retained;
             self.optimization_started = true;
-            let result = match occurrences {
-                None => self
-                    .session
-                    .execute_optimization_with_capture_v12(&self.root, &plan, &capture),
-                Some(occurrences) => self.session.execute_optimization_with_occurrences_v1(
+            let (result, cse_work) = if policy == FixedPolicy::Checked3 {
+                let mut ledger = crate::fixed_policy_v3::CseLedger::new(budget);
+                let result = self.session.execute_fixed_policy3_v1(
                     &self.root,
                     &plan,
                     &capture,
-                    occurrences,
-                ),
+                    occurrences.ok_or(PlironOptimizationErrorV12::Accounting)?,
+                    &mut ledger,
+                );
+                // Preserve the original ledger denial even when the pass
+                // manager wraps it, and reject sticky cleanup/accounting errors.
+                let work = ledger.finish()?;
+                (result, work)
+            } else {
+                (
+                    match occurrences {
+                        None => self
+                            .session
+                            .execute_optimization_with_capture_v12(&self.root, &plan, &capture),
+                        Some(occurrences) => self.session.execute_optimization_with_occurrences_v1(
+                            &self.root,
+                            &plan,
+                            &capture,
+                            occurrences,
+                        ),
+                    },
+                    0,
+                )
             };
             if let Some(error) = capture.failure() {
                 return Err(PlironOptimizationErrorV12::Mapping(error));
             }
-            result.map_err(PlironOptimizationErrorV12::Execution)
+            result
+                .map(|report| (report, cse_work))
+                .map_err(PlironOptimizationErrorV12::Execution)
         })();
         let keep = if self.optimization_started {
             profile.persistent
@@ -330,7 +454,7 @@ impl KirPlironGraphV12<'_> {
         // Pass-local objects have dropped; only session growth and, on success,
         // the explicitly transferred immutable report remain.
         budget.release_storage(release)?;
-        result.map(|report| (report, profile))
+        result.map(|(report, cse_work)| (report, profile, cse_work))
     }
 }
 
@@ -338,6 +462,34 @@ impl KirPlironGraphV12<'_> {
 mod tests {
     use super::*;
     include!("optimization_v12_native_profile_tests.rs");
+
+    #[test]
+    fn policy3_empty_profile_is_independent_and_does_not_change_historical_profile() {
+        // B=37, volume=32806, N=1. Policy3 capture is 10N events/targets:
+        // work=8*N*10N+64N=144; storage=512N+64*10N+64*10N+4096=5888.
+        // Work=(64+128)*volume+25268224+144; persistent=8*volume+4096+5888;
+        // temporary=(16+64)*volume+4096. Local Rust report layout stays off wire.
+        let (profile, limits) = policy3_execution_resources_v1(37, 1).unwrap();
+        assert_eq!(profile.work(), 31_567_120);
+        assert_eq!(profile.persistent_storage(), 272_432);
+        assert_eq!(profile.temporary_storage(), 2_628_576);
+        assert_eq!(
+            profile.retained_storage(),
+            size_of::<PlironOptimizationReportV1>()
+                + 8 * size_of::<PlironOptimizationPassReportV1>()
+        );
+        assert_eq!(limits.work().unwrap(), 144);
+        assert_eq!(limits.storage().unwrap(), 5888);
+        let (old, _) = native_execution_resources_v1(37, 1).unwrap();
+        assert_eq!(old.work(), 27_367_936);
+        assert_eq!(
+            old.retained_storage(),
+            size_of::<PlironOptimizationReportV1>()
+                + 7 * size_of::<PlironOptimizationPassReportV1>()
+        );
+        assert!(policy3_execution_resources_v1(usize::MAX, 1).is_err());
+        assert!(policy3_execution_resources_v1(37, 0).is_err());
+    }
 
     #[test]
     fn envelope_literals_and_arithmetic_are_independent() {

@@ -3495,6 +3495,7 @@ enum ValueBinding {
     Value {
         llvm_name: String,
         ty: Type,
+        unsigned_constant: Option<u64>,
     },
     Slice {
         data_name: String,
@@ -3506,7 +3507,7 @@ enum ValueBinding {
 impl ValueBinding {
     fn value(&self) -> Option<(&str, &Type)> {
         match self {
-            Self::Value { llvm_name, ty } => Some((llvm_name, ty)),
+            Self::Value { llvm_name, ty, .. } => Some((llvm_name, ty)),
             Self::Slice { .. } => None,
         }
     }
@@ -4278,6 +4279,7 @@ impl<'a> FunctionLowerer<'a> {
                         ValueBinding::Value {
                             llvm_name: format!("%arg{index}"),
                             ty: ty.clone(),
+                            unsigned_constant: None,
                         },
                     );
                 }
@@ -4288,6 +4290,7 @@ impl<'a> FunctionLowerer<'a> {
                         ValueBinding::Value {
                             llvm_name: format!("%arg{index}"),
                             ty: ty.clone(),
+                            unsigned_constant: None,
                         },
                     );
                 }
@@ -4301,6 +4304,7 @@ impl<'a> FunctionLowerer<'a> {
                         ValueBinding::Value {
                             llvm_name: format!("%arg{index}"),
                             ty: ty.clone(),
+                            unsigned_constant: None,
                         },
                     );
                 }
@@ -4363,6 +4367,7 @@ impl<'a> FunctionLowerer<'a> {
                             ValueBinding::Value {
                                 llvm_name: value_name(parameter.id),
                                 ty: parameter.ty.clone(),
+                                unsigned_constant: None,
                             },
                         );
                     }
@@ -4373,6 +4378,7 @@ impl<'a> FunctionLowerer<'a> {
                             ValueBinding::Value {
                                 llvm_name: value_name(parameter.id),
                                 ty: parameter.ty.clone(),
+                                unsigned_constant: None,
                             },
                         );
                     }
@@ -4425,6 +4431,7 @@ impl<'a> FunctionLowerer<'a> {
         }
         for block in &body.blocks {
             for operation in &block.operations {
+                let unsigned_constant = direct_unsigned_constant_v1(operation);
                 for result in &operation.results {
                     self.validate_narrow_type_capability(
                         &result.ty,
@@ -4441,6 +4448,7 @@ impl<'a> FunctionLowerer<'a> {
                         ValueBinding::Value {
                             llvm_name,
                             ty: result.ty.clone(),
+                            unsigned_constant,
                         },
                     );
                 }
@@ -4797,6 +4805,14 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
+            OperationKind::Alloca {
+                element,
+                count: Some(count),
+                address_space: KernelAddressSpace::Private,
+                alignment,
+            } => {
+                self.validate_counted_private_alloca_v1(element, *count, *alignment, &location)?;
+            }
             OperationKind::Call { callee, arguments } => {
                 if let Some(diagnostic) =
                     AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
@@ -4826,6 +4842,59 @@ impl<'a> FunctionLowerer<'a> {
                     format!("G1 does not lower {:?}", operation.kind),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_counted_private_alloca_v1(
+        &self,
+        element: &Type,
+        count: ValueId,
+        alignment: u32,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if !supported_memory_type(element, self.target) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedType,
+                format!("unsupported counted private allocation element type {element:?}"),
+            ));
+        }
+        let element_bytes = amdgpu_lds_element_bytes(element)
+            .expect("supported scalar memory types have a fixed AMDGPU byte size");
+        let required_alignment = amdgpu_private_element_alignment(element)
+            .expect("supported scalar memory types have a private alignment");
+        if u64::from(alignment) < required_alignment {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedOperation,
+                format!(
+                    "counted private allocation element {element:?} requires alignment {required_alignment}, found {alignment}"
+                ),
+            ));
+        }
+        let Some(ValueBinding::Value {
+            unsigned_constant: Some(count),
+            ..
+        }) = self.bindings.get(&count)
+        else {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedOperation,
+                "counted private allocation requires a direct unsigned integer constant",
+            ));
+        };
+        // This bounds private pointer-index representation, not device scratch capacity.
+        if *count == 0
+            || count
+                .checked_mul(element_bytes)
+                .is_none_or(|bytes| bytes > i32::MAX as u64)
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedOperation,
+                "counted private allocation requires a positive span within the 32-bit private index range",
+            ));
         }
         Ok(())
     }
@@ -6120,7 +6189,7 @@ impl<'a> FunctionLowerer<'a> {
                 .get(&parameter.id)
                 .expect("validated block parameter")
             {
-                ValueBinding::Value { llvm_name, ty } => {
+                ValueBinding::Value { llvm_name, ty, .. } => {
                     let values = incomings
                         .iter()
                         .map(|(predecessor, ordinal, arguments)| {
@@ -6723,6 +6792,24 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+            OperationKind::Alloca {
+                element,
+                count: Some(count),
+                address_space: KernelAddressSpace::Private,
+                alignment,
+            } => {
+                let (count_name, count_ty) = self.value(*count);
+                writeln!(
+                    output,
+                    "  {} = alloca {}, {} {}, align {}, addrspace(5)",
+                    result_name.expect("validated counted private allocation result"),
+                    llvm_type(element),
+                    llvm_type(count_ty),
+                    count_name,
+                    alignment
+                )
+                .unwrap();
+            }
             OperationKind::Call { callee, arguments } => {
                 if let Some(diagnostic) =
                     AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
@@ -6755,7 +6842,7 @@ impl<'a> FunctionLowerer<'a> {
                             .get(argument)
                             .expect("validated call argument")
                         {
-                            ValueBinding::Value { llvm_name, ty } => {
+                            ValueBinding::Value { llvm_name, ty, .. } => {
                                 format!("{} {llvm_name}", llvm_type(ty))
                             }
                             ValueBinding::Slice {
@@ -8774,6 +8861,25 @@ fn supported_scalar(scalar: ScalarType, target: LoweringTarget) -> bool {
 
 fn is_i32_register_type(ty: &Type) -> bool {
     matches!(ty, Type::Scalar(ScalarType::I32 | ScalarType::U32))
+}
+
+fn direct_unsigned_constant_v1(operation: &Operation) -> Option<u64> {
+    let OperationKind::Constant(constant) = &operation.kind else {
+        return None;
+    };
+    let [result] = operation.results.as_slice() else {
+        return None;
+    };
+    if result.ty != constant.ty() {
+        return None;
+    }
+    match constant {
+        Constant::U8(value) => Some(u64::from(*value)),
+        Constant::U16(value) => Some(u64::from(*value)),
+        Constant::U32(value) => Some(u64::from(*value)),
+        Constant::U64(value) | Constant::Index(value) => Some(*value),
+        _ => None,
+    }
 }
 
 fn supported_integer(scalar: ScalarType) -> bool {

@@ -340,9 +340,15 @@ pub fn optimize_native_neutral_kernel_ir_v1<'input>(
 
 #[path = "checked_neutral_optimization_v1.rs"]
 mod checked_neutral_optimization_v1;
+#[path = "neutral_optimization_policy3_v1.rs"]
+mod policy3;
 pub use checked_neutral_optimization_v1::{
     CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
     KirCheckedNeutralOptimizationStorageV1, KirNeutralOwnedOriginStorageV1,
+};
+pub use policy3::{
+    CheckedNeutralKernelIrOwnerPolicy3V1, KirNeutralOptimizationOutputPolicy3V1,
+    optimize_native_neutral_kernel_ir_policy3_v1,
 };
 
 #[cfg(test)]
