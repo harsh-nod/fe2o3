@@ -540,7 +540,7 @@ mod name_census_tests {
         let zero_value = zero.result(&context);
         let one_value = one.result(&context);
         let extent_value = extent.result(&context);
-        let view_type = RankedViewType::new(&mut context, 32, true, vec![DYNAMIC_EXTENT]).unwrap();
+        let view_type = RankedViewType::new(&context, 32, true, vec![DYNAMIC_EXTENT]).unwrap();
         let view = RankedViewOp::new_in_space(
             &mut context,
             view_type,
@@ -635,7 +635,7 @@ mod name_census_tests {
                 );
                 access_block.insert_at_back(function.get_region(&context), &context);
                 exit.insert_at_back(function.get_region(&context), &context);
-                let view_type = RankedViewType::new(&mut context, 32, true, vec![1]).unwrap();
+                let view_type = RankedViewType::new(&context, 32, true, vec![1]).unwrap();
                 let view = RankedViewOp::new_in_space(
                     &mut context,
                     view_type,
