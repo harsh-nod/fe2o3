@@ -224,9 +224,11 @@ fn pre_ranked_second_root_effectful_helper_cannot_acquire_empty_effect_facts() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
     budget.reserve_storage(FLOOR).unwrap();
-    let error = try_materialize_shared(helper_owner_with_second_root_barrier(true), &mut budget)
-        .err()
-        .expect("an effect reachable only from the second root must reject the whole owner");
+    let Err(error) =
+        try_materialize_shared(helper_owner_with_second_root_barrier(true), &mut budget)
+    else {
+        panic!("an effect reachable only from the second root must reject the whole owner");
+    };
     assert!(
         matches!(
             error,

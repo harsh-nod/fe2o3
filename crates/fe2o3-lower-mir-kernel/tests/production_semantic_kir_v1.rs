@@ -4336,12 +4336,12 @@ fn transparent_helper_carrier_rejects_loose_layout_and_wrong_ownership() {
         exact_transparent_scalar_carrier_field_v1(&loose_types, TRANSPARENT_HELPER_CARRIER_TYPE,),
         None
     );
-    let error = ProductionSemanticKirOwnerV1::try_lower(
+    let Err(error) = ProductionSemanticKirOwnerV1::try_lower(
         transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::LooseStorageOnly),
         ProductionSemanticKirLimitsV1::default(),
-    )
-    .err()
-    .expect("restricted scalar validity must not become a loose aggregate transport");
+    ) else {
+        panic!("restricted scalar validity must not become a loose aggregate transport");
+    };
     assert!(
         matches!(
             error,

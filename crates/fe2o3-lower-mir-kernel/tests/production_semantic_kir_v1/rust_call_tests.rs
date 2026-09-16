@@ -607,12 +607,12 @@ fn rust_call_field_roles_not_local_order_determine_parameter_correspondence() {
 
 #[test]
 fn rust_call_repeated_tuple_expansion_is_bounded_before_materialization() {
-    let error = ProductionSemanticKirOwnerV1::try_lower(
+    let Err(error) = ProductionSemanticKirOwnerV1::try_lower(
         owner(false, false, &[U32; 20], BodyCase::RepeatedCalls(40)),
         ProductionSemanticKirLimitsV1::new_with_max_operations(10, 100, 100, 400),
-    )
-    .err()
-    .expect("repeated arguments must exceed the work budget");
+    ) else {
+        panic!("repeated arguments must exceed the work budget");
+    };
     assert!(
         matches!(error, ProductionSemanticKirErrorV1::ResourceLimit {
         resource: ProductionSemanticKirResourceV1::AnalysisStorage, actual, limit: 400,
@@ -630,12 +630,12 @@ fn rust_call_ignored_argument_budget_has_an_exact_boundary() {
         )
         .expect("21 argument rows at one declaration and 40 calls fit exactly");
         for field in [UNIT, U32] {
-            let error = ProductionSemanticKirOwnerV1::try_lower(
+            let Err(error) = ProductionSemanticKirOwnerV1::try_lower(
                 owner(expanded, false, &[field; 20], BodyCase::RepeatedCalls(40)),
                 ProductionSemanticKirLimitsV1::new_with_max_operations(10, 100, 100, 860),
-            )
-            .err()
-            .expect("one fewer row must reject before body materialization");
+            ) else {
+                panic!("one fewer row must reject before body materialization");
+            };
             assert!(
                 matches!(
                     error,
@@ -654,12 +654,12 @@ fn rust_call_ignored_argument_budget_has_an_exact_boundary() {
 #[test]
 fn rust_call_empty_source_tuple_still_consumes_an_argument_row() {
     for expanded in [false, true] {
-        let error = ProductionSemanticKirOwnerV1::try_lower(
+        let Err(error) = ProductionSemanticKirOwnerV1::try_lower(
             owner(expanded, false, &[], BodyCase::RepeatedCalls(40)),
             ProductionSemanticKirLimitsV1::new_with_max_operations(10, 100, 100, 81),
-        )
-        .err()
-        .expect("receiver and empty tuple at 41 sites require 82 rows");
+        ) else {
+            panic!("receiver and empty tuple at 41 sites require 82 rows");
+        };
         assert!(
             matches!(
                 error,
