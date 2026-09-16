@@ -11,7 +11,7 @@ fn captured_len(token: SliceToken<'_>) -> u32 {
     }
     #[cfg(feature = "rust_call_slice_read")]
     {
-        if token.0.is_empty() { 0 } else { token.0[0] }
+        if token.0.len() == 0 { 0 } else { token.0[0] }
     }
 }
 
