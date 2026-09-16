@@ -391,7 +391,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 semantic_mir.identity().sha256(),
                 semantic_mir.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "semantic MIR",
         ),
         (
@@ -400,7 +400,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 middle_end.identity().sha256(),
                 middle_end.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "middle end",
         ),
         (
@@ -409,7 +409,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 kernel_ir.identity().sha256(),
                 kernel_ir.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "Kernel IR",
         ),
         (
@@ -418,7 +418,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 mir_to_kir_correspondence.identity().sha256(),
                 mir_to_kir_correspondence.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "MIR-to-KIR correspondence",
         ),
         (
@@ -427,7 +427,7 @@ pub fn validate_compiler_proof_inputs_v4(
                 formal_memory.identity().sha256(),
                 formal_memory.identity().byte_len(),
             )
-            .map_err(CompilerProofInputValidationErrorV4::Stage)?,
+            .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?,
             "formal memory",
         ),
     ] {
@@ -444,7 +444,7 @@ pub fn validate_compiler_proof_inputs_v4(
         mir_to_kir_correspondence,
         formal_memory,
     )
-    .map_err(CompilerProofInputValidationErrorV4::Stage)?;
+    .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?;
     let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
         association.verus_execution_evidence(),
     )
@@ -1090,6 +1090,13 @@ fn validate_parameter_bindings_v4(
 ) -> Result<(), CompilerProofInputValidationErrorV3> {
     let mut expected_bindings = 0_usize;
     for (&function_index, semantic_function) in semantic_functions {
+        if semantic_function.abi().extern_abi()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+        {
+            return Err(structural_v4(
+                "V4 parameter correspondence does not encode RustCall components",
+            ));
+        }
         let body = kernel_bodies
             .get(&function_index)
             .ok_or_else(|| structural_v4("corresponding KIR function body is absent"))?;
@@ -1099,7 +1106,9 @@ fn validate_parameter_bindings_v4(
             .enumerate()
             .filter_map(|(local, declaration)| match declaration.role() {
                 SemanticLocalRoleV1::Argument(argument) => Some((argument, local)),
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
             })
             .collect::<Vec<_>>();
         arguments.sort_unstable();
@@ -1486,7 +1495,7 @@ pub enum CompilerProofInputValidationErrorV4 {
         field: &'static str,
     },
     /// One of the five shared compiler stages failed strict decoding or cross-checking.
-    Stage(CompilerProofInputValidationErrorV3),
+    Stage(Box<CompilerProofInputValidationErrorV3>),
     /// The nested aggregate Verus execution failed canonical decode or signed receipt import.
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
     /// The signed aggregate receipt names a different live PLIRON middle-end record.
@@ -1522,9 +1531,62 @@ impl Error for CompilerProofInputValidationErrorV4 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ProofBindingDecode(error) => Some(error),
-            Self::Stage(error) => Some(error),
+            Self::Stage(error) => Some(error.as_ref()),
             Self::VerusEvidence(error) => Some(error),
             Self::ProofBindingIdentityMismatch { .. } | Self::VerusMiddleEndMismatch => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod rust_call_parameter_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    mod compiler_proof_inputs_v3 {
+        use crate as fe2o3_verifier;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/compiler_proof_inputs_v3.rs"
+        ));
+    }
+
+    #[test]
+    fn v4_rejects_rust_call_even_when_expansion_has_no_parameters() {
+        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            proof.semantic_mir(), fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        ).unwrap();
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+                proof.kernel_ir().to_vec(),
+            )
+            .unwrap();
+        let body = module.functions[0].body.as_ref().unwrap();
+        let ordinary = &semantic.functions()[0];
+        let rust_call = compiler_proof_inputs_v3::rust_call_empty_helper_v28(0x20);
+        let correspondence =
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();
+        let bodies = BTreeMap::from([(0, body)]);
+        assert!(
+            validate_parameter_bindings_v4(
+                &correspondence,
+                &BTreeMap::from([(0, ordinary)]),
+                &bodies
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_parameter_bindings_v4(
+                &correspondence,
+                &BTreeMap::from([(0, &rust_call)]),
+                &bodies
+            ),
+            Err(
+                CompilerProofInputValidationErrorV3::StructuralCorrespondence {
+                    detail: "V4 parameter correspondence does not encode RustCall components",
+                }
+            )
+        ));
     }
 }

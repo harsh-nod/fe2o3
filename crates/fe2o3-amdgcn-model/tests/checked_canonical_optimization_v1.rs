@@ -227,3 +227,6 @@ fn real_checked_rows_do_not_admit_foreign_target_or_kernel_metadata() {
         .unwrap();
     assert_eq!(budget.storage(), PREFIX);
 }
+
+#[path = "checked_canonical_optimization_v1/native_v12_lowering_v1_tests.rs"]
+mod native_v12_lowering_v1_tests;

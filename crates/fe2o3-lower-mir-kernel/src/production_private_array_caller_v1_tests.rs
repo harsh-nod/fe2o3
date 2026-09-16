@@ -174,11 +174,9 @@ fn private_array_multiroot_retained_helper_preserves_the_existing_purity_rejecti
     assert!(matches!(
         multiroot_array_owner(true),
         Err(ProductionPreRankedKirErrorV1::Lowering(
-            ProductionSemanticKirErrorV1::Unsupported {
+            ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
                 function: 0,
-                block: None,
-                statement: None,
-                detail: "reachable deterministic scalar helper is not interprocedurally complete and pure",
+                ..
             }
         ))
     ));

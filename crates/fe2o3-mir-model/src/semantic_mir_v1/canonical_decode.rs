@@ -333,6 +333,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes V28 RustCall entry locals with the unchanged V15 intrinsics.
+    pub fn decode_exact_v28_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V28),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -373,6 +385,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V13
                         | SemanticMirWireVersionV1::V14
                         | SemanticMirWireVersionV1::V15
+                        | SemanticMirWireVersionV1::V28
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1215,10 +1228,19 @@ impl<'a> CanonicalDecoderV1<'a> {
         let locals = self.records("locals", Some(SemanticMirResourceV1::Locals), |decoder| {
             let identity = SemanticLocalIdentityV1(decoder.identity()?);
             let ty = SemanticTypeIdV1(decoder.u32()?);
-            let role = match decoder.tagged("local role", 2)? {
+            let maximum_role = if decoder.wire_version >= SemanticMirWireVersionV1::V28 {
+                3
+            } else {
+                2
+            };
+            let role = match decoder.tagged("local role", maximum_role)? {
                 0 => SemanticLocalRoleV1::Return,
                 1 => SemanticLocalRoleV1::Argument(decoder.u32()?),
                 2 => SemanticLocalRoleV1::Temporary,
+                3 => SemanticLocalRoleV1::RustCallTupleField {
+                    argument: decoder.u32()?,
+                    field: decoder.u32()?,
+                },
                 _ => unreachable!(),
             };
             Ok(SemanticLocalDeclV1::new(
@@ -1620,7 +1642,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V15 {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
         } else if self.wire_version == SemanticMirWireVersionV1::V14 {
             67
@@ -2662,6 +2684,9 @@ impl<'a> CanonicalDecoderV1<'a> {
 mod tests {
     use super::*;
     use std::fmt::Debug;
+
+    mod frozen_v15;
+    mod rust_call_local_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]
@@ -4639,6 +4664,10 @@ mod tests {
             assert_eq!(
                 compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V14),
                 compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V15)
+            );
+            assert_eq!(
+                compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V15),
+                compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V28)
             );
         }
         decoder.finish().unwrap();

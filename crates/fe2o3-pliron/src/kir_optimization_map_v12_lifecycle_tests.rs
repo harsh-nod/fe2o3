@@ -106,17 +106,20 @@ fn check_with_seeded_prefix(
 fn real_observed_creation_erasure_and_replacement_remain_admitted() {
     let (input, output, map) = observed_map();
     assert!(
-        map.events
+        map.data
+            .events
             .iter()
             .any(|event| matches!(event.change, Change::Create(_)))
     );
     assert!(
-        map.events
+        map.data
+            .events
             .iter()
             .any(|event| matches!(event.change, Change::Erase(_)))
     );
     assert!(
-        map.events
+        map.data
+            .events
             .iter()
             .any(|event| matches!(event.change, Change::Replace(_, _)))
     );
@@ -129,23 +132,24 @@ fn recomputed_digest_does_not_admit_invalid_lifetime_order_or_event_kind() {
         let (input, output, mut map) = observed_map();
         match mutation {
             0 => {
-                let position = map.events.windows(2).position(|pair| {
+                let position = map.data.events.windows(2).position(|pair| {
                     matches!((pair[0].change, pair[1].change),
                         (Change::Erase(result), Change::Erase(producer))
-                        if map.nodes[result as usize].kind == (Kind::Value { producer: Some(producer) }))
+                        if map.data.nodes[result as usize].kind == (Kind::Value { producer: Some(producer) }))
                 }).expect("DCE observes result erasure before its producer");
-                map.events.swap(position, position + 1);
+                map.data.events.swap(position, position + 1);
             }
             1 => {
-                let position = map.events.windows(2).position(|pair| {
+                let position = map.data.events.windows(2).position(|pair| {
                     matches!((pair[0].change, pair[1].change),
                         (Change::Create(producer), Change::Create(result))
-                        if map.nodes[result as usize].kind == (Kind::Value { producer: Some(producer) }))
+                        if map.data.nodes[result as usize].kind == (Kind::Value { producer: Some(producer) }))
                 }).expect("SCCP observes the materialized producer before its result");
-                map.events.swap(position, position + 1);
+                map.data.events.swap(position, position + 1);
             }
             2 | 3 => {
                 let (position, value, producer) = map
+                    .data
                     .events
                     .iter()
                     .enumerate()
@@ -155,14 +159,14 @@ fn recomputed_digest_does_not_admit_invalid_lifetime_order_or_event_kind() {
                         };
                         let Kind::Value {
                             producer: Some(producer),
-                        } = map.nodes[value as usize].kind
+                        } = map.data.nodes[value as usize].kind
                         else {
                             return None;
                         };
                         Some((i, value, producer))
                     })
                     .expect("SCCP observes a live arithmetic result replacement");
-                map.events[position].change = if mutation == 2 {
+                map.data.events[position].change = if mutation == 2 {
                     Change::Move(value)
                 } else {
                     Change::Modify(producer)
@@ -171,7 +175,7 @@ fn recomputed_digest_does_not_admit_invalid_lifetime_order_or_event_kind() {
             _ => unreachable!(),
         }
         // This must fail lifecycle validation, not merely the digest comparison.
-        map.digest = map.compute_digest();
+        map.data.digest = map.compute_digest();
         assert_eq!(
             check_with_seeded_prefix(&map, &input, &output),
             Err(KirOptimizationMapErrorV12::Lifecycle),

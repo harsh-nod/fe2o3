@@ -153,9 +153,10 @@ fn assert_structural_failure(receipts: &Receipts, expected: &'static str) {
     let proof_binding = proof_binding(receipts, None, evidence.canonical_bytes());
     assert!(matches!(
         validate(&proof_binding, receipts),
-        Err(CompilerProofInputValidationErrorV4::Stage(
-            CompilerProofInputValidationErrorV3::StructuralCorrespondence { detail }
-        )) if detail == expected
+        Err(CompilerProofInputValidationErrorV4::Stage(error))
+            if matches!(*error,
+                CompilerProofInputValidationErrorV3::StructuralCorrespondence { detail }
+                    if detail == expected)
     ));
 }
 
@@ -291,6 +292,40 @@ fn validate(
         &receipts.correspondence,
         &receipts.formal_memory,
     )
+}
+
+#[test]
+fn v4_validation_error_stays_below_result_large_err_threshold() {
+    let size = std::mem::size_of::<CompilerProofInputValidationErrorV4>();
+    assert!(size < 128, "V4 validation error occupies {size} bytes");
+}
+
+#[test]
+fn v4_stage_error_preserves_display_and_direct_source_downcast() {
+    let error = CompilerProofInputValidationErrorV4::Stage(Box::new(
+        CompilerProofInputValidationErrorV3::StructuralCorrespondence {
+            detail: "stage regression",
+        },
+    ));
+    assert_eq!(
+        error.to_string(),
+        "current compiler proof stage failed: compiler proof inputs have invalid structural correspondence: stage regression"
+    );
+    let source = std::error::Error::source(&error).unwrap();
+    let direct = source
+        .downcast_ref::<CompilerProofInputValidationErrorV3>()
+        .unwrap();
+    let CompilerProofInputValidationErrorV4::Stage(stage) = &error else {
+        panic!("stage error changed variant");
+    };
+    assert!(std::ptr::eq(direct, stage.as_ref()));
+    assert!(matches!(
+        direct,
+        CompilerProofInputValidationErrorV3::StructuralCorrespondence {
+            detail: "stage regression"
+        }
+    ));
+    assert!(source.source().is_none());
 }
 
 #[test]
@@ -444,11 +479,11 @@ fn independently_well_formed_kir_custody_substitutions_fail_closed() {
         let proof_binding = proof_binding(&receipts, None, evidence.canonical_bytes());
         assert!(matches!(
             validate(&proof_binding, &receipts),
-            Err(CompilerProofInputValidationErrorV4::Stage(
-                CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
-                    field: "current production Kernel IR custody"
-                }
-            ))
+            Err(CompilerProofInputValidationErrorV4::Stage(error))
+                if matches!(*error,
+                    CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
+                        field: "current production Kernel IR custody"
+                    })
         ));
     }
 }

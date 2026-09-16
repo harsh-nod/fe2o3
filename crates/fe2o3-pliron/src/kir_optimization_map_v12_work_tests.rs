@@ -24,11 +24,12 @@ fn actual_nonempty_check_has_independent_exact_and_one_under_limits() {
     let (output, _, map) = run(&input);
     // Constant/result/Return => N=3; DCE erases result then producer => E=2.
     // Sources S=2, I=3, O=1, total F=2, B=2; log=2 and target bound=6.
-    assert_eq!(map.nodes.len(), 3);
-    assert_eq!(map.events.len(), 2);
-    assert_eq!(map.relations.len(), 2);
+    assert_eq!(map.data.nodes.len(), 3);
+    assert_eq!(map.data.events.len(), 2);
+    assert_eq!(map.data.relations.len(), 2);
     assert!(
-        map.events
+        map.data
+            .events
             .iter()
             .all(|event| matches!(event.change, Change::Erase(_)))
     );
@@ -98,8 +99,8 @@ fn declarations_without_endpoints_still_pay_both_module_scans() {
         }
         let input = owner(&module);
         let (output, _, map) = run(&input);
-        assert!(map.nodes.is_empty());
-        assert!(map.events.is_empty());
+        assert!(map.data.nodes.is_empty());
+        assert!(map.data.events.is_empty());
         // Census=3+2F, check=128*(2+2F), independently of symbol bytes.
         let exact = 259 + 258 * count;
         for under in [0, 1] {
@@ -142,7 +143,7 @@ fn immutable_output_census_rejects_growth_before_replay_scratch_allocation() {
         ));
     }
     let output = owner(&module);
-    map.output = *output.canonical().identity();
+    map.data.output = *output.canonical().identity();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     work.charge_work(11).unwrap();
     let mut budget = Budget::new(&mut work, 17);

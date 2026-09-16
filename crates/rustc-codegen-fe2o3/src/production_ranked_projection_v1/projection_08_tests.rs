@@ -1084,7 +1084,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1109,7 +1109,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1132,7 +1132,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1147,7 +1147,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1167,7 +1167,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1190,7 +1190,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             )
@@ -1213,7 +1213,7 @@
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[const { None }; 2],
                 &[],
             ),
@@ -1231,7 +1231,7 @@
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[])
+            projected_cfg_terminator(&function, 0, &[], false, &mut ComponentDynamicAssertionFactsV1, &[const { None }; 2], &[])
                 .unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,

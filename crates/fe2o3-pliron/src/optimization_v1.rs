@@ -47,6 +47,8 @@ pub enum PlironOptimizationPassV1 {
     SelectSameValueCanonicalization,
     LocalPureCommonSubexpressionElimination,
     SimplifyControlFlow,
+    /// Only the trusted, same-ledger fixed policy-3 entrypoint executes this pass.
+    DominancePureCommonSubexpressionElimination,
 }
 
 impl PlironOptimizationPassV1 {
@@ -59,6 +61,9 @@ impl PlironOptimizationPassV1 {
                 "local-pure-common-subexpression-elimination"
             }
             Self::SimplifyControlFlow => "simplify-control-flow",
+            Self::DominancePureCommonSubexpressionElimination => {
+                "dominance-pure-common-subexpression-elimination"
+            }
         }
     }
 }
@@ -407,7 +412,7 @@ impl PlironSession {
         root: &OperationHandle,
         plan: &PlironOptimizationPlanV1,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
-        self.execute_optimization_impl_v1(root, plan, None, None)
+        self.execute_optimization_impl_v1(root, plan, None, None, None)
     }
 
     pub(crate) fn execute_optimization_with_capture_v12(
@@ -416,7 +421,7 @@ impl PlironSession {
         plan: &PlironOptimizationPlanV1,
         capture: &crate::kir_optimization_map_v12::CaptureV12,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
-        self.execute_optimization_impl_v1(root, plan, Some(capture), None)
+        self.execute_optimization_impl_v1(root, plan, Some(capture), None, None)
     }
 
     pub(crate) fn execute_optimization_with_occurrences_v1(
@@ -426,7 +431,27 @@ impl PlironSession {
         capture: &crate::kir_optimization_map_v12::CaptureV12,
         occurrences: &crate::kir_occurrence_capture_v1::Capture,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
-        self.execute_optimization_impl_v1(root, plan, Some(capture), Some(occurrences))
+        self.execute_optimization_impl_v1(root, plan, Some(capture), Some(occurrences), None)
+    }
+
+    pub(crate) fn execute_fixed_policy3_v1(
+        &mut self,
+        root: &OperationHandle,
+        plan: &PlironOptimizationPlanV1,
+        capture: &crate::kir_optimization_map_v12::CaptureV12,
+        occurrences: &crate::kir_occurrence_capture_v1::Capture,
+        ledger: &mut crate::fixed_policy_v3::CseLedger<'_, '_>,
+    ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
+        if plan.passes.as_slice() != crate::fixed_policy_v3::POLICY3_PASSES {
+            return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+        }
+        self.execute_optimization_impl_v1(
+            root,
+            plan,
+            Some(capture),
+            Some(occurrences),
+            Some(ledger),
+        )
     }
 
     fn execute_optimization_impl_v1(
@@ -435,8 +460,18 @@ impl PlironSession {
         plan: &PlironOptimizationPlanV1,
         capture: Option<&crate::kir_optimization_map_v12::CaptureV12>,
         occurrences: Option<&crate::kir_occurrence_capture_v1::Capture>,
+        mut cse: Option<&mut crate::fixed_policy_v3::CseLedger<'_, '_>>,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
         let pointer = self.with_operation(root, |pointer, _| pointer)?;
+        if cse.is_none()
+            && plan
+                .passes
+                .contains(&PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination)
+        {
+            return Err(PlironOptimizationErrorV1::PassRejected(
+                PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination,
+            ));
+        }
         let Some(owner_root) = self.operation_roots.get(&root.identity).copied() else {
             self.poisoned = true;
             return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
@@ -515,6 +550,7 @@ impl PlironSession {
                         Some(occurrences) => occurrences.observer(capture.observer()),
                         None => capture.observer(),
                     },
+                    cse.as_deref_mut(),
                 ),
                 None => run_trusted_pass(pass, pointer, &mut self.context, &mut analyses),
             })) {
@@ -771,6 +807,9 @@ fn run_trusted_pass(
             passes.add_pass(LocalPureCsePassV1)
         }
         PlironOptimizationPassV1::SimplifyControlFlow => passes.add_pass(SimplifyCFGPass),
+        PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination => {
+            return Err(TrustedPassFailure);
+        }
     }
     passes
         .run(pointer, context, analyses)
@@ -786,7 +825,17 @@ fn run_observed_pass_v12(
     context: &mut pliron::context::Context,
     analyses: &mut AnalysisManager,
     observer: Box<dyn pliron::irbuild::observer::RewriteObserver>,
+    cse: Option<&mut crate::fixed_policy_v3::CseLedger<'_, '_>>,
 ) -> Result<bool, TrustedPassFailure> {
+    if pass == PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination {
+        return run_observed_dominance_cse_v1(
+            pointer,
+            context,
+            analyses,
+            observer,
+            cse.ok_or(TrustedPassFailure)?,
+        );
+    }
     struct Observed {
         pass: PlironOptimizationPassV1,
         observer: Option<Box<dyn pliron::irbuild::observer::RewriteObserver>>,
@@ -802,6 +851,9 @@ fn run_observed_pass_v12(
                 }
                 PlironOptimizationPassV1::LocalPureCommonSubexpressionElimination => {
                     "gpu-local-pure-cse-v1"
+                }
+                PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination => {
+                    "gpu-dominance-pure-cse-v1"
                 }
             }
         }
@@ -835,6 +887,9 @@ fn run_observed_pass_v12(
                 PlironOptimizationPassV1::LocalPureCommonSubexpressionElimination => {
                     dialect_gpu::cse_v1::local_pure_cse_with_observer_v12(root, context, observer)
                 }
+                PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination => {
+                    return Err(pliron::input_error_noloc!("missing policy-3 ledger"));
+                }
             };
             if matches!(
                 self.pass,
@@ -858,6 +913,72 @@ fn run_observed_pass_v12(
 }
 
 struct TrustedPassFailure;
+
+fn run_observed_dominance_cse_v1(
+    pointer: Ptr<Operation>,
+    context: &mut pliron::context::Context,
+    analyses: &mut AnalysisManager,
+    observer: Box<dyn pliron::irbuild::observer::RewriteObserver>,
+    ledger: &mut crate::fixed_policy_v3::CseLedger<'_, '_>,
+) -> Result<bool, TrustedPassFailure> {
+    use pliron::{
+        graph::dominance::DomInfo,
+        pass::{PassManager, PassResult},
+    };
+    struct Observed<'a, 'budget, 'work> {
+        ledger: &'a mut crate::fixed_policy_v3::CseLedger<'budget, 'work>,
+        observer: Option<Box<dyn pliron::irbuild::observer::RewriteObserver>>,
+    }
+    impl Pass for Observed<'_, '_, '_> {
+        fn name(&self) -> &str {
+            "gpu-dominance-pure-cse-v1"
+        }
+        fn run(
+            &mut self,
+            root: Ptr<Operation>,
+            context: &mut pliron::context::Context,
+            analyses: &mut AnalysisManager,
+        ) -> pliron::result::Result<PassResult> {
+            let mut dominance = analyses.get_analysis_mut::<DomInfo>(root, context)?;
+            let observer = self
+                .observer
+                .take()
+                .expect("one fixed-policy CSE invocation");
+            let changed = dialect_gpu::dominance_cse_v1::dominance_pure_cse_with_observer_v1(
+                root,
+                context,
+                &mut dominance,
+                self.ledger,
+                observer,
+            )
+            .map_err(|error| {
+                let error = self.ledger.record_core_error(error);
+                pliron::input_error_noloc!(error)
+            })?;
+            self.ledger
+                .finish()
+                .map_err(|error| pliron::input_error_noloc!(error))?;
+            let mut result = PassResult::default();
+            result.ir_changed = changed;
+            result.set_preserved::<DomInfo>();
+            Ok(result)
+        }
+    }
+    // Run through the existing manager hooks without its 'static boxed list:
+    // this pass must borrow the caller's one live canonical ledger.
+    let result = <Passes as PassManager>::run_pass(
+        &mut Observed {
+            ledger,
+            observer: Some(observer),
+        },
+        pointer,
+        context,
+        analyses,
+    )
+    .map_err(|_| TrustedPassFailure)?;
+    analyses.retain_preserved(&result);
+    Ok(result.ir_changed == IRStatus::Changed)
+}
 
 #[cfg(test)]
 #[path = "optimization_v1/graph_custody_tests_v1.rs"]

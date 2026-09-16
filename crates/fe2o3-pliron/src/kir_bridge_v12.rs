@@ -807,10 +807,29 @@ impl KirPlironGraphV12<'_> {
         limits: crate::kir_optimization_map_v12::CaptureLimitsV12,
     ) -> Result<crate::kir_optimization_map_v12::CaptureV12, crate::KirOptimizationMapErrorV12>
     {
+        self.begin_optimization_capture_for_policy_v1(
+            limits,
+            crate::fixed_policy_v3::FixedPolicy::Historical2,
+        )
+    }
+
+    pub(crate) fn begin_optimization_capture_for_policy_v1(
+        &mut self,
+        limits: crate::kir_optimization_map_v12::CaptureLimitsV12,
+        policy: crate::fixed_policy_v3::FixedPolicy,
+    ) -> Result<crate::kir_optimization_map_v12::CaptureV12, crate::KirOptimizationMapErrorV12>
+    {
         use crate::kir_optimization_map_v12::CaptureV12;
         let captured = catch_unwind(AssertUnwindSafe(|| {
             let roster = self.optimization_roster_v12(limits.node_limit())?;
-            CaptureV12::new(limits, &roster)
+            match policy {
+                crate::fixed_policy_v3::FixedPolicy::Historical2 => {
+                    CaptureV12::new(limits, &roster)
+                }
+                crate::fixed_policy_v3::FixedPolicy::Checked3 => {
+                    CaptureV12::new_for_policy(limits, &roster, policy)
+                }
+            }
         }));
         let capture = match captured {
             Ok(result) => result?,
@@ -854,6 +873,56 @@ impl KirPlironGraphV12<'_> {
         ),
         KirMappedExtractionErrorV12,
     > {
+        self.extract_with_map_finalizer_v1(
+            budget,
+            native,
+            crate::fixed_policy_v3::FixedPolicy::Historical2,
+            crate::kir_optimization_map_v12::CaptureV12::finish,
+        )
+    }
+
+    pub(crate) fn extract_admitted_canonical_with_policy3_map_v1(
+        &mut self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        native: &NativeBridgeWitnessV1,
+    ) -> Result<
+        (
+            VerifiedCanonicalKernelIrModuleV12,
+            KirBridgeOptimizedReceiptV1,
+            crate::KirOptimizationMapPolicy3V12,
+            KirBridgeStorageV12,
+        ),
+        KirMappedExtractionErrorV12,
+    > {
+        self.extract_with_map_finalizer_v1(
+            budget,
+            Some(native),
+            crate::fixed_policy_v3::FixedPolicy::Checked3,
+            crate::kir_optimization_map_v12::CaptureV12::finish_policy3,
+        )
+    }
+
+    fn extract_with_map_finalizer_v1<M>(
+        &mut self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        native: Option<&NativeBridgeWitnessV1>,
+        policy: crate::fixed_policy_v3::FixedPolicy,
+        finish: impl FnOnce(
+            &crate::kir_optimization_map_v12::CaptureV12,
+            &VerifiedCanonicalKernelIrModuleV12,
+            &VerifiedCanonicalKernelIrModuleV12,
+            &crate::kir_optimization_map_v12::LiveRosterV12,
+            &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<(M, usize), crate::KirOptimizationMapErrorV12>,
+    ) -> Result<
+        (
+            VerifiedCanonicalKernelIrModuleV12,
+            KirBridgeOptimizedReceiptV1,
+            M,
+            KirBridgeStorageV12,
+        ),
+        KirMappedExtractionErrorV12,
+    > {
         use crate::KirOptimizationMapErrorV12;
         use crate::kir_optimization_map_v12::CaptureLimitsV12;
         let floor = budget.storage();
@@ -865,6 +934,9 @@ impl KirPlironGraphV12<'_> {
                     KirOptimizationMapErrorV12::Passes,
                 ))?
                 .clone();
+            capture
+                .require_policy(policy)
+                .map_err(KirMappedExtractionErrorV12::Mapping)?;
             let inner_floor = budget.storage();
             let materialized = self.extract_admitted_inner_v1(budget, false, native);
             restore_bridge_floor_v12(budget, inner_floor)
@@ -875,9 +947,11 @@ impl KirPlironGraphV12<'_> {
             budget
                 .reserve_storage(extracted.retained_storage())
                 .map_err(|e| map_error(e.into()))?;
-            let limits =
-                CaptureLimitsV12::for_bytes(self.source.canonical().canonical_bytes().len())
-                    .map_err(map_error)?;
+            let limits = CaptureLimitsV12::for_policy_bytes(
+                self.source.canonical().canonical_bytes().len(),
+                policy,
+            )
+            .map_err(map_error)?;
             if owner.module().functions.len() != self.source.module().functions.len() {
                 return Err(map_error(KirOptimizationMapErrorV12::Coverage));
             }
@@ -905,9 +979,8 @@ impl KirPlironGraphV12<'_> {
                     return Err(map_error(KirOptimizationMapErrorV12::UnsupportedMutation));
                 }
             };
-            let (map, map_storage) = capture
-                .finish(self.source, &owner, &roster, budget)
-                .map_err(map_error)?;
+            let (map, map_storage) =
+                finish(&capture, self.source, &owner, &roster, budget).map_err(map_error)?;
             budget
                 .reserve_storage(map_storage)
                 .map_err(|e| map_error(e.into()))?;
@@ -1075,94 +1148,4 @@ impl KirPlironGraphV12<'_> {
     }
 }
 
-// This allocation-free census only reads the already admitted output. Symbol
-// byte lengths do not change the number of pointer-keyed roster entries.
-fn optimization_roster_endpoint_count_v12(
-    output: &Module,
-    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-) -> Result<usize, crate::KirOptimizationMapErrorV12> {
-    use crate::KirOptimizationMapErrorV12 as E;
-    budget.charge_work(1)?;
-    let mut endpoints = 0usize;
-    for function in &output.functions {
-        budget.charge_work(1)?;
-        let Some(body) = &function.body else { continue };
-        endpoints = endpoints
-            .checked_add(body.parameters.len())
-            .ok_or(E::Arithmetic)?;
-        for block in &body.blocks {
-            budget.charge_work(1)?;
-            endpoints = endpoints
-                .checked_add(block.parameters.len())
-                .and_then(|n| n.checked_add(block.operations.len()))
-                .and_then(|n| n.checked_add(usize::from(block.terminator.is_some())))
-                .ok_or(E::Arithmetic)?;
-            for operation in &block.operations {
-                budget.charge_work(1)?;
-                endpoints = endpoints
-                    .checked_add(operation.results.len())
-                    .ok_or(E::Arithmetic)?;
-            }
-        }
-    }
-    // index_live_functions performs at most F fixed-size pointer-key lookups.
-    // Keep a worst-case collision allowance separate from the logical visitor.
-    budget.charge_work(
-        output
-            .functions
-            .len()
-            .checked_mul(output.functions.len())
-            .ok_or(E::Arithmetic)?,
-    )?;
-    Ok(endpoints)
-}
-
-impl<'input> KirPlironGraphV12<'input> {
-    pub(crate) const fn neutral_input_v1(&self) -> &'input VerifiedCanonicalKernelIrModuleV12 {
-        self.source
-    }
-    pub(crate) fn neutral_occurrence_limits_v1(
-        &self,
-        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-    ) -> Result<crate::kir_occurrence_capture_v1::Limits, crate::KirOptimizationMapErrorV12> {
-        crate::kir_occurrence_capture_v1::Limits::for_graph(
-            &self.session.context,
-            self.session.operations[&self.root.identity],
-            self.source.module(),
-            budget,
-        )
-    }
-    pub(crate) fn neutral_live_roster_v1(
-        &self,
-        limit: usize,
-        meter: &mut dyn FnMut(usize) -> Result<(), crate::KirOptimizationMapErrorV12>,
-    ) -> Result<crate::kir_optimization_map_v12::LiveRosterV12, crate::KirOptimizationMapErrorV12>
-    {
-        self.optimization_roster_metered_v1::<true, _>(limit, meter)
-    }
-    pub(crate) fn begin_neutral_occurrence_capture_v1(
-        &self,
-        limits: crate::kir_occurrence_capture_v1::Limits,
-    ) -> Result<crate::kir_occurrence_capture_v1::Capture, crate::KirOptimizationMapErrorV12> {
-        let mut work = 0usize;
-        let allowance = limits.work()?;
-        let roster =
-            self.optimization_roster_metered_v1::<true, _>(limits.nodes, &mut |units| {
-                work = work
-                    .checked_add(units)
-                    .ok_or(crate::KirOptimizationMapErrorV12::Arithmetic)?;
-                if work > allowance {
-                    return Err(crate::KirOptimizationMapErrorV12::Limit);
-                }
-                Ok(())
-            })?;
-        crate::kir_occurrence_capture_v1::Capture::new(
-            &self.session.context,
-            self.session.operations[&self.root.identity],
-            self.source.module(),
-            &roster,
-            limits,
-            work,
-        )
-    }
-}
+include!("kir_bridge_v12_capture_v1.rs");

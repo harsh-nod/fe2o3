@@ -4,8 +4,43 @@ fn source_launch_test_semantic_v1(
     first_identity: u8,
     first_binding: u8,
 ) -> AdmittedInertSemanticMirV1 {
+    source_launch_test_semantic_with_access_v1(first_identity, first_binding, false)
+}
+
+fn source_launch_test_semantic_with_access_v1(
+    first_identity: u8,
+    first_binding: u8,
+    ranked_access: bool,
+) -> AdmittedInertSemanticMirV1 {
     let unit = SemanticTypeIdV1::from_index(0);
-    let types = vec![neutral_semantic_types_v1().into_iter().next().unwrap()];
+    let scalar = SemanticTypeIdV1::from_index(1);
+    let array = SemanticTypeIdV1::from_index(2);
+    let mut types = vec![neutral_semantic_types_v1().into_iter().next().unwrap()];
+    if ranked_access {
+        types.push(neutral_semantic_types_v1().remove(NEUTRAL_ELEMENT_TYPE.index() as usize));
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(236)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(236)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                32,
+                4,
+                SemanticFieldsShapeV1::array(4, 8),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                None,
+                false,
+                None,
+                4,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Array {
+                element: scalar,
+                length: 8,
+            },
+        ));
+    }
     let mut functions = Vec::new();
     for (ordinal, identity, symbol, binding) in [
         (0_u8, first_identity, "source_launch_first", first_binding),
@@ -33,9 +68,43 @@ fn source_launch_test_semantic_v1(
             None,
         )
         .unwrap();
+        let mut locals = vec![local(160 + ordinal, unit, SemanticLocalRoleV1::Return)];
+        let mut statements = Vec::new();
+        if ranked_access {
+            locals.extend([
+                local(170 + ordinal, scalar, SemanticLocalRoleV1::Temporary),
+                local(180 + ordinal, array, SemanticLocalRoleV1::Temporary),
+            ]);
+            // An ordinary private indexed write makes each original root rankable.
+            statements.push(typed_assignment(
+                1,
+                scalar,
+                SemanticRvalueKindV1::Use(typed_constant(scalar, 0, 4)),
+            ));
+            statements.push(statement(SemanticStatementKindV1::Assign(
+                SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(2),
+                        vec![
+                            SemanticProjectionV1::new(
+                                SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(1)),
+                                scalar,
+                            )
+                            .unwrap(),
+                        ],
+                        scalar,
+                    )
+                    .unwrap(),
+                    SemanticRvalueV1::new(
+                        scalar,
+                        SemanticRvalueKindV1::Use(typed_constant(scalar, 7, 4)),
+                    ),
+                ),
+            )));
+        }
         let blocks = vec![block(
             90 + ordinal,
-            vec![],
+            statements,
             SemanticTerminatorKindV1::Return,
         )];
         functions.push(
@@ -48,7 +117,7 @@ fn source_launch_test_semantic_v1(
                 SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(150 + ordinal)),
                 SemanticSourceProvenanceV1::unavailable(),
                 abi,
-                vec![local(160 + ordinal, unit, SemanticLocalRoleV1::Return)],
+                locals,
                 SemanticBlockIdV1::from_index(0),
                 blocks,
             )
@@ -95,6 +164,82 @@ fn source_launch_test_inputs_v1() -> [ProductionRankedRootInputV1; 2] {
     })
 }
 
+fn source_launch_materialized_two_root_fixture_v1() -> (
+    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    [ProductionRankedRootInputV1; 2],
+) {
+    let semantic = source_launch_test_semantic_with_access_v1(70, 0xa1, true);
+    let owner = ProductionSemanticMirOwnerV1::try_new(
+        semantic,
+        fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let ssa = ProductionSemanticSsaOwnerV1::try_new(
+        owner,
+        fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    let inputs = source_launch_test_inputs_v1();
+    let materialized = materialize_ranked_fixture_v1(ssa, &inputs).unwrap();
+    (materialized, inputs)
+}
+
+#[test]
+fn source_launch_materialized_two_roots_reject_reordering_and_duplicate_labels() {
+    let (materialized, inputs) = source_launch_materialized_two_root_fixture_v1();
+    let source_rows = materialized.source_launch().roots().to_vec();
+    let identity = *materialized.executable().canonical().identity();
+    let baseline = project_and_verify_ranked_materialized_semantic_mir_v1(
+        materialized,
+        &inputs,
+        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(baseline.root_count(), 2);
+    assert!(baseline.all_kernel_checks_are_clean());
+    assert_eq!(
+        baseline.materialized.executable().canonical().identity(),
+        &identity
+    );
+    for (root, source) in baseline.roots.iter().zip(&source_rows) {
+        assert_eq!(root.semantic_root, source.selected_root());
+        assert_eq!(root.kernel_binding, source.kernel_binding());
+        // This tests ranked roster custody, not private-array attachment.
+        // Private accesses still lack attachment rows, covered by the exact
+        // old/new attachment refusal in the canonical assertion tests.
+        assert!(root.access_sources.is_empty());
+    }
+
+    for (reorder, expected) in [
+        (
+            true,
+            "a projected ranked root with a substituted kernel binding",
+        ),
+        (false, "duplicate typed logical roots in the ranked roster"),
+    ] {
+        let (materialized, mut inputs) = source_launch_materialized_two_root_fixture_v1();
+        let retained_rows = materialized.source_launch().roots().to_vec();
+        if reorder {
+            inputs.swap(0, 1);
+            assert_ne!(inputs[0].kernel_binding, retained_rows[0].kernel_binding());
+        } else {
+            inputs[1].logical_name = inputs[0].logical_name.clone();
+            assert_eq!(inputs[0].kernel_binding, retained_rows[0].kernel_binding());
+            assert_eq!(inputs[1].kernel_binding, retained_rows[1].kernel_binding());
+        }
+        assert_eq!(materialized.source_launch().roots(), retained_rows);
+        let result = project_and_verify_ranked_materialized_semantic_mir_v1(
+            materialized,
+            &inputs,
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+        );
+        assert!(
+            matches!(result, Err(ProductionRankedProjectionErrorV1::Unsupported(actual)) if actual == expected),
+            "wrong post-materialization refusal for reorder={reorder}"
+        );
+    }
+}
+
 fn source_launch_test_ssa_owner_v1() -> ProductionSemanticSsaOwnerV1 {
     let semantic = source_launch_test_semantic_v1(70, 0xa1);
     let owner = ProductionSemanticMirOwnerV1::try_new(
@@ -129,7 +274,7 @@ fn source_launch_production_any_and_at_most_are_exactly_incomplete() {
             source_launch_input_v1(&inputs[0].source_launch),
             ProductionSourceLaunchInputV1::new(1, None, [3, 1, 1])
         );
-        let result = project_and_verify_ranked_semantic_mir_v1(
+        let result = project_ranked_fixture_v1(
             source_launch_test_ssa_owner_v1(),
             &inputs,
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
@@ -146,7 +291,7 @@ fn source_launch_production_any_and_at_most_are_exactly_incomplete() {
 #[test]
 fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root() {
     let program = neutral_ranked_program_v1();
-    let semantic = program.semantic_ssa_owner.source_semantic();
+    let semantic = program.materialized.semantic_ssa().source_semantic();
     let mut inputs = [ranked_root_input_1d("neutral_generated_hostile", 247, 64)];
     let [finite_launch, _] = source_launch_test_inputs_v1();
     inputs[0].source_launch = finite_launch.source_launch;
@@ -166,14 +311,19 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
         .unwrap();
     let references = crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
     let project = |launch: &LaunchContract, row: ProductionSourceLaunchRootV1| {
+        let input = ProductionRankedRootInputV1::new(
+            &inputs[0].logical_name,
+            inputs[0].kernel_binding,
+            launch,
+        );
         project_and_verify_ranked_root_v1(
             semantic,
             &effects,
             selected,
-            &inputs[0].logical_name,
-            launch,
+            &input,
             row,
             &references,
+            &mut ComponentDynamicAssertionFactsV1,
         )
     };
 
@@ -273,7 +423,7 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
 #[test]
 fn source_launch_production_checks_later_geometry_before_earlier_body_failure() {
     let inputs = source_launch_test_inputs_v1();
-    let individual = project_and_verify_ranked_semantic_mir_v1(
+    let individual = project_ranked_fixture_v1(
         source_launch_test_ssa_owner_v1(),
         &inputs,
         &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
@@ -295,7 +445,7 @@ fn source_launch_production_checks_later_geometry_before_earlier_body_failure() 
     )
     .unwrap();
     assert_eq!(conflicting[0].source_launch, inputs[0].source_launch);
-    let combined = project_and_verify_ranked_semantic_mir_v1(
+    let combined = project_ranked_fixture_v1(
         source_launch_test_ssa_owner_v1(),
         &conflicting,
         &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
@@ -306,4 +456,140 @@ fn source_launch_production_checks_later_geometry_before_earlier_body_failure() 
             "authenticated LaunchContract workgroup disagrees with semantic source workgroup"
         ))
     ));
+}
+
+fn source_launch_materialized_neutral_fixture_v1() -> (
+    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedRootInputV1>,
+) {
+    let mut inputs = vec![ranked_root_input_1d("neutral_generated_hostile", 247, 64)];
+    inputs[0].source_launch = LaunchContract::new(
+        1,
+        BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+        fe2o3_artifacts::Dimensions::new(3, 1, 1).unwrap(),
+        0,
+        0,
+    )
+    .unwrap();
+    let source = neutral_ranked_source_for_operation_v1(
+        SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+            context: NEUTRAL_CONTEXT_TYPE,
+            dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+            element_storage: NEUTRAL_ELEMENT_TYPE,
+            element: NEUTRAL_ELEMENT_TYPE,
+        },
+        64,
+    );
+    let materialized = materialize_ranked_fixture_v1(source, &inputs).unwrap();
+    (materialized, inputs)
+}
+
+#[test]
+fn source_launch_materialized_baseline_and_unique_diagnostic_rename_preserve_execution() {
+    for rename in [false, true] {
+        let (materialized, mut inputs) = source_launch_materialized_neutral_fixture_v1();
+        let identity = *materialized.executable().canonical().identity();
+        let functions = materialized.executable().module().functions.as_ptr();
+        let source_rows = materialized.source_launch().roots().to_vec();
+        if rename {
+            // Logical labels are not export symbols or executable authority.
+            inputs[0].logical_name = "renamed_diagnostic_label".to_owned();
+        }
+        let program = project_and_verify_ranked_materialized_semantic_mir_v1(
+            materialized,
+            &inputs,
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(program.root_count(), 1);
+        assert!(program.all_kernel_checks_are_clean());
+        assert!(!program.grants_artifact_or_launch_authority());
+        assert_eq!(program.roots[0].logical_name, inputs[0].logical_name);
+        assert_eq!(
+            program.roots[0].kernel_binding,
+            source_rows[0].kernel_binding()
+        );
+        assert_eq!(
+            program.roots[0].semantic_root_identity,
+            source_rows[0].semantic_root_identity()
+        );
+        assert_eq!(program.materialized.source_launch().roots(), source_rows);
+        assert_eq!(
+            program.materialized.executable().canonical().identity(),
+            &identity
+        );
+        assert_eq!(
+            program
+                .materialized
+                .executable()
+                .module()
+                .functions
+                .as_ptr(),
+            functions
+        );
+    }
+}
+
+#[test]
+fn source_launch_materialized_entry_rejects_changed_geometry_binding_and_roster() {
+    for (case, expected) in [
+        (
+            "grid",
+            "source launch roster root changed before ranked projection",
+        ),
+        (
+            "workgroup",
+            "source launch roster root changed before ranked projection",
+        ),
+        (
+            "binding",
+            "a projected ranked root with a substituted kernel binding",
+        ),
+        ("missing", "an incomplete typed/semantic ranked root roster"),
+        ("extra", "an incomplete typed/semantic ranked root roster"),
+    ] {
+        let (materialized, mut inputs) = source_launch_materialized_neutral_fixture_v1();
+        let source_row = materialized.source_launch().roots()[0];
+        match case {
+            "grid" | "workgroup" => {
+                inputs[0].source_launch = LaunchContract::new(
+                    1,
+                    BlockSize::Exact(
+                        fe2o3_artifacts::Dimensions::new(
+                            if case == "workgroup" { 128 } else { 64 },
+                            1,
+                            1,
+                        )
+                        .unwrap(),
+                    ),
+                    fe2o3_artifacts::Dimensions::new(if case == "grid" { 4 } else { 3 }, 1, 1)
+                        .unwrap(),
+                    0,
+                    0,
+                )
+                .unwrap();
+                assert_ne!(
+                    source_launch_input_v1(&inputs[0].source_launch),
+                    source_row.source_launch()
+                );
+            }
+            "binding" => {
+                inputs[0].kernel_binding[0] ^= 1;
+                assert_ne!(inputs[0].kernel_binding, source_row.kernel_binding());
+            }
+            "missing" => inputs.clear(),
+            "extra" => inputs.push(ranked_root_input_1d("extra_root", 248, 64)),
+            _ => unreachable!(),
+        }
+        assert_eq!(materialized.source_launch().roots(), &[source_row]);
+        let result = project_and_verify_ranked_materialized_semantic_mir_v1(
+            materialized,
+            &inputs,
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
+        );
+        assert!(
+            matches!(result, Err(ProductionRankedProjectionErrorV1::Unsupported(actual)) if actual == expected),
+            "wrong post-materialization refusal for {case}"
+        );
+    }
 }

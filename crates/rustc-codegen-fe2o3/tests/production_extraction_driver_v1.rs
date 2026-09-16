@@ -111,6 +111,17 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
             ],
         ),
         (
+            "owned-unsafe-closure",
+            include_str!("fixtures/production-source-safety-device/owned_unsafe_closure.rs"),
+            [
+                "ordinary production kernel `unsafe_closure_reachable` reaches a safe-signature local helper containing a user-provided unsafe block",
+                "reachable call chain:",
+                "unsafe_closure_reachable",
+                "owned_unsafe_fn_once",
+                "{closure#",
+            ],
+        ),
+        (
             "external-hir-gap",
             include_str!("fixtures/production-source-safety-device/external_hir_gap.rs"),
             [

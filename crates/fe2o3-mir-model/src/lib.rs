@@ -3,6 +3,7 @@ mod executable;
 mod executable_wire;
 mod mem2reg;
 mod semantic_constant;
+mod semantic_logical_arguments;
 mod semantic_memory;
 pub mod semantic_mir_v1;
 mod semantic_option_dominance;
@@ -53,6 +54,10 @@ pub use semantic_constant::{
     MirConstantValidationError, MirInitializedMask, MirMemoryIdentity, MirPointerProvenance,
     MirPointerRelocation, MirPointerWidth, MirPromotedIdentity, MirSemanticConstantPool,
     MirStaticIdentity, MirSymbolIdentity,
+};
+pub use semantic_logical_arguments::{
+    SemanticAdjustedArgumentV1, SemanticLogicalArgumentErrorV1, SemanticLogicalArgumentMapV1,
+    SemanticSourceArgumentBindingV1, SemanticSourceArgumentV1,
 };
 pub use semantic_memory::{
     MAX_MEMORY_OPERATION_WIRE_BYTES, MirCopyNonOverlappingContract, MirElementCount,

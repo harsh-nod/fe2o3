@@ -120,8 +120,54 @@ surrounding graph without treating opaque GPU effects as pure.
 
 The O0 bridge is byte-exact. Optimized export binds input/output identities and
 a deterministic digest of every surviving bridge coordinate. Unrecognized or
-malformed graph nodes fail closed. Cross-block/global CSE is not implemented,
-and the live transaction never falls back to a historical or unoptimized path.
+malformed graph nodes fail closed, and the live transaction never falls back
+to a historical or unoptimized path.
+
+Additional scalar transformations are implemented for the canonical migration
+in [#271](https://github.com/harsh-nod/fe2o3/issues/271):
+
+- [Dominance-aware CSE](../crates/dialect-gpu/src/dominance_cse_v1.rs) reuses
+  Pliron's dominator tree to replace exact eligible expressions with a
+  dominating equivalent. It leaves entry-unreachable blocks and non-SSA
+  regions unchanged. This is not general algebraic GVN or memory CSE.
+- [Integer identities](../crates/dialect-gpu/src/integer_identity_v1.rs)
+  simplify a closed family of fixed-width integer neutral operands, including
+  the value and false-overflow results of admitted checked operations.
+  Floating-point reassociation is not part of this transform.
+- Independent canonical transition checks validate the admitted replacements,
+  including [integer result semantics](../crates/fe2o3-kernel-analysis/src/canonical_kir_transition_v1/integer_identities.rs).
+
+These raw transforms do not select a production policy or grant publication
+authority. They require a caller-owned budget and a private candidate that is
+discarded after any transform or observer failure. Their new traversal and
+temporary-storage accounting does not meter all upstream Pliron internals.
+The default seven-step policy above is unchanged. The canonical migration also
+has a separately typed policy-3 execution API; backend activation and complete
+verification of the optimized production graph remain #271 work.
+
+## Canonical policy-3 candidate
+
+[`optimize_checked_canonical_kernel_ir_policy3_v1`](../crates/fe2o3-kernel-opt/src/checked_optimization_policy3_v1.rs)
+imports one exact canonical input, executes the fixed schedule below, extracts
+the actual output once, and independently checks the observed transformation:
+
+```text
+sccp -> simplify-cfg -> select-same -> dce -> local-pure-cse
+     -> dominance-pure-cse -> dce -> simplify-cfg
+```
+
+The [execution witness](../crates/fe2o3-pliron/src/fixed_policy_v3.rs) records that
+this specific schedule ran. It is distinct from the semantic transition check:
+equal input/output bytes alone cannot prove that a particular policy executed.
+The [policy-3 receipt](../crates/fe2o3-kernel-opt/src/checked_optimization_policy3_receipt_v1.rs)
+requires both the sealed execution witness and the independently checked
+input/output relation. Its owner cannot be converted to the historical
+policy-2 owner, and plain receipt bytes do not construct execution custody.
+
+The candidate uses the caller's existing resource ledger and is discarded on
+failure. Integer-identity rewrites are not in this schedule. This API supplies
+neither final source/memory/refinement admission nor artifact/launch authority;
+it is not an alternate selectable production backend or a fallback route.
 
 ## Admission tests
 
@@ -141,6 +187,7 @@ The production admission is maintained by the following regression gates:
 6. Production has one fixed optimizer-policy entry point and no legacy or
    unoptimized fallback.
 
-Semantic-refinement proofs and richer retained/replaced/merged/eliminated
-coordinate outcomes remain future work; the current receipt proves deterministic
-structural replay, not semantic equivalence.
+The historical V2 optimizer report proves deterministic structural replay,
+not semantic equivalence. The canonical migration adds independent checks for
+specific scalar/CFG transformations; those checks do not establish universal
+compiler correctness or replace final source, memory and refinement admission.

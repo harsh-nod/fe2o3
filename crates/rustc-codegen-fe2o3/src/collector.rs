@@ -117,6 +117,7 @@ pub struct CollectedFunction<'tcx> {
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
+    closure_observation: Option<Box<crate::closure_profile_v1::CompilerClosureObservationV2>>,
 }
 
 /// Source-level kernel contract authenticated against one exact rustc instance.
@@ -2408,6 +2409,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 frontend_contract: None,
                 reference_effect_binding: None,
                 dead_branches: None,
+                closure_observation: None,
             });
         }
         Ok(())
@@ -2449,6 +2451,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 frontend_contract,
                 reference_effect_binding,
                 dead_branches: None,
+                closure_observation: None,
             });
         }
         Ok(())
@@ -2468,36 +2471,24 @@ impl<'tcx> DeviceCollector<'tcx> {
 
             let mir = self.tcx.instance_mir(function.instance.def);
             self.charge_function_blocks(&function.instance, mir.basic_blocks.len())?;
-            if crate::closure_profile_v1::contains_concrete_closure_v1(self.tcx, function.instance)
-                .map_err(|error| {
-                    self.reachable_error(
-                        &function.instance,
-                        &format!("closure presence check failed closed: {error}"),
-                        None,
-                    )
-                })?
+            if let Some(admission) =
+                crate::closure_profile_v1::observe_closures_v2(self.tcx, function.instance)
+                    .map_err(|error| {
+                        self.reachable_error(
+                            &function.instance,
+                            &format!("bounded closure admission failed: {error}"),
+                            None,
+                        )
+                    })?
             {
-                let closure_plan = crate::closure_profile_v1::analyze_gfx942_closures_v1(
-                    self.tcx,
-                    function.instance,
-                    crate::closure_profile_v1::ClosureOriginPolicyV1::Either,
-                    &self.expected_target,
-                )
-                .map_err(|error| {
-                    self.reachable_error(
-                        &function.instance,
-                        &format!("bounded gfx942 closure admission failed: {error}"),
-                        None,
-                    )
-                })?;
                 if self.verbose {
                     eprintln!(
-                        "[collector] gfx942 closure profile: {} environment(s), {} static call(s), identity {}",
-                        closure_plan.environments().len(),
-                        closure_plan.calls().len(),
-                        encode_lower_hex(&closure_plan.identity()),
+                        "[collector] bounded closure admission: {} environment(s), {} static call(s)",
+                        admission.environments().len(),
+                        admission.calls().len(),
                     );
                 }
+                function.closure_observation = Some(Box::new(admission.into_observation()));
             }
             let dead_branches =
                 crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
@@ -2935,7 +2926,13 @@ impl<'tcx> DeviceCollector<'tcx> {
                     .get(&identity)
                     .expect("root-scoped traversal retains only audited function labels");
                 let chain = || reconstruct_call_chain(&links, &identity).join(" -> ");
-                if self.tcx.fn_sig(instance.def_id()).skip_binder().safety() == Safety::Unsafe
+                let safety =
+                    if self.tcx.def_kind(instance.def_id()) == rustc_hir::def::DefKind::Closure {
+                        instance.args.as_closure().sig().safety()
+                    } else {
+                        self.tcx.fn_sig(instance.def_id()).skip_binder().safety()
+                    };
+                if safety == Safety::Unsafe
                     && !crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                         self.tcx, instance,
                     )
@@ -3376,6 +3373,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             frontend_contract: None,
             reference_effect_binding: None,
             dead_branches: None,
+            closure_observation: None,
         });
         Ok(())
     }

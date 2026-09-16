@@ -337,6 +337,7 @@ impl State<'_, '_, '_, '_> {
             if self.reachable[block] != 0
                 && !payload::pure(&operation.operation.kind)
                 && self.operation_output[ordinal] == NONE
+                && !self.total_integer_identity(ordinal, budget)?
             {
                 return Err(Error::Rule("executable ordered operation removed"));
             }

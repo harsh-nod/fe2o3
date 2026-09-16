@@ -32,6 +32,32 @@ bounds, malformed CFG, and resource-limit failures are errors and cannot fall
 back to unchecked lowering. The Kernel IR runner and Pliron function stage are
 both closed and do not accept caller-registered executable passes.
 
+The rustc production adapter materializes the target-neutral executable once,
+before ranked projection. Its move-only pre-ranked owner retains the source
+SSA, exact executable, sealed assertion origins and source launch roster.
+Non-bounds assertion queries use that executable and its exact Boolean
+polarity; unknown facts do not establish a proof, and contradictory constants
+override a source-only proof. The existing ranked analyses still consume
+source-derived projections and retain their correspondence
+obligations. Their checked receipt attaches to the same executable owner
+without rematerializing it. All compile/check and simulation-export routes
+cross this boundary; simulation export still grants no launch authority.
+
+An exact fixed-array index can fail during materialization, before a ranked
+graph exists. This rejection retains `FE2O3-BOUNDS-001`, the exact index/extent
+witness, semantic location and available Rust source provenance. It reports
+the earlier failure phase without inventing a ranked-IR dump or rerunning an
+alternate analysis route. Missing provenance remains explicitly unavailable.
+An incomplete or impure helper also rejects before ranked projection; its
+diagnostic retains and explicitly labels the helper declaration location,
+without misidentifying that location as a particular caller or effect.
+
+Materialization and canonical assertion projection have separate fixed logical
+work/storage ledgers. These are not whole-compiler allocation meters: source
+MIR/SSA, legacy correspondence and other source-ranked analysis storage retain
+their existing limits. Neither this connection nor a clean pre-transform
+report establishes correctness of later optimized graphs or tile schedules.
+
 The ranked PLIRON path has one fixed workload-neutral V2 sequence:
 `tensor-layout -> memory-bounds -> atomic-legality -> race-freedom ->
 hierarchical-ownership -> barrier-convergence -> pipeline-protocol ->

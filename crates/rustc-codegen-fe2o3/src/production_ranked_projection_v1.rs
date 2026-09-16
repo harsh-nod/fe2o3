@@ -4,11 +4,19 @@
 //! Dynamic slice facts come only from canonical Rust bounds asserts whose
 //! success edge uniquely controls an access to the same slice and index.
 
+mod aggregate_value_projection_v2;
 mod analysis_multi_split_v1;
+mod canonical_assertion_facts_v1;
+mod ranked_projection_source_v1;
 
 use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
 };
+use canonical_assertion_facts_v1::{
+    CanonicalAssertionErrorV1, ProjectedAssertionFactsV1, projected_assertion_is_proved_v1,
+    with_canonical_assertions_source_budget_v1,
+};
+use ranked_projection_source_v1::{RankedProjectionSourceV1, with_projection_source_budget_v1};
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -26,13 +34,11 @@ use dialect_kernel::{
     PipelineEventKindAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_artifacts::{BlockSize, LaunchContract};
-#[cfg(test)]
-use fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionReceiptV1;
 use fe2o3_lower_mir_kernel::{
-    ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectOriginV1,
-    ProductionRankedExecutableEffectSourceV1, ProductionSourceExecutionLayoutV1,
-    ProductionSourceLaunchErrorV1, ProductionSourceLaunchInputV1,
-    ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
+    ProductionMaterializedRankedModuleReceiptV1, ProductionRankedAccessSourceV1,
+    ProductionRankedExecutableEffectOriginV1, ProductionRankedExecutableEffectSourceV1,
+    ProductionSourceExecutionLayoutV1, ProductionSourceLaunchErrorV1,
+    ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
     ProductionSourceLaunchRosterV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -581,6 +587,7 @@ struct LocalProvenanceV1 {
 }
 
 struct ProjectionLocalContractsV1 {
+    immutable_locals: Vec<bool>,
     checked_references: CheckedReferencesV1,
     allocations: Vec<Option<AllocationContractV1>>,
     allocation_provenance: Vec<Option<LocalAllocationProvenanceV1>>,
@@ -593,9 +600,15 @@ enum ProjectedBoundsIndexIdentityV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedBoundsExtentSourceV1 {
+    Slice(SemanticLocalIdV1),
+    FixedArray(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedBoundsCheckV1 {
     access_block: usize,
-    slice_local: SemanticLocalIdV1,
+    extent_source: ProjectedBoundsExtentSourceV1,
     index_identity: ProjectedBoundsIndexIdentityV1,
     index: ProductionRankedValueV1,
     extent: ProductionRankedValueV1,
@@ -695,7 +708,9 @@ impl ProjectedSemanticBlockV1 {
                 source: Some(source),
                 ..
             } => source.memory_space != MemorySpaceAttr::Private,
-            ProjectedBlockItemV1::Guarded(_) => true,
+            ProjectedBlockItemV1::Guarded(access) => {
+                access.memory_space != MemorySpaceAttr::Private
+            }
             ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
             ProjectedBlockItemV1::Pipeline(_) => false,
             ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
@@ -783,7 +798,7 @@ impl ProductionRankedRootProgramV1 {
 /// Move-only ordered roster retaining one exact admitted Rust semantic owner
 /// and every root-specific PLIRON graph that passed mandatory generic checks.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
-    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
 }
 
@@ -852,10 +867,10 @@ impl ProductionRankedVerifiedRootCandidateV1 {
 ///
 /// Entries remain in typed/source order. `canonical_kernel_order` records the
 /// independent descriptor-compatible `KernelId` order. No physical executable
-/// ordering, KIR, artifact, publication, load, or launch authority is present.
+/// ordering, artifact, publication, load, or launch authority is present.
 #[must_use = "dropping the ranked roster receipt abandons its production lineage"]
 pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
-    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>,
     canonical_kernel_order: Box<[usize]>,
     canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
@@ -1396,10 +1411,11 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     }
 
     pub(crate) fn verify_equivalence(&self) -> Result<(), ProductionRankedVerificationErrorV1> {
-        self.semantic_ssa_owner
+        self.materialized
+            .semantic_ssa()
             .verify_replay()
             .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
-        let semantic_owner = self.semantic_ssa_owner.source_owner();
+        let semantic_owner = self.materialized.semantic_ssa().source_owner();
         let semantic_bindings = self
             .source_order_roots
             .iter()
@@ -1456,14 +1472,14 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         self,
     ) -> Result<
         (
-            fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1,
+            ProductionMaterializedRankedModuleReceiptV1,
             AuthenticatedRankedVerificationRosterV1,
         ),
         ProductionRankedVerificationErrorV1,
     > {
         self.verify_equivalence()?;
         let Self {
-            semantic_ssa_owner,
+            materialized,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1504,8 +1520,8 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 verification,
             });
         }
-        let receipt = fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_ssa_projection_roster_candidate(
-            semantic_ssa_owner,
+        let receipt = ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+            materialized,
             lowering_roots,
         )
         .map_err(ProductionRankedVerificationErrorV1::Custody)?;
@@ -1535,11 +1551,19 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.semantic_ssa_owner.source_semantic().functions().len()
+        self.materialized
+            .semantic_ssa()
+            .source_semantic()
+            .functions()
+            .len()
     }
 
     pub(crate) fn semantic_callable_count(&self) -> usize {
-        self.semantic_ssa_owner.source_semantic().callables().len()
+        self.materialized
+            .semantic_ssa()
+            .source_semantic()
+            .callables()
+            .len()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
@@ -1565,13 +1589,14 @@ impl ProductionRankedSemanticProgramV1 {
         ProductionRankedVerificationErrorV1,
     > {
         let Self {
-            semantic_ssa_owner,
+            materialized,
             roots,
         } = self;
-        semantic_ssa_owner
+        materialized
+            .semantic_ssa()
             .verify_replay()
             .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
-        let semantic_owner = semantic_ssa_owner.source_owner();
+        let semantic_owner = materialized.semantic_ssa().source_owner();
         let semantic_bindings = roots
             .iter()
             .map(ranked_root_program_semantic_binding_v1)
@@ -1627,7 +1652,7 @@ impl ProductionRankedSemanticProgramV1 {
         let (canonical_roster_identity, canonical_kernel_order) =
             derive_ranked_kernel_roster_identity_v1(&records)?;
         let receipt = ProductionRankedSemanticProjectionRosterReceiptV1 {
-            semantic_ssa_owner,
+            materialized,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1728,6 +1753,7 @@ pub(crate) struct DeterministicDivisorDiagnosticV1 {
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
+    CanonicalAssertions(CanonicalAssertionErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
@@ -1808,6 +1834,9 @@ impl ProductionRankedProjectionErrorV1 {
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CanonicalAssertions(error) => {
+                write!(formatter, "canonical assertion analysis failed: {error}")
+            }
             Self::SemanticSsa(error) => {
                 write!(formatter, "semantic SSA custody failed: {error}")
             }
@@ -1950,6 +1979,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
 impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::CanonicalAssertions(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
@@ -2963,23 +2993,52 @@ fn derive_defined_callable_empty_effect_summaries_v1(
     })
 }
 
-pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
-    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
-    root_inputs: &[ProductionRankedRootInputV1],
-    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
-) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
-    semantic_ssa_owner
-        .verify_replay()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    let semantic_owner = semantic_ssa_owner.source_owner();
-    let semantic = semantic_ssa_owner.source_semantic();
-    let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
+fn derive_materialized_callable_effect_summaries_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<DefinedCallableEmptyEffectSummariesV1, ProductionRankedProjectionErrorV1> {
+    let semantic = source.semantic_ssa().source_semantic();
+    let mut summaries = derive_defined_callable_empty_effect_summaries_v1(
         semantic.types(),
         semantic.functions(),
         semantic.callables(),
     )?;
+    let helpers = source.empty_effect_helpers();
+    budget
+        .charge_work(helpers.scanned_function_count())
+        .map_err(ranked_projection_source_v1::resource)?;
+    for helper in helpers.iter() {
+        let decision = summaries
+            .decisions
+            .get_mut(helper.semantic_function().index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "materialized helper effect fact is outside its source owner",
+            ))?;
+        match decision {
+            // Complete empty effects do not establish a scalar return relation.
+            DefinedCallableEmptyEffectDecisionV1::Rejected => {
+                *decision = DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly;
+            }
+            DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+            | DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar => {}
+            DefinedCallableEmptyEffectDecisionV1::Unknown => {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "materialized helper effect fact has an unfinished source summary",
+                ));
+            }
+        }
+    }
+    Ok(summaries)
+}
+
+/// Validates the complete source launch roster before executable materialization.
+pub(crate) fn source_launch_roster_for_ranked_inputs_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+) -> Result<ProductionSourceLaunchRosterV1, ProductionSourceLaunchErrorV1> {
+    let semantic = semantic_ssa.source_semantic();
     if root_inputs.is_empty() || root_inputs.len() != semantic.roots().len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+        return Err(ProductionSourceLaunchErrorV1::Unsupported(
             "an incomplete typed/semantic ranked root roster",
         ));
     }
@@ -2987,9 +3046,49 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .iter()
         .map(source_launch_root_input_v1)
         .collect::<Vec<_>>();
-    let source_launch_roster = ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs)
-        .map_err(source_launch_projection_error_v1)?;
-    drop(launch_inputs);
+    ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs)
+}
+
+pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    let roots = {
+        let source = RankedProjectionSourceV1::from_legacy(&materialized)?;
+        with_projection_source_budget_v1(&source, |budget| {
+            project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
+        })?
+    };
+    Ok(ProductionRankedSemanticProgramV1 {
+        materialized,
+        roots,
+    })
+}
+
+fn project_ranked_roots_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
+    source.require_floor(budget)?;
+    source
+        .semantic_ssa()
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+    let semantic_owner = source.semantic_ssa().source_owner();
+    let semantic = source.semantic_ssa().source_semantic();
+    let callable_effects = derive_materialized_callable_effect_summaries_v1(source, budget)?;
+    let source_launch_roster = source.source_launch();
+    if root_inputs.is_empty()
+        || root_inputs.len() != source_launch_roster.roots().len()
+        || source_launch_roster.semantic_sha256() != semantic.semantic_sha256().as_bytes()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete typed/semantic ranked root roster",
+        ));
+    }
     let root_logical_names = root_inputs
         .iter()
         .map(|input| input.logical_name.as_str())
@@ -3020,56 +3119,57 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         })
         .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
 
-    let mut roots = Vec::with_capacity(root_inputs.len());
-    for ((input, source_root), root_references) in root_inputs
-        .iter()
-        .zip(source_launch_roster.roots())
-        .zip(root_reference_bindings.iter())
-    {
-        let semantic_root = source_root.selected_root();
-        let selection = semantic
-            .select_kernel_body_for_root_v1(semantic_root)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic KernelRoot without one direct body or transparent Result wrapper",
-            ))?;
-        let root = project_and_verify_ranked_root_v1(
-            semantic,
-            &callable_effects,
-            selection,
-            &input.logical_name,
-            &input.source_launch,
-            *source_root,
-            root_references,
-        )
-        .map_err(|error| {
-            error.with_deterministic_root_context(
-                semantic_root,
-                selection.body(),
-                input.logical_name.as_bytes(),
+    with_canonical_assertions_source_budget_v1(source, budget, |session| {
+        let mut roots = Vec::with_capacity(root_inputs.len());
+        for ((input, source_root), root_references) in root_inputs
+            .iter()
+            .zip(source_launch_roster.roots())
+            .zip(root_reference_bindings.iter())
+        {
+            let semantic_root = source_root.selected_root();
+            let selection = semantic
+                .select_kernel_body_for_root_v1(semantic_root)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a semantic KernelRoot without one direct body or transparent Result wrapper",
+                ))?;
+            let mut facts = session.for_source(semantic_root, selection.body());
+            let root = project_and_verify_ranked_root_v1(
+                semantic,
+                &callable_effects,
+                selection,
+                input,
+                *source_root,
+                root_references,
+                &mut facts,
             )
-        })?;
-        if root.kernel_binding != input.kernel_binding {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a projected ranked root with a substituted kernel binding",
-            ));
+            .map_err(|error| {
+                error.with_deterministic_root_context(
+                    semantic_root,
+                    selection.body(),
+                    input.logical_name.as_bytes(),
+                )
+            })?;
+            if root.kernel_binding != input.kernel_binding {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected ranked root with a substituted kernel binding",
+                ));
+            }
+            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
+                semantic_owner,
+                semantic_root,
+                &root.lowering,
+                &root.ranked_ir,
+                &root.access_sources,
+                &root.executable_effect_sources,
+            )
+            .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
+            roots.push(root);
         }
-        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-            semantic_owner,
-            semantic_root,
-            &root.lowering,
-            &root.ranked_ir,
-            &root.access_sources,
-            &root.executable_effect_sources,
-        )
-        .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
-        roots.push(root);
-    }
-    semantic_ssa_owner
-        .verify_replay()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    Ok(ProductionRankedSemanticProgramV1 {
-        semantic_ssa_owner,
-        roots: roots.into_boxed_slice(),
+        source
+            .semantic_ssa()
+            .verify_replay()
+            .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+        Ok(roots.into_boxed_slice())
     })
 }
 
@@ -3090,11 +3190,13 @@ fn project_and_verify_ranked_root_v1(
     semantic: &AdmittedInertSemanticMirV1,
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     selection: SemanticKernelBodySelectionV1,
-    logical_name: &str,
-    source_launch: &LaunchContract,
+    input: &ProductionRankedRootInputV1,
     source_root: ProductionSourceLaunchRootV1,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    let logical_name = input.logical_name.as_str();
+    let source_launch = &input.source_launch;
     let semantic_u32_induction =
         fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
             .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
@@ -3459,6 +3561,7 @@ fn project_and_verify_ranked_root_v1(
         &intrinsic.uniform_inductions,
         entry_operations,
         projected_blocks,
+        assertion_facts,
     )?;
     let reference_writes =
         projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
@@ -3612,10 +3715,11 @@ fn projected_reference_gpu_writes_v2(
                     .blocks()
                     .get(block)
                     .and_then(|block| block.statements().get(statement))
+                    .map(|value| (value, ScalarAssignmentSiteV1 { block, statement }))
             })
             .map_or(
                 Err("GPU write has no authenticated semantic MIR statement"),
-                |statement| expressions.resolve_store_v2(statement.kind()),
+                |(statement, site)| expressions.resolve_store_v2(statement.kind(), site),
             );
         writes.push(
             crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
@@ -3634,9 +3738,10 @@ fn projected_reference_gpu_writes_v2(
 struct GpuSemanticExpressionResolverV2<'a> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
-    definitions: HashMap<u32, &'a SemanticRvalueV1>,
-    ambiguous: HashSet<u32>,
-    visiting: HashSet<u32>,
+    definitions: SemanticAssertProofsV1<'a>,
+    borrowed: HashSet<u32>,
+    use_site: Option<ScalarAssignmentSiteV1>,
+    visiting: HashSet<(u32, usize, usize)>,
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
@@ -3688,9 +3793,12 @@ fn semantic_rvalue_read_places_v2<'a>(
 }
 
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
-    fn new(types: &'a [SemanticTypeDeclV1], function: &'a SemanticFunctionDeclV1) -> Self {
-        let mut definitions = HashMap::new();
-        let mut ambiguous = HashSet::new();
+    fn new(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let definitions = SemanticAssertProofsV1::new(types, function)?;
+        let mut borrowed = HashSet::new();
         for statement in function
             .blocks()
             .iter()
@@ -3699,24 +3807,24 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
-            if !assignment.destination().projections().is_empty() {
-                continue;
-            }
-            let local = assignment.destination().local().index();
-            if definitions.insert(local, assignment.value()).is_some() {
-                ambiguous.insert(local);
+            if let SemanticRvalueKindV1::Borrow { place, .. }
+            | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
+                && let Some(local) = local_definition_index(place)
+            {
+                borrowed.insert(local as u32);
             }
         }
-        Self {
+        Ok(Self {
             types,
             function,
             definitions,
-            ambiguous,
+            borrowed,
+            use_site: None,
             visiting: HashSet::new(),
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
-        }
+        })
     }
 
     fn with_ranked_reads(
@@ -3725,7 +3833,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         blocks: &[ProductionRankedBlockV1],
         sources: &[ProjectedAccessSourceV1],
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let mut resolver = Self::new(types, function);
+        let mut resolver = Self::new(types, function)?;
         let mut allocation_origins = HashMap::new();
         for block in blocks {
             for operation in block.operations() {
@@ -3867,14 +3975,27 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn resolve_store_v2(
         &mut self,
         kind: &'a SemanticStatementKindV1,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
-        match kind {
+        if !self
+            .function
+            .blocks()
+            .get(site.block)
+            .and_then(|block| block.statements().get(site.statement))
+            .is_some_and(|statement| std::ptr::eq(statement.kind(), kind))
+        {
+            return Err("GPU write use site does not identify the exact semantic statement");
+        }
+        let previous = self.use_site.replace(site);
+        let result = match kind {
             SemanticStatementKindV1::Assign(assignment) => {
                 self.resolve_rvalue_v2(assignment.value())
             }
             SemanticStatementKindV1::Store(store) => self.resolve_operand_v2(store.value(), 0),
             _ => Err("GPU write semantic site is not a scalar assignment or store"),
-        }
+        };
+        self.use_site = previous;
+        result
     }
 
     fn charge_v2(&mut self) -> Result<(), &'static str> {
@@ -3953,43 +4074,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         place: &'a SemanticPlaceV1,
         depth: usize,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
-        Self::require_depth_v2(depth)?;
-        if let Some(load) = self.place_loads.get(&(place as *const SemanticPlaceV1)) {
-            return Ok(ProductionSemanticExpressionV2::Load(load.clone()));
-        }
-        let local = place.local().index();
-        if !place.projections().is_empty() {
-            return Err("GPU semantic scalar operand uses an unsupported place projection");
-        }
-        let declaration = self
-            .function
-            .locals()
-            .get(local as usize)
-            .ok_or("GPU semantic scalar local is out of bounds")?;
-        if let SemanticLocalRoleV1::Argument(argument) = declaration.role() {
-            let symbol = crate::reference_effect_v1::kernel_scalar_symbol_v2(argument)
-                .ok_or("kernel scalar argument exceeds the reserved semantic symbol namespace")?;
-            return Ok(ProductionSemanticExpressionV2::Symbol {
-                symbol,
-                scalar: self.scalar_v2(declaration.ty())?,
-            });
-        }
-        if self.ambiguous.contains(&local) {
-            return Err(
-                "GPU semantic scalar local has multiple definitions; select/phi normalization is incomplete",
-            );
-        }
-        let value = self
-            .definitions
-            .get(&local)
-            .copied()
-            .ok_or("GPU semantic scalar local has no unique definition")?;
-        if !self.visiting.insert(local) {
-            return Err("GPU semantic scalar local has a cyclic definition");
-        }
-        let resolved = self.resolve_rvalue_inner_v2(value, depth);
-        self.visiting.remove(&local);
-        resolved
+        self.resolve_projected_place_v2(place, &[], depth)
     }
 
     fn resolve_rvalue_v2(
@@ -4008,7 +4093,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         self.charge_v2()?;
         let result_scalar = self.scalar_v2(value.result_type())?;
         match value.kind() {
-            SemanticRvalueKindV1::Use(operand) => self.resolve_operand_v2(operand, depth + 1),
+            SemanticRvalueKindV1::Use(operand) => {
+                if operand.ty() != value.result_type() {
+                    return Err("GPU semantic scalar alias changes type");
+                }
+                self.resolve_operand_v2(operand, depth + 1)
+            }
             SemanticRvalueKindV1::Unary { operation, operand } => {
                 let operation = match operation {
                     SemanticUnaryOpV1::Not => ProductionSemanticUnaryOpV2::Not,
@@ -4311,9 +4401,11 @@ fn project_rust_bounds_checks(
     )
 }
 
+include!("production_ranked_projection_v1/dynamic_local_array_v1.rs");
+
 #[allow(clippy::too_many_arguments)]
 fn project_rust_bounds_checks_with_ordinary_v1(
-    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
     known_indices: &[Option<ProjectedDisjointIndexV1>],
@@ -4415,6 +4507,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     // Separate MIR `Len` temporaries for one stable slice describe one ranked extent.
     let mut slice_extents = vec![None; function.locals().len()];
     let mut checks = Vec::new();
+    let mut fixed_proofs = None;
     for (block_index, block) in function.blocks().iter().enumerate() {
         let guard = match block.terminator().kind() {
             SemanticTerminatorKindV1::Assert {
@@ -4435,6 +4528,67 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                     // Literal array checks do not authorize a dynamic access. The
                     // projected ranked access retains both constants and the static
                     // shape verifier accepts or rejects the exact relation.
+                    continue;
+                }
+                if matches!(length, SemanticOperandV1::Constant(_)) {
+                    if fixed_proofs.is_none() {
+                        fixed_proofs = Some(SemanticAssertProofsV1::new(types, function)?);
+                    }
+                    let access_block = target.target().index() as usize;
+                    let (index_local, extent_value) = authenticate_fixed_array_guard_v1(
+                        fixed_proofs
+                            .as_mut()
+                            .expect("initialized fixed-array analysis"),
+                        block_index,
+                        access_block,
+                        condition,
+                        index,
+                        length,
+                    )?;
+                    if predecessors.get(access_block).map(Vec::as_slice) != Some(&[block_index])
+                        || access_block == function.entry().index() as usize
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a fixed-array bounds-check success block is not uniquely controlled",
+                        ));
+                    }
+                    reconcile_bounds_ordinary_index_v1(
+                        block_index,
+                        index_local,
+                        ordinary_indices,
+                        enum_payload_dominance,
+                        &mut local_values,
+                    )?;
+                    let slot = &mut local_values[index_local.index() as usize];
+                    let index = if let Some(value) = *slot {
+                        value
+                    } else {
+                        let result = next_value_id(next_value)?;
+                        reserve_operation(operations)?;
+                        operations.push(ProductionRankedOperationV1::IndexUnknown { result });
+                        let value = ProductionRankedValueV1::Local(result);
+                        *slot = Some(value);
+                        value
+                    };
+                    let result = next_value_id(next_value)?;
+                    reserve_operation(operations)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                        result,
+                        value: extent_value,
+                    });
+                    checks.try_reserve(1).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "fixed-array bounds-check storage cannot be reserved",
+                        )
+                    })?;
+                    checks.push(ProjectedBoundsCheckV1 {
+                        access_block,
+                        extent_source: ProjectedBoundsExtentSourceV1::FixedArray(extent_value),
+                        index_identity: ProjectedBoundsIndexIdentityV1::Local(index_local),
+                        index,
+                        extent: ProductionRankedValueV1::Local(result),
+                        must_authorize_access: true,
+                    });
                     continue;
                 }
                 BoundsGuardV1 {
@@ -4567,41 +4721,19 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
         }
-        if let ProjectedBoundsIndexIdentityV1::Local(index_local) = index_identity
-            && let Some(ordinary) = ordinary_indices
-                .get(index_local.index() as usize)
-                .copied()
-                .flatten()
-        {
-            let Some(enum_payload_dominance) = enum_payload_dominance else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "ordinary enum index facts lack enum-dominance evidence",
-                ));
-            };
-            if !enum_payload_dominance.allows(
-                ordinary.availability,
-                SemanticBlockIdV1::from_index(block_index as u32),
-            ) {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "an ordinary enum index payload is used outside its authenticated variant edge",
-                ));
-            }
-            let slot = local_values.get_mut(index_local.index() as usize).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "an ordinary enum index payload is outside the semantic local table",
-                ),
+        if let ProjectedBoundsIndexIdentityV1::Local(index_local) = index_identity {
+            reconcile_bounds_ordinary_index_v1(
+                block_index,
+                index_local,
+                ordinary_indices,
+                enum_payload_dominance,
+                &mut local_values,
             )?;
-            match *slot {
-                None => *slot = Some(ordinary.value),
-                Some(existing) if existing == ordinary.value => {}
-                Some(_) => {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "an ordinary enum index payload conflicts with index capability authority",
-                    ));
-                }
-            }
         }
-        let mut value_for = |identity: ProjectedBoundsIndexIdentityV1| {
+        let mut value_for = |identity: ProjectedBoundsIndexIdentityV1| -> Result<
+            ProductionRankedValueV1,
+            ProductionRankedProjectionErrorV1,
+        > {
             let local = match identity {
                 ProjectedBoundsIndexIdentityV1::Local(local) => local,
                 ProjectedBoundsIndexIdentityV1::Literal(value) => {
@@ -4670,7 +4802,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
         })?;
         checks.push(ProjectedBoundsCheckV1 {
             access_block,
-            slice_local,
+            extent_source: ProjectedBoundsExtentSourceV1::Slice(slice_local),
             index_identity,
             index,
             extent,
@@ -8963,6 +9095,7 @@ fn project_intrinsic_contracts(
         &enum_payload_dominance,
     )?;
     let local_contracts = ProjectionLocalContractsV1 {
+        immutable_locals: immutable_local_array_candidates_v1(function, &scalar_inventory),
         checked_references: CheckedReferencesV1 {
             origins: checked_reference_origins,
             option_dominance,
@@ -10312,7 +10445,9 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 SemanticLocalRoleV1::Argument(argument) => Some(
                     DeterministicScalarSummaryV1::Exact(self.ranked_argument(argument as usize)?),
                 ),
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
             }
         } else if self.definitions[local].len() != usize::from(self.local_definitions[local]) {
             None
@@ -17524,7 +17659,9 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
                 SemanticLocalRoleV1::Argument(origin) => {
                     self.argument(origin as usize, maximum).map(Some)
                 }
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => Ok(None),
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => Ok(None),
             };
         }
         if self.local_definitions.get(local).copied() != Some(1) {
@@ -18075,7 +18212,7 @@ fn source_launch_root_input_v1(
     )
 }
 
-fn source_launch_projection_error_v1(
+pub(crate) fn source_launch_projection_error_v1(
     error: ProductionSourceLaunchErrorV1,
 ) -> ProductionRankedProjectionErrorV1 {
     match error {
@@ -19246,6 +19383,7 @@ fn order_projected_block_effects(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProjectedCfgTerminatorV1 {
+    AbsentMaterialized,
     Branch(usize),
     Predicate {
         predicate: GuardPredicateV1,
@@ -19269,7 +19407,7 @@ fn projected_cfg_terminator(
     block_index: usize,
     callables: &[SemanticCallableDeclV1],
     non_bounds_assert_proved: bool,
-    constants: &[Option<u64>],
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
@@ -19434,17 +19572,24 @@ fn projected_cfg_terminator(
             target: edge,
             ..
         } => {
-            if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. })
-                && !non_bounds_assert_proved
-                && constant_operand_value(condition, constants) != Some(u64::from(*expected))
-            {
-                return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
-                    block: block_index,
-                    kind: semantic_assert_kind_v1(message),
-                    expected: *expected,
-                    condition_local: simple_operand_local(condition).map(SemanticLocalIdV1::index),
-                    source: Box::new(block.terminator().source()),
-                });
+            if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. }) {
+                // A contradictory actual graph constant overrides a source proof.
+                let graph_condition =
+                    assertion_facts.condition(block_index, *expected, edge.target())?;
+                if !projected_assertion_is_proved_v1(
+                    graph_condition,
+                    *expected,
+                    non_bounds_assert_proved,
+                ) {
+                    return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
+                        block: block_index,
+                        kind: semantic_assert_kind_v1(message),
+                        expected: *expected,
+                        condition_local: simple_operand_local(condition)
+                            .map(SemanticLocalIdV1::index),
+                        source: Box::new(block.terminator().source()),
+                    });
+                }
             }
             Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
         }
@@ -19585,6 +19730,7 @@ fn build_ranked_cfg(
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<
     (
         Vec<ProductionRankedBlockV1>,
@@ -19598,7 +19744,6 @@ fn build_ranked_cfg(
             "semantic CFG projection lost a basic block",
         ));
     }
-    let constants = constant_locals(function)?;
     let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
     let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
     for induction in uniform_inductions {
@@ -19618,12 +19763,15 @@ fn build_ranked_cfg(
     }
     let terminators = (0..function.blocks().len())
         .map(|index| {
+            if !assertion_facts.is_materialized_block(index)? {
+                return Ok(ProjectedCfgTerminatorV1::AbsentMaterialized);
+            }
             projected_cfg_terminator(
                 function,
                 index,
                 callables,
                 proved_assertions[index],
-                &constants,
+                assertion_facts,
                 switch_predicates,
                 deterministic_switches,
             )
@@ -20194,6 +20342,11 @@ fn build_ranked_cfg(
                         "a uniform induction deterministic switch requires unrepresentable control expansion",
                     ));
                 }
+                ProjectedCfgTerminatorV1::AbsentMaterialized => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a projected CFG reaches a source block absent from the materialized graph",
+                    ));
+                }
                 ProjectedCfgTerminatorV1::Return | ProjectedCfgTerminatorV1::Trap => {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a uniform induction body returns before its unique latch",
@@ -20214,6 +20367,11 @@ fn build_ranked_cfg(
             continue;
         }
         match terminator {
+            ProjectedCfgTerminatorV1::AbsentMaterialized => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a projected CFG reaches a source block absent from the materialized graph",
+                ));
+            }
             ProjectedCfgTerminatorV1::Branch(target) => push_block_at(
                 &mut blocks,
                 current,
@@ -20542,6 +20700,11 @@ fn reachable_projected_blocks(
         }
         *slot = true;
         match &terminators[block] {
+            ProjectedCfgTerminatorV1::AbsentMaterialized => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a projected CFG reaches a source block absent from the materialized graph",
+                ));
+            }
             ProjectedCfgTerminatorV1::Branch(target) => pending.push(*target),
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
@@ -23152,12 +23315,12 @@ enum ProjectedIndexV1 {
 fn projected_bounds_check(
     checks: &[ProjectedBoundsCheckV1],
     block_index: usize,
-    slice_local: SemanticLocalIdV1,
+    extent_source: ProjectedBoundsExtentSourceV1,
     index_identity: ProjectedBoundsIndexIdentityV1,
 ) -> Result<ProjectedBoundsCheckV1, ProductionRankedProjectionErrorV1> {
     let mut matches = checks.iter().copied().filter(|check| {
         check.access_block == block_index
-            && check.slice_local == slice_local
+            && check.extent_source == extent_source
             && check.index_identity == index_identity
     });
     let check = matches
@@ -23318,22 +23481,45 @@ fn project_place_access_with_atomic(
                     ));
                 }
                 match types.get(current.index() as usize).map(|ty| ty.shape()) {
-                    Some(SemanticTypeShapeV1::Array { length, .. }) => {
-                        let value = constants
-                            .get(index.index() as usize)
-                            .copied()
-                            .flatten()
-                            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                                "a dynamic array index before exact static-extent guard projection",
-                            ))?;
+                    Some(SemanticTypeShapeV1::Array { length, element }) => {
                         shape.push(*length);
-                        indices.push(ProjectedIndexV1::Constant(value));
+                        if let Some(value) =
+                            constants.get(index.index() as usize).copied().flatten()
+                        {
+                            indices.push(ProjectedIndexV1::Constant(value));
+                        } else {
+                            if *length == 0
+                                || !matches!(
+                                    types[element.index() as usize].shape(),
+                                    SemanticTypeShapeV1::Scalar(_)
+                                )
+                                || access != AccessKindAttr::Read
+                                || atomic.is_some()
+                                || place.projections().len() != 1
+                                || local_contracts
+                                    .immutable_locals
+                                    .get(place.local().index() as usize)
+                                    != Some(&true)
+                            {
+                                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                    "a dynamic array index requires an immutable local scalar array",
+                                ));
+                            }
+                            let check = projected_bounds_check(
+                                bounds_checks,
+                                block_index,
+                                ProjectedBoundsExtentSourceV1::FixedArray(*length),
+                                ProjectedBoundsIndexIdentityV1::Local(index),
+                            )?;
+                            indices.push(ProjectedIndexV1::Dynamic(check.index));
+                            comparisons.push((check.index, check.extent));
+                        }
                     }
                     Some(SemanticTypeShapeV1::Slice { .. }) => {
                         let check = projected_bounds_check(
                             bounds_checks,
                             block_index,
-                            place.local(),
+                            ProjectedBoundsExtentSourceV1::Slice(place.local()),
                             ProjectedBoundsIndexIdentityV1::Local(index),
                         )?;
                         shape.push(DYNAMIC_EXTENT);
@@ -23378,7 +23564,7 @@ fn project_place_access_with_atomic(
                         let check = projected_bounds_check(
                             bounds_checks,
                             block_index,
-                            place.local(),
+                            ProjectedBoundsExtentSourceV1::Slice(place.local()),
                             ProjectedBoundsIndexIdentityV1::Literal(offset),
                         )?;
                         shape.push(DYNAMIC_EXTENT);
@@ -23809,13 +23995,90 @@ mod cold_compile_error_tests;
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
 
+    // Isolated CFG tests retain synthetic facts; full-entry tests below use
+    // genuine materialized owners and the production assertion query.
+    struct ComponentDynamicAssertionFactsV1;
+
+    impl ProjectedAssertionFactsV1 for ComponentDynamicAssertionFactsV1 {
+        fn is_materialized_block(
+            &mut self,
+            _: usize,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            Ok(true)
+        }
+
+        fn condition(
+            &mut self,
+            _: usize,
+            _: bool,
+            _: SemanticBlockIdV1,
+        ) -> Result<
+            canonical_assertion_facts_v1::ProjectedAssertionConditionV1,
+            ProductionRankedProjectionErrorV1,
+        > {
+            Ok(canonical_assertion_facts_v1::ProjectedAssertionConditionV1::Dynamic)
+        }
+    }
+
+    impl ProjectedAssertionFactsV1 for canonical_assertion_facts_v1::ProjectedAssertionConditionV1 {
+        fn is_materialized_block(
+            &mut self,
+            _: usize,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            Ok(true)
+        }
+
+        fn condition(
+            &mut self,
+            _: usize,
+            _: bool,
+            _: SemanticBlockIdV1,
+        ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+            Ok(*self)
+        }
+    }
+
+    fn build_ranked_cfg(
+        types: &[SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+        callables: &[SemanticCallableDeclV1],
+        switch_predicates: &[Option<GuardPredicateV1>],
+        deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
+        uniform_inductions: &[ProjectedUniformInductionV1],
+        entry_operations: Vec<ProductionRankedOperationV1>,
+        projected_blocks: Vec<ProjectedSemanticBlockV1>,
+    ) -> Result<
+        (
+            Vec<ProductionRankedBlockV1>,
+            Vec<ProjectedAccessSourceV1>,
+            Vec<ProductionRankedExecutableEffectSourceV1>,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
+        super::build_ranked_cfg(
+            types,
+            function,
+            callables,
+            switch_predicates,
+            deterministic_switches,
+            uniform_inductions,
+            entry_operations,
+            projected_blocks,
+            &mut ComponentDynamicAssertionFactsV1,
+        )
+    }
+
+    include!("production_ranked_projection_v1/canonical_assertion_graph_v1_tests.rs");
+
     mod implicit_capability_capture_v1_tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");
     }
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
+    include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/constant_slice_index_v1_tests.rs");
+    include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");
@@ -23826,7 +24089,15 @@ mod tests {
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
         assert!(matches!(
-            projected_cfg_terminator(&unresolved, 0, &[], false, &[], &[const { None }; 3], &[]),
+            projected_cfg_terminator(
+                &unresolved,
+                0,
+                &[],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[const { None }; 3],
+                &[]
+            ),
             Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
                 block: 0,
                 kind: "division-by-zero",
@@ -23836,8 +24107,16 @@ mod tests {
 
         let proven = non_bounds_assert_function(constant(1));
         assert_eq!(
-            projected_cfg_terminator(&proven, 0, &[], false, &[], &[const { None }; 3], &[])
-                .unwrap(),
+            projected_cfg_terminator(
+                &proven,
+                0,
+                &[],
+                false,
+                &mut canonical_assertion_facts_v1::ProjectedAssertionConditionV1::Bool(true),
+                &[const { None }; 3],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Branch(1)
         );
     }
@@ -29770,8 +30049,16 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],)
-                    .unwrap(),
+                projected_cfg_terminator(
+                    &function,
+                    0,
+                    &[],
+                    false,
+                    &mut ComponentDynamicAssertionFactsV1,
+                    &[const { None }; 2],
+                    &[],
+                )
+                .unwrap(),
                 ProjectedCfgTerminatorV1::AnalysisMultiSplit {
                     blocks: vec![1, 2, 3],
                 }
@@ -29799,7 +30086,7 @@ mod tests {
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[None, Some(predicate.clone())],
                 &[],
             )
@@ -33019,18 +33306,45 @@ mod tests {
         let function = destinationless_call(0);
         let trap = compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::Trap);
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[trap], false, &[], &[None], &[]).unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[trap],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[None],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Trap,
         );
 
         let barrier =
             compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier);
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[barrier], false, &[], &[None], &[]).unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[barrier],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[None],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Return,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[], false, &[], &[None], &[]).unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[None],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Return,
         );
     }
@@ -33489,7 +33803,7 @@ mod tests {
                     0,
                     &[],
                     false,
-                    &[],
+                    &mut ComponentDynamicAssertionFactsV1,
                     &[None, Some(predicate.clone())],
                     &[],
                 )
@@ -33507,7 +33821,7 @@ mod tests {
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[None, Some(predicate)],
                 &[],
             ),
@@ -38510,7 +38824,7 @@ mod tests {
             fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .unwrap();
-        let projected = project_and_verify_ranked_semantic_mir_v1(
+        let projected = project_ranked_fixture_v1(
             owner,
             &[ranked_root_input("deep_constant_alias", 0xd5, 1)],
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
@@ -39593,6 +39907,7 @@ mod tests {
             },
         );
         let expression = GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
             .resolve_rvalue_v2(&rvalue)
             .unwrap();
         assert!(matches!(
@@ -39619,6 +39934,7 @@ mod tests {
             )),
         );
         let error = GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
             .resolve_rvalue_v2(&rvalue)
             .unwrap_err();
         assert_eq!(
@@ -39664,6 +39980,7 @@ mod tests {
             },
         );
         let expression = GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
             .resolve_rvalue_v2(&rvalue)
             .unwrap();
         assert!(matches!(
@@ -39717,6 +40034,7 @@ mod tests {
                 ),
             )));
         }
+        assignments.reverse();
         projection_function_with_locals(
             vec![block(241, assignments, SemanticTerminatorKindV1::Return)],
             locals,
@@ -39731,7 +40049,12 @@ mod tests {
                 SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], SCALAR_TYPE)
                     .unwrap(),
             );
-            GpuSemanticExpressionResolverV2::new(&types, function).resolve_operand_v2(&operand, 0)
+            let mut resolver = GpuSemanticExpressionResolverV2::new(&types, function).unwrap();
+            resolver.use_site = Some(ScalarAssignmentSiteV1 {
+                block: 0,
+                statement: function.blocks()[0].statements().len(),
+            });
+            resolver.resolve_operand_v2(&operand, 0)
         };
         assert!(matches!(
             root(&gpu_alias_chain_function(128)).unwrap(),

@@ -1,7 +1,7 @@
 # Kernel IR V12 Verification
 
-Status: shared compiler infrastructure, not production V12 graph optimization,
-target lowering, or formal qualification.
+Status: shared compiler infrastructure with native V12 lowering support, not
+completed production V12 graph migration or formal qualification.
 
 ## One Semantic Verifier
 
@@ -135,20 +135,52 @@ not launch or proof authority. Direct verification events make this
 memory-only report incomplete because it cannot represent compiler ordering;
 indirect events are reported through unavailable call effects.
 
+Native actual-owner lowering is implemented in
+[lowering_native_v12.rs](../crates/fe2o3-amdgcn-model/src/lowering_native_v12.rs)
+for exact `gfx942:xnack-` and `gfx950:xnack-` targets. These entry points borrow
+the actual `VerifiedCanonicalKernelIrModuleV12`; they do not reconstruct an
+executable from a caller-supplied identity pair or rerun the optimizer. Semantic
+anchors bind the owner's full digest and canonical length. Existing target,
+operation, helper-ABI and resource checks, including the multi-body anchor
+absence policy, remain in force. Returned LLVM is inert, not source/formal
+admission, protected publication, launch evidence or hardware qualification.
+The lowering engine retains its separate resource policy.
+
+Counted Private `Alloca` supports scalar elements admitted by the existing
+target/capability checks and direct, correctly typed positive
+`U8`/`U16`/`U32`/`U64`/`Index` constants. It preserves the operation's original
+block and count type, emitting `alloca` in address space 5 without hoisting or
+adding lifetime intrinsics. Existing uncounted allocations retain their behavior.
+Natural alignment is required, and checked `count * element_bytes` must fit
+within `i32::MAX`. This is a conservative private-index representation limit,
+not a device scratch-capacity or allocation-success guarantee.
+
+Dynamic, signed, zero, computed and block-parameter counts remain unsupported,
+as do counted pointer/vector elements. Workgroup allocations still require
+explicit `WorkgroupMemory`. Half-precision storage retains the existing `i16`
+representation and Float16/BFloat16 capability gates. The constant fact is
+collected in the existing value map, avoiding a whole-function scan for each
+allocation. Native model tests cover both exact targets and assemble
+representative LLVM text; these are not hardware or final production-admission
+results.
+
 The following boundaries remain closed:
 
 - AMDGPU raw-Module entry points reject V12 vectors and verification events
   before LLVM emission, including unused declarations, nested types,
   unreachable blocks, dead results, and types embedded in legacy operations.
-- Existing Pliron graph import, legacy optimizer admission, simulation
+  Native actual-owner lowering preserves that feature preflight. Historical
+  module-plus-identity lowering APIs still reject a V12 identity.
+- Historical Pliron graph import, legacy optimizer admission, simulation
   containers, and simulator execution retain their unsupported-V12 boundaries.
+  Separate native V12 graph/transition APIs are not historical admission routes.
 - Formal-memory extraction does not admit vector operations or verification
   events as completed modeled effects. A call to a marker-bearing helper
   cannot be skipped as a pure call.
-- No catalog-key authentication, V12 production graph migration, V12
-  optimization or target legalization, tutorial-wide compiler qualification,
-  hardware execution, or formal compiler verification follows from this
-  shared-verifier boundary.
+- No catalog-key authentication, completed V12 production graph migration,
+  arbitrary V12 feature legalization, tutorial-wide compiler qualification,
+  hardware execution, or formal compiler verification follows from these
+  shared-verifier and native-lowering boundaries.
 
 ## Canonical Transition Receipts
 

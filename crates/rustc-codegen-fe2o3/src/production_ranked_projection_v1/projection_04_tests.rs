@@ -43,8 +43,7 @@
             SemanticOperandV1::Copy(ranked_place(0)),
             SemanticOperandV1::Move(ranked_place(1)),
         ));
-        let function =
-            projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)]);
+        let function = projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)]);
         let types = projection_types();
         let mut operations = Vec::new();
         let mut sources = Vec::new();
@@ -130,11 +129,9 @@
         let kernel = ProductionRankedKernelV1::new("generic_checked_access", 1, blocks).unwrap();
         let construction =
             ProductionConstructionV1::ranked_kernel("checked_access_module", kernel).unwrap();
-        let lowering = compile_ranked_kernel_for_lowering_v1(
-            construction,
-            ProductionSessionLimitsV1::default(),
-        )
-        .unwrap();
+        let lowering =
+            compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+                .unwrap();
         assert!(lowering.bounds_report().is_clean());
         assert!(lowering.race_report().is_clean());
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
@@ -147,8 +144,7 @@
         let mut operations = Vec::new();
         let mut next_value = 0;
         let projected =
-            project_rust_bounds_checks(&function, 3, &[], &mut operations, &mut next_value)
-                .unwrap();
+            project_rust_bounds_checks(&function, 3, &[], &mut operations, &mut next_value).unwrap();
 
         assert_eq!(projected.argument_count, 3);
         assert_eq!(next_value, 2);
@@ -161,10 +157,13 @@
         ));
         assert_eq!(projected.checks.len(), 1);
         assert_eq!(projected.checks[0].access_block, 1);
-        assert_eq!(projected.checks[0].slice_local.index(), 1);
         assert_eq!(
             projected.checks[0].index_identity,
             ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4))
+        );
+        assert_eq!(
+            projected.checks[0].extent_source,
+            ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(1))
         );
         assert_eq!(
             projected.checks[0].index,
@@ -190,8 +189,7 @@
         let mut operations = Vec::new();
         let mut next_value = 0;
         let projected =
-            project_rust_bounds_checks(&function, 3, &known, &mut operations, &mut next_value)
-                .unwrap();
+            project_rust_bounds_checks(&function, 3, &known, &mut operations, &mut next_value).unwrap();
 
         assert_eq!(projected.checks[0].index, exact);
         assert_eq!(next_value, 1);
@@ -207,11 +205,13 @@
         let mut operations = Vec::new();
         let mut next_value = 0;
         let projected =
-            project_rust_bounds_checks(&function, 0, &[], &mut operations, &mut next_value)
-                .unwrap();
+            project_rust_bounds_checks(&function, 0, &[], &mut operations, &mut next_value).unwrap();
 
         assert_eq!(projected.checks.len(), 2);
-        assert_eq!(projected.checks[0].slice_local, projected.checks[1].slice_local);
+        assert_eq!(
+            projected.checks[0].extent_source,
+            projected.checks[1].extent_source
+        );
         assert_eq!(projected.checks[0].extent, projected.checks[1].extent);
         assert_ne!(projected.checks[0].index, projected.checks[1].index);
         assert_eq!(operations.len(), 3);
@@ -223,15 +223,13 @@
         let different_slices = repeated_bounds_check_function(false, false);
         let mut operations = Vec::new();
         let mut next_value = 0;
-        let projected = project_rust_bounds_checks(
-            &different_slices,
-            0,
-            &[],
-            &mut operations,
-            &mut next_value,
-        )
-        .unwrap();
-        assert_ne!(projected.checks[0].slice_local, projected.checks[1].slice_local);
+        let projected =
+            project_rust_bounds_checks(&different_slices, 0, &[], &mut operations, &mut next_value)
+                .unwrap();
+        assert_ne!(
+            projected.checks[0].extent_source,
+            projected.checks[1].extent_source
+        );
         assert_ne!(projected.checks[0].extent, projected.checks[1].extent);
         assert_eq!(operations.len(), 4);
         assert_eq!(next_value, 4);
@@ -300,7 +298,7 @@
             projected_bounds_check(
                 &projected.checks,
                 1,
-                SemanticLocalIdV1::from_index(3),
+                ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(3)),
                 ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4)),
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -339,10 +337,13 @@
             assert_eq!(projected.argument_count, 7);
             assert_eq!(projected.checks.len(), 1);
             assert_eq!(projected.checks[0].access_block, 1);
-            assert_eq!(projected.checks[0].slice_local.index(), 1);
             assert_eq!(
                 projected.checks[0].index_identity,
                 ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4))
+            );
+            assert_eq!(
+                projected.checks[0].extent_source,
+                ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(1))
             );
             assert!(!projected.checks[0].must_authorize_access);
             assert_eq!(operations.len(), 2);
@@ -452,11 +453,9 @@
         .unwrap();
         let construction =
             ProductionConstructionV1::ranked_kernel("safe_syncthreads_module", kernel).unwrap();
-        let lowering = compile_ranked_kernel_for_lowering_v1(
-            construction,
-            ProductionSessionLimitsV1::default(),
-        )
-        .unwrap();
+        let lowering =
+            compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+                .unwrap();
         assert!(lowering.barrier_report().is_clean());
         assert!(lowering.workgroup_report().is_clean());
     }
@@ -651,11 +650,9 @@
         let kernel = ProductionRankedKernelV1::new("shifted_checked_access", 1, blocks).unwrap();
         let construction =
             ProductionConstructionV1::ranked_kernel("shifted_access_module", kernel).unwrap();
-        let lowering = compile_ranked_kernel_for_lowering_v1(
-            construction,
-            ProductionSessionLimitsV1::default(),
-        )
-        .unwrap();
+        let lowering =
+            compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+                .unwrap();
         assert!(lowering.bounds_report().is_clean());
         assert!(lowering.race_report().is_clean());
     }
@@ -713,8 +710,7 @@
             ],
         );
         let dominance =
-            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
-                .unwrap();
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum()).unwrap();
         let zero = dominance.availability(carrier, 0).unwrap();
         let one = dominance.availability(carrier, 1).unwrap();
 
@@ -765,8 +761,7 @@
             ],
         );
         let dominance =
-            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
-                .unwrap();
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum()).unwrap();
 
         assert!(dominance.availability(carrier, 0).is_none());
         assert!(dominance.availability(carrier, 1).is_some());
@@ -809,8 +804,7 @@
             ],
         );
         let dominance =
-            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
-                .unwrap();
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum()).unwrap();
 
         assert!(dominance.availability(carrier, 0).is_none());
         assert!(dominance.availability(carrier, 1).is_none());
@@ -871,8 +865,7 @@
             block(52, vec![], SemanticTerminatorKindV1::Return),
             block(53, vec![], SemanticTerminatorKindV1::Return),
         ]);
-        let producer =
-            SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
+        let producer = SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
         let error = SemanticOptionDominanceV1::analyze(&function, &[producer]).unwrap_err();
 
         assert_eq!(
@@ -925,8 +918,7 @@
             block(62, vec![], SemanticTerminatorKindV1::Return),
             block(63, vec![], SemanticTerminatorKindV1::Return),
         ]);
-        let producer =
-            SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
+        let producer = SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
         let error = SemanticOptionDominanceV1::analyze(&function, &[producer]).unwrap_err();
 
         assert_eq!(
@@ -984,8 +976,7 @@
                 SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2)),
             ),
         ]);
-        let producer =
-            SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
+        let producer = SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
         let error = SemanticOptionDominanceV1::analyze(&function, &[producer]).unwrap_err();
 
         assert_eq!(
@@ -1054,8 +1045,7 @@
             ),
             block(44, vec![], SemanticTerminatorKindV1::Return),
         ]);
-        let producer =
-            SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
+        let producer = SemanticOptionProducerV1::new(option_local, SemanticBlockIdV1::from_index(1));
         let dominance = SemanticOptionDominanceV1::analyze(&function, &[producer]).unwrap();
         let authority = dominance.availability(option_local).unwrap();
 

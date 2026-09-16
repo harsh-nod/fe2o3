@@ -1219,10 +1219,14 @@ for production_step in \
   rocm-production-simulation-float-casts \
   rocm-production-simulation-wrapping-integers \
   rocm-production-simulation-launch-wrapping-integers \
+  rocm-production-simulation-rust-call \
   rocm-production-scalar-casts \
   rocm-production-simulation-bundle-v2-source-variables \
   rocm-production-simulation-bundle-v2-invalid-name \
-  rocm-production-simulation-bundle-v3-typed-layouts; do
+  rocm-production-simulation-bundle-v3-typed-layouts \
+  rocm-production-simulation-bundle-v4-aggregate-components \
+  rocm-production-simulation-bundle-v5-recursive-aggregates \
+  rocm-production-simulation-bundle-v6-nested-control-flow; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
   if [[ " $(step_command "${production_step}") " == *" --features "* ]]; then
@@ -1243,6 +1247,14 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_launch_wrapping_integers_match_rust_in_simulation -- --ignored --exact' \
   "$(step_command rocm-production-simulation-launch-wrapping-integers)" \
   'ROCm compile omitted the exact launch-wrapping-integer source regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_rust_call_closures_match_rust_in_simulation -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-rust-call)" \
+  'ROCm compile omitted the exact RustCall closure source regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_dynamic_local_array_matches_rust_in_simulation -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-dynamic-local-array)" \
+  'ROCm compile omitted the exact dynamic-local-array source regression'
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"
@@ -1273,6 +1285,18 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact' \
   "$(step_command rocm-production-simulation-bundle-v3-typed-layouts)" \
   'ROCm compile omitted the exact typed-layout source and CPU runtime regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_struct_argument_exports_exact_v4_components -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v4-aggregate-components)" \
+  'ROCm compile omitted the exact V4 aggregate component and CPU runtime regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v5-recursive-aggregates)" \
+  'ROCm compile omitted the exact V5 recursive aggregate and CPU runtime regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_semantic_conformance_v3 ordinary_rust_nested_control_flow_executes_after_production_ssa_lowering -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v6-nested-control-flow)" \
+  'ROCm compile omitted the exact V6 source control-flow and simulation regression'
 assert_equals \
   "cargo test --locked -p dialect-amdgcn --test lowering rocm_compiles_the_golden_to_an_amdgpu_code_object -- --ignored --exact" \
   "$(step_command rocm-g1-code-object)" \
