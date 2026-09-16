@@ -670,7 +670,7 @@ fn actual_vec_capacity_excess_is_accounted_before_later_work_or_denial() {
         assert_eq!(ledger.work, 0);
         assert_eq!(ledger.live, 97);
         if limit == 8 {
-            assert_eq!(ledger.peak, 97 + 8 * size_of::<u64>());
+            assert_eq!(ledger.peak, 97 + size_of::<[u64; 8]>());
         } else {
             assert!(ledger.failure.is_some());
         }
