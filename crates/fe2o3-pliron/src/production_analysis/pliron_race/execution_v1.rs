@@ -1,3 +1,11 @@
+fn allocation_origin_name_v1(origin: u64) -> String {
+    use std::fmt::Write as _;
+
+    let mut name = String::with_capacity(NUMERIC_RACE_NAME_BYTES_V1);
+    write!(name, "allocation origin {origin}").expect("writing a numeric diagnostic cannot fail");
+    name
+}
+
 #[derive(Clone)]
 struct EffectV1 {
     identity: EffectIdentityV1,
@@ -185,7 +193,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 } else {
                     EffectIdentityV1::Allocation(allocation_origin)
                 },
-                view_name: format!("allocation origin {allocation_origin}"),
+                view_name: allocation_origin_name_v1(allocation_origin),
                 kind,
                 location,
                 indices: vec![],
@@ -243,7 +251,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         };
         effects.push(EffectV1 {
             identity: EffectIdentityV1::View(view),
-            view_name: view.unique_name(context).to_string(),
+            view_name: view.id(context).into(),
             kind,
             location: RankedRaceLocationV1 {
                 block: block_index,
@@ -417,7 +425,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                     block: effect.location.block,
                     operation: effect.location.operation,
                     dimension,
-                    value: index.unique_name(context).to_string(),
+                    value: index.id(context).into(),
                 });
             }
         }
@@ -463,7 +471,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                     block: effect.location.block,
                     operation: effect.location.operation,
                     dimension,
-                    value: value.unique_name(context).to_string(),
+                    value: value.id(context).into(),
                 });
             };
             let key = AddressKeyV1 {

@@ -14368,16 +14368,26 @@ fn validate_place(
                     }
                 }
             }
-            SemanticProjectionKindV1::ConstantIndex { minimum_length, .. } => {
-                let SemanticTypeShapeV1::Array { element, length } =
-                    type_shape(context, current_type)
-                else {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
-                };
-                if minimum_length > *length {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
+            SemanticProjectionKindV1::ConstantIndex {
+                minimum_length,
+                from_end,
+                ..
+            } => {
+                match type_shape(context, current_type) {
+                    SemanticTypeShapeV1::Array { element, length } if minimum_length <= *length => {
+                        *element
+                    }
+                    // MIR's minimum length is not runtime bounds authority. Ranked
+                    // projection must authenticate the literal against the slice's
+                    // actual extent and the exact controlling success edge.
+                    SemanticTypeShapeV1::Slice { element } if !from_end => *element,
+                    _ => {
+                        return invalid_type_operation(
+                            SemanticTypeOperationV1::Projection,
+                            location,
+                        );
+                    }
                 }
-                *element
             }
             SemanticProjectionKindV1::Subslice { from, to, from_end } => {
                 let SemanticTypeShapeV1::Array { element, length } =

@@ -106,8 +106,9 @@ pub fn volatile_load_f32(source: &[f32], mut output: DisjointSlice<f32>) {
 )]
 pub fn core_atomic_rmw_v1(unsigned: DeviceGlobalMutPtr<u32>, signed: DeviceGlobalMutPtr<i32>) {
     let unsigned = unsigned.as_atomic();
-    let _ = unsigned.swap(1, Ordering::SeqCst);
-    let _ = unsigned.fetch_add(2, Ordering::Relaxed);
+    // Keep the returned value live across a second effectful operation.
+    let previous = unsigned.swap(1, Ordering::SeqCst);
+    let _ = unsigned.fetch_add(previous, Ordering::Relaxed);
     let _ = unsigned.fetch_sub(3, Ordering::Acquire);
     let _ = unsigned.fetch_and(4, Ordering::Release);
     let _ = unsigned.fetch_or(5, Ordering::AcqRel);

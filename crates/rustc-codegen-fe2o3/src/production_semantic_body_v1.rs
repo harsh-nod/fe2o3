@@ -1510,9 +1510,11 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     min_length,
                     from_end,
                 } => {
-                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..) | TyKind::Slice(..))
+                        || (from_end && matches!(derived.ty.kind(), TyKind::Slice(..)))
+                    {
                         return Err(unsupported(
-                            "ConstantIndex projection on a non-array place",
+                            "ConstantIndex requires an array or a from-start slice index",
                             block,
                             statement,
                         ));

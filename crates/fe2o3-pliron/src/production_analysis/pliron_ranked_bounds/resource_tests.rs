@@ -4,6 +4,8 @@ mod resource_upper_bound_tests {
 
     use super::*;
 
+    include!("guard_census_tests.rs");
+
     fn census() -> ProductionAnalysisInputCensusV1 {
         ProductionAnalysisInputCensusV1 {
             blocks: 5,
@@ -27,6 +29,7 @@ mod resource_upper_bound_tests {
             ownership_contracts: 0,
             effect_refinement_contracts: 0,
             index_lt_branch_candidates: 0,
+            memory_bounds_guard_candidates: 0,
             semantic_definitions: 0,
             semantic_refinement_contracts: 0,
             native_switch_verification_work: 0,
@@ -107,6 +110,7 @@ mod resource_upper_bound_tests {
             operations: 1,
             operands: 3,
             identifier_bytes: 1_024,
+            memory_bounds_guard_candidates: 1,
             ..ProductionAnalysisInputCensusV1::default()
         };
         let findings = 4;

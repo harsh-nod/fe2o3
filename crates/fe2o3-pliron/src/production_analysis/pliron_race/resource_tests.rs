@@ -2,6 +2,8 @@
 mod status_tests {
     use super::*;
 
+    include!("numeric_diagnostics_tests.rs");
+
     fn witness(
         access: AccessKindAttr,
         atomic_scope: Option<AtomicScopeAttr>,
@@ -263,14 +265,29 @@ mod status_tests {
         };
         let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
         let bound = race_resource_upper_bound_for_shape_v1(census, None, None, limits).unwrap();
-        const PER_FINDING: usize = 3 * 8 + 32_768 + 64 + 1_024 + 160;
+        const PER_FINDING: usize = 3 * 8 + 64 + 1_024 + 160;
         assert_eq!(bound.retained_storage_upper_bound(), PER_FINDING);
         assert_eq!(
             bound.peak_storage_upper_bound(),
-            64 * (8 + 16 + 32_768 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING
+            64 * (8 + 16 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING
         );
-        assert!(
-            race_resource_upper_bound_for_shape_v1(census, Some((2, 1)), None, limits).is_err()
+        let without_text = ProductionAnalysisInputCensusV1 {
+            identifier_bytes: 0,
+            ..census
+        };
+        assert_eq!(
+            race_resource_upper_bound_for_shape_v1(without_text, None, None, limits),
+            Ok(bound),
+        );
+        let enumerated =
+            race_resource_upper_bound_for_shape_v1(census, Some((2, 1)), None, limits).unwrap();
+        assert_eq!(
+            enumerated.retained_storage_upper_bound(),
+            64 * 64 * PER_FINDING
+        );
+        assert_eq!(
+            race_resource_upper_bound_for_shape_v1(without_text, Some((2, 1)), None, limits),
+            Ok(enumerated),
         );
     }
 

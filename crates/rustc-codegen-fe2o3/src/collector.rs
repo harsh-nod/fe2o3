@@ -2824,14 +2824,93 @@ impl<'tcx> DeviceCollector<'tcx> {
     }
 
     fn authenticate_production_kernel_source_safety(&self) -> Result<(), CollectError> {
-        let functions = self
+        let mut functions = self
             .result
             .iter()
-            .map(|function| (self.instance_identity(function.instance), function))
+            .map(|function| (self.instance_identity(function.instance), function.instance))
             .collect::<BTreeMap<_, _>>();
+        // Inlining removes executable call edges, not source-safety obligations.
+        // Keep this audit-only graph separate from the sealed executable closure.
+        let mut source_edges = self.call_edges.clone();
+        let mut scope_count = 0_usize;
+        for function in &self.result {
+            let body = self.tcx.instance_mir(function.instance.def);
+            scope_count = scope_count
+                .checked_add(body.source_scopes.len())
+                .ok_or_else(|| {
+                    self.reachable_error(
+                        &function.instance,
+                        "inlined source-scope accounting overflowed",
+                        None,
+                    )
+                })?;
+            if scope_count > fe2o3_rustc_front::MAX_TOTAL_BLOCKS_V1 {
+                return Err(self.reachable_error(
+                    &function.instance,
+                    "inlined source-safety scope count exceeds the bounded closure budget",
+                    None,
+                ));
+            }
+            let caller = self.instance_identity(function.instance);
+            for scope in &body.source_scopes {
+                let Some((inlined, _callsite)) = scope.inlined else {
+                    continue;
+                };
+                let inlined = function
+                    .instance
+                    .try_instantiate_mir_and_normalize_erasing_regions(
+                        self.tcx,
+                        TypingEnv::fully_monomorphized(),
+                        EarlyBinder::bind(inlined),
+                    )
+                    .map_err(|_| {
+                        self.reachable_error(
+                            &function.instance,
+                            "inlined source origin failed monomorphic normalization",
+                            None,
+                        )
+                    })?;
+                if !matches!(inlined.def, InstanceKind::Item(_))
+                    || !is_fully_monomorphized(self.tcx, inlined)
+                {
+                    return Err(self.reachable_error(
+                        &function.instance,
+                        "inlined source origin is not a traversable monomorphic function instance",
+                        Some(self.instance_label(inlined)),
+                    ));
+                }
+                if let Some(rejection) =
+                    crate::trusted_device_items::rejected_provider(self.tcx, inlined.def_id())
+                {
+                    return Err(self.reachable_error(
+                        &function.instance,
+                        &format!(
+                            "inlined source origin rejected provider marker `{}`: {}",
+                            rejection.marker, rejection.reason
+                        ),
+                        Some(self.instance_label(inlined)),
+                    ));
+                }
+                let identity = self.instance_identity(inlined);
+                if !functions.contains_key(&identity)
+                    && functions.len() >= fe2o3_rustc_front::MAX_FUNCTIONS_V1
+                {
+                    return Err(self.reachable_error(
+                        &function.instance,
+                        "inlined source-safety function count exceeds the bounded closure budget",
+                        None,
+                    ));
+                }
+                functions.insert(identity.clone(), inlined);
+                source_edges
+                    .entry(caller.clone())
+                    .or_default()
+                    .insert(identity);
+            }
+        }
         let labels = functions
             .iter()
-            .map(|(identity, function)| (identity.clone(), self.instance_label(function.instance)))
+            .map(|(identity, instance)| (identity.clone(), self.instance_label(*instance)))
             .collect::<BTreeMap<_, _>>();
 
         for root in self
@@ -2849,28 +2928,22 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
             let logical_name = root.logical_name.as_deref().unwrap_or(&root.export_name);
             let root_identity = self.instance_identity(root.instance);
-            let (links, order) = root_scoped_call_chains(&self.call_edges, &labels, &root_identity);
+            let (links, order) = root_scoped_call_chains(&source_edges, &labels, &root_identity);
 
             for identity in order {
-                let function = functions
+                let instance = *functions
                     .get(&identity)
-                    .expect("root-scoped traversal retains only collected function labels");
+                    .expect("root-scoped traversal retains only audited function labels");
                 let chain = || reconstruct_call_chain(&links, &identity).join(" -> ");
-                if self
-                    .tcx
-                    .fn_sig(function.instance.def_id())
-                    .skip_binder()
-                    .safety()
-                    == Safety::Unsafe
+                if self.tcx.fn_sig(instance.def_id()).skip_binder().safety() == Safety::Unsafe
                     && !crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
-                        self.tcx,
-                        function.instance,
+                        self.tcx, instance,
                     )
                 {
                     return Err(CollectError {
                         message: format!(
                             "ordinary production kernel `{logical_name}` reaches unsafe function instance `{}`; reachable call chain: {}",
-                            self.instance_label(function.instance),
+                            self.instance_label(instance),
                             chain(),
                         ),
                     });
@@ -2886,51 +2959,50 @@ impl<'tcx> DeviceCollector<'tcx> {
                     });
                 }
 
-                if crate::trusted_device_items::classify(self.tcx, function.instance.def_id())
+                if crate::trusted_device_items::classify(self.tcx, instance.def_id())
                     .is_some_and(
                         crate::production_semantic_terminal_v1::is_traversed_reviewed_helper_v1,
                     )
                     || crate::production_rustc_intrinsic_v1::is_reviewed_device_global_mut_ptr_as_raw_v1(
                         self.tcx,
-                        function.instance,
+                        instance,
                     )
                 {
                     continue;
                 }
-                let Some(local_def_id) = function.instance.def_id().as_local() else {
+                let Some(local_def_id) = instance.def_id().as_local() else {
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_scalar_bitcast_helper_v1(
                         self.tcx,
-                        function.instance,
+                        instance,
                     ) {
                         continue;
                     }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_fabs_f32_helper_v1(
                         self.tcx,
-                        function.instance,
+                        instance,
                     ) {
                         continue;
                     }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_wrapping_integer_helper_v1(
                         self.tcx,
-                        function.instance,
+                        instance,
                     ) {
                         continue;
                     }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_f32_is_finite_helper_v1(
                         self.tcx,
-                        function.instance,
+                        instance,
                     ) {
                         continue;
                     }
                     if crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
-                        self.tcx,
-                        function.instance,
+                        self.tcx, instance,
                     ) {
                         continue;
                     }
                     match crate::trusted_device_items::authenticate_reviewed_safe_external_helper_v1(
                         self.tcx,
-                        function.instance.def_id(),
+                        instance.def_id(),
                     ) {
                         Ok(true) => continue,
                         Ok(false) => {}
@@ -2938,7 +3010,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                             return Err(CollectError {
                                 message: format!(
                                     "ordinary production kernel `{logical_name}` rejected reviewed external helper `{}`: {detail}; reachable call chain: {}",
-                                    self.instance_label(function.instance),
+                                    self.instance_label(instance),
                                     chain(),
                                 ),
                             });
@@ -2947,7 +3019,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     return Err(CollectError {
                         message: format!(
                             "ordinary production kernel `{logical_name}` cannot authenticate the absence of user-provided unsafe blocks in external helper `{}`: cross-crate HIR is unavailable and optimized MIR does not retain unsafe-block syntax; reachable call chain: {}",
-                            self.instance_label(function.instance),
+                            self.instance_label(instance),
                             chain(),
                         ),
                     });
@@ -2956,7 +3028,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     return Err(CollectError {
                         message: format!(
                             "ordinary production kernel `{logical_name}` cannot authenticate local HIR for reachable function `{}`; reachable call chain: {}",
-                            self.instance_label(function.instance),
+                            self.instance_label(instance),
                             chain(),
                         ),
                     });

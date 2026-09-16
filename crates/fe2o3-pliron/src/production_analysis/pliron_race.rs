@@ -56,6 +56,9 @@ const RAW_INDEX_EVALUATION_QUERY_MAP_LIFECYCLE_WORK_V1: usize = 3;
 // units per field and stack capacity at two units per four-field frame.
 const RAW_INDEX_EVALUATION_MAP_STORAGE_PER_OPERATION_V1: usize = 6;
 const RAW_INDEX_EVALUATION_STACK_FRAME_STORAGE_V1: usize = 8;
+// Value::id is `v` plus a numeric UID; allocation origins are u64 values.
+// Debug aliases are intentionally excluded from retained race diagnostics.
+const NUMERIC_RACE_NAME_BYTES_V1: usize = 64;
 
 fn race_resource_overflow_v1() -> ProductionAnalysisResourceLimitV1 {
     ProductionAnalysisResourceLimitV1 {
@@ -269,10 +272,7 @@ fn race_resource_upper_bound_for_shape_v1(
         raw_evaluation_work,
         presburger_work,
     ])?;
-    let name_storage = census
-        .identifier_bytes
-        .checked_add(usize::BITS as usize)
-        .ok_or_else(race_resource_overflow_v1)?;
+    let name_storage = NUMERIC_RACE_NAME_BYTES_V1;
     let effect_state = checked_race_mul_v1(
         effects,
         MAX_RANKED_MEMORY_RANK

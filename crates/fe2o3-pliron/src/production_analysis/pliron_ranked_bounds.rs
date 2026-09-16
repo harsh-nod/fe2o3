@@ -99,9 +99,10 @@ fn checked_ranked_bounds_product_v1(
 }
 
 /// Bounds CFG fact intersection, ranked-access checks, and the retained
-/// memory-bounds report. Verified blocks each have a terminator, so the census
-/// fact bound equals the block count, not the observed guard-fact count. FIFO
-/// propagation, one-fact edge generation, and at most two successors bound both
+/// memory-bounds report. The authenticated census counts both less-than branch
+/// families, the only operations that generate legacy bounds facts. Each guard
+/// generates at most one fact. FIFO propagation, one-fact edge generation,
+/// and at most two successors bound both
 /// unchanged predecessor rescans and changed-node successor visits by the
 /// conservative graph-wave allowance below. Every operand is treated as a
 /// possible access dimension and charged through the Presburger solver's
@@ -133,6 +134,7 @@ pub(crate) fn preflight_ranked_bounds_resource_upper_bound_v1(
     let facts = census
         .blocks
         .min(census.operations)
+        .min(census.memory_bounds_guard_candidates)
         .min(MAX_RANKED_BOUNDS_FACTS);
     let fact_words = facts.div_ceil(u64::BITS as usize);
     let waves = facts

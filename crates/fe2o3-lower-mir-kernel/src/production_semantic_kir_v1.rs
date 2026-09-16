@@ -13079,7 +13079,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 if place.projections().iter().any(|projection| {
                     matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
-                }) {
+                }) || self.is_direct_slice_constant_index_v1(place)
+                {
                     self.lower_indexed_place_address(block, statement, place, operations)
                 } else {
                     let binding = self.resolve_place(block, statement, place, operations)?;
@@ -13777,7 +13778,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .map(|place| place.local().index() as usize);
                 let binding = if place.projections().iter().any(|projection| {
                     matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
-                }) {
+                }) || self.is_direct_slice_constant_index_v1(place)
+                {
                     self.lower_indexed_place_address(block, statement, place, operations)?
                 } else {
                     self.resolve_place(block, statement, place, operations)?
@@ -20951,11 +20953,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn is_direct_mutable_slice_index_v1(&self, place: &SemanticPlaceV1) -> bool {
+        self.is_direct_slice_index_v1(place, true)
+    }
+
+    fn is_direct_slice_constant_index_v1(&self, place: &SemanticPlaceV1) -> bool {
+        place.projections().last().is_some_and(|projection| {
+            matches!(
+                projection.kind(),
+                SemanticProjectionKindV1::ConstantIndex {
+                    from_end: false,
+                    ..
+                }
+            )
+        }) && self.is_direct_slice_index_v1(place, false)
+    }
+
+    fn is_direct_slice_index_v1(&self, place: &SemanticPlaceV1, require_write: bool) -> bool {
         let [dereference, index] = place.projections() else {
             return false;
         };
         if dereference.kind() != SemanticProjectionKindV1::Dereference
-            || !matches!(index.kind(), SemanticProjectionKindV1::Index(_))
+            || !matches!(
+                index.kind(),
+                SemanticProjectionKindV1::Index(_)
+                    | SemanticProjectionKindV1::ConstantIndex {
+                        from_end: false,
+                        ..
+                    }
+            )
         {
             return false;
         }
@@ -20970,7 +20995,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             return false;
         };
         if pointer.kind() != SemanticPointerKindV1::Reference
-            || pointer.mutability() != SemanticMutabilityV1::Mutable
+            || (require_write && pointer.mutability() != SemanticMutabilityV1::Mutable)
             || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
             || pointer.pointer_width_bits() != 64
             || pointer.pointee() != dereference.result_type()
@@ -20990,7 +21015,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         matches!(
             self.locals.get(place.local().index() as usize).and_then(Option::as_ref),
             Some(SemanticValueBindingV1::Value { ty: Type::Slice(slice), .. })
-                if slice.access == AccessMode::ReadWrite
+                if (slice.access == AccessMode::ReadWrite
+                    || (!require_write && slice.access == AccessMode::ReadOnly))
                     && Some(slice.address_space) == lower_address_space(pointer.address_space()).ok()
         )
     }
@@ -21170,12 +21196,58 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     offset, from_end, ..
                 } => {
                     let SemanticValueBindingV1::Aggregate(fields) = &binding else {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            statement,
-                            "constant index does not select a by-value aggregate",
-                        ));
+                        if from_end {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "from-end constant slice indexing is not supported",
+                            ));
+                        }
+                        let (slice, slice_ty) = binding.value().map_err(|detail| {
+                            unsupported(0, Some(block.index()), statement, detail)
+                        })?;
+                        let Type::Slice(slice_type) = slice_ty else {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "constant index does not select an aggregate or slice",
+                            ));
+                        };
+                        let index = self
+                            .emit(
+                                operations,
+                                Type::INDEX,
+                                OperationKind::Constant(Constant::Index(offset)),
+                            )?
+                            .value()
+                            .expect("emitted constant slice index")
+                            .0;
+                        let pointer_ty = Type::pointer(
+                            (*slice_type.element).clone(),
+                            slice_type.address_space,
+                            slice_type.access,
+                        );
+                        let base = self
+                            .emit(
+                                operations,
+                                pointer_ty.clone(),
+                                OperationKind::SliceData { slice },
+                            )?
+                            .value()
+                            .expect("emitted slice data")
+                            .0;
+                        binding = self.emit(
+                            operations,
+                            pointer_ty,
+                            OperationKind::GetElementPointer {
+                                base,
+                                offset: index,
+                            },
+                        )?;
+                        current_type = projection.result_type();
+                        continue;
                     };
                     let offset = usize::try_from(offset).map_err(|_| {
                         unsupported(

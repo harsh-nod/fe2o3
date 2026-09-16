@@ -171,10 +171,18 @@ fn validate_build_std_vendor_package(
     Ok(())
 }
 
-pub(super) fn extraction_rustflags(profile: ProductionAmdTargetProfileV1) -> String {
-    // Keep engineering MIR extraction at O0 without changing the selected target contract.
+pub(super) fn extraction_rustflags(
+    profile: ProductionAmdTargetProfileV1,
+    normalization: MirNormalizationV1,
+) -> String {
+    // Both profiles retain the same checked importer and selected target contract.
+    // Inlined origins are audited independently of the optimized executable graph.
+    let (inline, optimization) = match normalization {
+        MirNormalizationV1::Minimal => ("no", "0"),
+        MirNormalizationV1::OptimizedInline => ("yes", "3"),
+    };
     format!(
-        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu={} -Ctarget-feature={}",
+        "-Zalways-encode-mir -Zinline-mir={inline} -Zmir-enable-passes=-JumpThreading -Copt-level={optimization} -Ctarget-cpu={} -Ctarget-feature={}",
         profile.cpu(),
         profile.rustc_features()
     )
@@ -289,7 +297,7 @@ pub(super) fn run_extraction(
         .env("FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1", handoff)
         .env(
             options.profile.cargo_rustflags_env(),
-            extraction_rustflags(options.profile),
+            extraction_rustflags(options.profile, options.mir_normalization),
         );
     crate::configure_pinned_rustc_child(command.as_command_mut(), rustc)?;
     crate::remove_dynamic_loader_environment(command.as_command_mut());

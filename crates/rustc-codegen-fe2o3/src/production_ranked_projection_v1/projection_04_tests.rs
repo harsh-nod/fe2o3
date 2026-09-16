@@ -162,7 +162,10 @@
         assert_eq!(projected.checks.len(), 1);
         assert_eq!(projected.checks[0].access_block, 1);
         assert_eq!(projected.checks[0].slice_local.index(), 1);
-        assert_eq!(projected.checks[0].index_local.index(), 4);
+        assert_eq!(
+            projected.checks[0].index_identity,
+            ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4))
+        );
         assert_eq!(
             projected.checks[0].index,
             ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0))
@@ -298,7 +301,7 @@
                 &projected.checks,
                 1,
                 SemanticLocalIdV1::from_index(3),
-                SemanticLocalIdV1::from_index(4),
+                ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4)),
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a dynamic slice access without its exact Rust bounds-check predecessor"
@@ -337,7 +340,10 @@
             assert_eq!(projected.checks.len(), 1);
             assert_eq!(projected.checks[0].access_block, 1);
             assert_eq!(projected.checks[0].slice_local.index(), 1);
-            assert_eq!(projected.checks[0].index_local.index(), 4);
+            assert_eq!(
+                projected.checks[0].index_identity,
+                ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4))
+            );
             assert!(!projected.checks[0].must_authorize_access);
             assert_eq!(operations.len(), 2);
             assert_eq!(next_value, 2);

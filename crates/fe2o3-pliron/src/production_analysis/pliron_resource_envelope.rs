@@ -226,6 +226,9 @@ pub(crate) struct ProductionAnalysisInputCensusV1 {
     pub(crate) ownership_contracts: usize,
     pub(crate) effect_refinement_contracts: usize,
     pub(crate) index_lt_branch_candidates: usize,
+    /// Both legacy and argument-carrying less-than guards. Each can generate
+    /// at most one legacy bounds fact; other terminators generate none.
+    pub(crate) memory_bounds_guard_candidates: usize,
     /// Operations that can populate the semantic expression table, including
     /// malformed candidates that the later semantic verifier rejects.
     pub(crate) semantic_definitions: usize,

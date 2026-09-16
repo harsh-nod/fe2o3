@@ -569,6 +569,7 @@ fn pipeline_protocol_inventory_census_v1(
     let mut allocation_effects = 0_usize;
     let mut effect_refinement_contracts = 0_usize;
     let mut index_lt_branch_candidates = 0_usize;
+    let mut memory_bounds_guard_candidates = 0_usize;
     for site in inventory.operations() {
         let raw = site.pointer().deref(context);
         let operand_arity = raw.get_num_operands();
@@ -592,6 +593,14 @@ fn pipeline_protocol_inventory_census_v1(
                 .downcast_ref::<IndexLessThanBranchArgsOp>()
                 .is_some(),
         );
+        memory_bounds_guard_candidates += usize::from(
+            operation
+                .downcast_ref::<dialect_kernel::IndexLessThanBranchOp>()
+                .is_some()
+                || operation
+                    .downcast_ref::<IndexLessThanBranchArgsOp>()
+                    .is_some(),
+        );
     }
     let block_arguments = inventory
         .blocks()
@@ -613,6 +622,7 @@ fn pipeline_protocol_inventory_census_v1(
         allocation_effects,
         effect_refinement_contracts,
         index_lt_branch_candidates,
+        memory_bounds_guard_candidates,
         ..ProductionAnalysisInputCensusV1::default()
     })
 }

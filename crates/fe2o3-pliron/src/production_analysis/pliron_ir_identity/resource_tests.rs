@@ -6,6 +6,7 @@ mod resource_tests {
     use pliron::{builtin::attributes::UnitAttr, dialect::DialectName, identifier::Identifier};
 
     include!("native_switch_resource_tests.rs");
+    include!("guard_candidate_tests.rs");
 
     fn debug_named_function_v1(context: &mut Context) -> (FuncOp, Value) {
         register_dialect(context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
@@ -121,6 +122,7 @@ mod resource_tests {
             ownership_contracts: 0,
             effect_refinement_contracts: 0,
             index_lt_branch_candidates: 1,
+            memory_bounds_guard_candidates: 1,
             semantic_definitions: 0,
             semantic_refinement_contracts: 0,
             native_switch_verification_work: 43,
@@ -138,7 +140,7 @@ mod resource_tests {
             + 41 * 3
             + 1
             + 43;
-        let expected_retained = 29 + 31 + 37 + 41 + 9;
+        let expected_retained = 29 + 31 + 37 + 41 + 10;
         let expected_temporary = 2 * 3 + 3 * 3 + (7 + 13) + 23 + 37 + 47;
         assert_eq!(bound.work_upper_bound(), expected_work);
         assert_eq!(bound.retained_storage_upper_bound(), expected_retained);

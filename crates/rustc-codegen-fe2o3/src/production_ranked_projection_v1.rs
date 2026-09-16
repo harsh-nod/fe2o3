@@ -587,10 +587,16 @@ struct ProjectionLocalContractsV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedBoundsIndexIdentityV1 {
+    Local(SemanticLocalIdV1),
+    Literal(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedBoundsCheckV1 {
     access_block: usize,
     slice_local: SemanticLocalIdV1,
-    index_local: SemanticLocalIdV1,
+    index_identity: ProjectedBoundsIndexIdentityV1,
     index: ProductionRankedValueV1,
     extent: ProductionRankedValueV1,
     must_authorize_access: bool,
@@ -3177,6 +3183,7 @@ fn project_and_verify_ranked_root_v1(
         &mut discarded_ir,
     )?;
     let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
+        semantic.types(),
         function,
         intrinsic.extent_argument_count,
         &intrinsic.index_values,
@@ -4293,6 +4300,7 @@ fn project_rust_bounds_checks(
     next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
     project_rust_bounds_checks_with_ordinary_v1(
+        &[],
         function,
         first_argument,
         known_indices,
@@ -4303,7 +4311,9 @@ fn project_rust_bounds_checks(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_rust_bounds_checks_with_ordinary_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
     known_indices: &[Option<ProjectedDisjointIndexV1>],
@@ -4316,12 +4326,13 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     struct LocalDefinitionV1 {
         count: u32,
         length_source: Option<SemanticLocalIdV1>,
+        exact_slice_length_source: Option<SemanticLocalIdV1>,
     }
 
     #[derive(Clone, Copy)]
     struct BoundsGuardV1 {
         condition_local: SemanticLocalIdV1,
-        index_local: SemanticLocalIdV1,
+        index_identity: ProjectedBoundsIndexIdentityV1,
         length_local: SemanticLocalIdV1,
         access_block: usize,
         must_authorize_access: bool,
@@ -4344,6 +4355,8 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                     "a Rust bounds-check definition outside the semantic local table",
                 ))?;
             definition.count = definition.count.saturating_add(1);
+            definition.exact_slice_length_source =
+                exact_slice_length_source_v1(types, function, assignment.value());
             definition.length_source = match assignment.value().kind() {
                 SemanticRvalueKindV1::Length(place) => Some(place.local()),
                 SemanticRvalueKindV1::Unary {
@@ -4364,6 +4377,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 ))?;
             definition.count = definition.count.saturating_add(1);
             definition.length_source = None;
+            definition.exact_slice_length_source = None;
         }
         block
             .terminator()
@@ -4429,9 +4443,9 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                             "a Rust bounds-check condition without one exact local",
                         ),
                     )?,
-                    index_local: simple_operand_local(index).ok_or(
+                    index_identity: bounds_index_identity_v1(types, index).ok_or(
                         ProductionRankedProjectionErrorV1::Incomplete(
-                            "a Rust bounds-check index without one exact local",
+                            "a Rust bounds-check index without one exact local or literal",
                         ),
                     )?,
                     length_local: simple_operand_local(length).ok_or(
@@ -4450,8 +4464,8 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 let Some(condition_local) = simple_operand_local(discriminant) else {
                     continue;
                 };
-                let Some((index_local, length_local)) =
-                    exact_less_than_definition_v1(block, condition_local)
+                let Some((index_identity, length_local)) =
+                    exact_less_than_definition_v1(types, block, condition_local)
                 else {
                     continue;
                 };
@@ -4479,7 +4493,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 };
                 BoundsGuardV1 {
                     condition_local,
-                    index_local,
+                    index_identity,
                     length_local,
                     access_block,
                     must_authorize_access: false,
@@ -4489,7 +4503,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
         };
         let BoundsGuardV1 {
             condition_local,
-            index_local,
+            index_identity,
             length_local,
             access_block,
             must_authorize_access,
@@ -4499,25 +4513,28 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check condition outside the semantic local table",
             ),
         )?;
-        let index_definition = definitions.get(index_local.index() as usize).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a Rust bounds-check index outside the semantic local table",
-            ),
-        )?;
         let length_definition = definitions.get(length_local.index() as usize).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
                 "a Rust bounds-check length outside the semantic local table",
             ),
         )?;
-        let index_is_immutable_argument = index_definition.count == 0
-            && matches!(
-                function.locals()[index_local.index() as usize].role(),
-                SemanticLocalRoleV1::Argument(_)
-            );
-        if condition_definition.count != 1
-            || (index_definition.count != 1 && !index_is_immutable_argument)
-            || length_definition.count != 1
-        {
+        let index_is_stable = match index_identity {
+            ProjectedBoundsIndexIdentityV1::Literal(_) => true,
+            ProjectedBoundsIndexIdentityV1::Local(index_local) => {
+                let definition = definitions.get(index_local.index() as usize).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a Rust bounds-check index outside the semantic local table",
+                    ),
+                )?;
+                definition.count == 1
+                    || (definition.count == 0
+                        && matches!(
+                            function.locals()[index_local.index() as usize].role(),
+                            SemanticLocalRoleV1::Argument(_)
+                        ))
+            }
+        };
+        if condition_definition.count != 1 || !index_is_stable || length_definition.count != 1 {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds check whose condition, index, or length is not stable",
             ));
@@ -4527,8 +4544,19 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check length not derived from one exact slice",
             ),
         )?;
-        if exact_less_than_definition_v1(block, condition_local)
-            != Some((index_local, length_local))
+        if matches!(index_identity, ProjectedBoundsIndexIdentityV1::Literal(_))
+            && (length_definition.exact_slice_length_source != Some(slice_local)
+                || unsigned_index_bits_v1(
+                    types,
+                    function.locals()[length_local.index() as usize].ty(),
+                ) != Some(64))
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a literal slice index lacks an exact unsigned slice-length source",
+            ));
+        }
+        if exact_less_than_definition_v1(types, block, condition_local)
+            != Some((index_identity, length_local))
         {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds-check message not backed by its exact index < length condition",
@@ -4539,10 +4567,11 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
         }
-        if let Some(ordinary) = ordinary_indices
-            .get(index_local.index() as usize)
-            .copied()
-            .flatten()
+        if let ProjectedBoundsIndexIdentityV1::Local(index_local) = index_identity
+            && let Some(ordinary) = ordinary_indices
+                .get(index_local.index() as usize)
+                .copied()
+                .flatten()
         {
             let Some(enum_payload_dominance) = enum_payload_dominance else {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -4572,7 +4601,16 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 }
             }
         }
-        let mut unknown_for = |local: SemanticLocalIdV1| {
+        let mut value_for = |identity: ProjectedBoundsIndexIdentityV1| {
+            let local = match identity {
+                ProjectedBoundsIndexIdentityV1::Local(local) => local,
+                ProjectedBoundsIndexIdentityV1::Literal(value) => {
+                    let result = next_value_id(next_value)?;
+                    reserve_operation(operations)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+                    return Ok(ProductionRankedValueV1::Local(result));
+                }
+            };
             let slot = local_values.get_mut(local.index() as usize).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a Rust bounds-check operand outside the semantic local table",
@@ -4599,7 +4637,9 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check slice outside the semantic local table",
             ),
         )?;
-        if prior_extent.is_some() {
+        if prior_extent.is_some()
+            || matches!(index_identity, ProjectedBoundsIndexIdentityV1::Literal(_))
+        {
             let slice_definition = definitions.get(slice_local.index() as usize).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a Rust bounds-check slice outside the semantic local table",
@@ -4615,11 +4655,11 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 ));
             }
         }
-        let index = unknown_for(index_local)?;
+        let index = value_for(index_identity)?;
         let extent = if let Some(extent) = prior_extent {
             extent
         } else {
-            let extent = unknown_for(length_local)?;
+            let extent = value_for(ProjectedBoundsIndexIdentityV1::Local(length_local))?;
             slice_extents[slice_local.index() as usize] = Some(extent);
             extent
         };
@@ -4631,7 +4671,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
         checks.push(ProjectedBoundsCheckV1 {
             access_block,
             slice_local,
-            index_local,
+            index_identity,
             index,
             extent,
             must_authorize_access,
@@ -4644,9 +4684,10 @@ fn project_rust_bounds_checks_with_ordinary_v1(
 }
 
 fn exact_less_than_definition_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     block: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
     condition_local: SemanticLocalIdV1,
-) -> Option<(SemanticLocalIdV1, SemanticLocalIdV1)> {
+) -> Option<(ProjectedBoundsIndexIdentityV1, SemanticLocalIdV1)> {
     block.statements().iter().rev().find_map(|statement| {
         let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
             return None;
@@ -4664,8 +4705,76 @@ fn exact_less_than_definition_v1(
         else {
             return None;
         };
-        Some((simple_operand_local(left)?, simple_operand_local(right)?))
+        Some((
+            bounds_index_identity_v1(types, left)?,
+            simple_operand_local(right)?,
+        ))
     })
+}
+
+fn bounds_index_identity_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    operand: &SemanticOperandV1,
+) -> Option<ProjectedBoundsIndexIdentityV1> {
+    match operand {
+        SemanticOperandV1::Constant(constant) => match constant.value() {
+            SemanticConstantValueV1::Scalar(value)
+                if unsigned_index_bits_v1(types, constant.ty()) == Some(64)
+                    && value.size_bytes() == 8 =>
+            {
+                u64::try_from(value.bits())
+                    .ok()
+                    .map(ProjectedBoundsIndexIdentityV1::Literal)
+            }
+            _ => None,
+        },
+        SemanticOperandV1::Copy(_) | SemanticOperandV1::Move(_) => {
+            simple_operand_local(operand).map(ProjectedBoundsIndexIdentityV1::Local)
+        }
+    }
+}
+
+fn exact_slice_length_source_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    value: &SemanticRvalueV1,
+) -> Option<SemanticLocalIdV1> {
+    let (local, dereferenced_type) = match value.kind() {
+        SemanticRvalueKindV1::Unary {
+            operation: SemanticUnaryOpV1::PointerMetadata,
+            operand,
+        } => (simple_operand_local(operand)?, None),
+        SemanticRvalueKindV1::Length(place) => match place.projections() {
+            [] => {
+                let local = function.locals().get(place.local().index() as usize)?;
+                return matches!(
+                    types.get(local.ty().index() as usize)?.shape(),
+                    SemanticTypeShapeV1::Slice { .. }
+                )
+                .then_some(place.local());
+            }
+            [projection] if projection.kind() == SemanticProjectionKindV1::Dereference => {
+                (place.local(), Some(projection.result_type()))
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let local_type = function.locals().get(local.index() as usize)?.ty();
+    let SemanticTypeShapeV1::Pointer(pointer) = types.get(local_type.index() as usize)?.shape()
+    else {
+        return None;
+    };
+    if pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+        || dereferenced_type.is_some_and(|ty| ty != pointer.pointee())
+        || !matches!(
+            types.get(pointer.pointee().index() as usize)?.shape(),
+            SemanticTypeShapeV1::Slice { .. }
+        )
+    {
+        return None;
+    }
+    Some(local)
 }
 
 fn project_authenticated_capabilities_v1(
@@ -23044,12 +23153,12 @@ fn projected_bounds_check(
     checks: &[ProjectedBoundsCheckV1],
     block_index: usize,
     slice_local: SemanticLocalIdV1,
-    index_local: SemanticLocalIdV1,
+    index_identity: ProjectedBoundsIndexIdentityV1,
 ) -> Result<ProjectedBoundsCheckV1, ProductionRankedProjectionErrorV1> {
     let mut matches = checks.iter().copied().filter(|check| {
         check.access_block == block_index
             && check.slice_local == slice_local
-            && check.index_local == index_local
+            && check.index_identity == index_identity
     });
     let check = matches
         .next()
@@ -23225,7 +23334,7 @@ fn project_place_access_with_atomic(
                             bounds_checks,
                             block_index,
                             place.local(),
-                            index,
+                            ProjectedBoundsIndexIdentityV1::Local(index),
                         )?;
                         shape.push(DYNAMIC_EXTENT);
                         dynamic_extents.push(check.extent);
@@ -23249,18 +23358,45 @@ fn project_place_access_with_atomic(
                         "an indexed place exceeding the ranked-memory rank limit",
                     ));
                 }
-                let extent = static_array_extent(types, current)?;
-                let value = if from_end {
-                    extent.checked_sub(offset).ok_or(
-                        ProductionRankedProjectionErrorV1::Unsupported(
-                            "a from-end constant index larger than its static extent",
-                        ),
-                    )?
-                } else {
-                    offset
-                };
-                shape.push(extent);
-                indices.push(ProjectedIndexV1::Constant(value));
+                match types.get(current.index() as usize).map(|ty| ty.shape()) {
+                    Some(SemanticTypeShapeV1::Array { length, .. }) => {
+                        let value = if from_end {
+                            length.checked_sub(offset).ok_or(
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "a from-end constant index larger than its static extent",
+                                ),
+                            )?
+                        } else {
+                            offset
+                        };
+                        shape.push(*length);
+                        indices.push(ProjectedIndexV1::Constant(value));
+                    }
+                    Some(SemanticTypeShapeV1::Slice { .. }) if !from_end => {
+                        // MIR minimum_length is not a runtime bound. Keep the
+                        // literal's exact guard and actual dynamic slice extent.
+                        let check = projected_bounds_check(
+                            bounds_checks,
+                            block_index,
+                            place.local(),
+                            ProjectedBoundsIndexIdentityV1::Literal(offset),
+                        )?;
+                        shape.push(DYNAMIC_EXTENT);
+                        dynamic_extents.push(check.extent);
+                        indices.push(ProjectedIndexV1::Dynamic(check.index));
+                        comparisons.push((check.index, check.extent));
+                    }
+                    Some(SemanticTypeShapeV1::Slice { .. }) => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a from-end constant slice index lacks exact runtime subtraction",
+                        ));
+                    }
+                    _ => {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "a constant index projection whose base is not an array or slice",
+                        ));
+                    }
+                }
                 current = projection.result_type();
             }
             SemanticProjectionKindV1::Field(_)
@@ -23584,23 +23720,6 @@ fn push_ranked_ir(
     Ok(())
 }
 
-fn static_array_extent(
-    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-) -> Result<u64, ProductionRankedProjectionErrorV1> {
-    match types.get(ty.index() as usize).map(|ty| ty.shape()) {
-        Some(SemanticTypeShapeV1::Array { length, .. }) => Ok(*length),
-        Some(SemanticTypeShapeV1::Slice { .. }) => {
-            Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a slice access before dynamic extent projection is available",
-            ))
-        }
-        _ => Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "an index projection whose base is not an array or slice",
-        )),
-    }
-}
-
 fn memory_space(address_space: u32) -> Result<MemorySpaceAttr, ProductionRankedProjectionErrorV1> {
     match address_space {
         0 | 1 | 4 => Ok(MemorySpaceAttr::Global),
@@ -23696,6 +23815,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
+    include!("production_ranked_projection_v1/constant_slice_index_v1_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");

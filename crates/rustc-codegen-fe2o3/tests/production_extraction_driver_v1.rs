@@ -172,6 +172,112 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn optimized_inlined_source_origins_retain_source_safety_checks() {
+    for (source, expected) in [
+        (
+            include_str!("fixtures/production-source-safety-device/local_unsafe_block.rs"),
+            "safe-signature local helper containing a user-provided unsafe block",
+        ),
+        (
+            include_str!("fixtures/production-source-safety-device/external_hir_gap.rs"),
+            "cannot authenticate the absence of user-provided unsafe blocks in external helper",
+        ),
+    ] {
+        let target = ScratchTarget::new();
+        // Both calls can disappear from optimized executable MIR. Their exact
+        // compiler-recorded inline origins must still receive the source audit.
+        let source = source.replace("#[inline(never)]", "#[inline(always)]");
+        let fixture = materialize_source_safety_fixture(&target, &source);
+        let output = Command::new(env!("CARGO"))
+            .current_dir(fixture)
+            .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
+            .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_source_safety_fixture")
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+                "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32")
+            .args(["check", "--offline", "-Zbuild-std=core", "--target", "amdgcn-amd-amdhsa", "--target-dir"])
+            .arg(target.path().join("cargo"))
+            .output()
+            .expect("run optimized source-safety fixture");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+        assert!(
+            !output.status.success(),
+            "inlined unsafe source unexpectedly passed:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(expected),
+            "wrong source-safety rejection:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("reachable call chain:"),
+            "missing root custody:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_atomic_rmw_inline_normalization_reaches_gfx950_llvm() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("rmw-gfx950.ll");
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "atomic-rmw",
+        &llvm_output,
+        "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+    assert!(
+        output.status.success(),
+        "ordinary RMW extraction failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("10 formal access(es)"),
+        "atomic effects lost:\n{stderr}"
+    );
+    assert!(stderr.contains("artifact/launch authority false"));
+    let llvm = std::fs::read_to_string(llvm_output).expect("source-derived LLVM");
+    assert_eq!(llvm.matches("atomicrmw ").count(), 10, "{llvm}");
+    for operation in [
+        "atomicrmw xchg ptr addrspace(1) %arg0, i32 1 seq_cst",
+        "atomicrmw sub ptr addrspace(1) %arg0, i32 3 acquire",
+        "atomicrmw and ptr addrspace(1) %arg0, i32 4 release",
+        "atomicrmw or ptr addrspace(1) %arg0, i32 5 acq_rel",
+        "atomicrmw xor ptr addrspace(1) %arg0, i32 6 seq_cst",
+        "atomicrmw umin ptr addrspace(1) %arg0, i32 7 monotonic",
+        "atomicrmw umax ptr addrspace(1) %arg0, i32 8 acquire",
+        "atomicrmw min ptr addrspace(1) %arg1, i32 -9 release",
+        "atomicrmw max ptr addrspace(1) %arg1, i32 10 acq_rel",
+    ] {
+        assert!(
+            llvm.contains(operation),
+            "lost operation/order/signedness {operation}:\n{llvm}"
+        );
+    }
+    let exchange = llvm
+        .lines()
+        .find(|line| line.contains("atomicrmw xchg "))
+        .unwrap();
+    let previous = exchange
+        .trim()
+        .split_once(" = ")
+        .expect("exchange result")
+        .0;
+    assert!(
+        llvm.contains(&format!(
+            "atomicrmw add ptr addrspace(1) %arg0, i32 {previous} monotonic"
+        )),
+        "atomic return value did not feed the following RMW:\n{llvm}",
+    );
+    assert!(
+        !llvm.contains("syncscope("),
+        "system coherence unexpectedly narrowed:\n{llvm}"
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
     let target = ScratchTarget::new();
     let repeated_target = ScratchTarget::new();
@@ -353,20 +459,26 @@ fn exact_volatile_load_reaches_checked_ordered_llvm_at_engineering_o0() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn core_atomic_rmw_set_reaches_complete_semantic_import() {
+fn core_atomic_rmw_without_inlining_remains_fail_closed_at_callable_effects() {
     let target = ScratchTarget::new();
-    let output = run_extraction_command(&target, Some("atomic-rmw"), true);
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "atomic-rmw",
+        &target.path().join("rejected.ll"),
+        "-Zalways-encode-mir -Zinline-mir=no -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    );
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
 
     assert!(
         !output.status.success(),
-        "core atomics unexpectedly passed the pending target-neutral lowering boundary",
+        "non-inlined core atomics unexpectedly bypassed callable effect summaries",
     );
     assert!(
-        stderr.contains("then admitted one complete semantic MIR request")
-            && stderr.contains("target-neutral lowering remains pending")
-            && stderr.contains("no fallback or artifact emission was entered"),
-        "core atomic RMWs did not reach complete semantic import:\n{stderr}",
+        stderr.contains("semantic-to-ranked projection incomplete")
+            && stderr.contains(
+                "a call terminator before exact callable memory-effect summaries are available"
+            ),
+        "non-inlined atomic RMWs did not fail closed at the expected boundary:\n{stderr}",
     );
     for forbidden in [
         "reaches unsafe function instance",
