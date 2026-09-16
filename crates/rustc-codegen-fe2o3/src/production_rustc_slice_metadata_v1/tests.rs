@@ -4,7 +4,7 @@ use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::Compiler;
 use rustc_middle::mir::{BasicBlockData, Statement, Terminator, TerminatorKind};
 
-mod construction;
+mod construction_tests;
 
 const SOURCE: &str = r#"
 pub struct Slices<'a>(&'a [u32], &'a [u32]);
@@ -321,7 +321,7 @@ impl Callbacks for MetadataCallbacks {
                 .pairs
                 .is_empty()
         );
-        construction::check(tcx, Instance::mono(tcx, find("constructor")));
+        construction_tests::check(tcx, Instance::mono(tcx, find("constructor")));
         self.completed = true;
         Compilation::Stop
     }
