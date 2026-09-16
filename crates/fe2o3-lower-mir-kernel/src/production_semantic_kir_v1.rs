@@ -176,7 +176,7 @@ pub struct SemanticKirParameterBindingV1 {
     kernel_ir_value: ValueId,
 }
 
-/// One exact source projection used to scalarize a by-value function argument.
+/// One exact local projection used to scalarize a by-value function argument.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticKirParameterProjectionV1 {
     /// A tuple or nominal aggregate field.
@@ -212,7 +212,7 @@ pub struct SemanticKirIgnoredParameterBindingV1 {
 pub enum SemanticKirFunctionRoleV1 {
     /// The selected semantic body backing the sole kernel entry.
     KernelEntry,
-    /// A reachable, deterministic pure helper with an admitted scalar/shared-slice ABI.
+    /// A reachable pure helper with an admitted argument/result ABI.
     InternalHelper,
 }
 
@@ -290,7 +290,7 @@ impl SemanticKirParameterComponentBindingV1 {
         self.semantic_component_type
     }
 
-    /// Returns the canonical source-to-leaf projection path.
+    /// Returns the canonical argument-local-to-leaf projection path.
     pub fn projection(&self) -> &[SemanticKirParameterProjectionV1] {
         &self.projection
     }

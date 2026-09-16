@@ -624,7 +624,7 @@ fn rust_call_repeated_tuple_expansion_is_bounded_before_materialization() {
 #[test]
 fn rust_call_ignored_argument_budget_has_an_exact_boundary() {
     for expanded in [false, true] {
-        ProductionSemanticKirOwnerV1::try_lower(
+        let _lowered = ProductionSemanticKirOwnerV1::try_lower(
             owner(expanded, false, &[UNIT; 20], BodyCase::RepeatedCalls(40)),
             ProductionSemanticKirLimitsV1::new_with_max_operations(10, 100, 100, 861),
         )
