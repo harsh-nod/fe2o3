@@ -241,7 +241,15 @@
             },
         ];
 
-        let retained = production_access_sources(&blocks, &sites).unwrap();
+        // Existing inert non-private rows do not query the source or its ledger.
+        let retained = production_access_sources(
+            &assertion_types(),
+            &literal_assertion(true, true, false),
+            &blocks,
+            &sites,
+            &mut ComponentDynamicAssertionFactsV1,
+        )
+        .unwrap();
 
         assert_eq!(retained.len(), 2);
         assert_eq!(
@@ -287,7 +295,15 @@
             }),
         }];
 
-        let retained = production_access_sources(&blocks, &sites).unwrap();
+        // Existing inert non-private rows do not query the source or its ledger.
+        let retained = production_access_sources(
+            &assertion_types(),
+            &literal_assertion(true, true, false),
+            &blocks,
+            &sites,
+            &mut ComponentDynamicAssertionFactsV1,
+        )
+        .unwrap();
 
         assert_eq!(retained.len(), 1);
         assert_eq!(

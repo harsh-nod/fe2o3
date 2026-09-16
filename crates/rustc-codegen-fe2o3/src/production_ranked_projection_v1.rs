@@ -3564,7 +3564,13 @@ fn project_and_verify_ranked_root_v1(
         &blocks,
         &sources,
     )?;
-    let access_sources = production_access_sources(&blocks, &sources)?;
+    let access_sources = production_access_sources(
+        semantic.types(),
+        function,
+        &blocks,
+        &sources,
+        assertion_facts,
+    )?;
     let system_coherent_allocations = intrinsic
         .local_contracts
         .allocations
@@ -4381,9 +4387,84 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     }
 }
 
+fn private_indexed_write_source_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    source: &ProjectedAccessSourceV1,
+) -> bool {
+    let Some(site) = source.semantic_site else {
+        return false;
+    };
+    let Some(statement) = site.statement.and_then(|statement| {
+        function
+            .blocks()
+            .get(site.block)?
+            .statements()
+            .get(statement)
+    }) else {
+        return false;
+    };
+    let (destination, value) = match statement.kind() {
+        SemanticStatementKindV1::Assign(assignment) => {
+            let SemanticRvalueKindV1::Use(value) = assignment.value().kind() else {
+                return false;
+            };
+            (assignment.destination(), value)
+        }
+        SemanticStatementKindV1::Store(store)
+            if store.volatility() == SemanticVolatilityV1::NonVolatile
+                && store.atomic().is_none() =>
+        {
+            (store.destination(), store.value())
+        }
+        _ => return false,
+    };
+    // A projected RHS can emit a read before the physical write, whereas the
+    // ranked projector visits the destination first. Do not assign a write
+    // ordinal for that unsupported mixed-effect recipe.
+    let value_type = match value {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+            if !place.projections().is_empty() {
+                return false;
+            }
+            place.ty()
+        }
+        SemanticOperandV1::Constant(constant) => constant.ty(),
+    };
+    let [projection] = destination.projections() else {
+        return false;
+    };
+    if !matches!(
+        projection.kind(),
+        SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::ConstantIndex { .. }
+    ) {
+        return false;
+    }
+    let Some(local) = function.locals().get(destination.local().index() as usize) else {
+        return false;
+    };
+    let Some(SemanticTypeShapeV1::Array { element, .. }) =
+        types.get(local.ty().index() as usize).map(|ty| ty.shape())
+    else {
+        return false;
+    };
+    !local.role().is_entry_argument()
+        && matches!(
+            types.get(element.index() as usize).map(|ty| ty.shape()),
+            Some(SemanticTypeShapeV1::Scalar(_))
+        )
+        && value_type == *element
+        && destination.ty() == *element
+        && projection.result_type() == *element
+        && source.access == AccessKindAttr::Write
+}
+
 fn production_access_sources(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<Vec<ProductionRankedAccessSourceV1>, ProductionRankedProjectionErrorV1> {
     let mut ordinals = HashMap::<(usize, Option<usize>), u32>::new();
     let mut retained = Vec::new();
@@ -4399,9 +4480,10 @@ fn production_access_sources(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "ranked access correspondence is outside the projected graph",
             ))?;
-        // Ordinary private-local accesses remain in the ranked graph so that
-        // bounds and initialization checks see them. They are not observable
-        // memory effects and the executable KIR may promote them to SSA.
+        // A direct indexed array destination is storage-observable in the
+        // shared SSA plan. Retain only that write's exact source row for the
+        // lowerer's existing private-array relation; other private accesses
+        // may be promoted or use separate compiler-owned storage recipes.
         if source.memory_space == MemorySpaceAttr::Private
             && matches!(
                 operation,
@@ -4409,7 +4491,23 @@ fn production_access_sources(
                     | ProductionRankedOperationV1::PredicatedAccess { .. }
             )
         {
-            continue;
+            let retain = if matches!(
+                operation,
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    ..
+                }
+            ) {
+                // Fixed source/statement/local/type/projection checks only;
+                // no projection, ancestry or value-definition walk.
+                facts.charge_private_array_work(40)?;
+                private_indexed_write_source_v1(types, function, source)
+            } else {
+                false
+            };
+            if !retain {
+                continue;
+            }
         }
         if !matches!(
             operation,
@@ -24183,6 +24281,14 @@ mod tests {
     struct ComponentDynamicAssertionFactsV1;
 
     impl ProjectedAssertionFactsV1 for ComponentDynamicAssertionFactsV1 {
+        fn charge_private_array_work(
+            &mut self,
+            _: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            // Explicitly inert component facts, never a production budget.
+            Ok(())
+        }
+
         fn is_materialized_block(
             &mut self,
             _: usize,
@@ -24204,6 +24310,14 @@ mod tests {
     }
 
     impl ProjectedAssertionFactsV1 for canonical_assertion_facts_v1::ProjectedAssertionConditionV1 {
+        fn charge_private_array_work(
+            &mut self,
+            _: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            // Explicitly inert component facts, never a production budget.
+            Ok(())
+        }
+
         fn is_materialized_block(
             &mut self,
             _: usize,

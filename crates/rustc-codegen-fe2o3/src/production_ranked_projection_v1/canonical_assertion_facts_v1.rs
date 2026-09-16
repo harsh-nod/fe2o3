@@ -90,6 +90,8 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
+
     fn is_materialized_block(&mut self, block: usize) -> Result<bool, ProjectionError>;
 
     fn condition(
@@ -164,6 +166,10 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
+        self.budget.charge_work(amount).map_err(resource)
+    }
+
     fn is_materialized_block(&mut self, block: usize) -> Result<bool, ProjectionError> {
         self.budget.charge_work(1).map_err(resource)?;
         let block = u32::try_from(block).map_err(|_| resource(Resource::Arithmetic))?;
