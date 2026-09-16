@@ -3624,13 +3624,23 @@ fn prepare_projected_ranked_geometry_v1(
         &intrinsic.option_predicates,
         &intrinsic.direct_switch_predicates,
     )?;
-    let checked_control = checked_control_v1::prepare_with_bounds(
-        semantic.types(),
-        function,
-        semantic.callables(),
-        &bounds_checks.checks,
-        assertion_facts,
-    )?;
+    let checked_control = if recorder.is_some() {
+        checked_control_v1::prepare_with_recorded_calls_v1(
+            semantic.types(),
+            function,
+            semantic.callables(),
+            &bounds_checks.checks,
+            assertion_facts,
+        )?
+    } else {
+        checked_control_v1::prepare_with_bounds(
+            semantic.types(),
+            function,
+            semantic.callables(),
+            &bounds_checks.checks,
+            assertion_facts,
+        )?
+    };
     if checked_control.is_some() {
         assertion_facts.charge_private_array_work(1)?;
         if !intrinsic.uniform_inductions.is_empty() {
@@ -3886,6 +3896,22 @@ fn prepare_projected_ranked_geometry_v1(
         checked_control.as_ref(),
         assertion_facts,
     )?;
+    if matches!(
+        write_values,
+        ProjectedGlobalWriteValuesV1::CanonicalSourceUse
+    ) {
+        retain_canonical_source_bounds_v1(
+            &mut bounds_checks.checks,
+            &mut projected_blocks,
+            &projected_views,
+            &intrinsic
+                .local_contracts
+                .checked_references
+                .enum_payload_dominance,
+            checked_control.as_ref(),
+            assertion_facts,
+        )?;
+    }
     if !projected_blocks
         .iter()
         .any(ProjectedSemanticBlockV1::has_memory_access)

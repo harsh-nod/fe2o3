@@ -679,8 +679,21 @@ fn conditional_control_rejects_unanchored_wrong_typed_and_missing_unknown_leaves
                 let slot = claims
                     .arguments
                     .iter()
-                    .position(|claim| claim.component == Component::Scalar)
+                    .position(|claim| {
+                        claim.component == Component::Scalar
+                            && claim.source_local.index() == 8
+                            && matches!(claim.ranked_value, ProductionRankedValueV1::Local(_))
+                    })
                     .unwrap();
+                let original = claims.arguments[slot];
+                assert_eq!(
+                    claims
+                        .arguments
+                        .iter()
+                        .filter(|claim| **claim == original)
+                        .count(),
+                    1
+                );
                 match fault {
                     0 => claims.arguments[slot].source_local = SemanticLocalIdV1::from_index(3), // U32, not the U64 index.
                     1 => claims.arguments[slot].source_local = SemanticLocalIdV1::from_index(7), // metadata temporary, not a formal.
@@ -692,6 +705,7 @@ fn conditional_control_rejects_unanchored_wrong_typed_and_missing_unknown_leaves
                         claims.arguments.remove(slot);
                     }
                 }
+                assert!(!claims.arguments.contains(&original));
             },
             |view, candidates, budget| {
                 view.with_conditional_memory_control_coverage_v1(candidates, budget, |_, _| {
@@ -1041,4 +1055,188 @@ fn conditional_control_does_not_turn_a_no_return_callee_into_termination_evidenc
         )
         .unwrap();
     }
+}
+
+fn conditional_compare_message_drift_source_v1(index_drift: bool) -> ProductionPreRankedKirOwnerV1 {
+    let (seed, _) = conditional_literal_source_v1(3, None, false);
+    let semantic = seed.semantic_ssa().source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let root = &functions[0];
+    let mut locals = root.locals().to_vec();
+    let alternate = locals.len() as u32;
+    locals.push(local(250, A_U64, SemanticLocalRoleV1::Temporary));
+    let mut blocks = root.blocks().to_vec();
+    let mut statements = Vec::new();
+    let mut changed = 0;
+    for old in blocks[2].statements() {
+        if let SemanticStatementKindV1::Assign(assignment) = old.kind()
+            && assignment.destination().local().index() == 9
+        {
+            changed += 1;
+            statements.push(typed_assignment(
+                alternate,
+                A_U64,
+                if index_drift {
+                    SemanticRvalueKindV1::Use(typed_constant(A_U64, 5, 8))
+                } else {
+                    SemanticRvalueKindV1::Unary {
+                        operation: SemanticUnaryOpV1::PointerMetadata,
+                        operand: typed_operand(2, G_POINTER),
+                    }
+                },
+            ));
+            statements.push(typed_assignment(
+                9,
+                A_BOOL,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left: typed_operand(if index_drift { alternate } else { 8 }, A_U64),
+                    right: typed_operand(if index_drift { 7 } else { alternate }, A_U64),
+                },
+            ));
+        } else {
+            statements.push(old.clone());
+        }
+    }
+    assert_eq!(changed, 1);
+    let SemanticTerminatorKindV1::Assert {
+        message: SemanticAssertMessageV1::BoundsCheck { length, index },
+        ..
+    } = blocks[2].terminator().kind()
+    else {
+        panic!("genuine source bounds assertion required");
+    };
+    assert_eq!(*length, typed_operand(7, A_U64));
+    assert_eq!(*index, typed_operand(8, A_U64));
+    blocks[2] = SemanticBasicBlockV1::new(
+        blocks[2].identity(),
+        blocks[2].source(),
+        statements,
+        blocks[2].terminator().clone(),
+    )
+    .unwrap();
+    functions[0] = ordinary_rebuild_v1(root, root.abi().clone(), locals, blocks);
+    materialize_ranked_fixture_v1(
+        assertion_ssa_functions(semantic.types().to_vec(), functions),
+        &[ranked_root_input_1d(A_NAME, 247, 1)],
+    )
+    .unwrap()
+}
+
+// A fixture-only two-node oracle checks the actual optimized operands. It does
+// not use a source message as evidence that the Compare has those operands.
+fn conditional_compare_message_drift_output_v1(
+    source: &ProductionPreRankedKirOwnerV1,
+    output: &Owner,
+    index_drift: bool,
+) {
+    use fe2o3_kernel_ir::{CastKind, ComparePredicate, Constant, OperationKind, Type};
+    let original = &source.executable().module().functions[0];
+    let body = output.module().functions[0].body.as_ref().unwrap();
+    let mut comparisons = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| match operation.kind {
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs,
+                rhs,
+            } => Some((lhs, rhs)),
+            _ => None,
+        });
+    let (lhs, rhs) = comparisons
+        .next()
+        .expect("actual O Compare must be retained");
+    assert!(comparisons.next().is_none());
+    let operation = |value| {
+        let mut definitions = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.results.iter().any(|result| result.id == value));
+        let result = definitions
+            .next()
+            .expect("actual O operand definition required");
+        assert!(definitions.next().is_none());
+        result
+    };
+    let mut left = operation(lhs);
+    if let OperationKind::Cast {
+        kind: CastKind::Bitcast,
+        value,
+        ref to,
+    } = left.kind
+    {
+        assert_eq!(*to, Type::INDEX);
+        left = operation(value);
+    }
+    let expected = if index_drift { 5 } else { 3 };
+    assert!(matches!(left.kind,
+        OperationKind::Constant(Constant::U64(value) | Constant::Index(value)) if value == expected));
+    // This fixture has exactly two canonical Slice parameters followed by
+    // U32, with no aggregate parameter flattening. This is not a general ABI
+    // inference rule or a production correspondence substitute.
+    assert!(matches!(
+        original.signature.parameters.as_slice(),
+        [
+            Type::Slice(_),
+            Type::Slice(_),
+            Type::Scalar(fe2o3_kernel_ir::ScalarType::U32)
+        ]
+    ));
+    assert_eq!(original.signature, output.module().functions[0].signature);
+    let source_slice = if index_drift { 1 } else { 2 };
+    let ordinal = source_slice - 1;
+    assert_eq!(
+        source.semantic_ssa().source_semantic().functions()[0].locals()[source_slice].role(),
+        SemanticLocalRoleV1::Argument(ordinal as u32)
+    );
+    assert!(
+        matches!(operation(rhs).kind, OperationKind::SliceLength { slice }
+        if slice == body.parameters[ordinal])
+    );
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(|operation| matches!(operation.kind, OperationKind::Store { .. }))
+    );
+}
+
+fn conditional_compare_message_drift_rejects_v1(index_drift: bool) {
+    let source = conditional_compare_message_drift_source_v1(index_drift);
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        with_actual(&source, profile, |_, checked, _| {
+            conditional_compare_message_drift_output_v1(&source, checked.owner(), index_drift);
+        });
+        let mut completed = false;
+        let result = with_canonical_control_candidate_test_v1(
+            &source,
+            profile,
+            |_| {},
+            |view, candidates, budget| {
+                view.with_conditional_memory_control_coverage_v1(candidates, budget, |_, _| {
+                    completed = true;
+                    Ok(())
+                })
+            },
+        );
+        assert!(
+            matches!(&result, Err(ProductionRankedProjectionErrorV1::Incomplete(detail))
+            if *detail == "a Rust bounds-check message not backed by its exact index < length condition"),
+            "actual Compare/message drift must reach the exact source guard gate: {result:?}"
+        );
+        assert!(!completed);
+    }
+}
+
+#[test]
+fn conditional_control_actual_compare_index_cannot_drift_from_bounds_message() {
+    conditional_compare_message_drift_rejects_v1(true);
+}
+
+#[test]
+fn conditional_control_actual_compare_extent_cannot_drift_to_another_slice() {
+    conditional_compare_message_drift_rejects_v1(false);
 }

@@ -335,6 +335,22 @@ fn scoped_formal_helper_before_entry_source_v1() -> ProductionPreRankedKirOwnerV
 #[test]
 fn scoped_formal_source_helper_precedes_entry_without_becoming_kernel_index() {
     let source = scoped_formal_helper_before_entry_source_v1();
+    let semantic = source.semantic_ssa().source_semantic();
+    assert_eq!(semantic.functions().len(), 2);
+    assert_eq!(
+        semantic.functions()[0].role(),
+        SemanticFunctionRoleV1::InternalHelper
+    );
+    assert_eq!(
+        semantic.functions()[1].role(),
+        SemanticFunctionRoleV1::KernelRoot
+    );
+    assert_eq!(semantic.roots(), &[SemanticFunctionIdV1::from_index(1)]);
+    let source_export = semantic.functions()[1]
+        .kernel_entry()
+        .unwrap()
+        .export_symbol()
+        .as_bytes();
     for policy3 in [false, true] {
         for profile in [Profile::Gfx942, Profile::Gfx950] {
             with_formal_completed_roots_v1(
@@ -348,32 +364,51 @@ fn scoped_formal_source_helper_precedes_entry_without_becoming_kernel_index() {
                     };
                     let module = root.output().module();
                     assert_eq!(module.kernels.len(), 1);
-                    assert_eq!(
-                        module.functions[0].role,
-                        fe2o3_kernel_ir::FunctionRole::InternalHelper
-                    );
-                    assert_eq!(
-                        module.functions[1].role,
-                        fe2o3_kernel_ir::FunctionRole::KernelEntry
-                    );
-                    assert_eq!(module.kernels[0].entry, module.functions[1].id);
-                    assert!(
-                        module.functions[1]
-                            .body
-                            .as_ref()
-                            .unwrap()
-                            .blocks
-                            .iter()
-                            .flat_map(|block| &block.operations)
-                            .any(|operation| matches!(&operation.kind,
-                            fe2o3_kernel_ir::OperationKind::Call { callee, .. }
-                            if callee == &module.functions[0].id))
-                    );
+                    assert_eq!(module.functions.len(), 2);
+                    let mut kernels = module
+                        .kernels
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, kernel)| kernel.id.as_str().as_bytes() == source_export);
+                    let (kernel_ordinal, kernel) = kernels.next().unwrap();
+                    assert!(kernels.next().is_none());
+                    let mut entries = module
+                        .functions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, function)| function.id == kernel.entry);
+                    let (entry_ordinal, entry) = entries.next().unwrap();
+                    assert!(entries.next().is_none());
+                    assert_eq!(entry.role, fe2o3_kernel_ir::FunctionRole::KernelEntry);
+                    let mut calls = entry
+                        .body
+                        .as_ref()
+                        .unwrap()
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.operations)
+                        .filter_map(|operation| match &operation.kind {
+                            fe2o3_kernel_ir::OperationKind::Call { callee, .. } => Some(callee),
+                            _ => None,
+                        });
+                    let callee = calls.next().unwrap();
+                    assert!(calls.next().is_none());
+                    let helper = module
+                        .functions
+                        .iter()
+                        .find(|function| &function.id == callee)
+                        .unwrap();
+                    assert_eq!(helper.role, fe2o3_kernel_ir::FunctionRole::InternalHelper);
+                    assert!(helper.body.is_some());
                     assert_eq!(root.selected_root(), SemanticFunctionIdV1::from_index(1));
+                    // Materialization places kernel entries before auxiliaries.
+                    // Source function IDs must not become O function/kernel ordinals.
+                    assert_ne!(root.selected_root().index() as usize, kernel_ordinal);
+                    assert_ne!(root.selected_root().index() as usize, entry_ordinal);
                     root.with_complete_formal_memory_v1(budget, |formal, _| {
                         assert!(std::ptr::eq(formal.output(), root.output()));
-                        assert!(std::ptr::eq(formal.kernel(), &module.kernels[0]));
-                        assert_eq!(formal.obligations().kernel(), &module.kernels[0].id);
+                        assert!(std::ptr::eq(formal.kernel(), kernel));
+                        assert_eq!(formal.obligations().kernel(), &kernel.id);
                         Ok(())
                     })
                     .unwrap();

@@ -9,6 +9,9 @@ use fe2o3_lower_mir_kernel::{
 enum Control {
     Dormant,
     Branch(usize),
+    // Recorder-only continuation conditional on the actual callee returning.
+    // Mandatory canonical Call coverage supplies the callee/argument/result join.
+    ConditionalCallReturn(usize),
     BoundsAssert {
         next: usize,
         index: ProductionRankedValueV1,
@@ -108,10 +111,37 @@ fn selected_target(
     Ok(expected)
 }
 
+fn recorded_call_return(
+    call: &SemanticDirectCallV1,
+    callables: &[SemanticCallableDeclV1],
+) -> Option<SemanticBlockIdV1> {
+    let destination = call.destination()?;
+    if destination.edge().role() != SemanticEdgeRoleV1::CallReturn
+        || matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
+        || !matches!(
+            callables.get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::Defined { .. })
+        )
+    {
+        return None;
+    }
+    Some(destination.edge().target())
+}
+
+#[cfg(test)]
 fn admitted_shape(
     terminator: &SemanticTerminatorKindV1,
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    admitted_shape_with_recorded_calls(terminator, types, callables, false)
+}
+
+fn admitted_shape_with_recorded_calls(
+    terminator: &SemanticTerminatorKindV1,
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    recorded_calls: bool,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match terminator {
         SemanticTerminatorKindV1::Goto(_) | SemanticTerminatorKindV1::Return => Ok(()),
@@ -138,6 +168,11 @@ fn admitted_shape(
             if matches!(unwind, SemanticUnwindActionV1::Cleanup(_)) {
                 return Err(invalid("checked control assertion has unsupported cleanup"));
             }
+            Ok(())
+        }
+        SemanticTerminatorKindV1::Call(call)
+            if recorded_calls && recorded_call_return(call, callables).is_some() =>
+        {
             Ok(())
         }
         SemanticTerminatorKindV1::Call(call)
@@ -175,6 +210,29 @@ pub(super) fn prepare_with_bounds(
     callables: &[SemanticCallableDeclV1],
     bounds_checks: &[ProjectedBoundsCheckV1],
     facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<Option<CheckedControlFrameV1>, ProductionRankedProjectionErrorV1> {
+    prepare_inner(types, function, callables, bounds_checks, facts, false)
+}
+
+/// Only the canonical recorder path may defer ordinary Call continuation to its
+/// mandatory exact retained-Call coverage. This does not establish a return.
+pub(super) fn prepare_with_recorded_calls_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    bounds_checks: &[ProjectedBoundsCheckV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<Option<CheckedControlFrameV1>, ProductionRankedProjectionErrorV1> {
+    prepare_inner(types, function, callables, bounds_checks, facts, true)
+}
+
+fn prepare_inner(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    bounds_checks: &[ProjectedBoundsCheckV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
+    recorded_calls: bool,
 ) -> Result<Option<CheckedControlFrameV1>, ProductionRankedProjectionErrorV1> {
     if !facts.checked_control_enabled_v1() {
         return Ok(None);
@@ -244,7 +302,12 @@ pub(super) fn prepare_with_bounds(
     for (index, row) in blocks.iter_mut().enumerate() {
         facts.charge_private_array_work(6)?;
         let source = &function.blocks()[index];
-        admitted_shape(source.terminator().kind(), types, callables)?;
+        admitted_shape_with_recorded_calls(
+            source.terminator().kind(),
+            types,
+            callables,
+            recorded_calls,
+        )?;
         if !live(row.coverage) {
             continue;
         }
@@ -357,6 +420,15 @@ pub(super) fn prepare_with_bounds(
             }
             SemanticTerminatorKindV1::Return => Control::Return,
             SemanticTerminatorKindV1::Call(call)
+                if recorded_calls && call.destination().is_some() =>
+            {
+                facts.charge_private_array_work(3)?;
+                let next = recorded_call_return(call, callables).ok_or_else(|| {
+                    invalid("checked recorded Call lost its ordinary continuation")
+                })?;
+                Control::ConditionalCallReturn(target(function, next)?)
+            }
+            SemanticTerminatorKindV1::Call(call)
                 if call.destination().is_none()
                     && !matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
                     && matches!(
@@ -394,9 +466,9 @@ pub(super) fn prepare_with_bounds(
             Control::Dormant => {
                 return Err(invalid("checked source CFG reaches a nonexecuting block"));
             }
-            Control::Branch(next) | Control::BoundsAssert { next, .. } => {
-                reach(&mut blocks, &mut pending, next, facts)?
-            }
+            Control::Branch(next)
+            | Control::ConditionalCallReturn(next)
+            | Control::BoundsAssert { next, .. } => reach(&mut blocks, &mut pending, next, facts)?,
             Control::Split(first, second) => {
                 reach(&mut blocks, &mut pending, first, facts)?;
                 reach(&mut blocks, &mut pending, second, facts)?;
@@ -486,6 +558,10 @@ impl CheckedControlFrameV1 {
             terminators.push(match row.control {
                 Control::Dormant => ProjectedCfgTerminatorV1::AbsentMaterialized,
                 Control::Branch(next) => ProjectedCfgTerminatorV1::Branch(next),
+                // This analysis edge is conditional on actual Return; the live
+                // recorder retains the source Call, and D must check it before
+                // a completed analysis escapes. No progress is inferred here.
+                Control::ConditionalCallReturn(next) => ProjectedCfgTerminatorV1::Branch(next),
                 Control::BoundsAssert {
                     next,
                     index,
@@ -512,6 +588,172 @@ impl CheckedControlFrameV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiIdentityV1, SemanticAbiValueV1, SemanticCallDestinationV1, SemanticCanonAbiV1,
+        SemanticCodeObjectVersionV1, SemanticCompilerIntrinsicIdentityV1,
+        SemanticConstGenericArgumentsIdentityV1, SemanticControlFlowEdgeV1,
+        SemanticDeviceFfiContractIdentityV1, SemanticDeviceFfiEffectsV1,
+        SemanticDeviceFfiImportContractV1, SemanticDeviceFfiPhysicalAbiIdentityV1,
+        SemanticDeviceFfiSemanticIdentityV1, SemanticDeviceFfiTargetV1, SemanticFunctionAbiV1,
+        SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
+        SemanticLayoutIdentityV1, SemanticLinkSymbolV1, SemanticMonomorphizationIdentityV1,
+        SemanticNonBodyCallableBindingV1,
+    };
+
+    fn ordinary_call(
+        destination: bool,
+        role: SemanticEdgeRoleV1,
+        unwind: SemanticUnwindActionV1,
+    ) -> SemanticTerminatorKindV1 {
+        let destination = destination.then(|| {
+            SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(0),
+                    vec![],
+                    SemanticTypeIdV1::from_index(0),
+                )
+                .unwrap(),
+                SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(1)),
+            )
+        });
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new(
+                SemanticFunctionIdV1::from_index(0),
+                vec![],
+                destination,
+                unwind,
+            )
+            .unwrap(),
+        )
+    }
+
+    // These inert rows exercise grammar dispatch, not source admission or a
+    // completed canonical capability. Genuine source regressions live in D/F.
+    fn nonbody_binding() -> SemanticNonBodyCallableBindingV1 {
+        SemanticNonBodyCallableBindingV1::new(
+            SemanticFunctionIdentityV1::from_sha256([1; 32]),
+            SemanticItemDefinitionIdentityV1::from_sha256([2; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([3; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([4; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([5; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256([6; 32]),
+                SemanticLayoutIdentityV1::from_sha256([7; 32]),
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                vec![],
+                SemanticAbiValueV1::new(
+                    SemanticTypeIdV1::from_index(0),
+                    SemanticAbiPassModeV1::Ignore,
+                ),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn ordinary_call_continuation_requires_recorder_mode() {
+        let callables = [SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let call = ordinary_call(
+            true,
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticUnwindActionV1::Unreachable,
+        );
+        assert!(admitted_shape(&call, &[], &callables).is_err());
+        assert!(admitted_shape_with_recorded_calls(&call, &[], &callables, true).is_ok());
+        let SemanticTerminatorKindV1::Call(call) = &call else {
+            unreachable!()
+        };
+        assert_eq!(
+            recorded_call_return(call, &callables),
+            Some(SemanticBlockIdV1::from_index(1))
+        );
+    }
+
+    #[test]
+    fn recorded_call_requires_normal_destination_without_cleanup() {
+        let callables = [SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        for call in [
+            ordinary_call(
+                false,
+                SemanticEdgeRoleV1::CallReturn,
+                SemanticUnwindActionV1::Unreachable,
+            ),
+            ordinary_call(
+                true,
+                SemanticEdgeRoleV1::CallReturn,
+                SemanticUnwindActionV1::Cleanup(SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallUnwind,
+                    SemanticBlockIdV1::from_index(2),
+                )),
+            ),
+            ordinary_call(
+                true,
+                SemanticEdgeRoleV1::Goto,
+                SemanticUnwindActionV1::Unreachable,
+            ),
+        ] {
+            assert!(admitted_shape_with_recorded_calls(&call, &[], &callables, true).is_err());
+        }
+        let call = ordinary_call(
+            true,
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticUnwindActionV1::Unreachable,
+        );
+        assert!(admitted_shape_with_recorded_calls(&call, &[], &[], true).is_err());
+    }
+
+    #[test]
+    fn recorded_call_does_not_admit_external_or_generated_continuations() {
+        let call = ordinary_call(
+            true,
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticUnwindActionV1::Unreachable,
+        );
+        let external = SemanticCallableDeclV1::DeviceFfiImport {
+            binding: nonbody_binding(),
+            contract: SemanticDeviceFfiImportContractV1::new(
+                SemanticDeviceFfiContractIdentityV1::from_sha256([8; 32]),
+                SemanticLinkSymbolV1::new(b"untrusted_import".to_vec()).unwrap(),
+                SemanticDeviceFfiTargetV1::AmdGpuGfx942XnackMinus,
+                SemanticCodeObjectVersionV1::V6,
+                SemanticDeviceFfiPhysicalAbiIdentityV1::from_sha256([9; 32]),
+                SemanticDeviceFfiEffectsV1::none(),
+                SemanticDeviceFfiSemanticIdentityV1::from_sha256([10; 32]),
+            ),
+        };
+        let generated = SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: nonbody_binding(),
+            operation: SemanticCompilerIntrinsicOperationV1::ColdPath,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([11; 32]),
+        };
+        for callable in [external, generated] {
+            assert!(admitted_shape_with_recorded_calls(&call, &[], &[callable], true).is_err());
+        }
+    }
+
+    #[test]
+    fn explicit_trap_grammar_is_unchanged_in_both_modes() {
+        let call = ordinary_call(
+            false,
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticUnwindActionV1::Unreachable,
+        );
+        let callables = [SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: nonbody_binding(),
+            operation: SemanticCompilerIntrinsicOperationV1::Trap,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([12; 32]),
+        }];
+        for mode in [false, true] {
+            assert!(admitted_shape_with_recorded_calls(&call, &[], &callables, mode).is_ok());
+        }
+    }
 
     #[test]
     fn duplicate_targets_still_require_a_valid_selected_occurrence() {

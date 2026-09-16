@@ -1038,3 +1038,452 @@ fn canonical_store_same_typed_call_result_swap_is_refused_before_output_view_aut
 
 include!("canonical_memory_control_v1_tests.rs");
 include!("source_output_formal_complete_v1_tests.rs");
+
+mod canonical_source_guard_components_v1 {
+    use super::*;
+
+    // Only the allocation-free preparatory transformation is under test here.
+    // This adapter cannot supply assertion, source or occurrence authority.
+    struct Paid<'a, 'w>(&'a mut Budget<'w>);
+    impl ProjectedAssertionFactsV1 for Paid<'_, '_> {
+        fn checked_control_enabled_v1(&self) -> bool {
+            true
+        }
+        fn charge_private_array_work(
+            &mut self,
+            amount: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            self.0.charge_work(amount).map_err(|error| {
+                ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(error),
+                )
+            })
+        }
+        fn private_array_access(
+            &mut self,
+            _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+            _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            panic!("unexpected source query")
+        }
+        fn private_array_constant_index(
+            &mut self,
+            _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+            _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+            panic!("unexpected source query")
+        }
+        fn is_materialized_block(
+            &mut self,
+            _: usize,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            panic!("unexpected source query")
+        }
+        fn condition(
+            &mut self,
+            _: usize,
+            _: bool,
+            _: SemanticBlockIdV1,
+        ) -> Result<
+            canonical_assertion_facts_v1::ProjectedAssertionConditionV1,
+            ProductionRankedProjectionErrorV1,
+        > {
+            panic!("unexpected source query")
+        }
+    }
+
+    fn input(
+        source: &ProductionPreRankedKirOwnerV1,
+    ) -> (
+        Vec<ProjectedBoundsCheckV1>,
+        Vec<ProjectedSemanticBlockV1>,
+        Vec<Option<ProjectedViewV1>>,
+    ) {
+        let function = &source.semantic_ssa().source_semantic().functions()[0];
+        let mut operations = Vec::new();
+        let mut next = 0;
+        let mut checks = project_rust_bounds_checks(function, 0, &[], &mut operations, &mut next)
+            .unwrap()
+            .checks;
+        assert_eq!(checks.len(), 1);
+        assert_eq!(
+            (
+                function.blocks().len(),
+                checks[0].guard_block,
+                checks[0].access_block
+            ),
+            (3, 2, 1)
+        );
+        // An inert component precondition, not manufactured checked coverage.
+        checks[0].invariant_ssa = true;
+        let check = checks[0];
+        let view = ProductionRankedValueIdV1::new(20);
+        let mut views = vec![None; function.locals().len()];
+        views[check.slice_local.index() as usize] = Some(ProjectedViewV1 {
+            result: view,
+            element_width: 32,
+            writable: true,
+            shape: vec![dialect_kernel::DYNAMIC_EXTENT],
+            dynamic_extents: vec![check.extent],
+            memory_space: MemorySpaceAttr::Global,
+            allocation_origin: 1,
+            noalias_class: 1,
+        });
+        let mut blocks = vec![ProjectedSemanticBlockV1 { items: vec![] }; 3];
+        blocks[1]
+            .items
+            .push(ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
+                view,
+                indices: vec![check.index],
+                checked_success: None,
+                comparisons: vec![(check.index, check.extent)],
+                access: AccessKindAttr::Write,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                    block: 1,
+                    statement: Some(0),
+                }),
+            }));
+        (checks, blocks, views)
+    }
+
+    #[test]
+    fn canonical_source_guard_transform_has_exact_cumulative_work_and_no_storage_delta() {
+        // 1 entry + 3 blocks + one item(2+8+24+6) = 44. The last
+        // empty source block contributes the final independently derived unit.
+        const PER: usize = 44;
+        const HISTORY: usize = 7;
+        const FLOOR: usize = 19;
+        let source = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+        let dominance = SemanticEnumPayloadDominanceV1::analyze(
+            &source.semantic_ssa().source_semantic().functions()[0],
+            source.semantic_ssa().source_semantic().types(),
+        )
+        .unwrap();
+        for repeats in [1, 2] {
+            for exact in [true, false] {
+                let total = HISTORY + PER * repeats;
+                let mut work = Work::new(total - usize::from(!exact));
+                let mut budget = Budget::new(&mut work, FLOOR);
+                budget.charge_work(HISTORY).unwrap();
+                budget.reserve_storage(FLOOR).unwrap();
+                for ordinal in 0..repeats {
+                    let (mut checks, mut blocks, views) = input(&source);
+                    let result = retain_canonical_source_bounds_v1(
+                        &mut checks,
+                        &mut blocks,
+                        &views,
+                        &dominance,
+                        None,
+                        &mut Paid(&mut budget),
+                    );
+                    assert_eq!(result.is_ok(), exact || ordinal + 1 < repeats);
+                    assert_eq!(budget.storage(), FLOOR);
+                    if result.is_ok() {
+                        assert!(checks[0].retain_source_guard);
+                        assert!(matches!(&blocks[1].items[0], ProjectedBlockItemV1::Effect {
+                            operation: ProductionRankedOperationV1::Access { indices, .. },
+                            source: Some(source),
+                        } if indices == &[checks[0].index] && source.semantic_site.unwrap().statement == Some(0)));
+                    }
+                }
+                assert_eq!(budget.work(), total - usize::from(!exact));
+                assert_eq!(budget.storage(), FLOOR);
+                assert_eq!(work.failed_work(), (!exact).then_some(total));
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_source_guard_transform_refuses_unmatched_ambiguous_and_generated_items() {
+        let source = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+        let dominance = SemanticEnumPayloadDominanceV1::analyze(
+            &source.semantic_ssa().source_semantic().functions()[0],
+            source.semantic_ssa().source_semantic().types(),
+        )
+        .unwrap();
+        for mutation in 0..10 {
+            let (mut checks, mut blocks, mut views) = input(&source);
+            match mutation {
+                0 => checks[0].invariant_ssa = false,
+                1 => checks[0].must_authorize_access = false,
+                2 => checks[0].index = ProductionRankedValueV1::Argument(99),
+                3 => checks[0].extent = ProductionRankedValueV1::Argument(99),
+                4 => views[checks[0].slice_local.index() as usize] = None,
+                5 => checks.push(checks[0]),
+                other => {
+                    let ProjectedBlockItemV1::Guarded(access) = &mut blocks[1].items[0] else {
+                        unreachable!()
+                    };
+                    match other {
+                        6 => access.semantic_site = None,
+                        7 => access.semantic_site.as_mut().unwrap().block = 0,
+                        8 => access.checked_success = Some(ProductionRankedValueV1::Argument(0)),
+                        9 => access.comparisons.push(access.comparisons[0]),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            let before = blocks.clone();
+            let mut work = Work::new(1000);
+            let mut budget = Budget::new(&mut work, 19);
+            budget.charge_work(7).unwrap();
+            budget.reserve_storage(19).unwrap();
+            assert!(matches!(
+                retain_canonical_source_bounds_v1(
+                    &mut checks,
+                    &mut blocks,
+                    &views,
+                    &dominance,
+                    None,
+                    &mut Paid(&mut budget),
+                ),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(_))
+            ));
+            assert_eq!(blocks, before);
+            assert!(checks.iter().all(|check| !check.retain_source_guard));
+            assert_eq!(budget.storage(), 19);
+        }
+    }
+
+    #[test]
+    fn canonical_source_guard_transform_reuses_one_source_assert_for_multiple_accesses() {
+        let source = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+        let dominance = SemanticEnumPayloadDominanceV1::analyze(
+            &source.semantic_ssa().source_semantic().functions()[0],
+            source.semantic_ssa().source_semantic().types(),
+        )
+        .unwrap();
+        let (mut checks, mut blocks, views) = input(&source);
+        let mut second = blocks[1].items[0].clone();
+        let ProjectedBlockItemV1::Guarded(access) = &mut second else {
+            unreachable!()
+        };
+        access.semantic_site.as_mut().unwrap().statement = Some(1);
+        blocks[1].items.push(second);
+        let mut work = Work::new(84);
+        let mut budget = Budget::new(&mut work, 0);
+        retain_canonical_source_bounds_v1(
+            &mut checks,
+            &mut blocks,
+            &views,
+            &dominance,
+            None,
+            &mut Paid(&mut budget),
+        )
+        .unwrap();
+        assert_eq!(budget.work(), 84);
+        assert_eq!(budget.storage(), 0);
+        assert!(
+            blocks[1]
+                .items
+                .iter()
+                .all(|item| matches!(item, ProjectedBlockItemV1::Effect { .. }))
+        );
+    }
+}
+
+#[test]
+fn canonical_source_guards_remain_at_the_source_boundary_for_repeated_and_distinct_accesses() {
+    let seed = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+    let semantic = seed.semantic_ssa().source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let root = &functions[0];
+    let mut blocks = root.blocks().to_vec();
+    let old = &blocks[1];
+    let mut statements = old.statements().to_vec();
+    assert_eq!(statements.len(), 1);
+    statements.push(statements[0].clone());
+    blocks[1] = SemanticBasicBlockV1::new(
+        old.identity(),
+        old.source(),
+        statements,
+        old.terminator().clone(),
+    )
+    .unwrap();
+    functions[0] = ordinary_rebuild_v1(root, root.abi().clone(), root.locals().to_vec(), blocks);
+    let repeated = materialize_ranked_fixture_v1(
+        assertion_ssa_functions(semantic.types().to_vec(), functions),
+        &[ranked_root_input_1d(A_NAME, 247, 1)],
+    )
+    .unwrap();
+    let distinct = conditional_literal_two_guards_v1();
+    for source in [&repeated, &distinct] {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_canonical_control_candidate_test_v1(
+                source,
+                profile,
+                |_| {},
+                |view, candidates, budget| {
+                    let candidate = &candidates[0];
+                    assert_eq!(candidate.access_sources.len(), 2);
+                    for segment in &candidate.control.blocks {
+                        assert_eq!(segment.first, segment.tail);
+                        assert!(segment.end == segment.tail + 1 || segment.end == segment.tail + 2);
+                    }
+                    view.with_conditional_memory_control_coverage_v1(
+                        candidates,
+                        budget,
+                        |control, budget| {
+                            view.with_canonical_store_analysis_v1(
+                                candidates,
+                                control,
+                                budget,
+                                |roots, budget| {
+                                    assert_eq!(roots[0].access_count(), 2);
+                                    assert!(roots[0].access(0, budget)?.is_some());
+                                    assert!(roots[0].access(1, budget)?.is_some());
+                                    Ok(())
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn canonical_source_guard_bypass_predecessor_refuses_before_normalization() {
+    let seed = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+    let semantic = seed.semantic_ssa().source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let root = &functions[0];
+    let mut blocks = root.blocks().to_vec();
+    // The old entry remains a real helper Call. Its continuation now enters
+    // a branch that can bypass bb2's Assert and reach the bb1 Store directly.
+    let SemanticTerminatorKindV1::Call(call) = blocks[0].terminator().kind() else {
+        panic!("source entry must call")
+    };
+    let destination = call.destination().unwrap();
+    let branch = SemanticBlockIdV1::from_index(blocks.len() as u32);
+    let changed_call = SemanticDirectCallV1::new_callable(
+        call.callee(),
+        call.arguments().to_vec(),
+        Some(SemanticCallDestinationV1::new(
+            destination.place().clone(),
+            cfg_edge(SemanticEdgeRoleV1::CallReturn, branch.index()),
+        )),
+        call.unwind(),
+    )
+    .unwrap();
+    blocks[0] = block(
+        201,
+        blocks[0].statements().to_vec(),
+        SemanticTerminatorKindV1::Call(changed_call),
+    );
+    blocks.push(block(250, vec![], zero_switch(8, A_U64, 1, 2)));
+    functions[0] = ordinary_rebuild_v1(root, root.abi().clone(), root.locals().to_vec(), blocks);
+    let source = materialize_ranked_fixture_v1(
+        assertion_ssa_functions(semantic.types().to_vec(), functions),
+        &[ranked_root_input_1d(A_NAME, 247, 1)],
+    )
+    .unwrap();
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let called = std::cell::Cell::new(false);
+        let result = with_canonical_control_candidate_test_v1(
+            &source,
+            profile,
+            |_| {},
+            |_, _, _| {
+                called.set(true);
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a Rust bounds-check success block not uniquely controlled by that check"
+            ))
+        ));
+        assert!(!called.get());
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CheckedViewUnwindPayloadV1(u32);
+
+fn checked_view_unwind_outcome_v1(outcome: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
+    match outcome {
+        1 => Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "checked view callback refusal",
+        )),
+        2 => std::panic::panic_any(CheckedViewUnwindPayloadV1(271)),
+        _ => Ok(()),
+    }
+}
+
+fn check_view_unwind_reentry_v1(
+    budget: &mut Budget<'_>,
+    mut invoke: impl FnMut(&mut Budget<'_>, usize) -> Result<(), ProductionRankedProjectionErrorV1>,
+) {
+    let floor = budget.storage();
+    budget.charge_work(3).unwrap();
+    // Establish a preexisting storage-denial history without exhausting work.
+    assert!(budget.reserve_storage(STORAGE_LIMIT).is_err());
+    let failed = budget.failed_storage();
+    assert!(failed.is_some());
+    for outcome in [0, 1, 2, 0] {
+        let before = budget.work();
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(budget, outcome)));
+        match outcome {
+            1 => assert!(matches!(
+                result.unwrap(),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "checked view callback refusal"
+                ))
+            )),
+            2 => {
+                let payload = result.expect_err("callback must resume its original panic");
+                assert_eq!(
+                    payload.downcast_ref::<CheckedViewUnwindPayloadV1>(),
+                    Some(&CheckedViewUnwindPayloadV1(271))
+                );
+            }
+            _ => result.unwrap().unwrap(),
+        }
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.failed_storage(), failed);
+        assert!(budget.work() > before);
+    }
+}
+
+#[test]
+fn checked_output_view_scope_restores_floor_history_and_original_panic_then_reenters() {
+    let source = canonical_same_typed_tuple_store_source_v1(0, BodyShape::Straight);
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        with_actual_policy3_canonical_view_v1(&source, profile, |checked, view, budget| {
+            assert!(std::ptr::eq(view.output(), checked.owner()));
+            check_view_unwind_reentry_v1(budget, |budget, outcome| {
+                checked_output_session_v1::with_checked_output_assertions_view_budget_v1(
+                    view,
+                    budget,
+                    |_| checked_view_unwind_outcome_v1(outcome),
+                )
+            });
+        });
+    }
+}
+
+#[test]
+fn historical_checked_output_scope_preserves_the_same_unwind_and_reentry_contract() {
+    let source = canonical_same_typed_tuple_store_source_v1(1, BodyShape::Straight);
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        with_actual(&source, profile, |bound, checked, budget| {
+            check_view_unwind_reentry_v1(budget, |budget, outcome| {
+                with_checked_output_assertions_budget_v1(
+                    &source,
+                    bound,
+                    checked,
+                    profile,
+                    budget,
+                    |_| checked_view_unwind_outcome_v1(outcome),
+                )
+            });
+        });
+    }
+}

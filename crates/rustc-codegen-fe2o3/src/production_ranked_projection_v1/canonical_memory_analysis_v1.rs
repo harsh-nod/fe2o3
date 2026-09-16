@@ -335,3 +335,97 @@ fn with_prepared_canonical_memory_session_v1<T>(
         })
     })
 }
+
+// Canonical graph-memory analysis keeps each Rust assertion at its source
+// boundary. Only an ordinary access already matched to that invariant source
+// guard loses its redundant access-local predicate expansion. This changes no
+// actual O operation and leaves the legacy expression projection untouched.
+fn retain_canonical_source_bounds_v1(
+    checks: &mut [ProjectedBoundsCheckV1],
+    blocks: &mut [ProjectedSemanticBlockV1],
+    views: &[Option<ProjectedViewV1>],
+    dominance: &SemanticEnumPayloadDominanceV1,
+    frame: Option<&checked_control_v1::CheckedControlFrameV1>,
+    facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let invalid = ProductionRankedProjectionErrorV1::Incomplete;
+    facts.charge_private_array_work(1)?;
+    if !facts.checked_control_enabled_v1() {
+        return Err(invalid(
+            "canonical source guards require checked output facts",
+        ));
+    }
+    for (block_index, block) in blocks.iter_mut().enumerate() {
+        facts.charge_private_array_work(1)?;
+        for item in &mut block.items {
+            facts.charge_private_array_work(2)?;
+            let ProjectedBlockItemV1::Guarded(access) = item else {
+                continue;
+            };
+            facts.charge_private_array_work(8)?;
+            let Some(site) = access.semantic_site else {
+                return Err(invalid(
+                    "canonical source guard has no ordinary statement site",
+                ));
+            };
+            if site.block != block_index
+                || site.statement.is_none()
+                || access.memory_space != MemorySpaceAttr::Global
+                || !matches!(access.access, AccessKindAttr::Read | AccessKindAttr::Write)
+                || access.checked_success.is_some()
+                || access.indices.len() != 1
+                || access.comparisons.len() != 1
+                || access.comparisons[0].0 != access.indices[0]
+            {
+                return Err(invalid(
+                    "canonical source guard is not an ordinary Rust slice access",
+                ));
+            }
+            let pair = access.comparisons[0];
+            let mut matched = None;
+            for (ordinal, check) in checks.iter().enumerate() {
+                // The complete bounded candidate scan is prepaid row by row;
+                // it reuses existing SSA/dominance facts, not a new evaluator.
+                facts.charge_private_array_work(24)?;
+                let expected_view = views
+                    .get(check.slice_local.index() as usize)
+                    .and_then(Option::as_ref)
+                    .map(|view| view.result);
+                if !check.invariant_ssa
+                    || !check.must_authorize_access
+                    || !bounds_cfg_v1::controls(*check, block_index, Some(dominance))
+                    || frame.is_some_and(|frame| !frame.projects_block(check.guard_block))
+                    || (check.index, check.extent) != pair
+                    || expected_view != Some(access.view)
+                {
+                    continue;
+                }
+                if matched.replace(ordinal).is_some() {
+                    return Err(invalid("canonical source guard association is ambiguous"));
+                }
+            }
+            let ordinal = matched.ok_or(invalid(
+                "canonical access lacks an exact invariant source guard",
+            ))?;
+            facts.charge_private_array_work(6)?;
+            checks[ordinal].retain_source_guard = true;
+            let operation = ProductionRankedOperationV1::Access {
+                kind: access.access,
+                view: ProductionRankedValueV1::Local(access.view),
+                indices: std::mem::take(&mut access.indices),
+            };
+            let source = ProjectedEffectSourceV1 {
+                private_array_role: None,
+                access: access.access,
+                memory_space: access.memory_space,
+                source: access.source,
+                semantic_site: Some(site),
+            };
+            *item = ProjectedBlockItemV1::Effect {
+                operation,
+                source: Some(source),
+            };
+        }
+    }
+    Ok(())
+}

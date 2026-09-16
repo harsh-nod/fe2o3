@@ -416,13 +416,27 @@ pub(super) fn with_checked_output_assertions_view_budget_v1<'owners, T>(
         &mut CheckedOutputAssertionSessionV1<'_, '_, 'owners, '_, '_>,
     ) -> Result<T, ProjectionError>,
 ) -> Result<T, ProjectionError> {
-    with_canonical_analysis_scope_v1(occurrences.output(), budget, |scope| {
-        scope.with_sparse_v1(|report, budget| {
-            body(&mut CheckedOutputAssertionSessionV1 {
-                occurrences,
-                report,
-                budget,
+    let floor = budget.storage();
+    // The shared analysis scope promises Result cleanup, not unwind cleanup.
+    // Catch outside it so its inventory/report drop before releasing the floor.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_canonical_analysis_scope_v1(occurrences.output(), budget, |scope| {
+            scope.with_sparse_v1(|report, budget| {
+                body(&mut CheckedOutputAssertionSessionV1 {
+                    occurrences,
+                    report,
+                    budget,
+                })
             })
         })
-    })
+    }));
+    let released = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or_else(|| resource(Resource::Accounting))?;
+    budget.release_storage(released).map_err(resource)?;
+    match result {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
