@@ -124,7 +124,8 @@ pub use live::{
     Gfx942SdmaMultiQueueSubmissionFailureV1, Gfx942SdmaMultiQueueTerminalCustodyV1,
     Gfx942SdmaSubmissionFailureV1, Gfx942SdmaTerminalShardObservationV1,
     KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
-    QuarantinedGfx942BarrierProbeV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    PrimaryQueueReleaseCustodyV1, QuarantinedGfx942BarrierProbeV1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
@@ -577,6 +578,14 @@ struct QueueKernelOutcomeV1<T> {
     status: QueueSyscallStatusV1,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct NativeQueueDestroyProgressV1 {
+    started: bool,
+    request: Option<KfdIoctlDestroyQueueArgs>,
+    attempted: bool,
+    returned: Option<(KfdIoctlDestroyQueueArgs, QueueSyscallStatusV1)>,
+}
+
 /// Private substitution point. Its associated authority type is retained by
 /// the engine and cannot be manufactured through the public crate API.
 #[allow(dead_code)]
@@ -922,6 +931,18 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
     }
 
     fn destroy(&mut self, key: QueueKeyV1) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.destroy_retaining(key, &mut NativeQueueDestroyProgressV1::default())
+    }
+
+    fn destroy_retaining(
+        &mut self,
+        key: QueueKeyV1,
+        progress: &mut NativeQueueDestroyProgressV1,
+    ) -> Result<(), NativeQueueAdapterErrorV1> {
+        if progress.started {
+            return Err(NativeQueueAdapterErrorV1::InvalidPhase);
+        }
+        progress.started = true;
         // One memory-foundation revision is committed when the destroyed
         // queue's retained publications and authority are returned.
         self.foundation
@@ -932,8 +953,11 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             .native_queue_id(key)
             .ok_or(NativeQueueAdapterErrorV1::InvalidPhase)?;
         let args = KfdIoctlDestroyQueueArgs::new(queue_id);
+        progress.request = Some(args);
         self.begin(QueueTransitionV1::BeginDestroy { queue: key })?;
+        progress.attempted = true;
         let outcome = self.backend.destroy(args);
+        progress.returned = Some((outcome.value, outcome.status));
         let mut status = outcome.status;
         let malformed = outcome.value != args;
         if malformed {

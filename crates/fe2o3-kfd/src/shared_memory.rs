@@ -7,6 +7,7 @@ mod data_cleanup;
 mod device_allocation;
 mod device_initialization;
 mod dispatch_retention;
+mod queue_cleanup;
 mod transitions;
 
 pub(crate) use control_cleanup::ControlCleanupCustodyV1;
@@ -17,6 +18,7 @@ pub(crate) use data_cleanup::{DataCleanupCustodyV1, DispatchDataReleaseV1};
 pub(crate) use data_cleanup::{DataCleanupMetadataV1, DataCleanupObservationV1};
 
 pub(crate) use dispatch_retention::{RetainedDispatchDataRosterV1, RetainedDispatchDataV1};
+pub(crate) use queue_cleanup::QueueResourceCleanupCustodyV1;
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -6584,6 +6586,18 @@ impl SharedGttMemorySessionV1 {
         )
     }
 
+    pub(crate) fn release_queue_resources_in_place_v1(
+        &mut self,
+        custody: &mut QueueResourceCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
+        queue_cleanup::release_v1(
+            &mut self.engine,
+            &mut control_cleanup::ProjectionV1::new(&mut self.foundation, self.vm),
+            custody,
+            crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1,
+        )
+    }
+
     pub fn unmap_executable_from_gpu(
         &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
@@ -6898,6 +6912,8 @@ mod tests {
         map_gpu_inputs: Vec<(u64, u32)>,
         unmap_gpu_calls: usize,
         cleanup_calls: Vec<CleanupCallV1>,
+        cleanup_fault: Option<(usize, &'static str, bool)>,
+        unmap_outcome_at: Option<(usize, u32, bool)>,
         multi_map_script: Vec<(u32, bool)>,
         multi_unmap_script: Vec<(u32, bool)>,
         panic_multi_map_at: Option<usize>,
@@ -6946,6 +6962,8 @@ mod tests {
                 map_gpu_inputs: Vec::new(),
                 unmap_gpu_calls: 0,
                 cleanup_calls: Vec::new(),
+                cleanup_fault: None,
+                unmap_outcome_at: None,
                 multi_map_script: Vec::new(),
                 multi_unmap_script: Vec::new(),
                 panic_multi_map_at: None,
@@ -6964,6 +6982,15 @@ mod tests {
         }
 
         fn check(&self, operation: &'static str) -> Result<(), MemorySessionError> {
+            if let Some((at, selected, panic)) = self.cleanup_fault
+                && at == self.cleanup_calls.len()
+                && selected == operation
+            {
+                if panic {
+                    std::panic::panic_any(("N2 native panic", operation));
+                }
+                return Err(MemorySessionError::Injected(operation));
+            }
             if self.panic_operation == Some(operation) {
                 std::panic::panic_any(("N2 native panic", operation));
             }
@@ -7209,9 +7236,14 @@ mod tests {
             self.cleanup_calls
                 .push(CleanupCallV1::UnmapGpu(handle, old_success));
             self.operations.push("unmap_gpu");
+            let (progress, errno) = self
+                .unmap_outcome_at
+                .filter(|(at, _, _)| *at == self.unmap_gpu_calls)
+                .map(|(_, progress, errno)| (progress, errno))
+                .unwrap_or((self.unmap_progress, self.unmap_errno));
             KernelOutcome {
-                value: self.unmap_progress,
-                result: if self.unmap_errno {
+                value: progress,
+                result: if errno {
                     Err(MemorySessionError::Injected("unmap_gpu"))
                 } else {
                     self.check("unmap_gpu")

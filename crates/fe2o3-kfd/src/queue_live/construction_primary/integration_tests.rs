@@ -24,6 +24,9 @@ mod replacement_cases;
 #[path = "integration_projection_tests.rs"]
 mod projection_cases;
 
+#[path = "integration_release_tests.rs"]
+mod release_cases;
+
 #[path = "../construction_auxiliary/integration_tests.rs"]
 mod auxiliary_cases;
 
@@ -38,6 +41,12 @@ struct Trace {
     fault: Option<(&'static str, usize, bool)>,
     native_fault: Option<(&'static str, usize, bool)>,
     create: u8,
+    destroy: Option<u8>,
+    restore_foreign_vm: bool,
+    release_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
+    post_resources_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
+    signal_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
+    signal_fault: Option<(&'static str, bool)>,
     poison: bool,
     cleanup: usize,
     cleanup_panic: Option<bool>,
@@ -397,9 +406,31 @@ impl PrimaryMemoryV1 for Memory {
     }
     fn destroy_queue(
         &mut self,
-        _: fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
+        mut args: fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
     ) -> QueueKernelOutcomeV1<fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs> {
-        panic!("constructor must not DESTROY")
+        let mode = trace()
+            .borrow()
+            .destroy
+            .expect("constructor must not DESTROY");
+        assert_eq!(
+            Some(args.queue_id),
+            trace().borrow().create_return.map(|v| v.0)
+        );
+        record("destroy");
+        if mode == 3 {
+            std::panic::panic_any("DESTROY panic");
+        }
+        if mode == 4 {
+            args.queue_id += 1;
+        }
+        QueueKernelOutcomeV1 {
+            value: args,
+            status: match mode {
+                1 => fe2o3_runtime_model::QueueSyscallStatusV1::FailedNoEffect,
+                2 => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
+                _ => fe2o3_runtime_model::QueueSyscallStatusV1::Succeeded,
+            },
+        }
     }
 }
 

@@ -5,6 +5,8 @@ use transitions::ProjectionFaultV1 as Fault;
 
 #[path = "data_tests.rs"]
 mod data;
+#[path = "queue_tests.rs"]
+mod queue;
 #[path = "split_tests.rs"]
 mod split;
 
@@ -285,6 +287,75 @@ impl PristineAbortMemoryFixtureV1 {
 }
 
 impl crate::shared_memory::PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_restored_memory_snapshot_v1(&self) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwned
+        ));
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned + self.data_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn primary_assert_control_failure_v1(
+        &self,
+        before: &Snapshot,
+        order: &[SharedGttAllocationIdentityV1],
+        completed: usize,
+        step: usize,
+    ) {
+        before.assert_control_transition_snapshot_v1(
+            &self.primary_restored_memory_snapshot_v1(),
+            (self.fixture.vm, self.fixture.engine.session_id),
+            order,
+            (
+                completed,
+                step > 0,
+                step + 1,
+                Some((step > 0, step, false, step == 2)),
+            ),
+        );
+    }
+
+    pub(crate) fn primary_release_memory_snapshot_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+    ) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        let foundation = match self.fixture.ownership.phase {
+            QueueModelOwnershipPhaseV1::SessionOwned => &self.fixture.foundation,
+            QueueModelOwnershipPhaseV1::QueueOwned { .. } => queue,
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. } => {
+                panic!("primary release cannot hold a live loan")
+            }
+        };
+        Snapshot::from_fixture(
+            &self.fixture,
+            foundation,
+            self.control_release_process_poisoned + self.data_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn primary_queue_cleanup_snapshot_v1(
+        &self,
+        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1,
+    ) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwned
+        ));
+        let mut snapshot = Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned,
+        );
+        snapshot.controls = resources.observation().controls.into();
+        snapshot
+    }
+
     pub(crate) fn control_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
         self.assert_disposed_controls_v1();
         Snapshot::from_fixture(
@@ -354,6 +425,24 @@ impl Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn assert_primary_currentness_failure_v1(
+        &self,
+        mut after: Self,
+        checks: usize,
+        panicked: bool,
+    ) {
+        assert_eq!(
+            after.phase,
+            if panicked {
+                self.phase
+            } else {
+                SharedMemorySessionPhaseV1::Quarantined
+            }
+        );
+        after.phase = self.phase;
+        self.assert_currentness_only_v1(after, checks);
+    }
+
     pub(crate) fn assert_currentness_only_v1(&self, mut after: Self, checks: usize) {
         assert_eq!(after.currentness, self.currentness + checks);
         after.currentness = self.currentness;
@@ -738,10 +827,12 @@ fn expected_native_record(
 ) -> RecordSnapshot {
     let mut r = before.clone();
     if unmapped {
-        r.phase = if r.profile == SharedGttProfileV1::Kernarg {
-            SharedAllocationPhaseV1::CpuWritable
-        } else {
-            SharedAllocationPhaseV1::ExecutableImmutable
+        r.phase = match r.profile {
+            SharedGttProfileV1::Kernarg | SharedGttProfileV1::HostVisibleCoherent => {
+                SharedAllocationPhaseV1::CpuWritable
+            }
+            SharedGttProfileV1::Executable => SharedAllocationPhaseV1::ExecutableImmutable,
+            SharedGttProfileV1::AqlQueue => panic!("queue resources use the two-phase oracle"),
         };
     }
     if native_prefix >= 2 {

@@ -4247,7 +4247,61 @@ impl KfdRuntimeBackendV1 {
             .native_compute_lanes
             .iter()
             .position(|lane| lane.is_some_and(|lane| lane.ordinal() == 0));
-        if let Some(queue) = self.queue.take() {
+        let retained_primary = self.queue.as_ref().map_or(
+            Ok(false),
+            ComputeAqlQueueSessionV1::supports_retained_primary_release_v1,
+        );
+        let retained_primary = retained_primary.map_err(|error| {
+            self.terminal_error(format!("primary KFD teardown profile: {error}"))
+        })?;
+        if retained_primary {
+            let preflight = self
+                .queue
+                .as_ref()
+                .expect("selected primary queue")
+                .preflight_primary_release_v1();
+            if let Err(error) = preflight {
+                return Err(
+                    self.terminal_error(format!("primary KFD queue teardown preflight: {error}"))
+                );
+            }
+            let shell = try_uninit_box_v1::<PrimaryQueueReleaseCustodyV1>().map_err(|_| {
+                // Earlier dispatch/auxiliary cleanup may already have committed.
+                // The primary queue is still retained and can retry shutdown.
+                Self::quiescent_error(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "primary KFD teardown storage",
+                )
+            })?;
+            let queue = self.queue.take().expect("preflight primary queue");
+            self.primary_teardown = Some(fill_restore_shell_v1(
+                shell,
+                PrimaryQueueReleaseCustodyV1::new(queue),
+            ));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.primary_teardown
+                    .as_mut()
+                    .expect("installed primary teardown")
+                    .release_in_place()
+            }));
+            match result {
+                Ok(Ok(_)) => {
+                    self.primary_teardown.take();
+                }
+                Ok(Err(error)) => {
+                    return Err(
+                        self.terminal_error(format!("retained primary KFD teardown: {error}"))
+                    );
+                }
+                Err(payload) => {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.terminal_error("retained primary KFD teardown panicked")
+                    }));
+                    std::panic::resume_unwind(payload);
+                }
+            }
+            self.observe_destroyed_compute_lane_v1(primary_logical_lane);
+        } else if let Some(queue) = self.queue.take() {
             queue.destroy().map_err(|error| {
                 self.terminal_error(format!("explicit KFD queue teardown: {error}"))
             })?;

@@ -268,6 +268,18 @@ fn new_root(owner: DispatchResourceOwnerV1, mode: Mode) -> Root {
 }
 
 impl Snapshot {
+    pub(in crate::queue) fn ordinary_owner_v1(owner: &DispatchResourceOwnerV1) -> Self {
+        owner_snapshot(owner, Mode::Ordinary)
+    }
+    pub(in crate::queue) fn assert_ordinary_control_prefix_v1(
+        &self,
+        root: &Root,
+        completed: usize,
+    ) {
+        assert_eq!(self.mode, Mode::Ordinary);
+        self.assert_detached_prefix_v1(root, completed, true, false);
+    }
+
     pub(in crate::queue) fn assert_restored_v1(&self, mut after: Self, poisoned: bool) {
         assert_eq!(after.generation.poisoned, poisoned);
         after.generation.poisoned = self.generation.poisoned;

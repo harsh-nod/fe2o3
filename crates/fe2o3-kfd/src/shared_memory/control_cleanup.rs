@@ -34,6 +34,10 @@ pub(crate) enum CleanupStageV1 {
 }
 
 enum ControlTokenV1 {
+    MappedAqlRing(SharedGttAllocationV1<AqlQueueGttV1, GttGpuAccessibleMutableV1>),
+    UnmappedAqlRing(SharedGttAllocationV1<AqlQueueGttV1, GttCpuWritableV1>),
+    MappedAqlControl(SharedGttAllocationV1<UserptrAqlControlGttV1, GttGpuAccessibleMutableV1>),
+    UnmappedAqlControl(SharedGttAllocationV1<UserptrAqlControlGttV1, GttCpuWritableV1>),
     MappedKernarg(SharedGttAllocationV1<KernargGttV1, GttGpuAccessibleMutableV1>),
     UnmappedKernarg(SharedGttAllocationV1<KernargGttV1, GttCpuWritableV1>),
     MappedCode(SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>),
@@ -55,6 +59,18 @@ pub(crate) struct ControlCleanupCustodyV1 {
 }
 
 impl ControlCleanupCustodyV1 {
+    pub(super) fn aql_ring(
+        token: SharedGttAllocationV1<AqlQueueGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Self {
+        Self::new(ControlTokenV1::MappedAqlRing(token))
+    }
+
+    pub(super) fn aql_control(
+        token: SharedGttAllocationV1<UserptrAqlControlGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Self {
+        Self::new(ControlTokenV1::MappedAqlControl(token))
+    }
+
     pub(crate) fn kernarg(
         token: SharedGttAllocationV1<KernargGttV1, GttGpuAccessibleMutableV1>,
     ) -> Self {
@@ -67,7 +83,7 @@ impl ControlCleanupCustodyV1 {
         Self::new(ControlTokenV1::MappedCode(token))
     }
 
-    pub(super) fn host_data(
+    pub(crate) fn host_data(
         token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
     ) -> Self {
         Self::new(ControlTokenV1::MappedHostData(token))
@@ -95,6 +111,10 @@ impl ControlCleanupCustodyV1 {
         engine: &SharedMemoryEngine<B>,
     ) -> Result<(u64, u64), MemorySessionError> {
         let (id, generation, _, _, _) = match self.token.as_ref() {
+            Some(ControlTokenV1::MappedAqlRing(token)) => engine.evidence(token)?,
+            Some(ControlTokenV1::UnmappedAqlRing(token)) => engine.evidence(token)?,
+            Some(ControlTokenV1::MappedAqlControl(token)) => engine.evidence(token)?,
+            Some(ControlTokenV1::UnmappedAqlControl(token)) => engine.evidence(token)?,
             Some(ControlTokenV1::MappedKernarg(token)) => engine.evidence(token)?,
             Some(ControlTokenV1::UnmappedKernarg(token)) => engine.evidence(token)?,
             Some(ControlTokenV1::MappedCode(token)) => engine.evidence(token)?,
@@ -111,6 +131,12 @@ impl ControlCleanupCustodyV1 {
         engine: &mut SharedMemoryEngine<B>,
     ) -> Result<(), MemorySessionError> {
         match self.token.as_ref() {
+            Some(ControlTokenV1::MappedAqlRing(token)) => {
+                engine.unmap_mutable_borrowed(token, &mut self.unmap)?;
+            }
+            Some(ControlTokenV1::MappedAqlControl(token)) => {
+                engine.unmap_mutable_borrowed(token, &mut self.unmap)?;
+            }
             Some(ControlTokenV1::MappedKernarg(token)) => {
                 engine.unmap_mutable_borrowed(token, &mut self.unmap)?;
             }
@@ -123,6 +149,10 @@ impl ControlCleanupCustodyV1 {
             _ => return Err(MemorySessionError::InvalidAllocationAuthority),
         }
         self.token = Some(match self.token.take().expect("retained mapped control") {
+            ControlTokenV1::MappedAqlRing(token) => ControlTokenV1::UnmappedAqlRing(token.retag()),
+            ControlTokenV1::MappedAqlControl(token) => {
+                ControlTokenV1::UnmappedAqlControl(token.retag())
+            }
             ControlTokenV1::MappedKernarg(token) => ControlTokenV1::UnmappedKernarg(token.retag()),
             ControlTokenV1::MappedCode(token) => ControlTokenV1::UnmappedCode(token.retag()),
             ControlTokenV1::MappedHostData(token) => {
@@ -138,6 +168,16 @@ impl ControlCleanupCustodyV1 {
         engine: &mut SharedMemoryEngine<B>,
     ) -> Result<(), MemorySessionError> {
         match self.token.as_ref() {
+            Some(ControlTokenV1::UnmappedAqlRing(token)) => engine.release_borrowed(
+                token,
+                SharedAllocationPhaseV1::CpuWritable,
+                &mut self.disposal,
+            ),
+            Some(ControlTokenV1::UnmappedAqlControl(token)) => engine.release_borrowed(
+                token,
+                SharedAllocationPhaseV1::CpuWritable,
+                &mut self.disposal,
+            ),
             Some(ControlTokenV1::UnmappedKernarg(token)) => engine.release_borrowed(
                 token,
                 SharedAllocationPhaseV1::CpuWritable,
@@ -164,6 +204,8 @@ impl ControlCleanupCustodyV1 {
             return;
         }
         let receipt = match self.token.take().expect("retained disposal input") {
+            ControlTokenV1::UnmappedAqlRing(token) => TerminalTokenV1::from_token(token),
+            ControlTokenV1::UnmappedAqlControl(token) => TerminalTokenV1::from_token(token),
             ControlTokenV1::UnmappedKernarg(token) => TerminalTokenV1::from_token(token),
             ControlTokenV1::UnmappedCode(token) => TerminalTokenV1::from_token(token),
             ControlTokenV1::UnmappedHostData(token) => TerminalTokenV1::from_token(token),
@@ -209,6 +251,10 @@ impl ControlCleanupCustodyV1 {
         }
         let (owner, (identity, layout, profile_type, state_type)) =
             match self.token.as_ref().unwrap() {
+                ControlTokenV1::MappedAqlRing(t) => ("Mapped", token(t)),
+                ControlTokenV1::UnmappedAqlRing(t) => ("Unmapped", token(t)),
+                ControlTokenV1::MappedAqlControl(t) => ("Mapped", token(t)),
+                ControlTokenV1::UnmappedAqlControl(t) => ("Unmapped", token(t)),
                 ControlTokenV1::MappedKernarg(t) => ("Mapped", token(t)),
                 ControlTokenV1::MappedCode(t) => ("Mapped", token(t)),
                 ControlTokenV1::UnmappedKernarg(t) => ("Unmapped", token(t)),
@@ -259,6 +305,8 @@ pub(super) struct ProjectionV1<'a> {
     vm: VmKeyV1,
     #[cfg(test)]
     pub(super) fault: Option<(CleanupStageV1, transitions::ProjectionFaultV1)>,
+    #[cfg(test)]
+    pub(super) skip_fault_matches: usize,
 }
 
 impl<'a> ProjectionV1<'a> {
@@ -268,6 +316,8 @@ impl<'a> ProjectionV1<'a> {
             vm,
             #[cfg(test)]
             fault: None,
+            #[cfg(test)]
+            skip_fault_matches: 0,
         }
     }
 
@@ -281,6 +331,10 @@ impl<'a> ProjectionV1<'a> {
         if let Some((at, fault)) = self.fault
             && at == stage
         {
+            if self.skip_fault_matches != 0 {
+                self.skip_fault_matches -= 1;
+                return Ok(());
+            }
             match fault {
                 transitions::ProjectionFaultV1::Error => {
                     return Err(MemorySessionError::Injected("control cleanup projection"));

@@ -59,7 +59,8 @@ use fe2o3_kfd::{
     Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1, Gfx942XgmiBatchSubmissionFailureV1,
     Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1,
     Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1,
-    HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd, SharedGttMemorySessionV1,
+    HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd, PrimaryQueueReleaseCustodyV1,
+    SharedGttMemorySessionV1,
 };
 use fe2o3_profiler_protocol::{
     KfdProfileAccessV1, KfdProfileAtomicContractV1, KfdProfileAtomicOperationV1,
@@ -1143,6 +1144,7 @@ pub struct KfdRuntimeBackendV1 {
     description: BackendDeviceDescriptionV1,
     admitted_device: Option<CheckedGfx942XnackMinusDevice>,
     queue: Option<ComputeAqlQueueSessionV1>,
+    primary_teardown: Option<Box<PrimaryQueueReleaseCustodyV1>>,
     terminal_memory: Option<SharedGttMemorySessionV1>,
     terminal_sdma_custody: Option<KfdRuntimeTerminalSdmaCustodyV1>,
     queue_retired: bool,
@@ -1221,6 +1223,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
                 &self.terminal_sdma_custody.is_some(),
             )
             .field("queue_retired", &self.queue_retired)
+            .field("primary_teardown", &self.primary_teardown.is_some())
             .field("terminal", &self.terminal)
             .field("streams", &self.streams.len())
             .field("allocations", &self.allocations.len())
@@ -1506,6 +1509,7 @@ impl KfdRuntimeBackendV1 {
             description,
             admitted_device,
             queue: None,
+            primary_teardown: None,
             terminal_memory: None,
             terminal_sdma_custody: None,
             queue_retired: false,
@@ -1855,6 +1859,9 @@ impl KfdRuntimeBackendV1 {
         if let Some(queue) = self.queue.as_mut() {
             queue.poison_after_runtime_owner_failure_v1();
         }
+        if let Some(custody) = self.primary_teardown.as_mut() {
+            custody.poison_after_runtime_owner_failure_v1();
+        }
         self.compute_pipeline.quarantine_all();
         for lane in &mut self.auxiliary_compute_lanes {
             lane.pipeline.quarantine_all();
@@ -1875,7 +1882,7 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn require_live(&self) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.terminal {
+        if self.terminal || self.primary_teardown.is_some() {
             Err(RuntimeBackendFailureV1::Terminal(
                 KfdRuntimeBackendErrorV1::new(
                     KfdRuntimeBackendErrorKindV1::Terminal,
@@ -12824,6 +12831,7 @@ impl Drop for KfdRuntimeBackendV1 {
         #[cfg(not(test))]
         let scripted_owner_live = false;
         if self.terminal
+            || self.primary_teardown.is_some()
             || scripted_owner_live
             || !self.pending_compute.is_empty()
             || !self.pending_compute_streams.is_empty()

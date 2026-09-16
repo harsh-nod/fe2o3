@@ -5,6 +5,9 @@ use super::*;
 use crate::shared_memory::allocation::PendingAllocationStageV1;
 use crate::shared_memory::transitions::{self as adapter, ProjectionV1};
 
+#[path = "primary_release.rs"]
+mod primary_release;
+
 impl PreparationMemoryFixtureV1 {
     pub(crate) fn primary_assert_control_native_fault_v1<P: GttProfileV1>(
         &self,

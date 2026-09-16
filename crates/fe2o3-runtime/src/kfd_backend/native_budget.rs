@@ -100,6 +100,11 @@ impl KfdRuntimeBackendV1 {
             .as_ref()
             .and_then(ComputeAqlQueueSessionV1::host_visible_backing_usage_v1)
             .or_else(|| {
+                self.primary_teardown
+                    .as_ref()
+                    .and_then(|owner| owner.host_visible_backing_usage_v1())
+            })
+            .or_else(|| {
                 self.terminal_memory
                     .as_ref()
                     .and_then(SharedGttMemorySessionV1::host_visible_backing_usage_v1)
@@ -228,6 +233,11 @@ impl KfdRuntimeBackendV1 {
         self.queue
             .as_ref()
             .and_then(ComputeAqlQueueSessionV1::device_backing_usage_v1)
+            .or_else(|| {
+                self.primary_teardown
+                    .as_ref()
+                    .and_then(|owner| owner.device_backing_usage_v1())
+            })
             .or_else(|| {
                 self.terminal_memory
                     .as_ref()

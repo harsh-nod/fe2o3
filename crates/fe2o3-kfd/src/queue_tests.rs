@@ -588,6 +588,7 @@ struct FakeBackend {
     opener_pid: Rc<Cell<u32>>,
     currentness_calls: usize,
     fail_currentness_at: Option<usize>,
+    panic_destroy: bool,
     outcomes: VecDeque<ScriptedOutcome>,
     calls: Rc<RefCell<Vec<LoggedCall>>>,
     bootstrap_calls: Rc<RefCell<Vec<BootstrapCallV1>>>,
@@ -602,6 +603,7 @@ impl FakeBackend {
             opener_pid: Rc::new(Cell::new(std::process::id())),
             currentness_calls: 0,
             fail_currentness_at: None,
+            panic_destroy: false,
             outcomes: outcomes.into(),
             calls: Rc::new(RefCell::new(Vec::new())),
             bootstrap_calls: Rc::new(RefCell::new(Vec::new())),
@@ -736,6 +738,9 @@ impl NativeQueueBackendV1 for FakeBackend {
         args: KfdIoctlDestroyQueueArgs,
     ) -> QueueKernelOutcomeV1<KfdIoctlDestroyQueueArgs> {
         self.calls.borrow_mut().push(LoggedCall::Destroy(args));
+        if self.panic_destroy {
+            std::panic::panic_any("retained DESTROY panic");
+        }
         let outcome = self.outcome();
         let mut value = args;
         match outcome.mutation {
@@ -855,6 +860,124 @@ fn destroy_rejects_exhausted_release_revision_before_native_call() {
     assert_eq!(engine.backend.calls.borrow().len(), calls_after_destroy);
     assert_eq!(engine.journal_summary().live_publications, 0);
     engine.foundation.authenticate_origin().unwrap();
+}
+
+#[test]
+fn retained_destroy_preserves_native_request_outcome_and_rejects_reentry() {
+    for status in [
+        QueueSyscallStatusV1::Succeeded,
+        QueueSyscallStatusV1::FailedNoEffect,
+        QueueSyscallStatusV1::Indeterminate,
+    ] {
+        for malformed in [false, true] {
+            let (mut engine, key) = active_engine(vec![outcome(
+                status,
+                if malformed {
+                    Mutation::DestroyQueueId
+                } else {
+                    Mutation::None
+                },
+            )]);
+            let mut progress = NativeQueueDestroyProgressV1::default();
+            let result = engine.destroy_retaining(key, &mut progress);
+            assert_eq!(
+                result.is_ok(),
+                status == QueueSyscallStatusV1::Succeeded && !malformed
+            );
+            assert_eq!(
+                progress,
+                NativeQueueDestroyProgressV1 {
+                    started: true,
+                    attempted: true,
+                    request: Some(KfdIoctlDestroyQueueArgs::new(23)),
+                    returned: Some((
+                        KfdIoctlDestroyQueueArgs::new(if malformed { 22 } else { 23 }),
+                        status
+                    ))
+                }
+            );
+            assert!(engine.resource(key).unwrap().authority.is_some());
+            let before = progress;
+            let calls = engine.backend.calls.borrow().len();
+            assert_eq!(
+                engine.destroy_retaining(key, &mut progress),
+                Err(NativeQueueAdapterErrorV1::InvalidPhase)
+            );
+            assert_eq!(progress, before);
+            assert_eq!(engine.backend.calls.borrow().len(), calls);
+        }
+    }
+}
+
+#[test]
+fn retained_destroy_keeps_attempt_on_panic_and_outcome_after_currentness_loss() {
+    for panic in [false, true] {
+        let (mut engine, key) = active_engine(vec![success(Mutation::None)]);
+        engine.backend.panic_destroy = panic;
+        if !panic {
+            engine.backend.fail_currentness_at = Some(engine.backend.currentness_calls + 2);
+        }
+        let mut progress = NativeQueueDestroyProgressV1::default();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.destroy_retaining(key, &mut progress)
+        }));
+        if panic {
+            assert_eq!(
+                result.unwrap_err().downcast_ref::<&str>(),
+                Some(&"retained DESTROY panic")
+            );
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                Err(NativeQueueAdapterErrorV1::Currentness(
+                    "scripted currentness loss"
+                ))
+            );
+        }
+        assert!(progress.started && progress.attempted);
+        assert_eq!(progress.request, Some(KfdIoctlDestroyQueueArgs::new(23)));
+        assert_eq!(
+            progress.returned,
+            (!panic).then_some((
+                KfdIoctlDestroyQueueArgs::new(23),
+                QueueSyscallStatusV1::Succeeded
+            ))
+        );
+        assert!(engine.resource(key).unwrap().authority.is_some());
+        let before = progress;
+        let calls = engine.backend.calls.borrow().len();
+        assert_eq!(
+            engine.destroy_retaining(key, &mut progress),
+            Err(NativeQueueAdapterErrorV1::InvalidPhase)
+        );
+        assert_eq!(progress, before);
+        assert_eq!(engine.backend.calls.borrow().len(), calls);
+    }
+}
+
+#[test]
+fn retained_destroy_exhaustion_keeps_all_owners_without_native_attempt() {
+    let (mut engine, key) = active_engine(Vec::new());
+    engine
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX)
+        .unwrap();
+    let mut progress = NativeQueueDestroyProgressV1::default();
+    let calls = engine.backend.calls.borrow().len();
+    assert_eq!(
+        engine.destroy_retaining(key, &mut progress),
+        Err(NativeQueueAdapterErrorV1::ModelProjection)
+    );
+    assert_eq!(
+        progress,
+        NativeQueueDestroyProgressV1 {
+            started: true,
+            ..Default::default()
+        }
+    );
+    assert_eq!(engine.backend.calls.borrow().len(), calls);
+    assert!(engine.resource(key).unwrap().authority.is_some());
+    assert_eq!(engine.phase(key), Some(ComputeAqlQueuePhaseV1::Active));
 }
 
 #[test]

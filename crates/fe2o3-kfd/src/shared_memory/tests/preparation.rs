@@ -49,6 +49,7 @@ pub(crate) struct PreparationMemoryFixtureV1 {
     pub(super) fixture: BackingConstructorFixture,
     pub(super) disposed_controls: Vec<SharedGttAllocationIdentityV1>,
     pub(super) disposed_host_data: Vec<SharedGttAllocationIdentityV1>,
+    pub(super) disposed_queue_resources: Vec<(SharedGttAllocationIdentityV1, SharedGttProfileV1)>,
     pub(super) control_release_process_poisoned: usize,
     pub(super) control_release_calls: usize,
     pub(super) control_release_native_fault: Option<(usize, &'static str, bool)>,
@@ -151,6 +152,7 @@ impl PreparationMemoryFixtureV1 {
             fixture,
             disposed_controls: Vec::new(),
             disposed_host_data: Vec::new(),
+            disposed_queue_resources: Vec::new(),
             control_release_process_poisoned: 0,
             control_release_calls: 0,
             control_release_native_fault: None,
@@ -495,6 +497,30 @@ impl PreparationMemoryFixtureV1 {
 
     pub(super) fn assert_disposed_controls_v1(&self) {
         let e = &self.fixture.engine;
+        let mut queue_ids = std::collections::HashSet::new();
+        for &(id, profile) in &self.disposed_queue_resources {
+            assert!(queue_ids.insert(id));
+            assert!(
+                !self.disposed_controls.contains(&id) && !self.disposed_host_data.contains(&id)
+            );
+            assert_eq!(id.session_id, e.session_id);
+            let record = e.allocations.iter().find(|r| r.id == id.id).unwrap();
+            assert_eq!(record.generation, id.generation);
+            assert_eq!(record.profile, profile);
+            assert!(matches!(
+                profile,
+                SharedGttProfileV1::AqlQueue
+                    | SharedGttProfileV1::HostVisibleCoherent
+                    | SharedGttProfileV1::Executable
+            ));
+            assert_eq!(record.phase, SharedAllocationPhaseV1::Released);
+            assert!(record.free_attempted);
+            assert!(
+                record.reservation.is_none() && record.handle.is_none() && record.mapping.is_none()
+            );
+            assert!(record.host_backing_charge.is_none());
+            assert!(!e.allocation_record_slots.contains_key(&id.id));
+        }
         assert_eq!(
             self.disposed_controls.len(),
             self.disposed_controls
@@ -543,7 +569,9 @@ impl PreparationMemoryFixtureV1 {
                 .iter()
                 .filter(|r| r.phase == SharedAllocationPhaseV1::Released)
                 .count(),
-            self.disposed_controls.len() + self.disposed_host_data.len()
+            self.disposed_controls.len()
+                + self.disposed_host_data.len()
+                + self.disposed_queue_resources.len()
         );
     }
 

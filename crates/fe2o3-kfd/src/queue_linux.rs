@@ -24,6 +24,9 @@ use fe2o3_kfd_uapi::{
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
+mod teardown;
+pub(crate) use teardown::LinuxPrimaryTeardownCustodyV1;
+
 #[cfg(test)]
 #[path = "queue_linux/primary_fixture.rs"]
 pub(crate) mod primary_fixture;
@@ -1941,7 +1944,7 @@ mod tests {
         std::fs::File,
     );
 
-    fn mapped_diagnostic_shadow_fixture() -> MappedDiagnosticShadowFixture {
+    pub(super) fn mapped_diagnostic_shadow_fixture() -> MappedDiagnosticShadowFixture {
         let file = std::fs::File::open("/dev/null").unwrap();
         let binding = QueueExceptionBindingV1 {
             event_id: KfdSignalEventIdV1::new(7).unwrap(),

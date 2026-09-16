@@ -216,7 +216,7 @@
     "function": 13
   },
   "crates/fe2o3-completion/tests/completion_graph.rs": {
-    "block": 14
+    "block": 16
   },
   "crates/fe2o3-completion/tests/lifecycle.rs": {
     "block": 26
@@ -555,6 +555,9 @@
   "crates/fe2o3-host/src/generated_kfd_invocation.rs": {
     "impl": 1
   },
+  "crates/fe2o3-host/src/generated_runtime_arguments.rs": {
+    "trait": 1
+  },
   "crates/fe2o3-host/src/generated_worker_v3_dispatch.rs": {
     "block": 5,
     "trait": 1
@@ -697,6 +700,15 @@
     "block": 45,
     "extern_block": 1
   },
+  "crates/fe2o3-kfd/src/queue_linux/primary_fixture.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-kfd/src/queue_linux/teardown.rs": {
+    "block": 8
+  },
+  "crates/fe2o3-kfd/src/queue_linux/teardown/tests.rs": {
+    "block": 1
+  },
   "crates/fe2o3-kfd/src/queue_submit.rs": {
     "block": 7
   },
@@ -725,14 +737,14 @@
     "block": 4,
     "extern_block": 1,
     "function": 13,
-    "impl": 6
+    "impl": 7
   },
   "crates/fe2o3-macros/tests/fixtures/renamed-device/src/main.rs": {
     "function": 1
   },
   "crates/fe2o3-macros/tests/fixtures/renamed-typed-host/host-stub/src/lib.rs": {
     "function": 1,
-    "trait": 2
+    "trait": 3
   },
   "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/invalid_control_flow.rs": {
     "function": 1
@@ -795,6 +807,18 @@
   "crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs": {
     "impl": 1
   },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-r63-async-graph.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-r65-drain-versions.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/support/async_owner_copy.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/async_engine/graph.rs": {
+    "block": 4
+  },
   "crates/fe2o3-runtime/src/authorized_execution.rs": {
     "block": 3,
     "impl": 1,
@@ -807,6 +831,11 @@
     "block": 1,
     "impl": 8,
     "trait": 2
+  },
+  "crates/fe2o3-runtime/src/kfd_backend/drain_capture.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
   },
   "crates/fe2o3-runtime/tests/kfd_opaque_checkpoint_live.rs": {
     "block": 9,

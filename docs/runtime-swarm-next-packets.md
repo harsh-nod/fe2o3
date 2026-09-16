@@ -11,8 +11,10 @@ Stop/drain/graphs. Other teardown profiles remain required. Acceptance is local
 CPU/test only; A1/A2, issue #182 and HIP/HSA parity remain incomplete.
 
 [R126 development](runtime-primary-queue-release-v1.md) implements borrowed
-foundation restoration and split lower control cleanup. The retained primary
-teardown route, its queue profiles and native qualification remain open.
+foundation restoration, four-resource cleanup, retained Linux teardown and the
+ordinary-primary runtime owner. Nine constructed-parent tests exercise the shared
+driver with original owners and representative native/platform failures. Remaining
+parent/runtime coverage, other queue profiles and qualification remain open.
 
 Preceding Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each

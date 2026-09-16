@@ -1,6 +1,9 @@
 //! Safe, bounded Linux composition for one gfx942 compute-AQL queue.
 
 use core::fmt;
+#[path = "queue_live/primary_release.rs"]
+mod primary_release;
+pub use primary_release::PrimaryQueueReleaseCustodyV1;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};

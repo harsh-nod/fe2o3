@@ -8,6 +8,9 @@ use fe2o3_kfd_uapi::{KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES, KfdGfx942CreateQue
 #[path = "integration_platform_tests.rs"]
 mod tests;
 
+#[path = "integration_release_platform.rs"]
+mod release;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum Role {
     Runtime,
@@ -21,7 +24,7 @@ pub(super) enum Role {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct OwnerIdentity {
     id: usize,
-    role: Role,
+    pub(super) role: Role,
     session: u64,
     pid: u32,
 }
@@ -35,7 +38,7 @@ enum ShadowPhase {
 
 pub(super) struct Owner {
     trace: Rc<RefCell<Trace>>,
-    identity: OwnerIdentity,
+    pub(super) identity: OwnerIdentity,
     shadow: Option<(ShadowPhase, OwnerIdentity, SharedGttAllocationIdentityV1)>,
     doorbell: Option<KfdGfx942CreateQueueOutputs>,
     native_event_id: Option<u32>,

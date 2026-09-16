@@ -115,6 +115,12 @@ impl PristineAbortMemoryFixtureV1 {
     }
 
     pub(crate) fn code(&mut self) -> Code {
+        self.executable()
+    }
+
+    fn executable<R: SharedGttQueueResourceRoleV1>(
+        &mut self,
+    ) -> SharedGttQueueResourceAuthorityV1<R, ExecutableGttV1, GttGpuAccessibleExecutableV1> {
         let token = self.allocate::<ExecutableGttV1>(8192);
         let f = &mut self.fixture;
         let token = transitions::seal_v1(&mut f.engine, token).unwrap();
