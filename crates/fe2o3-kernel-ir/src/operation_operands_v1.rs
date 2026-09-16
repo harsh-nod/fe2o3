@@ -24,6 +24,7 @@ impl OperationKind {
         mut visitor: impl FnMut(ValueId) -> Result<(), E>,
     ) -> Result<(), E> {
         match self {
+            Self::Execution(operation) => operation.try_visit_operands_v1(&mut visitor)?,
             Self::VerificationContract(
                 crate::VerificationContractOperationV12::WorkgroupPipelineEvent {
                     storage,

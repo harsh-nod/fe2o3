@@ -82,7 +82,7 @@ pub(super) fn semantic_type_message_work_upper_v1<S: SemanticOperationIssueSinkV
         ty = match ty {
             Type::Pointer(pointer) => pointer.pointee.as_ref(),
             Type::Slice(slice) => slice.element.as_ref(),
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) => break,
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => break,
         };
     }
     Ok(SEMANTIC_FIXED_MESSAGE_WORK_UPPER_V1
@@ -100,6 +100,7 @@ pub(super) fn semantic_types_equal_v1<S: SemanticOperationIssueSinkV1>(
             (Type::Unit, Type::Unit) => return Ok(true),
             (Type::Scalar(actual), Type::Scalar(expected)) => return Ok(actual == expected),
             (Type::Vector(actual), Type::Vector(expected)) => return Ok(actual == expected),
+            (Type::Execution(actual), Type::Execution(expected)) => return Ok(actual == expected),
             (Type::Pointer(actual_pointer), Type::Pointer(expected_pointer)) => {
                 if actual_pointer.address_space != expected_pointer.address_space
                     || actual_pointer.access != expected_pointer.access
@@ -342,6 +343,10 @@ pub(crate) fn try_verify_semantic_operation_with_sink_v1<S: SemanticOperationIss
     sink: &mut S,
 ) -> Result<bool, S::Error> {
     match operation {
+        OperationKind::Execution(execution) => {
+            try_verify_execution_operation_with_sink_v3(execution, context, sink)?;
+            Ok(true)
+        }
         OperationKind::Intrinsic(intrinsic) => {
             try_verify_intrinsic_with_sink_v1(intrinsic, context, sink)?;
             Ok(true)

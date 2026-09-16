@@ -13,7 +13,7 @@ fn invocation_index(kind: IndexKind, axis: Axis) -> IntrinsicOperation {
 
 #[test]
 fn schema_codec_is_fixed_width_and_explicitly_payload_blind() {
-    let schema = SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent);
+    let schema = SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent).unwrap();
     let encoded = encode_semantic_operation_schema(schema);
 
     assert_eq!(encoded.len(), SEMANTIC_OPERATION_SCHEMA_BYTES_V1);
@@ -48,15 +48,15 @@ fn schema_codec_is_fixed_width_and_explicitly_payload_blind() {
 
 #[test]
 fn schema_decoder_rejects_unknown_dispatch_authority() {
-    let encoded = encode_semantic_operation_schema(SemanticOperationSchema::v1(
-        SemanticOperationKind::LaunchInvocationIndex,
-    ));
+    let encoded = encode_semantic_operation_schema(
+        SemanticOperationSchema::v1(SemanticOperationKind::LaunchInvocationIndex).unwrap(),
+    );
 
     let mut unknown_version = encoded;
-    unknown_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
+    unknown_version[8..10].copy_from_slice(&4_u16.to_le_bytes());
     assert_eq!(
         decode_semantic_operation_schema(&unknown_version),
-        Err(SemanticOperationSchemaDecodeError::UnknownVersion(3))
+        Err(SemanticOperationSchemaDecodeError::UnknownVersion(4))
     );
 
     let mut unknown_family = encoded;
@@ -134,9 +134,9 @@ fn wide_memory_elements_use_additive_v2_identity() {
 
 #[test]
 fn schema_decoder_rejects_malformed_encodings() {
-    let encoded = encode_semantic_operation_schema(SemanticOperationSchema::v1(
-        SemanticOperationKind::LaunchExtent,
-    ));
+    let encoded = encode_semantic_operation_schema(
+        SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent).unwrap(),
+    );
 
     assert_eq!(
         decode_semantic_operation_schema(&encoded[..15]),
@@ -185,7 +185,7 @@ fn full_instance_identity_separates_every_launch_payload() {
             let id = invocation_index(kind, axis).contract().instance_id();
             assert_eq!(
                 id.schema(),
-                SemanticOperationSchema::v1(SemanticOperationKind::LaunchInvocationIndex)
+                SemanticOperationSchema::v1(SemanticOperationKind::LaunchInvocationIndex).unwrap()
             );
             assert!(instances.insert(id), "aliased instance {kind:?} {axis:?}");
             let encoded = encode_semantic_operation_instance_id(id);
@@ -198,7 +198,7 @@ fn full_instance_identity_separates_every_launch_payload() {
         let id = launch_extent(axis).contract().instance_id();
         assert_eq!(
             id.schema(),
-            SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent)
+            SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent).unwrap()
         );
         assert!(instances.insert(id), "aliased launch extent {axis:?}");
         let encoded = encode_semantic_operation_instance_id(id);
@@ -513,10 +513,10 @@ fn instance_decoder_rejects_unknown_and_malformed_payloads() {
     );
 
     let mut unknown_version = encoded.clone();
-    unknown_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
+    unknown_version[8..10].copy_from_slice(&4_u16.to_le_bytes());
     assert_eq!(
         decode_semantic_operation_instance_id(&unknown_version),
-        Err(SemanticOperationInstanceDecodeError::UnknownVersion(3))
+        Err(SemanticOperationInstanceDecodeError::UnknownVersion(4))
     );
 
     let mut unknown_family = encoded.clone();
@@ -620,7 +620,7 @@ fn existing_launch_intrinsic_exposes_a_full_target_neutral_contract() {
 
     assert_eq!(
         contract.schema(),
-        SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent)
+        SemanticOperationSchema::v1(SemanticOperationKind::LaunchExtent).unwrap()
     );
     assert_eq!(
         contract.instance_id(),

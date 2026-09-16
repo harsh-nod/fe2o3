@@ -13,11 +13,11 @@ pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), Lower
             .iter()
             .chain(&function.signature.results)
         {
-            if contains_vector(ty) {
+            if contains_unsupported_type(ty) {
                 return Err(LoweringErrors::one(
                     LoweringLocation::device_function(module, function),
                     LoweringDiagnosticCode::UnsupportedType,
-                    "AMDGPU LLVM lowering does not support V12 vector types in function signatures",
+                    "AMDGPU LLVM lowering does not support V12 vector or V15 execution types in function signatures",
                 ));
             }
         }
@@ -28,18 +28,25 @@ pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), Lower
             if block
                 .parameters
                 .iter()
-                .any(|parameter| contains_vector(&parameter.ty))
+                .any(|parameter| contains_unsupported_type(&parameter.ty))
             {
                 return Err(LoweringErrors::one(
                     LoweringLocation::device_block(module, function, block.id),
                     LoweringDiagnosticCode::UnsupportedType,
-                    "AMDGPU LLVM lowering does not support V12 vector block parameters",
+                    "AMDGPU LLVM lowering does not support V12 vector or V15 execution block parameters",
                 ));
             }
             for (ordinal, operation) in block.operations.iter().enumerate() {
                 // Keep this exhaustive: a new operation with embedded types or
                 // compiler effects must receive an explicit backend decision.
                 let embedded = match &operation.kind {
+                    OperationKind::Execution(_) => {
+                        return Err(LoweringErrors::one(
+                            LoweringLocation::device_operation(module, function, block.id, ordinal),
+                            LoweringDiagnosticCode::UnsupportedOperation,
+                            "AMDGPU LLVM lowering does not support V15 execution operations",
+                        ));
+                    }
                     OperationKind::VerificationContract(_) => {
                         return Err(LoweringErrors::one(
                             LoweringLocation::device_operation(module, function, block.id, ordinal),
@@ -83,16 +90,16 @@ pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), Lower
                     | OperationKind::Wave(_)
                     | OperationKind::InlineAssembly(_) => None,
                 };
-                if embedded.is_some_and(contains_vector)
+                if embedded.is_some_and(contains_unsupported_type)
                     || operation
                         .results
                         .iter()
-                        .any(|result| contains_vector(&result.ty))
+                        .any(|result| contains_unsupported_type(&result.ty))
                 {
                     return Err(LoweringErrors::one(
                         LoweringLocation::device_operation(module, function, block.id, ordinal),
                         LoweringDiagnosticCode::UnsupportedType,
-                        "AMDGPU LLVM lowering does not support embedded or result V12 vector types",
+                        "AMDGPU LLVM lowering does not support embedded or result V12 vector or V15 execution types",
                     ));
                 }
             }
@@ -101,10 +108,10 @@ pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), Lower
     Ok(())
 }
 
-fn contains_vector(mut ty: &Type) -> bool {
+fn contains_unsupported_type(mut ty: &Type) -> bool {
     loop {
         match ty {
-            Type::Vector(_) => return true,
+            Type::Vector(_) | Type::Execution(_) => return true,
             Type::Pointer(pointer) => ty = &pointer.pointee,
             Type::Slice(slice) => ty = &slice.element,
             Type::Unit | Type::Scalar(_) => return false,
@@ -141,6 +148,110 @@ mod tests {
             vec![block],
         ));
         module
+    }
+
+    #[test]
+    fn execution_v15_operations_are_rejected_before_target_emission() {
+        use fe2o3_kernel_ir::ExecutionOperationV15 as Execution;
+        for execution in [
+            Execution::ContextIssue,
+            Execution::WorkgroupDerive {
+                context: ValueId(0),
+            },
+            Execution::ScopeEnd {
+                workgroup: ValueId(0),
+                discarded: vec![ValueId(1)],
+            },
+            Execution::MaskedTileLoadU32 {
+                workgroup: ValueId(0),
+                input: ValueId(1),
+                base: ValueId(2),
+                lanes: 3,
+                elements: 2,
+            },
+            Execution::TileIntoFragmentU32 {
+                tile: ValueId(0),
+                lanes: 3,
+                elements: 2,
+            },
+            Execution::FragmentIntoPartsU32 {
+                fragment: ValueId(0),
+                lanes: 3,
+                elements: 2,
+            },
+        ] {
+            let errors = reject_unsupported_v12_module(&module(Operation::new(
+                vec![],
+                OperationKind::Execution(execution),
+            )))
+            .unwrap_err();
+            assert!(errors.contains(LoweringDiagnosticCode::UnsupportedOperation));
+            assert_eq!(errors.diagnostics()[0].location.block, Some(BlockId(7)));
+            assert_eq!(errors.diagnostics()[0].location.operation, Some(0));
+        }
+    }
+
+    #[test]
+    fn execution_v15_roles_cannot_hide_in_legacy_embedded_types() {
+        use fe2o3_kernel_ir::ExecutionRoleV15 as Role;
+        for role in [
+            Role::Context,
+            Role::Workgroup,
+            Role::MaskedTileU32 {
+                lanes: 3,
+                elements: 2,
+            },
+            Role::LaneFragmentU32 {
+                lanes: 3,
+                elements: 2,
+            },
+        ] {
+            let role = Type::Execution(role);
+            for ty in [
+                role.clone(),
+                Type::slice(
+                    Type::pointer(role, AddressSpace::Global, AccessMode::ReadOnly),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+            ] {
+                for kind in [
+                    OperationKind::Alloca {
+                        element: ty.clone(),
+                        count: None,
+                        address_space: AddressSpace::Private,
+                        alignment: 4,
+                    },
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value: ValueId(0),
+                        to: ty.clone(),
+                    },
+                    OperationKind::Intrinsic(IntrinsicOperation::new(
+                        IntrinsicKind::LaunchExtent {
+                            axis: fe2o3_kernel_ir::Axis::X,
+                        },
+                        ty.clone(),
+                    )),
+                    OperationKind::WorkgroupMemory(WorkgroupMemory {
+                        element: ty.clone(),
+                        extent: WorkgroupMemoryExtent::Static(1),
+                        alignment: 4,
+                    }),
+                ] {
+                    let errors =
+                        reject_unsupported_v12_module(&module(Operation::new(vec![], kind)))
+                            .unwrap_err();
+                    assert!(errors.contains(LoweringDiagnosticCode::UnsupportedType));
+                }
+                let errors = reject_unsupported_v12_module(&module(Operation::new(
+                    vec![ValueDef::new(ValueId(0), ty)],
+                    OperationKind::Constant(Constant::I32(0)),
+                )))
+                .unwrap_err();
+                assert!(errors.contains(LoweringDiagnosticCode::UnsupportedType));
+            }
+        }
     }
 
     #[test]

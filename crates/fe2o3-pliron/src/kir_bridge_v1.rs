@@ -811,7 +811,7 @@ fn to_u32(value: usize) -> Result<u32, KirBridgeErrorV1> {
 
 fn preflight_type(ty: &Type) -> Result<(), KirBridgeErrorV1> {
     match ty {
-        Type::Vector(_) => Err(KirBridgeErrorV1::UnsupportedType),
+        Type::Vector(_) | Type::Execution(_) => Err(KirBridgeErrorV1::UnsupportedType),
         Type::Unit | Type::Scalar(_) => Ok(()),
         Type::Pointer(pointer) => {
             preflight_address_space(pointer.address_space)?;
@@ -834,7 +834,8 @@ fn preflight_operation(
     coordinate: KirBridgeCoordinateV1,
 ) -> Result<(), KirBridgeErrorV1> {
     match &operation.kind {
-        OperationKind::VerificationContract(_)
+        OperationKind::Execution(_)
+        | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_) => {
@@ -1431,7 +1432,7 @@ pub(crate) fn ranked_data_type_node_is_supported_v2(ty: &dyn pliron::r#type::Typ
 
 fn type_to_pliron(context: &Context, ty: &Type) -> Result<TypeHandle, KirBridgeErrorV1> {
     Ok(match ty {
-        Type::Vector(_) => return Err(KirBridgeErrorV1::UnsupportedType),
+        Type::Vector(_) | Type::Execution(_) => return Err(KirBridgeErrorV1::UnsupportedType),
         Type::Unit => UnitType::get(context).into(),
         Type::Scalar(ScalarType::Bool) => IntegerType::get(context, 1, Signedness::Signless).into(),
         Type::Scalar(ScalarType::I8) => IntegerType::get(context, 8, Signedness::Signed).into(),
@@ -2740,7 +2741,8 @@ fn remap_preserved_operation(
         | OperationKind::Fence(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::WorkgroupMemory(_) => {}
-        OperationKind::Constant(_)
+        OperationKind::Execution(_)
+        | OperationKind::Constant(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }
         | OperationKind::Compare { .. }

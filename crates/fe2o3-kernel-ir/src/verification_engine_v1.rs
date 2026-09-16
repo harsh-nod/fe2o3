@@ -266,6 +266,17 @@ fn verify_function_header_v1(
         .chain(&function.signature.results)
     {
         verify_type_v12_with_budget_v1(ty, &location, diagnostics, budget)?;
+        if crate::verification_execution_lifecycle_v15::invalid_execution_type_v15(
+            ty, false, budget,
+        )? {
+            emit_fixed_v1(
+                diagnostics,
+                clone_diagnostic_location_v1(&location, budget)?,
+                DiagnosticCode::InvalidSemanticOperation,
+                "execution roles cannot cross a function signature",
+                budget,
+            )?;
+        }
     }
 
     // Reserved declaration checks are allocation-free in the shared
@@ -742,6 +753,15 @@ pub(crate) fn verify_type_v12_with_budget_v1(
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    if crate::verification_execution_lifecycle_v15::invalid_execution_type_v15(ty, true, budget)? {
+        emit_fixed_v1(
+            diagnostics,
+            clone_diagnostic_location_v1(location, budget)?,
+            DiagnosticCode::InvalidSemanticOperation,
+            "execution roles must have valid geometry and cannot be nested in memory types",
+            budget,
+        )?;
+    }
     if let Some(error) = verification_invalid_vector_type_v12_v1(ty, budget)? {
         emit_dynamic_v1(
             diagnostics,

@@ -167,7 +167,14 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 self.verify_terminator_v1(block, terminator, &location)?;
             }
         }
-        Ok(())
+        crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(
+            self.module,
+            self.function,
+            self.function_state,
+            self.control_flow,
+            self.diagnostics,
+            self.budget,
+        )
     }
 
     fn verify_definition_rosters(

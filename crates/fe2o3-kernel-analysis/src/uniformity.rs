@@ -287,7 +287,8 @@ fn collect_uniform_helper_candidate(
                         candidate.structurally_supported = false;
                     }
                 },
-                OperationKind::VerificationContract(_)
+                OperationKind::Execution(_)
+                | OperationKind::VerificationContract(_)
                 | OperationKind::Alloca { .. }
                 | OperationKind::Atomic(_)
                 | OperationKind::Barrier(_)
@@ -789,7 +790,8 @@ impl<'a> Analyzer<'a> {
 
     fn operation_variation(&self, operation: &Operation) -> Variation {
         match &operation.kind {
-            OperationKind::VerificationContract(_)
+            OperationKind::Execution(_)
+            | OperationKind::VerificationContract(_)
             | OperationKind::VectorLoad(_)
             | OperationKind::VectorStore(_) => Variation::Varying,
             OperationKind::VectorLayoutConvert(_) => {

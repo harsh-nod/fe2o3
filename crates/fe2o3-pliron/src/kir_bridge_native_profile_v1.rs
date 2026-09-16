@@ -99,6 +99,7 @@ fn source_type_nodes(ty: &Type, depth: usize) -> Result<usize, KirBridgeErrorV12
         return Err(KirBridgeErrorV1::UnsupportedType.into());
     }
     match ty {
+        Type::Execution(_) => Err(KirBridgeErrorV1::UnsupportedType.into()),
         Type::Pointer(pointer) => {
             checked_bridge_add_v12(1, source_type_nodes(&pointer.pointee, depth + 1)?)
         }

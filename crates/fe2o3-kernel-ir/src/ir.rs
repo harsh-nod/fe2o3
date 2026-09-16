@@ -413,6 +413,12 @@ impl Operation {
             return semantic.contract().memory_effects;
         }
         match &self.kind {
+            OperationKind::Execution(crate::ExecutionOperationV15::MaskedTileLoadU32 {
+                ..
+            }) => {
+                vec![MemoryEffect::Read(AddressSpace::Global)]
+            }
+            OperationKind::Execution(_) => Vec::new(),
             OperationKind::Intrinsic(_) => {
                 unreachable!("semantic operations return before legacy operation dispatch")
             }
@@ -501,6 +507,8 @@ impl Operation {
     reason = "boxing a public IR operation would change its established ownership and API shape"
 )]
 pub enum OperationKind {
+    /// Closed execution lifecycle operations, encoded only in Kernel IR V15.
+    Execution(crate::ExecutionOperationV15),
     /// Ordered compiler event whose catalog key alone grants no proof authority.
     VerificationContract(VerificationContractOperationV12),
     /// Fixed-lane vector operations, encoded only by Kernel IR V12 or later.

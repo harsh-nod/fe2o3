@@ -6799,7 +6799,8 @@ fn execute_operation(
         OperationKind::MemoryIntrinsic(intrinsic) => {
             execute_memory_intrinsic(engine, values, intrinsic, &site)
         }
-        OperationKind::Barrier(_)
+        OperationKind::Execution(_)
+        | OperationKind::Barrier(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)

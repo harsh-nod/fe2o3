@@ -19,6 +19,51 @@ const AMPLE_STORAGE: usize = 100_000_000;
 include!("kir_bridge_v12_mapped_result_tests.rs");
 include!("kir_bridge_v12_roster_resources_tests.rs");
 
+#[test]
+fn execution_v15_roles_and_operations_are_rejected_by_both_bridge_profiles() {
+    use fe2o3_kernel_ir::{ExecutionOperationV15 as Execution, ExecutionRoleV15 as Role};
+    let context = Context::new();
+    for profile in [KirBridgeTypeProfileV12::Legacy, KirBridgeTypeProfileV12::V12] {
+        for role in [
+            Role::Context, Role::Workgroup,
+            Role::MaskedTileU32 { lanes: 3, elements: 2 },
+            Role::LaneFragmentU32 { lanes: 3, elements: 2 },
+        ] {
+            let role = Type::Execution(role);
+            for ty in [
+                role.clone(),
+                Type::pointer(
+                    Type::slice(role, AddressSpace::Global, AccessMode::ReadOnly),
+                    AddressSpace::Private, AccessMode::ReadWrite,
+                ),
+            ] {
+                assert!(matches!(profile.preflight_type(&ty), Err(KirBridgeErrorV1::UnsupportedType)));
+                assert!(matches!(profile.to_pliron(&context, &ty), Err(KirBridgeErrorV1::UnsupportedType)));
+            }
+        }
+        for execution in [
+            Execution::ContextIssue,
+            Execution::WorkgroupDerive { context: ValueId(0) },
+            Execution::ScopeEnd { workgroup: ValueId(0), discarded: vec![ValueId(1)] },
+            Execution::MaskedTileLoadU32 {
+                workgroup: ValueId(0), input: ValueId(1), base: ValueId(2), lanes: 3, elements: 2,
+            },
+            Execution::TileIntoFragmentU32 { tile: ValueId(0), lanes: 3, elements: 2 },
+            Execution::FragmentIntoPartsU32 { fragment: ValueId(0), lanes: 3, elements: 2 },
+        ] {
+            let kind = OperationKind::Execution(execution);
+            let operation = KirOperation::new(vec![], kind.clone());
+            let coordinate = KirBridgeCoordinateV1::Operation { function: 0, block: 0, operation: 0 };
+            assert!(matches!(
+                profile.preflight_operation(&operation, coordinate),
+                Err(KirBridgeErrorV1::UnsupportedOperation { .. }),
+            ));
+            assert!(preserved_operation_kind(&kind).is_err());
+            assert!(remap_preserved_operation(&kind, kind.operands()).is_err());
+        }
+    }
+}
+
 fn owner(source: &Module) -> VerifiedCanonicalKernelIrModuleV12 {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(AMPLE_WORK);
     let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, AMPLE_STORAGE);

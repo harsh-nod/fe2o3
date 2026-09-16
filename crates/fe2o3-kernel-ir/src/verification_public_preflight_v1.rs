@@ -159,7 +159,8 @@ fn operation_kind_exceeds_public_verifier_depth_v1<E>(
         | OperationKind::Matrix(_)
         | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::Wave(_)
-        | OperationKind::InlineAssembly(_) => None,
+        | OperationKind::InlineAssembly(_)
+        | OperationKind::Execution(_) => None,
     };
     match ty {
         Some(ty) => type_exceeds_public_verifier_depth_v1(ty, visit),
@@ -180,7 +181,9 @@ fn type_exceeds_public_verifier_depth_v1<E>(
         match ty {
             Type::Pointer(pointer) => ty = &pointer.pointee,
             Type::Slice(slice) => ty = &slice.element,
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) => return Ok(false),
+            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => {
+                return Ok(false);
+            }
         }
         depth += 1;
     }

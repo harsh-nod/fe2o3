@@ -77,6 +77,14 @@ fn assert_all_public_paths_reject(module: &Module, expected: LoweringDiagnosticC
     drop(native);
     budget.release_storage(storage.retained_storage()).unwrap();
     assert_eq!(budget.storage(), 0);
+    assert_unowned_public_paths_reject(module, expected, "uncalled");
+}
+
+fn assert_unowned_public_paths_reject(
+    module: &Module,
+    expected: LoweringDiagnosticCode,
+    function: &str,
+) {
     let kernel = KernelId::new("kernel");
     let scalar_owner = VerifiedCanonicalKernelIrV8::from_module(scalar_module()).unwrap();
     let anchor = ProductionSemanticAnchorKirIdentityV1::from_v8(&scalar_owner);
@@ -106,7 +114,7 @@ fn assert_all_public_paths_reject(module: &Module, expected: LoweringDiagnosticC
                 .as_ref()
                 .unwrap()
                 .as_str(),
-            "uncalled"
+            function
         );
     }
     for lower in module_paths {
@@ -131,6 +139,27 @@ fn assert_all_public_paths_reject(module: &Module, expected: LoweringDiagnosticC
         let errors = result.unwrap_err();
         assert!(errors.contains(expected), "{errors}");
     }
+}
+
+#[test]
+fn valid_execution_v15_context_has_no_legacy_target_lowering() {
+    let mut module = scalar_module();
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(Operation::new(
+            vec![ValueDef::new(
+                ValueId(0),
+                Type::Execution(ExecutionRoleV15::Context),
+            )],
+            OperationKind::Execution(ExecutionOperationV15::ContextIssue),
+        ));
+    verify_module(&module).expect("an idle issued context is a structurally valid V15 lifecycle");
+    assert!(encode_module_v12(&module).is_err());
+    assert_unowned_public_paths_reject(
+        &module,
+        LoweringDiagnosticCode::UnsupportedOperation,
+        "entry",
+    );
 }
 
 #[test]

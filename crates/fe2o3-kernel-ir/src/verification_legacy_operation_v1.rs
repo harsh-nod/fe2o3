@@ -59,7 +59,8 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             }
             OperationKind::Intrinsic(_)
             | OperationKind::MemoryIntrinsic(_)
-            | OperationKind::Matrix(_) => {
+            | OperationKind::Matrix(_)
+            | OperationKind::Execution(_) => {
                 Err(CanonicalKernelIrVerificationResourceErrorV1::Accounting)
             }
             OperationKind::Unary { op, operand } => {

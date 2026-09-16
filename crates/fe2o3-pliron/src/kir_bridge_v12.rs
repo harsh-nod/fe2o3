@@ -24,6 +24,7 @@ impl KirBridgeTypeProfileV12 {
         match self {
             Self::Legacy => preflight_type(ty),
             Self::V12 => match ty {
+                Type::Execution(_) => Err(KirBridgeErrorV1::UnsupportedType),
                 Type::Vector(vector) => vector
                     .validate()
                     .map_err(|_| KirBridgeErrorV1::UnsupportedType),
@@ -69,6 +70,7 @@ impl KirBridgeTypeProfileV12 {
             return type_to_pliron(context, ty);
         }
         Ok(match ty {
+            Type::Execution(_) => return Err(KirBridgeErrorV1::UnsupportedType),
             Type::Vector(vector) => {
                 vector
                     .validate()

@@ -14,6 +14,7 @@ pub(crate) fn verification_types_equal_v1(
     Ok(match (left, right) {
         (Type::Unit, Type::Unit) => true,
         (Type::Scalar(left), Type::Scalar(right)) => left == right,
+        (Type::Execution(left), Type::Execution(right)) => left == right,
         (Type::Vector(left), Type::Vector(right)) => left == right,
         (Type::Pointer(left), Type::Pointer(right)) => {
             left.address_space == right.address_space
@@ -69,7 +70,7 @@ pub(crate) fn verification_invalid_vector_type_v12_v1(
         Type::Vector(vector) => Ok(vector.validate().err()),
         Type::Pointer(pointer) => verification_invalid_vector_type_v12_v1(&pointer.pointee, budget),
         Type::Slice(slice) => verification_invalid_vector_type_v12_v1(&slice.element, budget),
-        Type::Unit | Type::Scalar(_) => Ok(None),
+        Type::Unit | Type::Scalar(_) | Type::Execution(_) => Ok(None),
     }
 }
 
