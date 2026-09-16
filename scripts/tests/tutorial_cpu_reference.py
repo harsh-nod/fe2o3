@@ -656,14 +656,19 @@ class AdapterComponents(unittest.TestCase):
                     self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
 
     def test_main_signal_and_deadline_cleanup_are_nonpassing_component_records(self) -> None:
+        source_root = self.root / "source-checkout"
+        source_root.mkdir(mode=0o700)
         for mode in ("terminate", "deadline"):
             def execute(root, arguments, output, started, observation):
+                self.assertEqual(root, source_root)
+                self.assertFalse(output.is_relative_to(root))
                 code = ("import os,signal,time; os.kill(os.getppid(),signal.SIGTERM); time.sleep(5)"
                         if mode == "terminate" else "import time; time.sleep(5)")
                 adapter.child([sys.executable, "-c", code], self.root, {}, output, "component-signal",
                               time.monotonic() + 10, observation["phases"])
             captured = io.StringIO()
             with patch.dict(os.environ, {"FE2O3_TUTORIAL_CPU_OUTPUT_ROOT": str(self.root)}, clear=True), \
+                    patch.object(adapter, "__file__", str(source_root / "scripts" / HELPER.name)), \
                     patch.object(adapter, "execute", side_effect=execute), \
                     patch.object(adapter, "MAX_SECONDS", 0.1 if mode == "deadline" else 5), \
                     contextlib.redirect_stdout(captured):
@@ -671,8 +676,38 @@ class AdapterComponents(unittest.TestCase):
             observation = json.loads(captured.getvalue())
             self.assertNotEqual(result, 0)
             self.assertNotEqual(observation["outcome"], "passed")
+            self.assertTrue(observation["phases"], observation)
             self.assertIsNotNone(observation["phases"][-1]["returncode"])
             self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
+
+    def test_main_rejects_output_inside_its_source_before_either_executor(self) -> None:
+        source_root = self.root / "source-checkout"
+        source_root.mkdir(mode=0o700)
+        output_parent = source_root / "private-output"
+        output_parent.mkdir(mode=0o700)
+        previous = {number: adapter.signal.getsignal(number) for number in
+                    (adapter.signal.SIGINT, adapter.signal.SIGTERM, adapter.signal.SIGALRM)}
+        for arguments in (["fixture", "lib"], ["--batch"]):
+            captured = io.StringIO()
+            with patch.dict(os.environ, {"FE2O3_TUTORIAL_CPU_OUTPUT_ROOT": str(output_parent)}, clear=True), \
+                    patch.object(adapter, "__file__", str(source_root / "scripts" / HELPER.name)), \
+                    patch.object(adapter, "execute") as standalone, \
+                    patch.object(adapter, "execute_batch") as batch, \
+                    patch.object(adapter.tempfile, "mkdtemp") as allocate, \
+                    contextlib.redirect_stdout(captured):
+                result = adapter.main(arguments)
+            observation = json.loads(captured.getvalue())
+            self.assertEqual(result, 1)
+            self.assertEqual(observation["outcome"], "invalid")
+            self.assertEqual(observation["errors"], ["output directory must be outside the source checkout"])
+            self.assertEqual(observation["phases"], [])
+            standalone.assert_not_called()
+            batch.assert_not_called()
+            allocate.assert_not_called()
+            self.assertEqual(list(output_parent.iterdir()), [])
+            self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
+            self.assertEqual(adapter.signal.getitimer(adapter.signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertEqual({number: adapter.signal.getsignal(number) for number in previous}, previous)
 
 
 class BatchComponents(unittest.TestCase):
@@ -1135,9 +1170,12 @@ class BatchComponents(unittest.TestCase):
                     (adapter.signal.SIGINT, adapter.signal.SIGTERM, adapter.signal.SIGALRM)}
         for arguments in (["--batch", "external-driver"], ["--batch"]):
             def execute(root, output, started, observation):
+                self.assertEqual(root, self.root)
+                self.assertFalse(output.is_relative_to(root))
                 observation["outcome"] = "passed"
             captured = io.StringIO()
             with patch.dict(os.environ, {"FE2O3_TUTORIAL_CPU_OUTPUT_ROOT": str(self.base)}, clear=True), \
+                    patch.object(adapter, "__file__", str(self.root / "scripts" / HELPER.name)), \
                     patch.object(adapter, "execute_batch", side_effect=execute) as batch, \
                     patch.object(adapter, "execute") as standalone, \
                     contextlib.redirect_stdout(captured):
