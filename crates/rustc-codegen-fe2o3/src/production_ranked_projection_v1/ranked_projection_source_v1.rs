@@ -42,6 +42,10 @@ impl<'s> RankedProjectionSourceV1<'s> {
         self.semantic_ssa
     }
 
+    pub(super) const fn owner(&self) -> &'s ProductionPreRankedKirOwnerV1 {
+        self.owner
+    }
+
     pub(super) const fn source_launch(&self) -> &'s ProductionSourceLaunchRosterV1 {
         self.source_launch
     }

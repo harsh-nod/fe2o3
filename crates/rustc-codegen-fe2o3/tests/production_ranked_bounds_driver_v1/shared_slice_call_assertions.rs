@@ -58,7 +58,10 @@ fn assert_shared_slice_call_chain_v1(module: &fe2o3_kernel_ir::Module) {
     );
 }
 
-fn assert_shared_slice_source_v1(architecture: &str, target: &ScratchTarget) -> std::path::PathBuf {
+fn assert_shared_slice_source_v1(
+    architecture: &str,
+    target: &ScratchTarget,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     use fe2o3_mir_model::semantic_mir_v1::*;
     let path = target
         .path()
@@ -160,27 +163,118 @@ fn assert_shared_slice_source_v1(architecture: &str, target: &ScratchTarget) -> 
         exported.stderr
     );
     assert!(!rejected.exists());
-    let rejected = target
+    let indexed = target
         .path()
         .join(format!("slice-field-index-{architecture}.fe2sim"));
     let exported = output(
         simulation_export_command_for_feature(
             architecture,
-            &rejected,
+            &indexed,
             &target.path().join(architecture),
             Some(5),
             "rust_call_slice_index",
         ),
-        "refuse incomplete aggregate slice allocation/view binding",
+        "export checked direct and nested slice reads",
     );
-    assert!(!exported.status.success());
-    assert!(
-        exported
-            .stderr
-            .contains("a Rust bounds assertion does not authorize one matching projected access"),
-        "{}",
-        exported.stderr
+    assert!(exported.status.success(), "{}", exported.stderr);
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV5::from_canonical_bytes(
+        std::fs::read(&indexed).unwrap(),
+    )
+    .unwrap();
+    let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        bundle.semantic_mir(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let selected_bodies = semantic
+        .functions()
+        .iter()
+        .enumerate()
+        .filter(|(_, function)| function.role() == SemanticFunctionRoleV1::KernelRoot)
+        .map(|(index, _)| {
+            semantic
+                .select_kernel_body_for_root_v1(SemanticFunctionIdV1::from_index(index as u32))
+                .expect("selected source kernel body")
+        })
+        .map(|selection| &semantic.functions()[selection.body().index() as usize])
+        .collect::<Vec<_>>();
+    let mut nested_indexed_inputs = 0;
+    for function in selected_bodies {
+        for statement in function
+            .blocks()
+            .iter()
+            .flat_map(|block| block.statements())
+        {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let SemanticRvalueKindV1::Use(
+                SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
+            ) = assignment.value().kind()
+            else {
+                continue;
+            };
+            if !place
+                .projections()
+                .iter()
+                .any(|projection| matches!(projection.kind(), SemanticProjectionKindV1::Index(_)))
+            {
+                continue;
+            }
+            let mut local = place.local();
+            // rustc stages field references through locals before metadata and
+            // indexing. Follow only unique whole-local copies in this fixture.
+            for _ in 0..function.locals().len() {
+                let mut definitions = function
+                    .blocks()
+                    .iter()
+                    .flat_map(|block| block.statements())
+                    .filter_map(|statement| {
+                        let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                            return None;
+                        };
+                        (assignment.destination().local() == local).then_some(assignment)
+                    });
+                let Some(definition) = definitions.next() else {
+                    break;
+                };
+                if definitions.next().is_some()
+                    || !definition.destination().projections().is_empty()
+                {
+                    break;
+                }
+                let SemanticRvalueKindV1::Use(
+                    SemanticOperandV1::Copy(origin) | SemanticOperandV1::Move(origin),
+                ) = definition.value().kind()
+                else {
+                    break;
+                };
+                if origin
+                    .projections()
+                    .iter()
+                    .filter(|projection| {
+                        matches!(projection.kind(), SemanticProjectionKindV1::Field(_))
+                    })
+                    .count()
+                    >= 2
+                {
+                    assert!(
+                        matches!(semantic.types()[origin.ty().index() as usize].shape(),
+                        SemanticTypeShapeV1::Pointer(pointer) if pointer.metadata() == SemanticPointerMetadataV1::SliceLength)
+                    );
+                    nested_indexed_inputs += 1;
+                    break;
+                }
+                if !origin.projections().is_empty() {
+                    break;
+                }
+                local = origin.local();
+            }
+        }
+    }
+    assert_eq!(
+        nested_indexed_inputs, 2,
+        "both nested slice fields feed indexed reads in the selected source body"
     );
-    assert!(!rejected.exists());
-    path
+    (path, indexed)
 }
