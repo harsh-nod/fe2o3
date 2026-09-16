@@ -73,7 +73,8 @@ struct SourceOutputProjectionInvocationV1 {
     first_use: usize,
     end_use: usize,
     // Private address substitution also requires the candidate's retained
-    // own-Store seal. Public leaf queries and full-ranked joins remain closed.
+    // own-Store seal. Public leaf queries remain closed; full-ranked joins
+    // independently authenticate the same source chain and their own claims.
     identity_getter: bool,
 }
 
@@ -4251,8 +4252,21 @@ struct SourceOutputIdentityStoreAddressV1 {
     allocation: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceOutputIdentitySourceFactsV1 {
+    receiver: SemanticLocalIdV1,
+    receiver_value: SsaValueV1,
+    receiver_site: (u32, u32),
+    slice_entry: SsaValueV1,
+    option: SemanticLocalIdV1,
+    payload: SemanticLocalIdV1,
+    payload_value: SsaValueV1,
+    payload_site: (u32, u32),
+}
+
 struct SourceOutputIdentityAddressV1 {
     invocation: SourceOutputProjectionInvocationV1,
+    source_facts: SourceOutputIdentitySourceFactsV1,
     witness: SemanticLocalIdV1,
     slice: SemanticLocalIdV1,
     original_pointer: ValueId,
@@ -4264,6 +4278,7 @@ struct SourceOutputIdentityAddressV1 {
 
 struct SourceOutputIdentitySourceV1 {
     anchor: SourceOutputInvocationSourceAnchorV1,
+    facts: SourceOutputIdentitySourceFactsV1,
     slice: SemanticLocalIdV1,
     discriminator: SemanticLocalIdV1,
     discriminator_site: (u32, u32),
@@ -4297,9 +4312,9 @@ fn source_output_identity_address_move_v1(
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<SourceOutputIdentityAddressV1, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
-    // Twelve fixed fields plus three transfer/drop steps; this does not scan
-    // the source or Store list again, and the existing allocation is moved.
-    budget.charge_work(15).map_err(Error::Resource)?;
+    // Existing transfer15 plus twelve for the retained fixed source facts.
+    // No source/Store scan is repeated and the Store allocation is moved.
+    budget.charge_work(27).map_err(Error::Resource)?;
     budget
         .reserve_storage(std::mem::size_of::<Option<SourceOutputIdentityAddressV1>>())
         .map_err(Error::Resource)?;
@@ -4323,6 +4338,7 @@ fn source_output_identity_address_move_v1(
         ..
     } = identity;
     let SourceOutputIdentitySourceV1 {
+        facts,
         slice,
         stores,
         some_region,
@@ -4330,6 +4346,7 @@ fn source_output_identity_address_move_v1(
     } = source;
     let address = SourceOutputIdentityAddressV1 {
         invocation,
+        source_facts: facts,
         witness,
         slice,
         original_pointer,
@@ -4384,6 +4401,20 @@ mod identity_address_transfer_components_v1 {
         SourceOutputIdentityGetterV1 {
             source: SourceOutputIdentitySourceV1 {
                 anchor,
+                facts: SourceOutputIdentitySourceFactsV1 {
+                    receiver: SemanticLocalIdV1::from_index(3),
+                    receiver_value: SsaValueV1::Definition(
+                        fe2o3_mir_model::SsaDefinitionIdV1::new(6),
+                    ),
+                    receiver_site: (3, 0),
+                    slice_entry: SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(7)),
+                    option: SemanticLocalIdV1::from_index(4),
+                    payload: SemanticLocalIdV1::from_index(8),
+                    payload_value: SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(
+                        8,
+                    )),
+                    payload_site: (4, 0),
+                },
                 slice: SemanticLocalIdV1::from_index(1),
                 discriminator: SemanticLocalIdV1::from_index(6),
                 discriminator_site: (3, 0),
@@ -4432,21 +4463,23 @@ mod identity_address_transfer_components_v1 {
     #[test]
     fn identity_address_transfer_moves_store_allocation_and_releases_exact_old_owners() {
         let value = descriptor();
+        let facts = value.source.facts;
         let (old, new, stores) = charges(&value);
         let pointer = value.source.stores.as_ptr();
         let capacity = value.source.stores.capacity();
-        let mut work = Work::new(15);
+        let mut work = Work::new(27);
         let mut budget = AssertOriginBudgetV1::new(&mut work, PREFIX + old + new);
         budget.reserve_storage(PREFIX).unwrap();
         source_output_global_scratch_scope_v1(&mut budget, |budget| {
             budget.reserve_storage(old).unwrap();
             let result = source_output_identity_address_move_v1(value, budget)?;
-            assert_eq!(budget.work(), 15);
+            assert_eq!(budget.work(), 27);
             assert_eq!(budget.storage(), PREFIX + new + stores);
             assert_eq!(budget.peak_storage(), PREFIX + old + new);
             assert_eq!(result.stores.as_ptr(), pointer);
             assert_eq!(result.stores.capacity(), capacity);
             assert_eq!(result.stores.len(), 3);
+            assert_eq!(result.source_facts, facts);
             assert_eq!(result.witness, SemanticLocalIdV1::from_index(2));
             assert_eq!(result.slice, SemanticLocalIdV1::from_index(1));
             assert_eq!(result.original_pointer, ValueId(8));
@@ -4464,7 +4497,7 @@ mod identity_address_transfer_components_v1 {
     fn identity_address_transfer_new_header_denial_drops_input_then_restores_floor() {
         let value = descriptor();
         let (old, new, _) = charges(&value);
-        let mut work = Work::new(15);
+        let mut work = Work::new(27);
         let mut budget = AssertOriginBudgetV1::new(&mut work, PREFIX + old + new - 1);
         budget.reserve_storage(PREFIX).unwrap();
         let mut completed = false;
@@ -4482,7 +4515,7 @@ mod identity_address_transfer_components_v1 {
             AssertOriginResourceV1::Storage(error)))
             if error.actual() == PREFIX + old + new && error.limit() == PREFIX + old + new - 1)
         );
-        assert_eq!(budget.work(), 15);
+        assert_eq!(budget.work(), 27);
         assert_eq!(budget.storage(), PREFIX);
         assert_eq!(budget.failed_storage(), Some(PREFIX + old + new));
     }
@@ -4491,8 +4524,8 @@ mod identity_address_transfer_components_v1 {
     fn identity_address_transfer_post_allocation_push_denial_restores_outer_floor() {
         let value = descriptor();
         let (old, new, stores) = charges(&value);
-        // Move 15; growth of an empty destination vector 1; push 1 is denied.
-        let mut work = Work::new(16);
+        // Move27; growth of an empty destination vector1; push1 is denied.
+        let mut work = Work::new(28);
         let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
         budget.reserve_storage(PREFIX).unwrap();
         let mut reached_allocation = false;
@@ -4523,9 +4556,9 @@ mod identity_address_transfer_components_v1 {
         assert!(
             matches!(result, Err(ProductionSourceOutputErrorV1::SourceOrigin(
             SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Work(error))))
-            if error.actual() == 17 && error.limit() == 16)
+            if error.actual() == 29 && error.limit() == 28)
         );
-        assert_eq!(budget.work(), 16);
+        assert_eq!(budget.work(), 28);
         assert_eq!(budget.storage(), PREFIX);
     }
 }
@@ -5077,6 +5110,17 @@ fn source_output_identity_source_v1(
             return Err(Error::Invalid("identity default is not empty Unreachable"));
         }
     }
+    budget.charge_work(12).map_err(Error::Resource)?;
+    let facts = SourceOutputIdentitySourceFactsV1 {
+        receiver: receiver.local(),
+        receiver_value,
+        receiver_site: (receiver_block.get(), receiver_statement),
+        slice_entry: slice_value,
+        option,
+        payload,
+        payload_value,
+        payload_site,
+    };
     let mut result = SourceOutputIdentitySourceV1 {
         anchor: SourceOutputInvocationSourceAnchorV1 {
             get,
@@ -5084,6 +5128,7 @@ fn source_output_identity_source_v1(
             raw: option_value,
             witness: witness_value,
         },
+        facts,
         slice: slice.local(),
         discriminator,
         discriminator_site,

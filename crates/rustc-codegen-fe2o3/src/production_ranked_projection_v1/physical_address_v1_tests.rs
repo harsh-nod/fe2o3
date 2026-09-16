@@ -199,6 +199,27 @@ mod identity_getter_physical_tests {
                 &mut Budget<'_>,
             ) -> Result<(), ProductionRankedProjectionErrorV1>,
         ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            with_full_roots_and_references(
+                source,
+                view,
+                inputs,
+                budget,
+                |full, recorder, _, budget| inspect(full, recorder, budget),
+            )
+        }
+
+        pub(super) fn with_full_roots_and_references(
+            source: &ProductionPreRankedKirOwnerV1,
+            view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            inputs: &[ProductionRankedRootInputV1],
+            budget: &mut Budget<'_>,
+            inspect: impl FnOnce(
+                ProductionRankedRootProgramV1,
+                &Recorder,
+                &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+                &mut Budget<'_>,
+            ) -> Result<(), ProductionRankedProjectionErrorV1>,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
             let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
             // This admitted factory declares no reference expression. Keep the
             // actual original object and its derived partitions throughout.
@@ -237,7 +258,7 @@ mod identity_getter_physical_tests {
                         drop(legacy);
                         session.with_output_occurrences_v1(|same_view, budget| {
                             assert!(std::ptr::eq(same_view.source(), source));
-                            inspect(full, &recorder, budget)
+                            inspect(full, &recorder, &references, budget)
                         })
                     })
                 })
@@ -571,6 +592,416 @@ mod identity_getter_physical_tests {
                 assert!(budget.work() > after_panic);
                 Ok(())
             }).expect("actual full Expression callback prerequisite, not D projection");
+        }
+    }
+
+    mod full_identity_address_tests {
+        use super::*;
+        use fe2o3_lower_mir_kernel::{
+            ProductionBorrowedRankedCorrespondenceV1 as Original,
+            ProductionProjectionArgumentComponentV1 as Component,
+            ProductionProjectionControlCandidateV1 as Claims,
+        };
+
+        fn with_join(
+            profile: Profile,
+            mode: bool,
+            stores: usize,
+            body: impl FnOnce(
+                &Analysis<'_, '_, '_>,
+                &Original<'_>,
+                &Claims,
+                &mut Budget<'_>,
+            ) -> Result<(), ProductionSourceOutputErrorV1>,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            let ssa = identity_getter_shape_tests::source_ssa_options(29, mode, stores);
+            with_admitted_source_fixture(ssa, mode, profile, |source, view, inputs, budget| {
+                full_expression_recorder_tests::with_full_roots_and_references(
+                    source,
+                    view,
+                    inputs,
+                    budget,
+                    |full, recorder, references, budget| {
+                        assert_eq!(full.access_sources.len(), stores);
+                        let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                        let floor = budget.storage();
+                        let mut r1_entered = false;
+                        let result = with_authenticated_borrowed_ranked_source_roster_v1(
+                            source, vec![full].into_boxed_slice(), budget,
+                            |original, verification, budget| {
+                                r1_entered = true;
+                                assert!(std::ptr::eq(original.materialized(), source));
+                                assert_eq!(original.root_count(), 1);
+                                assert_eq!(verification.roots().len(), 1);
+                                assert!(!verification.roots()[0].verification().has_authenticated_functional_verification());
+                                assert!(verification.roots()[0].verification().aggregate_verus_execution().is_none());
+                                Ok(with_ranked_root_preparation_v1(&projection, inputs, references, |effects, partition| {
+                                    checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| {
+                                        with_prepared_canonical_memory_session_v1(&projection, inputs, effects, partition, session, |analyses, budget| {
+                                            assert_eq!(analyses.len(), 1);
+                                            assert_eq!(analyses[0].access_count(), stores);
+                                            assert!(std::ptr::eq(analyses[0].output(), view.output()));
+                                            body(&analyses[0], original, recorder.candidate(), budget)
+                                        })
+                                    })
+                                }))
+                            },
+                        ).expect("genuine full Expression/R1 prerequisite, never a D-root substitute");
+                        assert!(r1_entered);
+                        assert_eq!(budget.storage(), floor);
+                        assert!(references.as_slice().is_empty());
+                        result
+                    },
+                )
+            })
+        }
+
+        fn claims_copy(claims: &Claims) -> Claims {
+            Claims {
+                blocks: claims.blocks.clone(),
+                arguments: claims.arguments.clone(),
+            }
+        }
+
+        #[test]
+        fn full_identity_r2_joins_actual_own_stores_with_same_n_r1_on_both_profiles() {
+            use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Def, OperationKind as Op};
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for mode in [false, true] {
+                    for stores in [1, 2] {
+                        let mut joined = false;
+                        with_join(profile, mode, stores, |analysis, original, claims, budget| {
+                            assert_eq!(claims.arguments.len(), 2);
+                            assert_eq!(claims.arguments.iter().filter(|row| row.component == Component::Scalar).count(), 1);
+                            assert_eq!(claims.arguments.iter().filter(|row| row.component == Component::SliceLength).count(), 1);
+                            let floor = budget.storage();
+                            let before = budget.work();
+                            analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                                assert_eq!(relation.global_access_count(), stores);
+                                assert_eq!(relation.private_access_count(), 0);
+                                let mut previous = None;
+                                for ordinal in 0..stores {
+                                    let address = relation.access(ordinal, budget)?.unwrap();
+                                    let ordinary = analysis.access(ordinal, budget)?.unwrap();
+                                    assert_eq!(address.operation(), ordinary.operation());
+                                    assert_ne!(previous, Some(address.operation()));
+                                    previous = Some(address.operation());
+                                    assert_eq!(address.element_bytes(), 4);
+                                    assert_eq!(address.pointer_definition(), Def::Result { operation: address.gep(), result: 0 });
+                                    let body = relation.output().module().functions[address.operation().block.function.0 as usize].body.as_ref().unwrap();
+                                    let store = &body.blocks[address.operation().block.block as usize].operations[address.operation().operation as usize];
+                                    let gep = &body.blocks[address.gep().block.block as usize].operations[address.gep().operation as usize];
+                                    assert!(matches!(store.kind, Op::Store { pointer, .. } if pointer == gep.results[0].id));
+                                    assert!(matches!(gep.kind, Op::GetElementPointer { .. }));
+                                }
+                                assert!(relation.access(stores, budget)?.is_none());
+                                for _ in 0..2 {
+                                    let live = budget.storage();
+                                    relation.check_borrowed_ranked_addresses_v1(original, 0, claims, budget)?;
+                                    assert_eq!(budget.storage(), live);
+                                }
+                                joined = true;
+                                Ok(())
+                            })?;
+                            assert_eq!(budget.storage(), floor);
+                            assert!(budget.work() > before);
+                            Ok(())
+                        }).expect("full identity R2 must pass after real full Expression, R1, D and P");
+                        assert!(joined);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn full_identity_r2_rejects_independent_witness_extent_and_duplicate_claims() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_join(profile, true, 2, |analysis, original, claims, budget| {
+                    analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                        let index = claims.arguments.iter().position(|row| row.component == Component::Scalar).unwrap();
+                        let extent = claims.arguments.iter().position(|row| row.component == Component::SliceLength).unwrap();
+                        assert_ne!(claims.arguments[index].source_local, claims.arguments[extent].source_local);
+                        let semantic = original.materialized().semantic_ssa().source_semantic();
+                        let option = semantic.functions().iter().flat_map(|function| function.blocks()).find_map(|block| {
+                            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else { return None; };
+                            matches!(semantic.callables().get(call.callee().index() as usize), Some(
+                                SemanticCallableDeclV1::CompilerIntrinsic {
+                                    operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }, ..
+                                }
+                            )).then(|| call.destination().unwrap().place().local())
+                        }).unwrap();
+                        assert_ne!(option, claims.arguments[index].source_local);
+                        let floor = budget.storage();
+                        for case in 0..10 {
+                            let mut changed = claims_copy(claims);
+                            let expected = match case {
+                                0 => { changed.arguments[index].source_local = claims.arguments[extent].source_local; "full address leaf source mapping differs" }
+                                1 => { changed.arguments[extent].source_local = claims.arguments[index].source_local; "full address leaf source mapping differs" }
+                                2 => { changed.arguments[index].component = Component::SliceLength; "full address leaf source mapping differs" }
+                                3 => { changed.arguments[extent].component = Component::Scalar; "full address leaf source mapping differs" }
+                                4 => { changed.arguments.remove(index); "full address source claim absent" }
+                                5 => { changed.arguments.remove(extent); "full address source claim absent" }
+                                6 => { changed.arguments.push(changed.arguments[index]); "duplicate global ranked correlation key" }
+                                7 => { let mut conflict = changed.arguments[index]; conflict.source_local = claims.arguments[extent].source_local; changed.arguments.push(conflict); "duplicate global ranked correlation key" }
+                                8 => { changed.arguments[index].source_local = option; "full address leaf source mapping differs" }
+                                9 => { let value = changed.arguments[index].ranked_value; changed.arguments[index].ranked_value = changed.arguments[extent].ranked_value; changed.arguments[extent].ranked_value = value; "full address leaf source mapping differs" }
+                                _ => unreachable!(),
+                            };
+                            let before = budget.work();
+                            assert!(matches!(relation.check_borrowed_ranked_addresses_v1(original, 0, &changed, budget),
+                                Err(ProductionSourceOutputErrorV1::Invalid(actual)) if actual == expected), "case {case}");
+                            assert!(budget.work() > before);
+                            assert_eq!(budget.storage(), floor);
+                        }
+                        relation.check_borrowed_ranked_addresses_v1(original, 0, claims, budget)
+                    })
+                }).unwrap();
+            }
+        }
+
+        #[test]
+        fn full_identity_r2_rejects_root_and_foreign_ledger_then_reenters_same_ledger() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_join(profile, false, 1, |analysis, original, claims, budget| {
+                    analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                        let floor = budget.storage();
+                        assert!(matches!(relation.check_borrowed_ranked_addresses_v1(original, 1, claims, budget),
+                            Err(ProductionSourceOutputErrorV1::Invalid("full address root absent"))));
+                        let before = budget.work();
+                        let mut other_work = Work::new(LIMIT);
+                        let mut other = Budget::new(&mut other_work, STORAGE_LIMIT);
+                        other.reserve_storage(floor).unwrap();
+                        assert!(matches!(relation.check_borrowed_ranked_addresses_v1(original, 0, claims, &mut other),
+                            Err(ProductionSourceOutputErrorV1::Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))));
+                        assert_eq!(other.storage(), floor);
+                        assert_eq!(budget.work(), before);
+                        assert_eq!(budget.storage(), floor);
+                        relation.check_borrowed_ranked_addresses_v1(original, 0, claims, budget)
+                    })
+                }).unwrap();
+            }
+        }
+
+        #[test]
+        fn full_identity_r2_rejects_distinct_original_n_with_equal_fixture_numbers() {
+            with_join(Profile::Gfx942, false, 1, |_, foreign, _, _| {
+                let mut checked = false;
+                with_join(
+                    Profile::Gfx942,
+                    false,
+                    1,
+                    |analysis, original, claims, budget| {
+                        assert!(!std::ptr::eq(
+                            foreign.materialized(),
+                            original.materialized()
+                        ));
+                        analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                            let floor = budget.storage();
+                            assert!(matches!(
+                                relation
+                                    .check_borrowed_ranked_addresses_v1(foreign, 0, claims, budget),
+                                Err(ProductionSourceOutputErrorV1::Invalid(
+                                    "full address original owner differs"
+                                ))
+                            ));
+                            assert_eq!(budget.storage(), floor);
+                            relation
+                                .check_borrowed_ranked_addresses_v1(original, 0, claims, budget)?;
+                            checked = true;
+                            Ok(())
+                        })
+                    },
+                )
+                .unwrap();
+                assert!(checked);
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        #[test]
+        fn full_identity_r2_callback_error_and_exact_panic_preserve_floor_and_reentry() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                with_join(profile, true, 2, |analysis, original, claims, budget| {
+                    let floor = budget.storage();
+                    let before = budget.work();
+                    let mut error_entered = false;
+                    let error = analysis.with_physical_address_relation_v1::<()>(
+                        budget,
+                        |relation, budget| {
+                            relation
+                                .check_borrowed_ranked_addresses_v1(original, 0, claims, budget)?;
+                            error_entered = true;
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "identity R2 callback marker",
+                            ))
+                        },
+                    );
+                    assert!(error_entered);
+                    assert!(matches!(
+                        error,
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "identity R2 callback marker"
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), floor);
+                    assert!(budget.work() > before);
+                    let mut panic_entered = false;
+                    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        analysis.with_physical_address_relation_v1::<()>(
+                            budget,
+                            |relation, budget| {
+                                relation.check_borrowed_ranked_addresses_v1(
+                                    original, 0, claims, budget,
+                                )?;
+                                panic_entered = true;
+                                std::panic::panic_any(193u32)
+                            },
+                        )
+                    }))
+                    .expect_err("the exact post-R2 callback panic must resume");
+                    assert!(panic_entered);
+                    assert_eq!(panic.downcast_ref::<u32>(), Some(&193));
+                    assert_eq!(budget.storage(), floor);
+                    analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                        relation.check_borrowed_ranked_addresses_v1(original, 0, claims, budget)
+                    })?;
+                    assert_eq!(budget.storage(), floor);
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+
+        #[test]
+        fn hostile_full_access_sites_are_rejected_before_borrowed_r1_callback() {
+            for case in 0..3 {
+                let ssa = identity_getter_shape_tests::source_ssa_options(17, false, 1);
+                with_admitted_source_fixture(
+                    ssa,
+                    false,
+                    Profile::Gfx942,
+                    |source, view, inputs, budget| {
+                        full_expression_recorder_tests::with_full_roots(
+                            source,
+                            view,
+                            inputs,
+                            budget,
+                            |mut full, _, budget| {
+                                let access = full.access_sources[0];
+                                full.access_sources[0] = ProductionRankedAccessSourceV1::new(
+                                    if case == 0 {
+                                        u32::MAX
+                                    } else {
+                                        access.semantic_block()
+                                    },
+                                    if case == 1 {
+                                        Some(u32::MAX)
+                                    } else {
+                                        access.semantic_statement()
+                                    },
+                                    if case == 2 {
+                                        1
+                                    } else {
+                                        access.semantic_access_ordinal()
+                                    },
+                                    access.ranked_block(),
+                                    access.ranked_operation(),
+                                );
+                                let floor = budget.storage();
+                                let mut entered = false;
+                                let result = with_authenticated_borrowed_ranked_source_roster_v1(
+                                    source,
+                                    vec![full].into_boxed_slice(),
+                                    budget,
+                                    |_, _, _| {
+                                        entered = true;
+                                        Ok(())
+                                    },
+                                );
+                                assert!(
+                                    !entered,
+                                    "hostile source site must not acquire R1, case {case}"
+                                );
+                                assert!(
+                                    matches!(
+                                        result,
+                                        Err(ProductionRankedVerificationErrorV1::Custody(_))
+                                    ),
+                                    "case {case}: {result:?}"
+                                );
+                                assert_eq!(budget.storage(), floor);
+                                Ok(())
+                            },
+                        )
+                    },
+                )
+                .unwrap();
+            }
+        }
+
+        #[test]
+        fn hostile_full_view_width_requires_exact_r1_or_r2_refusal() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                let ssa = identity_getter_shape_tests::source_ssa_options(17, false, 1);
+                with_admitted_source_fixture(ssa, false, profile, |source, view, inputs, budget| {
+                    full_expression_recorder_tests::with_full_roots_and_references(
+                        source, view, inputs, budget, |mut full, recorder, references, budget| {
+                            let candidate = Candidate {
+                                selected_root: full.semantic_root, selected_function: full.semantic_root,
+                                lowering: &full.lowering, access_sources: &full.access_sources,
+                                executable_effect_sources: &full.executable_effect_sources,
+                                control: recorder.candidate(),
+                            };
+                            full.lowering = physical_address_width_mutation_v1(&candidate);
+                            let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                            let floor = budget.storage();
+                            let mut r1_entered = false;
+                            let mut r2_rejected = false;
+                            let result = with_authenticated_borrowed_ranked_source_roster_v1(
+                                source, vec![full].into_boxed_slice(), budget, |original, verification, budget| {
+                                    r1_entered = true;
+                                    assert!(!verification.roots()[0].verification().has_authenticated_functional_verification());
+                                    assert!(verification.roots()[0].verification().aggregate_verus_execution().is_none());
+                                    Ok(with_ranked_root_preparation_v1(&projection, inputs, references, |effects, partition| {
+                                        checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| {
+                                            with_prepared_canonical_memory_session_v1(&projection, inputs, effects, partition, session, |analyses, budget| {
+                                                assert_eq!(analyses.len(), 1);
+                                                analyses[0].with_physical_address_relation_v1(budget, |relation, budget| {
+                                                    let live = budget.storage();
+                                                    assert!(matches!(relation.check_borrowed_ranked_addresses_v1(original, 0, recorder.candidate(), budget),
+                                                        Err(ProductionSourceOutputErrorV1::Invalid("physical address requires one exact scalar slice extent and width"))));
+                                                    assert_eq!(budget.storage(), live);
+                                                    r2_rejected = true;
+                                                    Ok(())
+                                                })
+                                            })
+                                        })
+                                    }))
+                                },
+                            );
+                            match result {
+                                Err(ProductionRankedVerificationErrorV1::Custody(
+                                    fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::Unsupported {
+                                        detail: "ranked projection receipt contains a rejected mandatory kernel check", ..
+                                    },
+                                )) => {
+                                    assert!(!r1_entered && !r2_rejected);
+                                    eprintln!("hostile full width: exact R1 mandatory-check refusal; no R2 claim");
+                                }
+                                Ok(result) => {
+                                    result?;
+                                    assert!(r1_entered && r2_rejected);
+                                    eprintln!("hostile full width: exact R2 width refusal after real R1/D/P");
+                                }
+                                Err(other) => panic!("unexpected full-width prerequisite refusal: {other}"),
+                            }
+                            assert_eq!(budget.storage(), floor);
+                            Ok(())
+                        },
+                    )
+                }).unwrap();
+            }
         }
     }
 

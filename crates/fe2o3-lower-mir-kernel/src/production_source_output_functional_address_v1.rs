@@ -18,6 +18,14 @@ struct SourceOutputFullAddressClaimV1 {
     anchor: Option<SourceOutputFullAddressAnchorV1>,
 }
 
+#[derive(Clone, Copy)]
+struct SourceOutputFullIdentityAnchorsV1 {
+    index: SourceOutputFullAddressAnchorV1,
+    extent: SourceOutputFullAddressAnchorV1,
+    index_symbol: u32,
+    extent_symbol: u32,
+}
+
 #[derive(Default)]
 struct SourceOutputFullAddressWorkspaceV1 {
     full: SourceOutputAddressWorkspaceV1,
@@ -26,6 +34,7 @@ struct SourceOutputFullAddressWorkspaceV1 {
     events: Vec<(SourceOutputFullAddressEventKeyV1, usize)>,
     entries: Vec<(u32, usize)>,
     claims: Vec<SourceOutputFullAddressClaimV1>,
+    identity: Option<SourceOutputFullIdentityAnchorsV1>,
 }
 
 fn source_output_full_address_workspace_v1(
@@ -182,6 +191,27 @@ fn source_output_full_address_use_v1(
         ) if original == variable && variable.get() == local.index() => Ok(value),
         _ => Err(Error::Invalid("full address captured source use differs")),
     }
+}
+
+fn source_output_full_address_define_v1(
+    work: &SourceOutputFullAddressWorkspaceV1,
+    captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    key: SourceOutputFullAddressEventKeyV1,
+    local: SemanticLocalIdV1,
+    expected: SsaValueV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let event = source_output_full_address_event_v1(work, captured, key, budget)?;
+    budget.charge_work(3).map_err(Error::Resource)?;
+    if !matches!(expected, SsaValueV1::Definition(_))
+        || !matches!((event.event(), event.resolved()),
+            (fe2o3_mir_model::SsaEventV1::Define(original), Some(SsaResolvedEventV1::Define { variable, value }))
+            if original == variable && variable.get() == local.index() && value == expected)
+    {
+        return Err(Error::Invalid("full identity captured definition differs"));
+    }
+    Ok(())
 }
 
 fn source_output_full_address_entry_v1(
@@ -459,6 +489,229 @@ fn source_output_full_address_check_anchor_v1(
     })
 }
 
+fn source_output_full_identity_anchors_v1(
+    analysis: &ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>,
+    original_function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    work: &SourceOutputFullAddressWorkspaceV1,
+    captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    function: &SemanticFunctionDeclV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<Option<SourceOutputFullIdentityAnchorsV1>, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_pliron::{
+        ProductionSemanticSsaEventRoleV1 as Role, ProductionSemanticSsaOccurrenceSiteV1 as Site,
+        ProductionSemanticSsaOperandRoleV1 as Operand,
+    };
+    let Some(identity) = &analysis.control.candidates[analysis.control_ordinal].identity_address
+    else {
+        return Ok(None);
+    };
+    budget.charge_work(32).map_err(Error::Resource)?;
+    analysis.control.require_candidate_at_v1(
+        analysis.view,
+        analysis.candidate,
+        analysis.control_ordinal,
+        budget,
+    )?;
+    let invocation = identity.invocation;
+    let index = analysis
+        .control
+        .invocation_sources
+        .get(invocation.source_index)
+        .ok_or(Error::Invalid("full identity source index absent"))?;
+    let original_owner = match invocation.original {
+        SourceOutputAddressDefV1::FunctionArgument { function, .. } => function,
+        SourceOutputAddressDefV1::BlockArgument { block, .. } => block.function,
+        SourceOutputAddressDefV1::Result { operation, .. } => operation.block.function,
+    };
+    if !invocation.identity_getter
+        || index.source != std::ptr::from_ref(analysis.view.source).cast()
+        || index.function != analysis.candidate.selected_function
+        || index.canonical != original_function
+        || original_owner != original_function
+        || !std::ptr::eq(captured.owner(), analysis.view.source.semantic_ssa())
+        || analysis
+            .view
+            .source
+            .semantic_ssa()
+            .source_semantic()
+            .functions()
+            .get(index.function.index() as usize)
+            .is_none_or(|actual| !std::ptr::eq(actual, function))
+    {
+        return Err(Error::Invalid(
+            "full identity original source association differs",
+        ));
+    }
+    let facts = identity.source_facts;
+    // Identity raw is the Option CallReturn definition, not an integer index.
+    let getter_definition =
+        source_output_identity_direct_definition_v1(index, invocation.source.raw, budget)?;
+    let (getter, _) = source_output_invocation_call_v1(
+        function,
+        index,
+        captured,
+        facts.option,
+        invocation.source.raw,
+        getter_definition,
+        budget,
+    )?;
+    let producer_definition =
+        source_output_identity_direct_definition_v1(index, invocation.source.witness, budget)?;
+    let (producer, _) = source_output_invocation_call_v1(
+        function,
+        index,
+        captured,
+        identity.witness,
+        invocation.source.witness,
+        producer_definition,
+        budget,
+    )?;
+    if getter != invocation.source.get || producer != invocation.source.producer {
+        return Err(Error::Invalid("full identity exact CallReturn differs"));
+    }
+    // Terminator operands require Control's seven-field index; the full
+    // statement index below has six fields and different operand tags.
+    let receiver = source_output_invocation_use_v1(
+        index,
+        captured,
+        (1, getter.source().get(), 0, 3, 0, 0, 0),
+        facts.receiver,
+        budget,
+    )?;
+    let witness = source_output_invocation_use_v1(
+        index,
+        captured,
+        (1, getter.source().get(), 0, 3, 1, 0, 0),
+        identity.witness,
+        budget,
+    )?;
+    if receiver != facts.receiver_value || witness != invocation.source.witness {
+        return Err(Error::Invalid("full identity getter argument use differs"));
+    }
+    let receiver_site = Site::Statement {
+        block: SsaBlockIdV1::new(facts.receiver_site.0),
+        statement: facts.receiver_site.1,
+    };
+    let payload_site = Site::Statement {
+        block: SsaBlockIdV1::new(facts.payload_site.0),
+        statement: facts.payload_site.1,
+    };
+    let receiver_use =
+        source_output_full_address_event_key_v1(receiver_site, Operand::RvaluePlace, Role::BaseUse)
+            .ok_or(Error::Invalid("full identity receiver use key absent"))?;
+    let receiver_define = source_output_full_address_event_key_v1(
+        receiver_site,
+        Operand::Destination,
+        Role::DestinationDefine,
+    )
+    .ok_or(Error::Invalid(
+        "full identity receiver definition key absent",
+    ))?;
+    let payload_use = source_output_full_address_event_key_v1(
+        payload_site,
+        Operand::RvalueOperand(0),
+        Role::BaseUse,
+    )
+    .ok_or(Error::Invalid("full identity payload use key absent"))?;
+    let payload_define = source_output_full_address_event_key_v1(
+        payload_site,
+        Operand::Destination,
+        Role::DestinationDefine,
+    )
+    .ok_or(Error::Invalid(
+        "full identity payload definition key absent",
+    ))?;
+    if source_output_full_address_use_v1(work, captured, receiver_use, identity.slice, budget)?
+        != facts.slice_entry
+    {
+        return Err(Error::Invalid(
+            "full identity receiver source entry differs",
+        ));
+    }
+    source_output_full_address_define_v1(
+        work,
+        captured,
+        receiver_define,
+        facts.receiver,
+        facts.receiver_value,
+        budget,
+    )?;
+    if source_output_full_address_use_v1(work, captured, payload_use, facts.option, budget)?
+        != invocation.source.raw
+    {
+        return Err(Error::Invalid("full identity payload Option use differs"));
+    }
+    source_output_full_address_define_v1(
+        work,
+        captured,
+        payload_define,
+        facts.payload,
+        facts.payload_value,
+        budget,
+    )?;
+    let index_leaf =
+        source_output_full_address_anchor_v1(analysis, work, identity.ranked_index, budget)?;
+    let SourceOutputAddressLeafV1::Invocation(row, checked) = &index_leaf else {
+        return Err(Error::Invalid("full identity index leaf is not Invocation"));
+    };
+    if **checked != invocation
+        || row.source_local != identity.witness
+        || row.component != ProductionProjectionArgumentComponentV1::Scalar
+        || row.scalar != source_output_address_u64_v1()
+    {
+        return Err(Error::Invalid("full identity sealed index differs"));
+    }
+    let index_anchor = SourceOutputFullAddressAnchorV1 {
+        local: identity.witness,
+        component: ProductionProjectionArgumentComponentV1::Scalar,
+        scalar: row.scalar,
+        original: invocation.original,
+        output: Some(invocation.output),
+        ssa: invocation.source.witness,
+        bits: None,
+        invocation: true,
+    };
+    let extent_leaf =
+        source_output_full_address_anchor_v1(analysis, work, identity.ranked_extent, budget)?;
+    let extent_anchor = source_output_full_address_check_anchor_v1(
+        analysis,
+        work,
+        captured,
+        function,
+        &extent_leaf,
+        identity.slice,
+        ProductionProjectionArgumentComponentV1::SliceLength,
+        facts.slice_entry,
+        budget,
+    )?;
+    let index_node = source_output_address_leaf_node_v1(index_leaf, |units| {
+        budget.charge_work(units).map_err(Error::Resource)
+    })?;
+    let extent_node = source_output_address_leaf_node_v1(extent_leaf, |units| {
+        budget.charge_work(units).map_err(Error::Resource)
+    })?;
+    let (
+        NormalizedScalarNodeV1::Symbol {
+            symbol: index_symbol,
+            ..
+        },
+        NormalizedScalarNodeV1::Symbol {
+            symbol: extent_symbol,
+            ..
+        },
+    ) = (index_node, extent_node)
+    else {
+        return Err(Error::Invalid("full identity anchors are not Symbols"));
+    };
+    Ok(Some(SourceOutputFullIdentityAnchorsV1 {
+        index: index_anchor,
+        extent: extent_anchor,
+        index_symbol,
+        extent_symbol,
+    }))
+}
+
 fn source_output_full_address_leaf_v1(
     work: &mut SourceOutputFullAddressWorkspaceV1,
     lowering: &ProductionRankedKernelLoweringInputV1,
@@ -648,6 +901,99 @@ fn source_output_full_address_access_v1(
             "full address view permission allocation or extent differs",
         ));
     }
+    if let Some(prepared) = work.identity {
+        use fe2o3_pliron::ProductionSemanticSsaOperandRoleV1 as Operand;
+        budget.charge_work(24).map_err(Error::Resource)?;
+        let (identity, own) = analysis
+            .control
+            .identity_address_use_v1(
+                analysis.view,
+                analysis.candidate,
+                analysis.control_ordinal,
+                access.source,
+                physical.operation,
+                budget,
+            )?
+            .ok_or(Error::Invalid("full identity own Store seal absent"))?;
+        if !write
+            || own.original != original
+            || own.output != operation
+            || own.pointer.definition != physical.pointer
+            || own.gep != physical.gep
+            || own.allocation != physical.allocation
+            || identity.invocation.output != physical.offset
+            || memory_index != identity.ranked_index
+            || memory_extent != identity.ranked_extent
+        {
+            return Err(Error::Invalid("full identity own physical Store differs"));
+        }
+        let statement = key.1.ok_or(Error::Invalid(
+            "full identity source Store statement absent",
+        ))?;
+        let source = function
+            .blocks()
+            .get(key.0 as usize)
+            .and_then(|block| block.statements().get(statement as usize))
+            .ok_or(Error::Invalid("full identity source Store absent"))?;
+        let (place, operand) = match source.kind() {
+            SemanticStatementKindV1::Assign(assignment) => {
+                (assignment.destination(), Operand::Destination)
+            }
+            SemanticStatementKindV1::Store(store) => {
+                (store.destination(), Operand::StoreDestination)
+            }
+            _ => return Err(Error::Invalid("full identity source Store grammar differs")),
+        };
+        if place.local() != identity.source_facts.payload
+            || !matches!(place.projections(), [projection] if projection.kind() == SemanticProjectionKindV1::Dereference)
+        {
+            return Err(Error::Invalid(
+                "full identity own payload dereference differs",
+            ));
+        }
+        let site = Site::Statement {
+            block: SsaBlockIdV1::new(key.0),
+            statement,
+        };
+        let key = source_output_full_address_event_key_v1(site, operand, Role::BaseUse)
+            .ok_or(Error::Invalid("full identity own Store source key absent"))?;
+        if source_output_full_address_use_v1(
+            work,
+            captured,
+            key,
+            identity.source_facts.payload,
+            budget,
+        )? != identity.source_facts.payload_value
+        {
+            return Err(Error::Invalid(
+                "full identity own Store payload use differs",
+            ));
+        }
+        let expected_index = NormalizedScalarNodeV1::Symbol {
+            symbol: prepared.index_symbol,
+            scalar: source_output_address_u64_v1(),
+        };
+        let expected_extent = NormalizedScalarNodeV1::Symbol {
+            symbol: prepared.extent_symbol,
+            scalar: source_output_address_u64_v1(),
+        };
+        source_output_full_address_leaf_v1(
+            work,
+            &root.lowering,
+            full_index,
+            prepared.index,
+            &expected_index,
+            budget,
+        )?;
+        return source_output_full_address_leaf_v1(
+            work,
+            &root.lowering,
+            full_extent,
+            prepared.extent,
+            &expected_extent,
+            budget,
+        );
+    }
     let (place, operand, index_local) =
         source_output_full_address_place_v1(function, access.source, write, budget)?;
     let statement = key
@@ -718,7 +1064,8 @@ impl ProductionPhysicalAddressRelationV1<'_, '_, '_> {
     /// relation, using pre-captured source SSA occurrences and inert full claims.
     /// This returns no functional, bounds, race, reference or final authority.
     /// The caller keeps the separate SSA capture receipt reserved on the same
-    /// original ledger. Absent capture and non-Global-Slice access shapes refuse.
+    /// original ledger. Only direct Global Slice accesses and the same privately
+    /// checked identity-getter Store chain are supported; absent capture refuses.
     /// Only a direct root body is supported; wrapper-selected bodies and
     /// helper/phi-derived index leaves are not authorized by this comparison.
     pub fn check_borrowed_ranked_addresses_v1(
@@ -821,6 +1168,14 @@ impl ProductionPhysicalAddressRelationV1<'_, '_, '_> {
                     "full address source access multiplicity differs",
                 ));
             }
+            work.identity = source_output_full_identity_anchors_v1(
+                self.analysis,
+                original_function,
+                &work,
+                &captured,
+                function,
+                budget,
+            )?;
             for physical in self.rows {
                 source_output_full_address_access_v1(
                     self,
@@ -975,6 +1330,316 @@ mod functional_address_component_tests {
             ),
         ] {
             assert_ne!(exact, changed);
+        }
+    }
+
+    #[test]
+    fn functional_identity_statement_keys_do_not_reinterpret_getter_terminator_keys() {
+        use fe2o3_pliron::{
+            ProductionSemanticSsaEventRoleV1 as Role,
+            ProductionSemanticSsaOccurrenceSiteV1 as Site,
+            ProductionSemanticSsaOperandRoleV1 as Operand,
+        };
+        let site = Site::Statement {
+            block: SsaBlockIdV1::new(3),
+            statement: 7,
+        };
+        for (operand, role, expected) in [
+            (Operand::RvaluePlace, Role::BaseUse, (3, 7, 2, 0, 0, 0)),
+            (
+                Operand::Destination,
+                Role::DestinationDefine,
+                (3, 7, 0, 0, 2, 0),
+            ),
+            (Operand::RvalueOperand(0), Role::BaseUse, (3, 7, 3, 0, 0, 0)),
+            (Operand::Destination, Role::BaseUse, (3, 7, 0, 0, 0, 0)),
+            (Operand::StoreDestination, Role::BaseUse, (3, 7, 1, 0, 0, 0)),
+        ] {
+            assert_eq!(
+                source_output_full_address_event_key_v1(site, operand, role),
+                Some(expected)
+            );
+            assert_ne!(
+                source_output_full_address_event_key_v1(
+                    Site::Statement {
+                        block: SsaBlockIdV1::new(3),
+                        statement: 8
+                    },
+                    operand,
+                    role
+                ),
+                Some(expected)
+            );
+            assert_ne!(
+                source_output_full_address_event_key_v1(site, operand, Role::ProjectionIndexUse(0)),
+                Some(expected)
+            );
+        }
+        for argument in [0, 1] {
+            assert_eq!(
+                source_output_full_address_event_key_v1(
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(3)
+                    },
+                    Operand::CallArgument(argument),
+                    Role::BaseUse
+                ),
+                None
+            );
+            assert_eq!(
+                source_output_full_address_event_key_v1(
+                    site,
+                    Operand::CallArgument(argument),
+                    Role::BaseUse
+                ),
+                None
+            );
+        }
+        let exact = ProductionRankedAccessSourceV1::new(3, Some(7), 0, 91, 92);
+        assert_eq!(source_output_full_address_site_v1(exact), (3, Some(7), 0));
+        for changed in [
+            ProductionRankedAccessSourceV1::new(4, Some(7), 0, 91, 92),
+            ProductionRankedAccessSourceV1::new(3, Some(8), 0, 91, 92),
+            ProductionRankedAccessSourceV1::new(3, None, 0, 91, 92),
+            ProductionRankedAccessSourceV1::new(3, Some(7), 1, 91, 92),
+        ] {
+            assert_ne!(
+                source_output_full_address_site_v1(changed),
+                source_output_full_address_site_v1(exact)
+            );
+        }
+        // A ranked coordinate is not a source site or a captured event key.
+        assert_eq!(
+            source_output_full_address_site_v1(ProductionRankedAccessSourceV1::new(
+                3,
+                Some(7),
+                0,
+                2,
+                4
+            )),
+            source_output_full_address_site_v1(exact)
+        );
+    }
+
+    #[test]
+    fn functional_identity_global_binding_keeps_witness_ssa_and_both_definition_owners() {
+        use fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1 as Function;
+        let mut witness = anchor();
+        witness.invocation = true;
+        witness.ssa = SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(5));
+        let raw_option = SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(4));
+        // These private numeric records exercise consistent binding only. They
+        // cannot construct a public source, Control, P or R1 capability.
+        for case in 0..5 {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(36);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 13);
+            budget.reserve_storage(13).unwrap();
+            let mut claim = SourceOutputFullAddressClaimV1 {
+                claim: ProductionProjectionArgumentCandidateV1 {
+                    ranked_value: ProductionRankedValueV1::Argument(91),
+                    source_local: witness.local,
+                    component: witness.component,
+                },
+                anchor: None,
+            };
+            source_output_full_address_bind_v1(&mut claim, witness, &mut budget).unwrap();
+            let mut changed = witness;
+            match case {
+                0 => changed.ssa = raw_option,
+                1 => {
+                    changed.original = SourceOutputAddressDefV1::FunctionArgument {
+                        function: Function(1),
+                        argument: 2,
+                    }
+                }
+                2 => {
+                    changed.output = Some(SourceOutputAddressDefV1::FunctionArgument {
+                        function: Function(1),
+                        argument: 2,
+                    })
+                }
+                3 => changed.invocation = false,
+                4 => changed.bits = Some(0),
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                source_output_full_address_bind_v1(&mut claim, changed, &mut budget),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "full address leaf source mapping differs"
+                ))
+            ));
+            assert!(claim.anchor == Some(witness));
+            source_output_full_address_bind_v1(&mut claim, witness, &mut budget).unwrap();
+            assert_eq!(budget.work(), 36);
+            assert_eq!(budget.storage(), 13);
+        }
+    }
+
+    #[test]
+    fn functional_identity_full_leaf_grammar_and_extent_are_checked_independently() {
+        use fe2o3_pliron::{
+            ProductionRankedBlockV1 as Block, ProductionRankedKernelV1 as Kernel,
+            ProductionRankedTerminatorV1 as Terminator, ProductionRankedValueIdV1 as Id,
+        };
+        for case in 0..9 {
+            let mut expected_anchor = anchor();
+            expected_anchor.invocation = case != 6;
+            let id = Id::new(0);
+            let mut operations = vec![match case {
+                1 => ProductionRankedOperationV1::InvocationIndex {
+                    result: id,
+                    dimension: 1,
+                    launch_extent: 0,
+                },
+                2 => ProductionRankedOperationV1::InvocationIndex {
+                    result: id,
+                    dimension: 0,
+                    launch_extent: 1,
+                },
+                3 => ProductionRankedOperationV1::IndexUnknown { result: id },
+                4 => ProductionRankedOperationV1::IndexConstant {
+                    result: id,
+                    value: 0,
+                },
+                _ => ProductionRankedOperationV1::InvocationIndex {
+                    result: id,
+                    dimension: 0,
+                    launch_extent: 0,
+                },
+            }];
+            let mut value = ProductionRankedValueV1::Local(id);
+            if case == 5 {
+                value = ProductionRankedValueV1::Argument(0);
+            }
+            if matches!(case, 7 | 8) {
+                operations.push(ProductionRankedOperationV1::IndexUnsignedCast {
+                    result: Id::new(1),
+                    source: value,
+                    bit_width: if case == 7 { 32 } else { 64 },
+                });
+                value = ProductionRankedValueV1::Local(Id::new(1));
+            }
+            let kernel = Kernel::new(
+                "identity_leaf_component",
+                1,
+                vec![Block::new(operations, Terminator::Return)],
+            )
+            .unwrap();
+            let lowering = fe2o3_pliron::compile_ranked_kernel_for_lowering_v1(
+                fe2o3_pliron::ProductionConstructionV1::ranked_kernel(
+                    "identity_leaf_component",
+                    kernel,
+                )
+                .unwrap(),
+                fe2o3_pliron::ProductionSessionLimitsV1::default(),
+            )
+            .unwrap();
+            let mut meter = CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = AssertOriginBudgetV1::new(&mut meter, 1_000_000);
+            budget.reserve_storage(13).unwrap();
+            source_output_global_scratch_scope_v1(&mut budget, |budget| {
+                let mut work = source_output_full_address_workspace_v1(budget)?;
+                source_output_address_ranked_index_v1(&mut work.full, &lowering, budget)?;
+                if matches!(case, 1 | 2) {
+                    let expected = if case == 1 { (1, 0) } else { (0, 1) };
+                    let mut invocations = lowering
+                        .kernel()
+                        .blocks()
+                        .iter()
+                        .flat_map(|block| block.operations())
+                        .filter_map(|operation| match operation {
+                            ProductionRankedOperationV1::InvocationIndex {
+                                result,
+                                dimension,
+                                launch_extent,
+                            } if *result == id => Some((*dimension, *launch_extent)),
+                            _ => None,
+                        });
+                    assert_eq!(invocations.next(), Some(expected));
+                    assert_eq!(invocations.next(), None);
+                    assert!(work.full.ranked.iter().all(|row| row.value != id));
+                }
+                assert_origin_push_v1(&mut work.claims, SourceOutputFullAddressClaimV1 {
+                    claim: ProductionProjectionArgumentCandidateV1 {
+                        ranked_value: ProductionRankedValueV1::Local(id), source_local: expected_anchor.local,
+                        component: expected_anchor.component,
+                    }, anchor: None,
+                }, budget).map_err(ProductionSourceOutputErrorV1::SourceOrigin)?;
+                let expected = NormalizedScalarNodeV1::Symbol { symbol: 17, scalar: source_output_address_u64_v1() };
+                let result = source_output_full_address_leaf_v1(&mut work, &lowering, value, expected_anchor, &expected, budget);
+                let error = match case {
+                    0 | 8 => None,
+                    1 | 2 => Some("physical ranked definition unsupported or absent"),
+                    4 => Some("full address ranked constant differs"),
+                    5 => Some("full address ranked leaf is not a supported definition"),
+                    _ => Some("full address ranked leaf grammar unsupported"),
+                };
+                if let Some(expected) = error {
+                    assert!(matches!(&result, Err(ProductionSourceOutputErrorV1::Invalid(actual)) if *actual == expected), "case {case}: {result:?}");
+                    assert!(work.claims[0].anchor.is_none());
+                } else {
+                    result?;
+                    assert!(work.claims[0].anchor == Some(expected_anchor));
+                }
+                Ok(())
+            }).unwrap();
+            assert_eq!(budget.storage(), 13);
+        }
+    }
+
+    #[test]
+    fn functional_identity_claim_push_denial_after_allocation_restores_larger_workspace_floor() {
+        let header = std::mem::size_of::<SourceOutputFullAddressWorkspaceV1>();
+        let row_bytes = std::mem::size_of::<SourceOutputFullAddressClaimV1>();
+        // 7 prefix + 2 workspace + 1 empty-Vec reserve + 1 insertion.
+        for limit in [11, 10] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+            budget.reserve_storage(13).unwrap();
+            budget.charge_work(7).unwrap();
+            let mut allocated = false;
+            let result = source_output_global_scratch_scope_v1(&mut budget, |budget| {
+                let mut scratch = source_output_full_address_workspace_v1(budget)?;
+                assert!(scratch.identity.is_none());
+                let result = assert_origin_push_v1(
+                    &mut scratch.claims,
+                    SourceOutputFullAddressClaimV1 {
+                        claim: ProductionProjectionArgumentCandidateV1 {
+                            ranked_value: ProductionRankedValueV1::Argument(91),
+                            source_local: anchor().local,
+                            component: anchor().component,
+                        },
+                        anchor: None,
+                    },
+                    budget,
+                )
+                .map_err(ProductionSourceOutputErrorV1::SourceOrigin);
+                assert!(scratch.claims.capacity() >= 4);
+                allocated = true;
+                assert_eq!(
+                    budget.storage(),
+                    13 + header + scratch.claims.capacity() * row_bytes
+                );
+                assert_eq!(scratch.claims.len(), usize::from(limit == 11));
+                result
+            });
+            assert!(allocated);
+            if limit == 11 {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProductionSourceOutputErrorV1::SourceOrigin(
+                        SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Work(_))
+                    ))
+                ));
+            }
+            assert_eq!(budget.storage(), 13);
+            assert_eq!(budget.work(), limit);
+            assert_eq!(
+                work.failed_work(),
+                if limit == 11 { None } else { Some(11) }
+            );
         }
     }
 }
