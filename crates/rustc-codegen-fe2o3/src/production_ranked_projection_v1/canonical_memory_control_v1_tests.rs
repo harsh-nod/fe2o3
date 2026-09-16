@@ -1569,3 +1569,50 @@ fn invocation_coordinate_fixture_authenticates_borrow_callreturn_and_actual_n() 
         );
     });
 }
+
+#[test]
+fn invocation_fixture_records_distinct_exact_guard_and_store_index_occurrences() {
+    use fe2o3_pliron::{
+        ProductionSemanticSsaEventRoleV1 as Role, ProductionSemanticSsaOccurrenceSiteV1 as Site,
+        ProductionSemanticSsaOperandRoleV1 as Operand,
+    };
+    with_invocation_coordinate_source_v1(|source, _| {
+        let rows = source
+            .semantic_ssa()
+            .occurrences_v1()
+            .unwrap()
+            .function(ROOT)
+            .unwrap();
+        for (site, operand, role) in [
+            (
+                Site::Terminator {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(2),
+                },
+                Operand::AssertMessage(1),
+                Role::BaseUse,
+            ),
+            (
+                Site::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(1),
+                    statement: 0,
+                },
+                Operand::Destination,
+                Role::ProjectionIndexUse(1),
+            ),
+        ] {
+            let mut found = rows
+                .events()
+                .iter()
+                .filter(|row| row.site() == site && row.operand() == operand && row.role() == role);
+            let row = found
+                .next()
+                .expect("the exact own-use occurrence must be captured");
+            assert!(found.next().is_none());
+            assert!(row.is_reachable() && row.is_promoted());
+            assert!(
+                matches!(row.resolved(), Some(fe2o3_mir_model::SsaResolvedEventV1::Use { variable, .. })
+                if variable.get() == 8)
+            );
+        }
+    });
+}

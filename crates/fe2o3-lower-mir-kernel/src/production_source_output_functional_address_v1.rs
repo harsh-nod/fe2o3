@@ -10,6 +10,7 @@ struct SourceOutputFullAddressAnchorV1 {
     output: Option<SourceOutputAddressDefV1>,
     ssa: SsaValueV1,
     bits: Option<u64>,
+    invocation: bool,
 }
 
 struct SourceOutputFullAddressClaimV1 {
@@ -336,7 +337,7 @@ fn source_output_full_address_anchor_v1<'a>(
     work: &SourceOutputFullAddressWorkspaceV1,
     mut value: ProductionRankedValueV1,
     budget: &mut AssertOriginBudgetV1<'_>,
-) -> Result<ProductionConditionalMemoryIndexLeafV1<'a>, ProductionSourceOutputErrorV1> {
+) -> Result<SourceOutputAddressLeafV1<'a>, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     for _ in 0..=MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
         budget.charge_work(2).map_err(Error::Resource)?;
@@ -372,21 +373,23 @@ fn source_output_full_address_anchor_v1<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn source_output_full_address_check_anchor_v1(
+    analysis: &ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>,
     work: &SourceOutputFullAddressWorkspaceV1,
     captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
     function: &SemanticFunctionDeclV1,
-    leaf: &ProductionConditionalMemoryIndexLeafV1<'_>,
+    leaf: &SourceOutputAddressLeafV1<'_>,
     local: SemanticLocalIdV1,
     component: ProductionProjectionArgumentComponentV1,
     used: SsaValueV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<SourceOutputFullAddressAnchorV1, ProductionSourceOutputErrorV1> {
-    use ProductionConditionalMemoryIndexLeafV1 as Leaf;
     use ProductionSourceOutputErrorV1 as Error;
+    use SourceOutputAddressLeafV1 as Leaf;
     budget.charge_work(6).map_err(Error::Resource)?;
     let row = match leaf {
         Leaf::Formal(formal) => formal.row,
         Leaf::Literal(literal) => literal.row,
+        Leaf::Invocation(row, _) => row,
     };
     if row.source_local != local
         || row.component != component
@@ -396,10 +399,10 @@ fn source_output_full_address_check_anchor_v1(
             "full address source anchor local component or type differs",
         ));
     }
-    let (output, bits) = match row.origin {
+    let (output, bits, ssa, invocation) = match row.origin {
         SourceOutputProjectionLeafOriginV1::Formal(formal) => {
             source_output_full_address_entry_v1(work, captured, function, local, used, budget)?;
-            (Some(formal.output), None)
+            (Some(formal.output), None, used, false)
         }
         SourceOutputProjectionLeafOriginV1::Literal(literal) => {
             if component != ProductionProjectionArgumentComponentV1::Scalar || literal.ssa != used {
@@ -418,7 +421,30 @@ fn source_output_full_address_check_anchor_v1(
                     "full address literal captured definition differs",
                 ));
             }
-            (None, Some(literal.bits))
+            (None, Some(literal.bits), used, false)
+        }
+        SourceOutputProjectionLeafOriginV1::Invocation(invocation) => {
+            budget.charge_work(6).map_err(Error::Resource)?;
+            let index = analysis
+                .control
+                .invocation_sources
+                .get(invocation.source_index)
+                .ok_or(Error::Invalid(
+                    "full address invocation source index absent",
+                ))?;
+            let actual = source_output_invocation_source_anchor_v1(
+                analysis.view,
+                index,
+                local,
+                used,
+                budget,
+            )?;
+            if actual != invocation.source
+                || component != ProductionProjectionArgumentComponentV1::Scalar
+            {
+                return Err(Error::Invalid("full address own invocation use differs"));
+            }
+            (Some(invocation.output), None, actual.raw, true)
         }
     };
     Ok(SourceOutputFullAddressAnchorV1 {
@@ -427,8 +453,9 @@ fn source_output_full_address_check_anchor_v1(
         scalar: row.scalar,
         original: row.original(),
         output,
-        ssa: used,
+        ssa,
         bits,
+        invocation,
     })
 }
 
@@ -445,14 +472,20 @@ fn source_output_full_address_leaf_v1(
         budget.charge_work(3).map_err(Error::Resource)?;
         match value {
             ProductionRankedValueV1::Argument(argument)
-                if (argument as usize) < lowering.kernel().argument_count() => {}
+                if !anchor.invocation
+                    && (argument as usize) < lowering.kernel().argument_count() => {}
             ProductionRankedValueV1::Local(_) => match source_output_address_ranked_operation_v1(
                 &work.full.ranked,
                 lowering,
                 value,
                 budget,
             )? {
-                ProductionRankedOperationV1::IndexUnknown { .. } => {}
+                ProductionRankedOperationV1::IndexUnknown { .. } if !anchor.invocation => {}
+                ProductionRankedOperationV1::InvocationIndex {
+                    dimension: 0,
+                    launch_extent: 0,
+                    ..
+                } if anchor.invocation => {}
                 ProductionRankedOperationV1::IndexUnsignedCast {
                     source,
                     bit_width: 64,
@@ -634,6 +667,7 @@ fn source_output_full_address_access_v1(
     let index = source_output_full_address_use_v1(work, captured, index_key, index_local, budget)?;
     let extent_leaf = source_output_full_address_anchor_v1(analysis, work, memory_extent, budget)?;
     let extent_anchor = source_output_full_address_check_anchor_v1(
+        analysis,
         work,
         captured,
         function,
@@ -656,6 +690,7 @@ fn source_output_full_address_access_v1(
     )?;
     let index_leaf = source_output_full_address_anchor_v1(analysis, work, memory_index, budget)?;
     let index_anchor = source_output_full_address_check_anchor_v1(
+        analysis,
         work,
         captured,
         function,
@@ -824,6 +859,7 @@ mod functional_address_component_tests {
                 variable: fe2o3_mir_model::SsaVariableIdV1::new(8),
             },
             bits: None,
+            invocation: false,
         }
     }
 

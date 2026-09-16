@@ -1,93 +1,95 @@
 # Issue 271 Integration Snapshot
 
-This is reviewable work in progress, not production qualification or milestone
+Reviewable work in progress, not production qualification or milestone
 completion. Do not merge this historical tree over current main. Publish
 selected changes against current main with fresh qualification.
 
 ## Exact Source
 
-- Host: `XSJHARMENON01` (local, not the shared MI300X machine).
+- Host: `XSJHARMENON01`, local rather than the shared MI300X machine.
 - Checkout: `/home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913`.
 - Checkout HEAD: `10b190b8267c0c4011b4ef6bbb52680a3c44b391`.
-- Source manifest: 5067 files, SHA256
-  `6da4f9cca338993ae57c889c468c670b4ecfa3a9448e3995c2ba21b1d570f592`.
-- Previous WIP: `f0137d1b9f2e8617fb440b3a6296c5cfba66dad7`.
+- Source manifest: 5069 files, SHA256
+  `c9b42843a2d489fec4b83cb57c5e5f57b1ed1423d74735f576e93f4f2a902bfd`.
+- Previous WIP: `71fa71a7374a05c11fc3abd6575058defea62acd`.
 
-The status file is outside this source manifest. Snapshot publication preserves
-the original checkout HEAD/index and verifies every source blob.
+The status file is outside this manifest. Publication preserves the source
+checkout HEAD/index and checks every Git source blob.
 
 ## Implemented Components
 
-Source-first integration captures SSA before materialization and retains original
-source/reference custody. It requires genuine functional/aggregate evidence
-before target binding and checked policy-3 optimization. Every root receives
-physical-address checks before fresh formal-memory extraction.
+The preceding snapshot's source-first capture, source-owned descriptor adapter,
+Stage A local callback, private bounded Stage B1 byte-transfer infrastructure,
+Stage B2 native/target coordinate and catalog relation, and native
+text/descriptor replay remain present. Genuine source functional/aggregate and
+reference gates are not bypassed. These components do not activate the default
+production route or create protected export authority.
 
-The source-owned descriptor adapter and Stage A local callback join exact source,
-root, ABI, geometry, actual optimized owner/catalog, descriptor and native LLVM
-text replay. Postflight failures retain precedence over callback errors or panic.
-The source admission and local-relation fixture repairs are now executed.
+The supplied-native materialization checker now replays the existing source
+emitter and compares complete native N and source-catalog bytes against actual
+borrowed inputs. This is emitter consistency, not independent semantic
+preservation or original-producer custody. It does not rerun the optimizer.
 
-Stage B1 adds private bounded owned-byte transfer infrastructure with original
-ledger accounting and fail-closed append behavior. Its component tests exercise
-mechanics, not a genuine post-functional-Some export or protected full frame.
-
-Stage B2 independently checks supplied native N/B target-coordinate preservation
-and complete contract-catalog equality. It borrows the actual input owners,
-supports genuine idempotent binding, and adds no optimizer replay or authority.
-Native text/descriptor tests now include dormant vector types, dormant catalog
-events and a reachable helper before the kernel entry, on both target profiles.
-
-A new invocation-index fixture genuinely admits and captures the typed shared
-borrow and both intrinsic CallReturn definitions, then checks actual native N.
-It establishes source/N fixture feasibility only. The complete invocation-index
-control/address relation is still under development and is not in this snapshot.
+The private Global-X invocation relation traces exact captured source uses,
+typed shared borrow, ThreadIndex1d/Get CallReturn ancestry, native N spans,
+checked O Compare operands, and the full address projection's own captured
+index use. It checks the actual O Global-X root through a closed identity-cast
+grammar. Public formal/literal leaf APIs remain closed to this private origin.
+Unsupported origins and multidimensional source domains still refuse.
 
 ## Executed Checks
 
-On this exact source, with source/helper before-and-after guards passing:
+All listed runs passed source/helper stability guards. Counts overlap; do not
+add them or claim whole-workspace qualification.
 
-- AMDGPU model library: 42 passed, 0 failed, 0 ignored.
-- MIR-to-kernel lowerer library: 384 passed, 0 failed, 0 ignored.
-- Rust backend library: 816 passed, 0 failed, 0 ignored.
-- Checked canonical optimization integration: 18 passed, 0 failed, 0 ignored.
-- Native text/descriptor integration: 11 passed, 0 failed, 0 ignored.
+- Exact current snapshot: focused Invocation tests, 4 lowerer and 9 backend
+  tests passed, none failed or ignored. This includes the nine newly added
+  tests plus earlier prerequisite/existing tests selected by the same filter.
+- Immediate preceding snapshot `315fdbb0...`: supplied-native integration,
+  10 passed, none failed or ignored. The only later source delta is a test-only
+  1D-to-3D module change that makes Y/Z intrinsic negative cases admissible
+  before the Global-X-only checker refuses them.
+- Previous published snapshot `6da4f9cc...`: model 42, lowerer 384, backend 816,
+  checked canonical integration 18, and native integration 11 passed. Broader
+  historical library/doc results are recorded in the preceding WIP status;
+  they are not exact-current regression results.
+- The newly edited compiler files pass rustfmt checks. New source/native
+  compile-fail documentation and complete current library regressions remain
+  pending.
 
-The preceding 5067-file snapshot `39dce5b7...` passed 3029 tests in eight compiler
-libraries and 12 compile-fail AMDGPU documentation tests. These overlap the
-current runs; do not add their counts or call them exact-current whole-workspace
-qualification. The later changes are conditional-style repairs, a private tuple
-alias, and the new invocation fixture with its accessor correction.
+Initial qualification found fixture/API errors: unreachable source declarations,
+the spelling of the U64 IR type, two test session-borrow lifetimes, and a negative
+intrinsic fixture with the wrong launch rank. These were corrected without
+relaxing production validation or replacing dynamic values with constants.
 
-Strict linting is NOT green. The dependency-inclusive run stopped at an unchanged
-verifier warning. Selected-package `--no-deps` linting found backend warnings;
-the two new integration warnings were repaired. Fifteen remaining warning
-contexts already exist in the preceding published WIP. No blanket lint waiver,
-baseline build, all-target lint pass, or full repository CI pass is claimed.
+Strict linting is NOT green. Earlier runs found an unchanged verifier warning
+and existing backend warnings. Two newly introduced integration warnings were
+fixed; no blanket waiver, baseline build, all-target strict pass, or full CI pass
+is claimed.
 
 ## Remaining Work
 
-M5/M7 remain active; the production default is unchanged. Full protected export,
-source/N/B/O lineage and wire contracts, execution authentication, verifier/worker/
-host integration and legacy retirement remain open. The source/N supplied-input
-replay checker is under development separately. Reusing the original emitter
-checks materialization consistency, not independent semantic preservation.
+M5/M7 remain active, with all M0-M9 milestone acceptance boxes open. Composition
+of source/N, target binding and native replay into the held production callback,
+protected full framing, wire/worker/host integration, policy-4 target dispatch,
+and legacy retirement remain unfinished. The default production route is
+unchanged. Further fresh formal-query, admitted hostile source-ancestry, and
+index-constructor allocation-denial tests are under development and are not in
+this snapshot.
 
 There is no genuine post-functional-Some success fixture, nonempty-reference
-production success, new source/output functional theorem or final authority.
-Approved Verus runtime qualification remains deferred, not passed. Policy-1
-framing cannot be relabeled as authenticated policy-3 execution. Policy-4 target
-dispatch is not implemented by these additions.
+production success, new source/output functional theorem, or final authority.
+Approved Verus runtime qualification remains deferred, not passed. Emitter
+replay and policy-3 component checks cannot manufacture those obligations.
 
-Tutorial acceptance is pending for all 48 configurations. The separate CPU WIP
-`wip/issue271-tutorial-cpu-20260916` at `1fe5ea4178d2dcbd504f9054ede6d5e796642ebf`
-contains the managed CPU adapter, six vecadd library tests, a streamed artifact
-observation repair, and the test-only #279 correction. Its first actual pilot
-ran six tests successfully but the artifact observer refused the executable;
-that observation remains invalid. The repaired pilot is pending. CPU component
-tests, compile/simulator results and hardware observations are distinct gates.
+Tutorial acceptance remains open for all 48 configurations. The separate CPU
+WIP has a reviewed generic shared-private-driver batch with 44 component tests;
+no real managed batch has passed. The artifact-fix standalone pilot exceeded
+the unchanged 1,200-second deadline before tests completed. Scratch was cleaned
+and source/helper guards passed, but the observation remains invalid.
 
-Hardware, performance, release and website pins remain open. No M0-M9 milestone
-signoff is claimed. Main has peer changes absent from this historical tree;
-selective publication must preserve them. The separate #272 WIP is unchanged
-and is not qualified by any result above.
+Main includes peer work absent from this historical tree and the separately
+qualified #279 test correction at `9af22bb556997e9d93b6ddde24be03d708788759`.
+Selective native replay publication is being qualified separately. Hardware,
+performance, release and tutorial website pins remain open. The separate #272
+WIP is unchanged and is not qualified by this snapshot.

@@ -236,6 +236,11 @@ fn source_output_address_ranked_index_v1(
             let (ProductionRankedOperationV1::ViewInSpace { result, .. }
             | ProductionRankedOperationV1::IndexConstant { result, .. }
             | ProductionRankedOperationV1::IndexUnknown { result }
+            | ProductionRankedOperationV1::InvocationIndex {
+                result,
+                dimension: 0,
+                launch_extent: 0,
+            }
             | ProductionRankedOperationV1::IndexUnsignedCast { result, .. }) = row
             else {
                 continue;
@@ -289,12 +294,12 @@ fn source_output_address_ranked_operation_v1<'a>(
 }
 
 fn source_output_address_leaf_node_v1(
-    leaf: ProductionConditionalMemoryIndexLeafV1<'_>,
+    leaf: SourceOutputAddressLeafV1<'_>,
     mut paid: impl FnMut(usize) -> Result<(), ProductionSourceOutputErrorV1>,
 ) -> Result<NormalizedScalarNodeV1<usize>, ProductionSourceOutputErrorV1> {
     use NormalizedScalarNodeV1 as Node;
-    use ProductionConditionalMemoryIndexLeafV1 as Leaf;
     use ProductionSourceOutputErrorV1 as Error;
+    use SourceOutputAddressLeafV1 as Leaf;
     Ok(match leaf {
         Leaf::Formal(formal) => {
             if formal.scalar() != source_output_address_u64_v1() {
@@ -326,6 +331,20 @@ fn source_output_address_leaf_node_v1(
             Node::Constant {
                 scalar: literal.scalar(),
                 bits: literal.bits(),
+            }
+        }
+        Leaf::Invocation(row, invocation) => {
+            paid(4)?;
+            if row.scalar != source_output_address_u64_v1()
+                || row.component != ProductionProjectionArgumentComponentV1::Scalar
+            {
+                return Err(Error::Invalid("physical invocation scalar differs"));
+            }
+            Node::Symbol {
+                symbol: PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2
+                    .checked_add(invocation.symbol)
+                    .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+                scalar: row.scalar,
             }
         }
     })
@@ -409,6 +428,20 @@ fn source_output_address_scalar_grammar_v1(
             .map_err(Error::Resource)?;
         if kir_semantic_scalar_v1(definition.ty) != Some(source_output_address_u64_v1()) {
             return Err(Error::Invalid("physical scalar is not U64 or INDEX"));
+        }
+        if !context.invocation_roots.is_empty()
+            && assert_origin_find_v1(
+                context.invocation_roots,
+                context.inner.budget,
+                |row, budget| {
+                    budget.charge_work(4)?;
+                    Ok(row.0.cmp(&definition.coordinate))
+                },
+            )
+            .map_err(Error::SourceOrigin)?
+            .is_some()
+        {
+            return Ok(());
         }
         let SourceOutputAddressDefV1::Result {
             operation,
@@ -727,14 +760,13 @@ fn source_output_address_access_v1(
         bytes,
         context.inner.budget,
     )?;
-    let Some(ProductionConditionalMemoryIndexLeafV1::Formal(length)) =
-        analysis.control.address_leaf_v1(
-            analysis.view,
-            analysis.candidate,
-            analysis.control_ordinal,
-            extent,
-            context.inner.budget,
-        )?
+    let Some(SourceOutputAddressLeafV1::Formal(length)) = analysis.control.address_leaf_v1(
+        analysis.view,
+        analysis.candidate,
+        analysis.control_ordinal,
+        extent,
+        context.inner.budget,
+    )?
     else {
         return Err(Error::Invalid(
             "physical extent is not checked Slice metadata",
@@ -976,6 +1008,7 @@ impl<'source, 'output> ProductionScopedCanonicalStoreAnalysisV1<'_, 'source, 'ou
             let mut context = SourceOutputControlNormalizationV1 {
                 literal_uses: &[],
                 guard: None,
+                invocation_roots: self.control.invocation_roots,
                 inner: SourceOutputScalarNormalizationV1 {
                     inventory,
                     function,

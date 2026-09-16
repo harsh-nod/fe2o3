@@ -5,7 +5,7 @@ use fe2o3_pliron::ProductionRankedTerminatorV1;
 /// through the replayed importer correspondence before inspecting actual O.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionProjectionArgumentComponentV1 {
-    /// A direct scalar formal or independently checked single-definition literal.
+    /// A scalar source component; its precise origin is independently checked.
     Scalar,
     /// Immutable length metadata of an admitted Slice source formal.
     SliceLength,
@@ -14,7 +14,7 @@ pub enum ProductionProjectionArgumentComponentV1 {
 /// An untrusted projected leaf and the source component it claims to represent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionProjectionArgumentCandidateV1 {
-    /// Projection-local Argument or Local(IndexUnknown), not an ABI ordinal.
+    /// Projection-local Argument or index-producing Local, not an ABI ordinal.
     pub ranked_value: ProductionRankedValueV1,
     /// Local-table identity in the candidate's selected source function.
     pub source_local: SemanticLocalIdV1,
@@ -60,6 +60,27 @@ struct SourceOutputProjectionArgumentV1 {
 enum SourceOutputProjectionLeafOriginV1 {
     Formal(SourceOutputProjectionFormalV1),
     Literal(SourceOutputProjectionLiteralV1),
+    Invocation(SourceOutputProjectionInvocationV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceOutputProjectionInvocationV1 {
+    source_index: usize,
+    source: SourceOutputInvocationSourceAnchorV1,
+    original: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    output: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    symbol: u32,
+    first_use: usize,
+    end_use: usize,
+}
+
+enum SourceOutputAddressLeafV1<'scope> {
+    Formal(ProductionConditionalMemoryArgumentV1<'scope>),
+    Literal(ProductionConditionalMemoryLiteralV1<'scope>),
+    Invocation(
+        &'scope SourceOutputProjectionArgumentV1,
+        &'scope SourceOutputProjectionInvocationV1,
+    ),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +114,7 @@ impl SourceOutputProjectionArgumentV1 {
         match self.origin {
             SourceOutputProjectionLeafOriginV1::Formal(formal) => formal.original,
             SourceOutputProjectionLeafOriginV1::Literal(literal) => literal.original,
+            SourceOutputProjectionLeafOriginV1::Invocation(invocation) => invocation.original,
         }
     }
 }
@@ -130,6 +152,8 @@ pub struct ProductionConditionalMemoryControlCoverageV1<'scope> {
     candidates: &'scope [SourceOutputControlCandidateIdentityV1<'scope>],
     arguments: &'scope [SourceOutputProjectionArgumentV1],
     literal_uses: &'scope [SourceOutputProjectionLiteralUseV1],
+    invocation_sources: &'scope [SourceOutputInvocationSourceIndexV1],
+    invocation_roots: &'scope [(fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1, u32)],
 }
 
 /// A borrow of the same source-anchored substitution used for control checks.
@@ -262,7 +286,7 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
     }
 
     /// Looks up a formal component in the same map used by control normalization.
-    /// A literal row returns None; use index_leaf for its distinct typed borrow.
+    /// Non-formal rows return None; index_leaf separately exposes literals.
     /// Revalidates exact candidate custody and caller-owned accounting first;
     /// an absent row grants no meaning to an opaque ranked value.
     pub fn index_value(
@@ -284,6 +308,7 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
     /// Borrows a formal or a typed literal from the SAME checked leaf map.
     /// Literal records cover only their exact listed guard uses; a later
     /// address/extent relation must check its own actual O operand occurrence.
+    /// Private invocation rows intentionally return None through this API.
     pub fn index_leaf(
         &self,
         view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
@@ -293,13 +318,22 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
     ) -> Result<Option<ProductionConditionalMemoryIndexLeafV1<'_>>, ProductionSourceOutputErrorV1>
     {
         let ordinal = self.candidate_ordinal_v1(view, candidate, budget)?;
-        source_output_control_leaf_rows_v1(
+        Ok(source_output_control_leaf_rows_v1(
             self.arguments,
             self.literal_uses,
             self.candidates[ordinal].arguments.clone(),
             ranked_value,
             budget,
-        )
+        )?
+        .and_then(|leaf| match leaf {
+            SourceOutputAddressLeafV1::Formal(value) => {
+                Some(ProductionConditionalMemoryIndexLeafV1::Formal(value))
+            }
+            SourceOutputAddressLeafV1::Literal(value) => {
+                Some(ProductionConditionalMemoryIndexLeafV1::Literal(value))
+            }
+            SourceOutputAddressLeafV1::Invocation(..) => None,
+        }))
     }
 
     fn address_leaf_v1(
@@ -309,8 +343,7 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
         ordinal: usize,
         ranked_value: ProductionRankedValueV1,
         budget: &mut AssertOriginBudgetV1<'_>,
-    ) -> Result<Option<ProductionConditionalMemoryIndexLeafV1<'_>>, ProductionSourceOutputErrorV1>
-    {
+    ) -> Result<Option<SourceOutputAddressLeafV1<'_>>, ProductionSourceOutputErrorV1> {
         self.require_candidate_at_v1(view, candidate, ordinal, budget)?;
         source_output_control_leaf_rows_v1(
             self.arguments,
@@ -1127,36 +1160,46 @@ fn source_output_control_ranked_anchor_v1(
     candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
     claim: ProductionProjectionArgumentCandidateV1,
     budget: &mut AssertOriginBudgetV1<'_>,
-) -> Result<(), ProductionSourceOutputErrorV1> {
+) -> Result<bool, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     budget.charge_work(2).map_err(Error::Resource)?;
     match claim.ranked_value {
         ProductionRankedValueV1::Argument(argument)
             if (argument as usize) < candidate.lowering.kernel().argument_count() =>
         {
-            Ok(())
+            Ok(false)
         }
         ProductionRankedValueV1::Local(value) => {
-            let mut found = false;
+            let mut found = None;
             for block in candidate.lowering.kernel().blocks() {
                 budget.charge_work(1).map_err(Error::Resource)?;
                 for operation in block.operations() {
                     budget.charge_work(2).map_err(Error::Resource)?;
-                    if let ProductionRankedOperationV1::IndexUnknown { result } = operation
-                        && *result == value
-                    {
-                        if found {
+                    let anchor = match operation {
+                        ProductionRankedOperationV1::IndexUnknown { result }
+                            if *result == value =>
+                        {
+                            Some(false)
+                        }
+                        ProductionRankedOperationV1::InvocationIndex {
+                            result,
+                            dimension: 0,
+                            launch_extent: 0,
+                        } if *result == value => Some(true),
+                        _ => None,
+                    };
+                    if let Some(invocation) = anchor {
+                        if found.replace(invocation).is_some() {
                             return Err(Error::Invalid("control unknown definition duplicated"));
                         }
-                        found = true;
                     }
                 }
             }
             // The lowering owner already checked complete SSA definitions and
             // visibility. This check additionally requires the actual unknown
             // opcode, not a candidate assertion about its numerical meaning.
-            if found {
-                Ok(())
+            if let Some(invocation) = found {
+                Ok(invocation)
             } else {
                 Err(Error::Invalid(
                     "control local anchor is not an actual IndexUnknown",
@@ -1167,13 +1210,13 @@ fn source_output_control_ranked_anchor_v1(
     }
 }
 
-// Wrap the shared normalizer, adding only an independently checked metadata
-// symbol for SliceLength(formal). No Call evaluation, memory read, phi guess or
-// alternate arithmetic semantics is introduced here.
+// The wrapper recognizes checked SliceLength formals and exact invocation roots
+// sealed by source/N/O use bindings. It does not evaluate Calls, loads or phis.
 struct SourceOutputControlNormalizationV1<'a, 'kir, 'ranked, 'ledger, 'limit> {
     inner: SourceOutputScalarNormalizationV1<'a, 'kir, 'ranked, 'ledger, 'limit>,
     literal_uses: &'a [SourceOutputProjectionLiteralUseV1],
     guard: Option<(SemanticBlockIdV1, ValueId)>,
+    invocation_roots: &'a [(fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1, u32)],
 }
 
 impl<'kir, 'ranked> ScalarNormalizationContextV1<'kir, 'ranked>
@@ -1212,6 +1255,20 @@ impl<'kir, 'ranked> ScalarNormalizationContextV1<'kir, 'ranked>
                 argument.checked_mul(2)?,
                 kir_semantic_scalar_v1(definition.ty)?,
             )));
+        }
+        if !self.invocation_roots.is_empty() {
+            let found =
+                assert_origin_find_v1(self.invocation_roots, self.inner.budget, |row, budget| {
+                    budget.charge_work(4)?;
+                    Ok(row.0.cmp(&definition.coordinate))
+                })
+                .map_err(ProductionSourceOutputErrorV1::SourceOrigin);
+            if let Some(index) = self.inner.remember(found)? {
+                let slot = self.invocation_roots[index].1;
+                self.inner.paid(2)?;
+                PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2.checked_add(slot)?;
+                return Some(Some((slot, source_output_address_u64_v1())));
+            }
         }
         let Some(operation) = self.inner.operation(value) else {
             return Some(None);
@@ -1292,6 +1349,55 @@ fn source_output_control_ranked_leaf_v1(
         }
         let formal = match row.origin {
             SourceOutputProjectionLeafOriginV1::Formal(formal) => formal,
+            SourceOutputProjectionLeafOriginV1::Invocation(invocation) => {
+                let (guard, condition) = context.guard?;
+                let uses = context
+                    .literal_uses
+                    .get(invocation.first_use..invocation.end_use)?;
+                let mut found = None;
+                for used in uses {
+                    context.inner.paid(2)?;
+                    if used.guard == guard && found.replace(*used).is_some() {
+                        return None;
+                    }
+                }
+                let used = found?;
+                let definition = context
+                    .inner
+                    .inventory
+                    .definition_for_value(
+                        context.inner.function.coordinate,
+                        condition,
+                        context.inner.budget,
+                    )
+                    .map_err(ProductionSourceOutputErrorV1::Inventory);
+                let definition = context.inner.remember(definition)??;
+                context.inner.paid(3)?;
+                let Definition::Result {
+                    operation,
+                    result: 0,
+                } = definition.coordinate
+                else {
+                    return None;
+                };
+                if used.output.coordinate
+                    != (fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                        operation,
+                        operand: 0,
+                    })
+                {
+                    return None;
+                }
+                let symbol =
+                    PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2.checked_add(invocation.symbol)?;
+                let actual = normalize_kir_expression_core_v1(used.output.value, 0, context)?;
+                if !matches!(context.inner.nodes.get(actual), Some(Node::Symbol { scalar: ty, symbol: id })
+                    if *ty == scalar && *id == symbol)
+                {
+                    return None;
+                }
+                return context.emit(Node::Symbol { scalar, symbol });
+            }
             SourceOutputProjectionLeafOriginV1::Literal(literal) => {
                 let (guard, condition) = context.guard?;
                 let uses = context
@@ -1367,7 +1473,8 @@ fn source_output_control_ranked_leaf_v1(
                         result,
                         value: bits,
                     } = operation
-                        && *result == value && literal.replace(*bits).is_some()
+                        && *result == value
+                        && literal.replace(*bits).is_some()
                     {
                         return None;
                     }
@@ -1845,6 +1952,8 @@ fn source_output_control_calls_and_accesses_v1(
     candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
     canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
     segments: &[SourceOutputProjectionSegmentV1],
+    arguments: &[SourceOutputProjectionArgumentV1],
+    has_invocation: bool,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<(), ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
@@ -1981,13 +2090,65 @@ fn source_output_control_calls_and_accesses_v1(
     }
     for segment in segments {
         budget.charge_work(3).map_err(Error::Resource)?;
-        if matches!(
-            source.blocks()[segment.source.index() as usize]
-                .terminator()
-                .kind(),
-            SemanticTerminatorKindV1::Call(_)
-        ) && call_counts[segment.source.index() as usize] != 1
-        {
+        let SemanticTerminatorKindV1::Call(call) = source.blocks()[segment.source.index() as usize]
+            .terminator()
+            .kind()
+        else {
+            continue;
+        };
+        let mut intrinsic = false;
+        if has_invocation {
+            for argument in arguments {
+                budget.charge_work(1).map_err(Error::Resource)?;
+                if let SourceOutputProjectionLeafOriginV1::Invocation(anchor) = argument.origin {
+                    budget.charge_work(4).map_err(Error::Resource)?;
+                    intrinsic |= anchor.source.get.source().get() == segment.source.index()
+                        || anchor.source.producer.source().get() == segment.source.index();
+                }
+            }
+        }
+        if intrinsic {
+            budget
+                .charge_work(
+                    segments
+                        .len()
+                        .checked_add(8)
+                        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+                )
+                .map_err(Error::Resource)?;
+            if call_counts[segment.source.index() as usize] != 0 {
+                return Err(Error::Invalid(
+                    "invocation boundary retains an ordinary Call",
+                ));
+            }
+            let destination = call
+                .destination()
+                .ok_or(Error::Invalid("invocation continuation absent"))?;
+            let target = segments
+                .iter()
+                .find(|row| row.source == destination.edge().target())
+                .ok_or(Error::Invalid("invocation live successor segment absent"))?;
+            let edge = source_output_control_edge_v1(
+                &view.checked_control_rows,
+                fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+                    source: segment.original,
+                    successor: 0,
+                },
+                budget,
+            )?;
+            if edge.input.target != target.original
+                || !edge.checked.executable
+                || matches!(
+                    edge.checked.placement,
+                    fe2o3_kernel_analysis::CanonicalKirEdgePlacementV1::Omitted
+                )
+            {
+                return Err(Error::Invalid("invocation checked continuation differs"));
+            }
+            source_output_control_argument_rows_v1(&view.checked_control_rows, edge, budget)?;
+            // The common segment checker below authenticates the retained edge
+            // or InternalConnector placement. No synthetic O branch is required.
+        } else if call_counts[segment.source.index() as usize] != 1 {
             return Err(Error::Invalid(
                 "control projected continuation lost its actual Call",
             ));
@@ -2031,7 +2192,8 @@ fn source_output_control_calls_and_accesses_v1(
         }
         let location = (access.ranked_block, access.ranked_operation);
         if let Some((block, last)) = previous
-            && block == access.semantic_block && last >= location
+            && block == access.semantic_block
+            && last >= location
         {
             return Err(Error::Invalid("control source effect order differs"));
         }
@@ -2079,11 +2241,17 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             let header = std::mem::size_of::<Vec<SourceOutputControlCandidateIdentityV1<'_>>>()
                 + std::mem::size_of::<Vec<SourceOutputProjectionArgumentV1>>()
                 + std::mem::size_of::<Vec<SourceOutputProjectionLiteralUseV1>>()
+                + std::mem::size_of::<Vec<SourceOutputInvocationSourceIndexV1>>()
+                + std::mem::size_of::<
+                    Vec<(fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1, u32)>,
+                >()
                 + std::mem::size_of::<ProductionConditionalMemoryControlCoverageV1<'_>>();
             budget.reserve_storage(header).map_err(Error::Resource)?;
             let mut identities = Vec::new();
             let mut arguments = Vec::new();
             let mut literal_uses = Vec::new();
+            let mut invocation_sources = Vec::new();
+            let mut invocation_roots = Vec::new();
             let (inventory, storage) =
                 fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(self.output(), budget)
                     .map_err(Error::Inventory)?;
@@ -2107,24 +2275,75 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                     budget,
                 )?;
                 let first = arguments.len();
+                let mut invocation_index = None;
                 for claim in &candidate.control.arguments {
                     budget.charge_work(2).map_err(Error::Resource)?;
-                    source_output_control_ranked_anchor_v1(candidate, *claim, budget)?;
-                    let row = source_output_control_argument_v1(
-                        self,
-                        candidate,
-                        canonical,
-                        *claim,
-                        &mut literal_uses,
-                        &inventory,
-                        budget,
-                    )?;
+                    let invocation =
+                        source_output_control_ranked_anchor_v1(candidate, *claim, budget)?;
+                    let row = if invocation {
+                        let ordinal = if let Some(ordinal) = invocation_index {
+                            ordinal
+                        } else {
+                            let index = source_output_invocation_source_index_v1(
+                                self, candidate, canonical, budget,
+                            )?;
+                            let ordinal = invocation_sources.len();
+                            assert_origin_push_v1(&mut invocation_sources, index, budget)
+                                .map_err(Error::SourceOrigin)?;
+                            // The moved index is now charged in the vector's capacity.
+                            budget
+                                .release_storage(std::mem::size_of::<
+                                    SourceOutputInvocationSourceIndexV1,
+                                >())
+                                .map_err(Error::Resource)?;
+                            invocation_index = Some(ordinal);
+                            ordinal
+                        };
+                        let row = source_output_control_invocation_v1(
+                            self,
+                            candidate,
+                            &invocation_sources[ordinal],
+                            ordinal,
+                            *claim,
+                            &mut literal_uses,
+                            &inventory,
+                            budget,
+                        )?;
+                        if let SourceOutputProjectionLeafOriginV1::Invocation(anchor) = row.origin {
+                            assert_origin_push_v1(
+                                &mut invocation_roots,
+                                (anchor.output, anchor.symbol),
+                                budget,
+                            )
+                            .map_err(Error::SourceOrigin)?;
+                        }
+                        row
+                    } else {
+                        source_output_control_argument_v1(
+                            self,
+                            candidate,
+                            canonical,
+                            *claim,
+                            &mut literal_uses,
+                            &inventory,
+                            budget,
+                        )?
+                    };
                     assert_origin_push_v1(&mut arguments, row, budget)
                         .map_err(Error::SourceOrigin)?;
                 }
                 source_output_ranked_sort_unique_v1(&mut arguments[first..], budget, |a, b| {
                     a.ranked_value.cmp(&b.ranked_value)
                 })?;
+                if invocation_index.is_some() {
+                    source_output_invocation_sort_v1(
+                        &mut invocation_roots,
+                        4,
+                        true,
+                        |a, b| a.0.cmp(&b.0),
+                        budget,
+                    )?;
+                }
                 // Distinct ranked variables may not pretend to be independent
                 // aliases of one source component. Global alpha-renaming is
                 // harmless; substituting another source local is not.
@@ -2141,7 +2360,13 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 source_output_global_scratch_scope_v1(budget, |budget| {
                     let segments = source_output_control_segments_v1(self, candidate, budget)?;
                     source_output_control_calls_and_accesses_v1(
-                        self, candidate, canonical, &segments, budget,
+                        self,
+                        candidate,
+                        canonical,
+                        &segments,
+                        &arguments[first..],
+                        invocation_index.is_some(),
+                        budget,
                     )?;
                     budget.charge_work(2).map_err(Error::Resource)?;
                     let function = inventory
@@ -2158,6 +2383,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                     let mut context = SourceOutputControlNormalizationV1 {
                         literal_uses: &literal_uses,
                         guard: None,
+                        invocation_roots: &invocation_roots,
                         inner: SourceOutputScalarNormalizationV1 {
                             inventory: &inventory,
                             function,
@@ -2216,6 +2442,8 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 candidates: &identities,
                 arguments: &arguments,
                 literal_uses: &literal_uses,
+                invocation_sources: &invocation_sources,
+                invocation_roots: &invocation_roots,
             };
             body(&coverage, budget)
         })
@@ -2478,7 +2706,7 @@ fn source_output_control_leaf_rows_v1<'a>(
     range: std::ops::Range<usize>,
     ranked_value: ProductionRankedValueV1,
     budget: &mut AssertOriginBudgetV1<'_>,
-) -> Result<Option<ProductionConditionalMemoryIndexLeafV1<'a>>, ProductionSourceOutputErrorV1> {
+) -> Result<Option<SourceOutputAddressLeafV1<'a>>, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     budget.charge_work(1).map_err(Error::Resource)?;
     let arguments = arguments
@@ -2495,13 +2723,10 @@ fn source_output_control_leaf_rows_v1<'a>(
     let row = &arguments[ordinal];
     Ok(Some(match &row.origin {
         SourceOutputProjectionLeafOriginV1::Formal(formal) => {
-            ProductionConditionalMemoryIndexLeafV1::Formal(ProductionConditionalMemoryArgumentV1 {
-                row,
-                formal,
-            })
+            SourceOutputAddressLeafV1::Formal(ProductionConditionalMemoryArgumentV1 { row, formal })
         }
         SourceOutputProjectionLeafOriginV1::Literal(literal) => {
-            ProductionConditionalMemoryIndexLeafV1::Literal(ProductionConditionalMemoryLiteralV1 {
+            SourceOutputAddressLeafV1::Literal(ProductionConditionalMemoryLiteralV1 {
                 row,
                 literal,
                 uses: literal_uses
@@ -2509,5 +2734,1274 @@ fn source_output_control_leaf_rows_v1<'a>(
                     .ok_or(Error::Invalid("literal guard-use span absent"))?,
             })
         }
+        SourceOutputProjectionLeafOriginV1::Invocation(invocation) => {
+            SourceOutputAddressLeafV1::Invocation(row, invocation)
+        }
     }))
+}
+
+type SourceOutputInvocationEventKeyV1 = (u32, u32, u32, u32, u32, u32, u32);
+
+#[derive(Clone, Copy)]
+enum SourceOutputInvocationDefinitionV1 {
+    Event(usize),
+    Edge(usize),
+}
+
+struct SourceOutputInvocationSourceIndexV1 {
+    source: *const (),
+    function: SemanticFunctionIdV1,
+    canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    events: Vec<(SourceOutputInvocationEventKeyV1, usize)>,
+    definitions: Vec<(SsaValueV1, SourceOutputInvocationDefinitionV1)>,
+    incoming: Vec<((u32, fe2o3_mir_model::SsaEdgeIdV1), usize)>,
+    transports: Vec<((fe2o3_mir_model::SsaEdgeIdV1, u32), SsaValueV1)>,
+    statements: Vec<((u32, u32), usize)>,
+    terminators: Vec<(u32, usize)>,
+    blocks: Vec<(BlockId, u32)>,
+    values: Vec<(ValueId, (u32, u32, u32))>,
+}
+
+fn source_output_invocation_event_key_v1(
+    event: &fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1,
+) -> Option<SourceOutputInvocationEventKeyV1> {
+    use fe2o3_pliron::{
+        ProductionSemanticSsaEventRoleV1 as Role, ProductionSemanticSsaOccurrenceSiteV1 as Site,
+        ProductionSemanticSsaOperandRoleV1 as Operand,
+    };
+    let (kind, block, statement) = match event.site() {
+        Site::Statement { block, statement } => (0, block.get(), statement),
+        Site::Terminator { block } => (1, block.get(), 0),
+    };
+    let (operand, argument) = match event.operand() {
+        Operand::RvalueOperand(argument) => (0, argument),
+        Operand::RvaluePlace => (1, 0),
+        Operand::Destination => (2, 0),
+        Operand::CallArgument(argument) => (3, argument),
+        Operand::AssertMessage(argument) => (4, argument),
+        _ => return None,
+    };
+    let (role, projection) = match event.role() {
+        Role::BaseUse => (0, 0),
+        Role::ProjectionIndexUse(projection) => (1, projection),
+        Role::DestinationDefine => (2, 0),
+        _ => return None,
+    };
+    Some((kind, block, statement, operand, argument, role, projection))
+}
+
+fn source_output_invocation_capture_v1<'a>(
+    source: &'a crate::ProductionPreRankedKirOwnerV1,
+    function: SemanticFunctionIdV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'a>,
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(8).map_err(Error::Resource)?;
+    let ssa = source.semantic_ssa();
+    let receipt = ssa
+        .occurrence_storage()
+        .ok_or(Error::Invalid("invocation source capture receipt absent"))?;
+    let captured = ssa
+        .occurrences_v1()
+        .and_then(|view| view.function(function))
+        .ok_or(Error::Invalid("invocation source capture absent"))?;
+    if !std::ptr::eq(captured.owner(), ssa) || budget.storage() < receipt.retained_storage() {
+        return Err(Error::Invalid("invocation source capture custody differs"));
+    }
+    Ok(captured)
+}
+
+fn source_output_invocation_sort_v1<T>(
+    rows: &mut [T],
+    fields: usize,
+    unique: bool,
+    compare: impl Fn(&T, &T) -> std::cmp::Ordering,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    assert_origin_sort_v1(rows, budget, |a, b, budget| {
+        budget.charge_work(fields)?;
+        Ok(compare(a, b))
+    })
+    .map_err(Error::SourceOrigin)?;
+    if unique {
+        for pair in rows.windows(2) {
+            budget.charge_work(fields).map_err(Error::Resource)?;
+            if compare(&pair[0], &pair[1]).is_eq() {
+                return Err(Error::Invalid("invocation source index key duplicated"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn source_output_invocation_source_index_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputInvocationSourceIndexV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let captured =
+        source_output_invocation_capture_v1(view.source, candidate.selected_function, budget)?;
+    budget
+        .reserve_storage(std::mem::size_of::<SourceOutputInvocationSourceIndexV1>())
+        .map_err(Error::Resource)?;
+    let plan = view
+        .source
+        .semantic_ssa()
+        .plan_for_function(candidate.selected_function)
+        .ok_or(Error::Invalid("invocation source SSA plan absent"))?
+        .plan();
+    let mut index = SourceOutputInvocationSourceIndexV1 {
+        source: std::ptr::from_ref(view.source).cast(),
+        function: candidate.selected_function,
+        canonical,
+        events: Vec::new(),
+        definitions: Vec::new(),
+        incoming: Vec::new(),
+        transports: Vec::new(),
+        statements: Vec::new(),
+        terminators: Vec::new(),
+        blocks: Vec::new(),
+        values: Vec::new(),
+    };
+    for (ordinal, event) in captured.events().iter().enumerate() {
+        budget.charge_work(8).map_err(Error::Resource)?;
+        if let Some(key) = source_output_invocation_event_key_v1(event) {
+            assert_origin_push_v1(&mut index.events, (key, ordinal), budget)
+                .map_err(Error::SourceOrigin)?;
+        }
+        if event.is_reachable()
+            && event.is_promoted()
+            && let Some(SsaResolvedEventV1::Define { value, .. }) = event.resolved()
+        {
+            assert_origin_push_v1(
+                &mut index.definitions,
+                (value, SourceOutputInvocationDefinitionV1::Event(ordinal)),
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        }
+    }
+    for (ordinal, definition) in captured.edge_definitions().iter().enumerate() {
+        budget.charge_work(6).map_err(Error::Resource)?;
+        if definition.is_reachable()
+            && definition.is_promoted()
+            && let Some(value) = definition.value()
+        {
+            assert_origin_push_v1(
+                &mut index.definitions,
+                (value, SourceOutputInvocationDefinitionV1::Edge(ordinal)),
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        }
+    }
+    for (ordinal, successor) in captured.successors().iter().enumerate() {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        if !plan.is_reachable(successor.id().source()) {
+            continue;
+        }
+        assert_origin_push_v1(
+            &mut index.incoming,
+            ((successor.edge().target().index(), successor.id()), ordinal),
+            budget,
+        )
+        .map_err(Error::SourceOrigin)?;
+        for argument in plan
+            .edge_arguments(successor.id())
+            .ok_or(Error::Invalid("invocation source edge arguments absent"))?
+        {
+            budget.charge_work(4).map_err(Error::Resource)?;
+            assert_origin_push_v1(
+                &mut index.transports,
+                (
+                    (successor.id(), argument.variable().get()),
+                    argument.value(),
+                ),
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        }
+    }
+    for (ordinal, span) in view
+        .source
+        .correspondence
+        .statement_operation_spans()
+        .iter()
+        .enumerate()
+    {
+        budget.charge_work(5).map_err(Error::Resource)?;
+        if span.correspondence_owner() == candidate.selected_root
+            && span.semantic_function() == candidate.selected_function
+        {
+            assert_origin_push_v1(
+                &mut index.statements,
+                (
+                    (span.semantic_block().index(), span.statement_ordinal()),
+                    ordinal,
+                ),
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        }
+    }
+    for (ordinal, span) in view
+        .source
+        .correspondence
+        .terminator_operation_spans()
+        .iter()
+        .enumerate()
+    {
+        budget.charge_work(5).map_err(Error::Resource)?;
+        if span.correspondence_owner() == candidate.selected_root
+            && span.semantic_function() == candidate.selected_function
+        {
+            assert_origin_push_v1(
+                &mut index.terminators,
+                (span.semantic_block().index(), ordinal),
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        }
+    }
+    let body = view
+        .source
+        .executable()
+        .module()
+        .functions
+        .get(canonical.0 as usize)
+        .and_then(|function| function.body.as_ref())
+        .ok_or(Error::Invalid("invocation N body absent"))?;
+    for (block, row) in body.blocks.iter().enumerate() {
+        budget.charge_work(2).map_err(Error::Resource)?;
+        let block = u32::try_from(block)
+            .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+        assert_origin_push_v1(&mut index.blocks, (row.id, block), budget)
+            .map_err(Error::SourceOrigin)?;
+        for (operation, row) in row.operations.iter().enumerate() {
+            budget.charge_work(2).map_err(Error::Resource)?;
+            let operation = u32::try_from(operation)
+                .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+            for (result, value) in row.results.iter().enumerate() {
+                budget.charge_work(3).map_err(Error::Resource)?;
+                let result = u32::try_from(result)
+                    .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+                assert_origin_push_v1(
+                    &mut index.values,
+                    (value.id, (block, operation, result)),
+                    budget,
+                )
+                .map_err(Error::SourceOrigin)?;
+            }
+        }
+    }
+    source_output_invocation_sort_v1(&mut index.events, 7, true, |a, b| a.0.cmp(&b.0), budget)?;
+    source_output_invocation_sort_v1(
+        &mut index.definitions,
+        4,
+        true,
+        |a, b| a.0.cmp(&b.0),
+        budget,
+    )?;
+    source_output_invocation_sort_v1(&mut index.incoming, 3, true, |a, b| a.0.cmp(&b.0), budget)?;
+    source_output_invocation_sort_v1(&mut index.transports, 3, true, |a, b| a.0.cmp(&b.0), budget)?;
+    source_output_invocation_sort_v1(&mut index.statements, 2, true, |a, b| a.0.cmp(&b.0), budget)?;
+    source_output_invocation_sort_v1(
+        &mut index.terminators,
+        1,
+        true,
+        |a, b| a.0.cmp(&b.0),
+        budget,
+    )?;
+    source_output_invocation_sort_v1(&mut index.blocks, 1, true, |a, b| a.0.cmp(&b.0), budget)?;
+    source_output_invocation_sort_v1(&mut index.values, 1, true, |a, b| a.0.cmp(&b.0), budget)?;
+    Ok(index)
+}
+
+fn source_output_invocation_use_v1(
+    index: &SourceOutputInvocationSourceIndexV1,
+    captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    key: SourceOutputInvocationEventKeyV1,
+    local: SemanticLocalIdV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SsaValueV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let row = assert_origin_find_v1(&index.events, budget, |row, budget| {
+        budget.charge_work(7)?;
+        Ok(row.0.cmp(&key))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("invocation exact source use absent"))?;
+    budget.charge_work(8).map_err(Error::Resource)?;
+    let event = captured
+        .events()
+        .get(index.events[row].1)
+        .ok_or(Error::Invalid("invocation source use ordinal differs"))?;
+    if source_output_invocation_event_key_v1(event) != Some(key)
+        || !event.is_reachable()
+        || !event.is_promoted()
+    {
+        return Err(Error::Invalid(
+            "invocation source use is not live promoted exact occurrence",
+        ));
+    }
+    match (event.event(), event.resolved()) {
+        (
+            fe2o3_mir_model::SsaEventV1::Use(original),
+            Some(SsaResolvedEventV1::Use { variable, value }),
+        ) if original == variable && variable.get() == local.index() => Ok(value),
+        _ => Err(Error::Invalid("invocation captured source operand differs")),
+    }
+}
+
+fn source_output_invocation_definition_v1(
+    index: &SourceOutputInvocationSourceIndexV1,
+    mut value: SsaValueV1,
+    local: SemanticLocalIdV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(SsaValueV1, SourceOutputInvocationDefinitionV1), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    source_output_global_scratch_scope_v1(budget, |budget| {
+        budget
+            .reserve_storage(std::mem::size_of::<
+                [Option<SsaValueV1>; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1],
+            >())
+            .map_err(Error::Resource)?;
+        let mut visited = [None; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1];
+        for depth in 0..visited.len() {
+            budget.charge_work(depth + 16).map_err(Error::Resource)?;
+            if visited[..depth].contains(&Some(value)) {
+                return Err(Error::Invalid("invocation source forwarding cycle"));
+            }
+            visited[depth] = Some(value);
+            let SsaValueV1::BlockArgument { block, variable } = value else {
+                let row = assert_origin_find_v1(&index.definitions, budget, |row, budget| {
+                    budget.charge_work(4)?;
+                    Ok(row.0.cmp(&value))
+                })
+                .map_err(Error::SourceOrigin)?
+                .ok_or(Error::Invalid("invocation source definition absent"))?;
+                return Ok(index.definitions[row]);
+            };
+            if variable.get() != local.index() {
+                return Err(Error::Invalid("invocation forwarded variable differs"));
+            }
+            let row = assert_origin_find_v1(&index.incoming, budget, |row, budget| {
+                budget.charge_work(1)?;
+                Ok(row.0.0.cmp(&block.get()))
+            })
+            .map_err(Error::SourceOrigin)?
+            .ok_or(Error::Invalid("invocation source incoming edge absent"))?;
+            budget.charge_work(4).map_err(Error::Resource)?;
+            if row
+                .checked_sub(1)
+                .and_then(|i| index.incoming.get(i))
+                .is_some_and(|other| other.0.0 == block.get())
+                || index
+                    .incoming
+                    .get(row + 1)
+                    .is_some_and(|other| other.0.0 == block.get())
+            {
+                return Err(Error::Invalid(
+                    "invocation source has multiple incoming edges",
+                ));
+            }
+            let key = (index.incoming[row].0.1, variable.get());
+            let row = assert_origin_find_v1(&index.transports, budget, |row, budget| {
+                budget.charge_work(3)?;
+                Ok(row.0.cmp(&key))
+            })
+            .map_err(Error::SourceOrigin)?
+            .ok_or(Error::Invalid("invocation same-variable transport absent"))?;
+            value = index.transports[row].1;
+        }
+        Err(Error::Invalid(
+            "invocation source forwarding depth exceeded",
+        ))
+    })
+}
+
+fn source_output_invocation_statement_span_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    block: u32,
+    statement: u32,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let key = (block, statement);
+    let row = assert_origin_find_v1(&index.statements, budget, |row, budget| {
+        budget.charge_work(2)?;
+        Ok(row.0.cmp(&key))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("invocation source alias span absent"))?;
+    budget.charge_work(4).map_err(Error::Resource)?;
+    let span = view.source.correspondence.statement_operation_spans()[index.statements[row].1];
+    if span.operation_count() != 0 {
+        return Err(Error::Invalid("invocation source alias emits operations"));
+    }
+    Ok(())
+}
+
+fn source_output_invocation_copy_origin_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    mut local: SemanticLocalIdV1,
+    mut value: SsaValueV1,
+    ty: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (
+        SemanticLocalIdV1,
+        SsaValueV1,
+        SourceOutputInvocationDefinitionV1,
+    ),
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1 as Site;
+    let function =
+        &view.source.semantic_ssa().source_semantic().functions()[index.function.index() as usize];
+    for _ in 0..=MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        budget.charge_work(16).map_err(Error::Resource)?;
+        if function
+            .locals()
+            .get(local.index() as usize)
+            .is_none_or(|row| row.ty() != ty)
+        {
+            return Err(Error::Invalid("invocation source alias type differs"));
+        }
+        let (resolved, definition) =
+            source_output_invocation_definition_v1(index, value, local, budget)?;
+        let SourceOutputInvocationDefinitionV1::Event(ordinal) = definition else {
+            return Ok((local, resolved, definition));
+        };
+        let event = &captured.events()[ordinal];
+        let Site::Statement { block, statement } = event.site() else {
+            return Err(Error::Invalid(
+                "invocation source event definition site unsupported",
+            ));
+        };
+        if !matches!((event.event(), event.resolved()),
+            (fe2o3_mir_model::SsaEventV1::Define(original), Some(SsaResolvedEventV1::Define { variable, value }))
+            if original == variable && variable.get() == local.index() && value == resolved)
+            || source_output_invocation_event_key_v1(event)
+                != Some((0, block.get(), statement, 2, 0, 2, 0))
+        {
+            return Err(Error::Invalid(
+                "invocation source destination definition differs",
+            ));
+        }
+        let row = function
+            .blocks()
+            .get(block.get() as usize)
+            .and_then(|block| block.statements().get(statement as usize))
+            .ok_or(Error::Invalid(
+                "invocation source defining statement absent",
+            ))?;
+        let SemanticStatementKindV1::Assign(assignment) = row.kind() else {
+            return Err(Error::Invalid(
+                "invocation source definition is not an assignment",
+            ));
+        };
+        if assignment.destination().local() != local
+            || !assignment.destination().projections().is_empty()
+            || assignment.destination().ty() != ty
+            || assignment.value().result_type() != ty
+        {
+            return Err(Error::Invalid(
+                "invocation source assignment type or destination differs",
+            ));
+        }
+        let SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place)) = assignment.value().kind()
+        else {
+            return Ok((local, resolved, definition));
+        };
+        if !place.projections().is_empty() || place.ty() != ty {
+            return Err(Error::Invalid(
+                "invocation source Copy is not typed plain transport",
+            ));
+        }
+        source_output_invocation_statement_span_v1(view, index, block.get(), statement, budget)?;
+        local = place.local();
+        value = source_output_invocation_use_v1(
+            index,
+            captured,
+            (0, block.get(), statement, 0, 0, 0, 0),
+            local,
+            budget,
+        )?;
+    }
+    Err(Error::Invalid("invocation source Copy depth exceeded"))
+}
+
+fn source_output_invocation_call_v1<'a>(
+    function: &'a SemanticFunctionDeclV1,
+    index: &SourceOutputInvocationSourceIndexV1,
+    captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    local: SemanticLocalIdV1,
+    value: SsaValueV1,
+    definition: SourceOutputInvocationDefinitionV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (
+        fe2o3_mir_model::SsaEdgeIdV1,
+        &'a fe2o3_mir_model::semantic_mir_v1::SemanticDirectCallV1,
+    ),
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(16).map_err(Error::Resource)?;
+    let SourceOutputInvocationDefinitionV1::Edge(ordinal) = definition else {
+        return Err(Error::Invalid(
+            "invocation result lacks a source CallReturn definition",
+        ));
+    };
+    let row = captured
+        .edge_definitions()
+        .get(ordinal)
+        .ok_or(Error::Invalid("invocation edge definition absent"))?;
+    if row.variable().get() != local.index()
+        || row.value() != Some(value)
+        || row.ordinal() != 0
+        || !row.is_reachable()
+        || !row.is_promoted()
+    {
+        return Err(Error::Invalid(
+            "invocation source CallReturn definition differs",
+        ));
+    }
+    let block = function
+        .blocks()
+        .get(row.edge().source().get() as usize)
+        .ok_or(Error::Invalid("invocation source Call block absent"))?;
+    let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+        return Err(Error::Invalid("invocation source definition is not a Call"));
+    };
+    let destination = call
+        .destination()
+        .ok_or(Error::Invalid("invocation source Call has no destination"))?;
+    if !matches!(call.unwind(), SemanticUnwindActionV1::Unreachable)
+        || destination.place().local() != local
+        || !destination.place().projections().is_empty()
+        || destination.edge().role()
+            != fe2o3_mir_model::semantic_mir_v1::SemanticEdgeRoleV1::CallReturn
+    {
+        return Err(Error::Invalid(
+            "invocation source Call continuation differs",
+        ));
+    }
+    // The sole normal edge is occurrence zero; cleanup and no-destination calls
+    // were refused above, so a target-only match cannot authenticate this row.
+    if row.edge().ordinal() != 0 {
+        return Err(Error::Invalid(
+            "invocation source Call successor ordinal differs",
+        ));
+    }
+    let key = (destination.edge().target().index(), row.edge());
+    let found = assert_origin_find_v1(&index.incoming, budget, |row, budget| {
+        budget.charge_work(3)?;
+        Ok(row.0.cmp(&key))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("invocation captured CallReturn differs"))?;
+    let edge = &captured.successors()[index.incoming[found].1];
+    if edge.id() != row.edge() || edge.edge() != destination.edge() {
+        return Err(Error::Invalid(
+            "invocation captured CallReturn role differs",
+        ));
+    }
+    Ok((row.edge(), call))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceOutputInvocationSourceAnchorV1 {
+    get: fe2o3_mir_model::SsaEdgeIdV1,
+    producer: fe2o3_mir_model::SsaEdgeIdV1,
+    raw: SsaValueV1,
+    witness: SsaValueV1,
+}
+
+fn source_output_invocation_source_anchor_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    local: SemanticLocalIdV1,
+    value: SsaValueV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputInvocationSourceAnchorV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
+        SemanticMutabilityV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
+    };
+    use fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1 as Site;
+    budget.charge_work(4).map_err(Error::Resource)?;
+    if index.source != std::ptr::from_ref(view.source).cast() {
+        return Err(Error::Invalid("invocation indexed source owner differs"));
+    }
+    let captured = source_output_invocation_capture_v1(view.source, index.function, budget)?;
+    let semantic = view.source.semantic_ssa().source_semantic();
+    let function = semantic
+        .functions()
+        .get(index.function.index() as usize)
+        .ok_or(Error::Invalid("invocation indexed source function absent"))?;
+    let raw = function
+        .locals()
+        .get(local.index() as usize)
+        .ok_or(Error::Invalid("invocation raw source local absent"))?
+        .ty();
+    budget.charge_work(8).map_err(Error::Resource)?;
+    if !matches!(
+        semantic
+            .types()
+            .get(raw.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64
+        }))
+    ) || lower_scalar_type(semantic.types(), raw).map_err(Error::SourceReplay)?
+        != Type::Scalar(ScalarType::U64)
+    {
+        return Err(Error::Invalid(
+            "invocation source raw index is not unsigned 64-bit",
+        ));
+    }
+    let (raw_local, raw_value, definition) =
+        source_output_invocation_copy_origin_v1(view, index, &captured, local, value, raw, budget)?;
+    let (get, call) = source_output_invocation_call_v1(
+        function, index, &captured, raw_local, raw_value, definition, budget,
+    )?;
+    let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+        operation:
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+                index_witness,
+                raw_index,
+            },
+        ..
+    }) = semantic.callables().get(call.callee().index() as usize)
+    else {
+        return Err(Error::Invalid(
+            "invocation raw definition is not authenticated ThreadIndexGet",
+        ));
+    };
+    budget
+        .charge_work(call.arguments().len())
+        .map_err(Error::Resource)?;
+    let [SemanticOperandV1::Copy(reference)] = call.arguments() else {
+        return Err(Error::Invalid(
+            "invocation Get requires one copied typed reference",
+        ));
+    };
+    if *raw_index != raw
+        || !reference.projections().is_empty()
+        || call
+            .destination()
+            .is_none_or(|destination| destination.place().ty() != raw)
+    {
+        return Err(Error::Invalid("invocation Get source types differ"));
+    }
+    let Some(SemanticTypeShapeV1::Pointer(pointer)) = semantic
+        .types()
+        .get(reference.ty().index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return Err(Error::Invalid(
+            "invocation Get argument is not a source reference",
+        ));
+    };
+    if pointer.kind() != SemanticPointerKindV1::Reference
+        || pointer.mutability() != SemanticMutabilityV1::Immutable
+        || pointer.pointee() != *index_witness
+        || pointer.metadata() != SemanticPointerMetadataV1::None
+    {
+        return Err(Error::Invalid(
+            "invocation Get witness reference type differs",
+        ));
+    }
+    let reference_value = source_output_invocation_use_v1(
+        index,
+        &captured,
+        (1, get.source().get(), 0, 3, 0, 0, 0),
+        reference.local(),
+        budget,
+    )?;
+    let (_, _, definition) = source_output_invocation_copy_origin_v1(
+        view,
+        index,
+        &captured,
+        reference.local(),
+        reference_value,
+        reference.ty(),
+        budget,
+    )?;
+    let SourceOutputInvocationDefinitionV1::Event(ordinal) = definition else {
+        return Err(Error::Invalid(
+            "invocation Get reference lacks an actual shared Borrow",
+        ));
+    };
+    let Site::Statement { block, statement } = captured.events()[ordinal].site() else {
+        return Err(Error::Invalid("invocation Borrow source site differs"));
+    };
+    let SemanticStatementKindV1::Assign(assignment) =
+        function.blocks()[block.get() as usize].statements()[statement as usize].kind()
+    else {
+        return Err(Error::Invalid("invocation Borrow source assignment absent"));
+    };
+    let SemanticRvalueKindV1::Borrow {
+        kind: SemanticBorrowKindV1::Shared,
+        place,
+    } = assignment.value().kind()
+    else {
+        return Err(Error::Invalid(
+            "invocation Get receiver was not a shared Borrow",
+        ));
+    };
+    if !place.projections().is_empty() || place.ty() != *index_witness {
+        return Err(Error::Invalid("invocation Borrow witness type differs"));
+    }
+    source_output_invocation_statement_span_v1(view, index, block.get(), statement, budget)?;
+    let witness = source_output_invocation_use_v1(
+        index,
+        &captured,
+        (0, block.get(), statement, 1, 0, 0, 0),
+        place.local(),
+        budget,
+    )?;
+    let (witness_local, witness_value, definition) = source_output_invocation_copy_origin_v1(
+        view,
+        index,
+        &captured,
+        place.local(),
+        witness,
+        *index_witness,
+        budget,
+    )?;
+    let (producer, call) = source_output_invocation_call_v1(
+        function,
+        index,
+        &captured,
+        witness_local,
+        witness_value,
+        definition,
+        budget,
+    )?;
+    budget
+        .charge_work(call.arguments().len())
+        .map_err(Error::Resource)?;
+    if !call.arguments().is_empty()
+        || call
+            .destination()
+            .is_none_or(|destination| destination.place().ty() != *index_witness)
+        || !matches!(semantic.callables().get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {index_witness: actual, raw_index: raw}, ..
+            }) if actual == index_witness && raw == raw_index)
+    {
+        return Err(Error::Invalid(
+            "invocation witness is not authenticated ThreadIndex1d",
+        ));
+    }
+    Ok(SourceOutputInvocationSourceAnchorV1 {
+        get,
+        producer,
+        raw: raw_value,
+        witness: witness_value,
+    })
+}
+
+fn source_output_invocation_n_root_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    source: SourceOutputInvocationSourceAnchorV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1, ValueId),
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::{
+        CanonicalKirBlockCoordinateV1 as Block, CanonicalKirDefinitionCoordinateV1 as Def,
+        CanonicalKirOperationCoordinateV1 as Op,
+    };
+    let body = view.source.executable().module().functions[index.canonical.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("invocation N body absent"))?;
+    let mut result = None;
+    for (edge, count) in [(source.get, 0), (source.producer, 1)] {
+        let found = assert_origin_find_v1(&index.terminators, budget, |row, budget| {
+            budget.charge_work(1)?;
+            Ok(row.0.cmp(&edge.source().get()))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("invocation N Call span absent"))?;
+        let span =
+            view.source.correspondence.terminator_operation_spans()[index.terminators[found].1];
+        budget.charge_work(8).map_err(Error::Resource)?;
+        if span.operation_count() != count {
+            return Err(Error::Invalid(
+                "invocation N Call span is not exact intrinsic or alias",
+            ));
+        }
+        let found = assert_origin_find_v1(&index.blocks, budget, |row, budget| {
+            budget.charge_work(1)?;
+            Ok(row.0.cmp(&span.kernel_ir_block()))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("invocation N span block absent"))?;
+        let block = index.blocks[found].1;
+        if !matches!(
+            body.blocks[block as usize].terminator,
+            Some(Terminator::Branch { .. })
+        ) {
+            return Err(Error::Invalid("invocation N CallReturn is not one branch"));
+        }
+        if count == 0 {
+            continue;
+        }
+        let operation = body.blocks[block as usize]
+            .operations
+            .get(span.first_operation_ordinal() as usize)
+            .ok_or(Error::Invalid("invocation N producer operation absent"))?;
+        if operation.results.len() != 1
+            || operation.results[0].ty != Type::INDEX
+            || !matches!(&operation.kind, OperationKind::Intrinsic(intrinsic)
+                if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d())
+        {
+            return Err(Error::Invalid(
+                "invocation N producer is not exact GlobalX INDEX",
+            ));
+        }
+        result = Some((
+            Def::Result {
+                operation: Op {
+                    block: Block {
+                        function: index.canonical,
+                        block,
+                    },
+                    operation: span.first_operation_ordinal(),
+                },
+                result: 0,
+            },
+            operation.results[0].id,
+        ));
+    }
+    result.ok_or(Error::Invalid("invocation N producer absent"))
+}
+
+fn source_output_invocation_n_ancestry_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    mut value: ValueId,
+    root: ValueId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let body = view.source.executable().module().functions[index.canonical.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("invocation N body absent"))?;
+    for _ in 0..=MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        if value == root {
+            return Ok(());
+        }
+        let found = assert_origin_find_v1(&index.values, budget, |row, budget| {
+            budget.charge_work(1)?;
+            Ok(row.0.cmp(&value))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("invocation N use definition absent"))?;
+        let (block, ordinal, result) = index.values[found].1;
+        let operation = &body.blocks[block as usize].operations[ordinal as usize];
+        budget.charge_work(8).map_err(Error::Resource)?;
+        let OperationKind::Cast {
+            kind: CastKind::Bitcast,
+            value: operand,
+            to,
+        } = &operation.kind
+        else {
+            return Err(Error::Invalid(
+                "invocation N ancestry is not identity transport",
+            ));
+        };
+        if result != 0
+            || operation.results.len() != 1
+            || operation.results[0].id != value
+            || kir_semantic_scalar_v1(&operation.results[0].ty)
+                != Some(source_output_address_u64_v1())
+            || kir_semantic_scalar_v1(to) != Some(source_output_address_u64_v1())
+        {
+            return Err(Error::Invalid(
+                "invocation N identity width or result differs",
+            ));
+        }
+        value = *operand;
+    }
+    Err(Error::Invalid("invocation N ancestry depth exceeded"))
+}
+
+fn source_output_invocation_output_root_v1(
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    mut value: ValueId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1, ValueId),
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Def;
+    budget.charge_work(2).map_err(Error::Resource)?;
+    let function = inventory
+        .functions()
+        .get(canonical.0 as usize)
+        .ok_or(Error::Invalid("invocation O function absent"))?;
+    for _ in 0..=MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        let definition = inventory
+            .definition_for_value(canonical, value, budget)
+            .map_err(Error::Inventory)?
+            .ok_or(Error::Invalid("invocation O definition absent"))?;
+        budget.charge_work(8).map_err(Error::Resource)?;
+        if kir_semantic_scalar_v1(definition.ty) != Some(source_output_address_u64_v1()) {
+            return Err(Error::Invalid("invocation O coordinate width differs"));
+        }
+        let Def::Result {
+            operation,
+            result: 0,
+        } = definition.coordinate
+        else {
+            return Err(Error::Invalid("invocation O coordinate is not result zero"));
+        };
+        let row = source_output_address_operation_v1(inventory, function, operation, budget)?;
+        if row.operation.results.len() != 1 || row.operation.results[0].id != value {
+            return Err(Error::Invalid("invocation O result identity differs"));
+        }
+        match &row.operation.kind {
+            OperationKind::Intrinsic(intrinsic)
+                if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()
+                    && row.operation.results[0].ty == Type::INDEX =>
+            {
+                return Ok((definition.coordinate, value));
+            }
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: operand,
+                to,
+            } if kir_semantic_scalar_v1(to) == Some(source_output_address_u64_v1()) => {
+                source_output_address_operand_v1(inventory, row, 0, *operand, budget)?;
+                value = *operand;
+            }
+            _ => {
+                return Err(Error::Invalid(
+                    "invocation O ancestry is not sealed GlobalX transport",
+                ));
+            }
+        }
+    }
+    Err(Error::Invalid("invocation O ancestry depth exceeded"))
+}
+
+fn source_output_invocation_symbol_slot_v1(
+    parameters: usize,
+) -> Result<u32, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let slot = u32::try_from(parameters)
+        .ok()
+        .and_then(|n| n.checked_mul(2))
+        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+    PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2
+        .checked_add(slot)
+        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+    Ok(slot)
+}
+
+fn source_output_invocation_symbol_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<u32, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget
+        .charge_work(view.source.source_launch.roots().len())
+        .map_err(Error::Resource)?;
+    let root = view
+        .source
+        .source_launch
+        .roots()
+        .iter()
+        .find(|root| root.selected_root() == candidate.selected_root)
+        .ok_or(Error::Invalid("invocation source launch root absent"))?;
+    budget.charge_work(81).map_err(Error::Resource)?;
+    let source = &view.source.semantic_ssa().source_semantic().functions()
+        [candidate.selected_root.index() as usize];
+    let entry = source
+        .kernel_entry()
+        .ok_or(Error::Invalid("invocation source entry absent"))?;
+    let layout = root.layout();
+    let expected = ProductionRankedOperationV1::ExecutionLayout {
+        grid_identity: layout.grid_identity(),
+        global_extents: layout.global_extents(),
+        workgroup_extents: layout.workgroup_extents(),
+        subgroup_size: layout.subgroup_size(),
+        full_physical_workgroups: layout.full_physical_workgroups(),
+    };
+    if candidate.selected_root != candidate.selected_function
+        || source.role() != SemanticFunctionRoleV1::KernelRoot
+        || source.identity() != root.semantic_root_identity()
+        || entry.kernel_binding_identity().as_bytes() != &root.kernel_binding()
+        || root.source_rank() != 1
+        || layout.global_extents()[1..] != [1, 1]
+        || layout.workgroup_extents()[1..] != [1, 1]
+        || candidate
+            .lowering
+            .kernel()
+            .blocks()
+            .first()
+            .and_then(|b| b.operations().first())
+            != Some(&expected)
+    {
+        return Err(Error::Invalid(
+            "invocation exact GlobalX source launch differs",
+        ));
+    }
+    let function = view
+        .output()
+        .module()
+        .functions
+        .get(canonical.0 as usize)
+        .ok_or(Error::Invalid("invocation output function absent"))?;
+    source_output_invocation_symbol_slot_v1(function.signature.parameters.len())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn source_output_control_invocation_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    source_index: usize,
+    claim: ProductionProjectionArgumentCandidateV1,
+    uses: &mut Vec<SourceOutputProjectionLiteralUseV1>,
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputProjectionArgumentV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::{
+        CanonicalKirDefinitionCoordinateV1 as Def, CanonicalKirUseCoordinateV1 as Use,
+    };
+    budget.charge_work(4).map_err(Error::Resource)?;
+    if claim.component != ProductionProjectionArgumentComponentV1::Scalar {
+        return Err(Error::Invalid("invocation source component is not scalar"));
+    }
+    let symbol = source_output_invocation_symbol_v1(view, candidate, index.canonical, budget)?;
+    let captured = source_output_invocation_capture_v1(view.source, index.function, budget)?;
+    let function =
+        &view.source.semantic_ssa().source_semantic().functions()[index.function.index() as usize];
+    let body = view.source.executable().module().functions[index.canonical.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("invocation original body absent"))?;
+    let first_use = uses.len();
+    let mut anchor = None;
+    for segment in &candidate.control.blocks {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        let tail = candidate
+            .lowering
+            .kernel()
+            .blocks()
+            .get(segment.tail as usize)
+            .ok_or(Error::Invalid("invocation projected guard absent"))?;
+        let (lhs, rhs) = match tail.terminator() {
+            ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
+            | ProductionRankedTerminatorV1::IndexEqual { lhs, rhs, .. } => (*lhs, *rhs),
+            _ => continue,
+        };
+        if lhs != claim.ranked_value && rhs != claim.ranked_value {
+            continue;
+        }
+        if lhs != claim.ranked_value || rhs == claim.ranked_value {
+            return Err(Error::Invalid(
+                "invocation requires the exact bounds index operand",
+            ));
+        }
+        let block = function
+            .blocks()
+            .get(segment.source_block.index() as usize)
+            .ok_or(Error::Invalid("invocation source guard absent"))?;
+        let SemanticTerminatorKindV1::Assert {
+            message:
+                SemanticAssertMessageV1::BoundsCheck {
+                    index: SemanticOperandV1::Copy(place),
+                    ..
+                },
+            ..
+        } = block.terminator().kind()
+        else {
+            return Err(Error::Invalid(
+                "invocation guard is not a copied source bounds index",
+            ));
+        };
+        if place.local() != claim.source_local
+            || !place.projections().is_empty()
+            || function
+                .locals()
+                .get(place.local().index() as usize)
+                .map(|local| local.ty())
+                != Some(place.ty())
+        {
+            return Err(Error::Invalid(
+                "invocation source guard local or type differs",
+            ));
+        }
+        let value = source_output_invocation_use_v1(
+            index,
+            &captured,
+            (1, segment.source_block.index(), 0, 4, 1, 0, 0),
+            claim.source_local,
+            budget,
+        )?;
+        let source = source_output_invocation_source_anchor_v1(
+            view,
+            index,
+            claim.source_local,
+            value,
+            budget,
+        )?;
+        let (original, original_root) =
+            source_output_invocation_n_root_v1(view, index, source, budget)?;
+        let assertion = view
+            .source
+            .assert_origins()
+            .assert_condition(
+                candidate.selected_root,
+                candidate.selected_function,
+                segment.source_block,
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        let SemanticKirAssertConditionOutcomeV1::Emitted {
+            condition_use,
+            definition,
+            ..
+        } = assertion.outcome()
+        else {
+            return Err(Error::Invalid("invocation assertion condition was elided"));
+        };
+        let Def::Result {
+            operation,
+            result: 0,
+        } = definition
+        else {
+            return Err(Error::Invalid(
+                "invocation guard condition is not a direct Compare",
+            ));
+        };
+        budget.charge_work(5).map_err(Error::Resource)?;
+        if operation.block.function != index.canonical
+            || !matches!(condition_use, Use::TerminatorOperand { block, operand: 0 } if block == operation.block)
+        {
+            return Err(Error::Invalid("invocation assertion occurrence differs"));
+        }
+        let compare = body
+            .blocks
+            .get(operation.block.block as usize)
+            .and_then(|block| block.operations.get(operation.operation as usize))
+            .ok_or(Error::Invalid("invocation original Compare absent"))?;
+        let OperationKind::Compare {
+            predicate: ComparePredicate::LessThan,
+            lhs: original_value,
+            ..
+        } = &compare.kind
+        else {
+            return Err(Error::Invalid(
+                "invocation original guard is not a less-than Compare",
+            ));
+        };
+        source_output_invocation_n_ancestry_v1(
+            view,
+            index,
+            *original_value,
+            original_root,
+            budget,
+        )?;
+        let coordinate = Use::OperationOperand {
+            operation,
+            operand: 0,
+        };
+        let row = assert_origin_find_v1(
+            &view.checked_control_rows.compare_uses,
+            budget,
+            |row, budget| {
+                budget.charge_work(1)?;
+                Ok(row.input.coordinate.cmp(&coordinate))
+            },
+        )
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("invocation checked Compare use absent"))?;
+        let row = view.checked_control_rows.compare_uses[row];
+        let output =
+            source_output_control_literal_row_v1(row, coordinate, *original_value, budget)?;
+        budget.charge_work(2).map_err(Error::Resource)?;
+        if !matches!(output.coordinate, Use::OperationOperand { operation, .. }
+            if operation.block.function == index.canonical)
+        {
+            return Err(Error::Invalid("invocation mapped Compare function differs"));
+        }
+        if source_output_control_use_identity_v1(inventory, output.coordinate, budget)? != output {
+            return Err(Error::Invalid("invocation mapped Compare use differs"));
+        }
+        let (output_root, output_value) = source_output_invocation_output_root_v1(
+            inventory,
+            index.canonical,
+            output.value,
+            budget,
+        )?;
+        budget.charge_work(8).map_err(Error::Resource)?;
+        let current = (source, original, output_root, output_value);
+        if anchor
+            .replace(current)
+            .is_some_and(|previous| previous != current)
+        {
+            return Err(Error::Invalid("invocation guard anchors differ"));
+        }
+        assert_origin_push_v1(
+            uses,
+            SourceOutputProjectionLiteralUseV1 {
+                guard: segment.source_block,
+                input: row.input,
+                output,
+            },
+            budget,
+        )
+        .map_err(Error::SourceOrigin)?;
+    }
+    let (source, original, output, _) = anchor.ok_or(Error::Invalid(
+        "invocation has no retained checked guard use",
+    ))?;
+    Ok(SourceOutputProjectionArgumentV1 {
+        ranked_value: claim.ranked_value,
+        source_local: claim.source_local,
+        component: claim.component,
+        scalar: source_output_address_u64_v1(),
+        origin: SourceOutputProjectionLeafOriginV1::Invocation(
+            SourceOutputProjectionInvocationV1 {
+                source_index,
+                source,
+                original,
+                output,
+                symbol,
+                first_use,
+                end_use: uses.len(),
+            },
+        ),
+    })
 }

@@ -249,9 +249,7 @@ mod physical_address_components_v1 {
                     &mut budget,
                 );
                 if exact {
-                    let Some(ProductionConditionalMemoryIndexLeafV1::Formal(found)) =
-                        result.unwrap()
-                    else {
+                    let Some(SourceOutputAddressLeafV1::Formal(found)) = result.unwrap() else {
                         panic!("exact formal row");
                     };
                     assert_eq!(found.original(), definition);
@@ -581,6 +579,7 @@ mod physical_address_components_v1 {
                         .map_err(ProductionSourceOutputErrorV1::Resource)?;
                     let ssa = source_output_allocation_scratch_v1(inventory, budget)?;
                     let mut context = SourceOutputControlNormalizationV1 {
+                        invocation_roots: &[],
                         literal_uses: &[],
                         guard: None,
                         inner: SourceOutputScalarNormalizationV1 {
@@ -697,5 +696,347 @@ mod physical_address_components_v1 {
             ));
             assert_eq!(budget.storage(), floor);
         });
+    }
+}
+
+#[cfg(test)]
+mod invocation_coordinate_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use fe2o3_mir_model::{SsaDefinitionIdV1, SsaEdgeIdV1, SsaVariableIdV1};
+
+    #[test]
+    fn invocation_symbol_domain_has_no_formal_collision_or_base_overflow() {
+        assert_eq!(source_output_invocation_symbol_slot_v1(0).unwrap(), 0);
+        assert_eq!(source_output_invocation_symbol_slot_v1(3).unwrap(), 6);
+        let maximum = ((u32::MAX - PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2) / 2) as usize;
+        let slot = source_output_invocation_symbol_slot_v1(maximum).unwrap();
+        assert!(
+            PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2
+                .checked_add(slot)
+                .is_some()
+        );
+        for count in [maximum + 1, usize::MAX] {
+            assert!(matches!(
+                source_output_invocation_symbol_slot_v1(count),
+                Err(ProductionSourceOutputErrorV1::Resource(
+                    AssertOriginResourceV1::Arithmetic
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn invocation_actual_o_root_recognizes_only_global_x_identity_transports() {
+        use fe2o3_kernel_ir::{
+            Axis, Function as KirFunction, IndexKind, IntrinsicKind, IntrinsicOperation,
+            VerifiedCanonicalKernelIrModuleV12 as Owner,
+        };
+        for kind in [
+            IntrinsicOperation::global_id_1d().kind,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::Y,
+            },
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::Z,
+            },
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Workgroup,
+                axis: Axis::X,
+            },
+            IntrinsicKind::LaunchExtent { axis: Axis::X },
+        ] {
+            let mut block = BasicBlock::new(BlockId(0));
+            block.operations = vec![
+                Operation::effect_free(
+                    ValueDef::new(ValueId(1), Type::INDEX),
+                    OperationKind::Intrinsic(IntrinsicOperation::new(kind, Type::INDEX)),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(2), Type::Scalar(ScalarType::U64)),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value: ValueId(1),
+                        to: Type::Scalar(ScalarType::U64),
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U64)),
+                    OperationKind::Constant(Constant::U64(1)),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U64)),
+                    OperationKind::Binary {
+                        op: BinaryOp::Add,
+                        lhs: ValueId(2),
+                        rhs: ValueId(3),
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U32)),
+                    OperationKind::Cast {
+                        kind: CastKind::Truncate,
+                        value: ValueId(2),
+                        to: Type::Scalar(ScalarType::U32),
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(6), Type::Scalar(ScalarType::U64)),
+                    OperationKind::Cast {
+                        kind: CastKind::ZeroExtend,
+                        value: ValueId(5),
+                        to: Type::Scalar(ScalarType::U64),
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(7), Type::Scalar(ScalarType::I64)),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value: ValueId(2),
+                        to: Type::Scalar(ScalarType::I64),
+                    },
+                ),
+            ];
+            block.terminator = Some(Terminator::Return { values: vec![] });
+            let mut module = Module::new("invocation-root-component");
+            module.functions.push(KirFunction::kernel_entry(
+                "entry",
+                Signature::new(vec![Type::Scalar(ScalarType::U64)], vec![]),
+                vec![ValueId(0)],
+                vec![block],
+            ));
+            module.kernels.push(Kernel::new(
+                "invocation-root-component",
+                "entry",
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Static(1),
+                    y: LaunchExtent::Static(1),
+                    z: LaunchExtent::Static(1),
+                },
+            ));
+            let mut work = Work::new(1_000_000);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+            budget.reserve_storage(19).unwrap();
+            let (owner, storage) =
+                Owner::from_module_ref_with_verification_budget_v12(&module, &mut budget).unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            let (inventory, inventory_storage) =
+                fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(&owner, &mut budget)
+                    .unwrap();
+            budget
+                .reserve_storage(inventory_storage.retained_storage())
+                .unwrap();
+            let floor = budget.storage();
+            let function = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(0);
+            for value in [ValueId(1), ValueId(2)] {
+                let result = source_output_invocation_output_root_v1(
+                    &inventory,
+                    function,
+                    value,
+                    &mut budget,
+                );
+                if kind == IntrinsicOperation::global_id_1d().kind {
+                    let (definition, value) = result.unwrap();
+                    assert_eq!(value, ValueId(1));
+                    assert!(
+                        matches!(definition, SourceOutputAddressDefV1::Result { operation, result: 0 }
+                        if operation.block.function == function && operation.block.block == 0 && operation.operation == 0)
+                    );
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSourceOutputErrorV1::Invalid(_))
+                    ));
+                }
+            }
+            for value in [
+                ValueId(0),
+                ValueId(3),
+                ValueId(4),
+                ValueId(5),
+                ValueId(6),
+                ValueId(7),
+            ] {
+                assert!(matches!(
+                    source_output_invocation_output_root_v1(
+                        &inventory,
+                        function,
+                        value,
+                        &mut budget
+                    ),
+                    Err(ProductionSourceOutputErrorV1::Invalid(_))
+                ));
+            }
+            assert_eq!(budget.storage(), floor);
+            drop(inventory);
+            budget
+                .release_storage(inventory_storage.retained_storage())
+                .unwrap();
+            drop(owner);
+            budget.release_storage(storage.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), 19);
+        }
+    }
+
+    fn source_index() -> SourceOutputInvocationSourceIndexV1 {
+        // Numeric walk fixture only. This deliberately has no source owner and
+        // cannot enter the source-authenticating relation constructors.
+        SourceOutputInvocationSourceIndexV1 {
+            source: std::ptr::null(),
+            function: SemanticFunctionIdV1::from_index(0),
+            canonical: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(0),
+            events: vec![],
+            definitions: vec![(
+                SsaValueV1::Definition(SsaDefinitionIdV1::new(7)),
+                SourceOutputInvocationDefinitionV1::Edge(0),
+            )],
+            incoming: vec![],
+            transports: vec![],
+            statements: vec![],
+            terminators: vec![],
+            blocks: vec![],
+            values: vec![],
+        }
+    }
+
+    #[test]
+    fn invocation_single_definition_walk_has_derived_work_and_storage_boundaries() {
+        const HISTORY: usize = 7;
+        const WORK: usize = 16 + 1 + 4;
+        let index = source_index();
+        let floor = 19
+            + std::mem::size_of_val(&index)
+            + index.definitions.capacity() * std::mem::size_of_val(&index.definitions[0]);
+        let scratch = std::mem::size_of::<
+            [Option<SsaValueV1>; MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1],
+        >();
+        for exact in [true, false] {
+            let mut work = Work::new(HISTORY + WORK - usize::from(!exact));
+            let mut budget = AssertOriginBudgetV1::new(&mut work, floor + scratch);
+            budget.charge_work(HISTORY).unwrap();
+            budget.reserve_storage(floor).unwrap();
+            let result = source_output_invocation_definition_v1(
+                &index,
+                index.definitions[0].0,
+                SemanticLocalIdV1::from_index(8),
+                &mut budget,
+            );
+            if exact {
+                assert!(
+                    matches!(result, Ok((value, SourceOutputInvocationDefinitionV1::Edge(0)))
+                    if value == index.definitions[0].0)
+                );
+                assert_eq!(budget.work(), HISTORY + WORK);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProductionSourceOutputErrorV1::SourceOrigin(_))
+                ));
+                assert_eq!(budget.work(), HISTORY + 16 + 1);
+                // A denied charge records history but does not poison future
+                // smaller charges. The production fallible chain must return.
+                budget.charge_work(1).unwrap();
+            }
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.peak_storage(), floor + scratch);
+        }
+        let mut work = Work::new(HISTORY + WORK);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, floor + scratch - 1);
+        budget.charge_work(HISTORY).unwrap();
+        budget.reserve_storage(floor).unwrap();
+        assert!(matches!(
+            source_output_invocation_definition_v1(
+                &index,
+                index.definitions[0].0,
+                SemanticLocalIdV1::from_index(8),
+                &mut budget
+            ),
+            Err(ProductionSourceOutputErrorV1::Resource(_))
+        ));
+        assert_eq!(budget.work(), HISTORY);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.peak_storage(), floor);
+    }
+
+    #[test]
+    fn invocation_source_walk_requires_one_exact_incoming_transport_and_refuses_cycles() {
+        let mut index = source_index();
+        let edge = SsaEdgeIdV1::new(SsaBlockIdV1::new(0), 0);
+        let variable = SsaVariableIdV1::new(8);
+        let value = SsaValueV1::BlockArgument {
+            block: SsaBlockIdV1::new(1),
+            variable,
+        };
+        index.incoming = vec![((1, edge), 0)];
+        index.transports = vec![((edge, variable.get()), index.definitions[0].0)];
+        let mut work = Work::new(10_000);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+        let floor = 19
+            + std::mem::size_of_val(&index)
+            + index.definitions.capacity() * std::mem::size_of_val(&index.definitions[0])
+            + index.incoming.capacity() * std::mem::size_of_val(&index.incoming[0])
+            + index.transports.capacity() * std::mem::size_of_val(&index.transports[0]);
+        budget.reserve_storage(floor).unwrap();
+        let before = budget.work();
+        assert!(
+            source_output_invocation_definition_v1(
+                &index,
+                value,
+                SemanticLocalIdV1::from_index(8),
+                &mut budget
+            )
+            .is_ok()
+        );
+        assert_eq!(budget.work() - before, (16 + 2 + 4 + 4) + (17 + 5));
+        index.transports[0].1 = value;
+        assert!(matches!(
+            source_output_invocation_definition_v1(
+                &index,
+                value,
+                SemanticLocalIdV1::from_index(8),
+                &mut budget
+            ),
+            Err(ProductionSourceOutputErrorV1::Invalid(
+                "invocation source forwarding cycle"
+            ))
+        ));
+        index.transports[0].1 = index.definitions[0].0;
+        assert!(matches!(
+            source_output_invocation_definition_v1(
+                &index,
+                value,
+                SemanticLocalIdV1::from_index(9),
+                &mut budget
+            ),
+            Err(ProductionSourceOutputErrorV1::Invalid(
+                "invocation forwarded variable differs"
+            ))
+        ));
+        // Reserve the second row before growing this component-only fixture.
+        assert_origin_push_v1(
+            &mut index.incoming,
+            ((1, SsaEdgeIdV1::new(SsaBlockIdV1::new(0), 1)), 1),
+            &mut budget,
+        )
+        .unwrap();
+        let retained = budget.storage();
+        assert!(matches!(
+            source_output_invocation_definition_v1(
+                &index,
+                value,
+                SemanticLocalIdV1::from_index(8),
+                &mut budget
+            ),
+            Err(ProductionSourceOutputErrorV1::Invalid(
+                "invocation source has multiple incoming edges"
+            ))
+        ));
+        assert_eq!(budget.storage(), retained);
     }
 }

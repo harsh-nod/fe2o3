@@ -1435,3 +1435,316 @@ mod borrowed_full_address_tests {
         );
     }
 }
+
+mod invocation_coordinate_address_tests {
+    use super::*;
+    use fe2o3_lower_mir_kernel::{
+        ProductionBorrowedRankedCorrespondenceV1, ProductionScopedCanonicalStoreAnalysisV1,
+    };
+
+    fn with_fixture(
+        profile: Profile,
+        control_case: Option<u8>,
+        body: impl FnOnce(
+            &ProductionScopedCanonicalStoreAnalysisV1<'_, '_, '_>,
+            &ProductionBorrowedRankedCorrespondenceV1<'_>,
+            &canonical_memory_control_v1::CanonicalMemoryControlRecorderV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) {
+        with_invocation_coordinate_source_v1(|source, budget| {
+            let floor = budget.storage();
+            let bound =
+                dialect_amdgcn::bind_production_target_v1(source.executable().module(), profile)
+                    .unwrap();
+            let (input, input_storage) =
+                Owner::from_module_ref_with_verification_budget_v12(bound.module(), budget)
+                    .unwrap();
+            budget
+                .reserve_storage(input_storage.retained_storage())
+                .unwrap();
+            let observed =
+                fe2o3_pliron::optimize_native_neutral_kernel_ir_policy3_v1(&input, budget).unwrap();
+            budget
+                .reserve_storage(observed.storage().retained_storage())
+                .unwrap();
+            let checked = observed.try_check_and_finish_v1(budget).unwrap();
+            let output_bytes = checked.storage().retained_storage();
+            budget.reserve_storage(output_bytes).unwrap();
+            let coordinate_bytes;
+            {
+                let (coordinates, storage) =
+                    dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                        source.executable(),
+                        &input,
+                        profile,
+                        budget,
+                    )
+                    .unwrap();
+                coordinate_bytes = storage.retained_storage();
+                budget.reserve_storage(coordinate_bytes).unwrap();
+                let (view, storage) =
+                    fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                        source,
+                        &coordinates,
+                        &checked,
+                        budget,
+                    )
+                    .unwrap();
+                budget.reserve_storage(storage.retained_storage()).unwrap();
+                let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                let inputs = [ranked_root_input_1d(A_NAME, 247, 1)];
+                let references =
+                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+                let live = budget.storage();
+                with_ranked_root_preparation_v1(&projection, &inputs, &references, |effects, partition| {
+                    checked_output_session_v1::with_checked_output_assertions_view_budget_v1(&view, budget, |session| {
+                        session.with_canonical_memory_scope_v1(|session| {
+                            let source_root = projection.source_launch().roots()[0];
+                            let selection = projection.semantic_ssa().source_semantic()
+                                .select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
+                            let mut facts = session.for_source(source_root.selected_root(), selection.body());
+                            let legacy = project_and_verify_ranked_root_control_inner_v1(
+                                projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                &partition[0], &mut facts)?;
+                            let mut recorder = canonical_memory_control_v1::CanonicalMemoryControlRecorderV1::new(&mut facts)?;
+                            let full = project_and_verify_ranked_root_control_with_address_claims_v1(
+                                projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                &partition[0], &mut facts, Some(&mut recorder))?;
+                            assert_eq!(full.ranked_ir, legacy.ranked_ir);
+                            assert_eq!(full.access_sources, legacy.access_sources);
+                            if let Some(case) = control_case {
+                                let mut root = project_canonical_memory_root_v1(
+                                    projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                    &partition[0], &mut facts)?;
+                                let ordinal = root.control.candidate().arguments.iter().position(|row|
+                                    row.source_local.index() == 8
+                                        && row.component == fe2o3_lower_mir_kernel::ProductionProjectionArgumentComponentV1::Scalar)
+                                    .expect("the actual recorder must capture the Invocation leaf");
+                                let ranked = root.control.candidate().arguments[ordinal].ranked_value;
+                                assert!(root.lowering.kernel().blocks().iter().flat_map(|block| block.operations()).any(|operation|
+                                    matches!(operation, fe2o3_pliron::ProductionRankedOperationV1::InvocationIndex {
+                                        result, dimension: 0, launch_extent: 0,
+                                    } if ranked == fe2o3_pliron::ProductionRankedValueV1::Local(*result))));
+                                let expected = match case {
+                                    0 => {
+                                        root.control.candidate_mut().arguments[ordinal].source_local = SemanticLocalIdV1::from_index(9);
+                                        Some("invocation source guard local or type differs")
+                                    }
+                                    1 => {
+                                        root.control.candidate_mut().arguments.remove(ordinal);
+                                        Some("control projected continuation lost its actual Call")
+                                    }
+                                    2 => {
+                                        root.control.candidate_mut().arguments[ordinal].component =
+                                            fe2o3_lower_mir_kernel::ProductionProjectionArgumentComponentV1::SliceLength;
+                                        Some("invocation source component is not scalar")
+                                    }
+                                    3 => None,
+                                    _ => unreachable!(),
+                                };
+                                drop(facts);
+                                return session.with_output_occurrences_v1(|view, budget| {
+                                    let candidates = [fe2o3_lower_mir_kernel::ProductionCanonicalMemoryAnalysisCandidateV1 {
+                                        selected_root: root.selected_root, selected_function: root.selected_function,
+                                        lowering: &root.lowering, access_sources: &root.access_sources,
+                                        executable_effect_sources: &root.executable_effect_sources,
+                                        control: root.control.candidate(),
+                                    }];
+                                    let floor = budget.storage();
+                                    let mut completed = false;
+                                    let result = view.with_conditional_memory_control_coverage_v1(&candidates, budget, |control, budget| {
+                                        completed = true;
+                                        assert!(control.index_value(view, &candidates[0], ranked, budget)?.is_none());
+                                        assert!(control.index_leaf(view, &candidates[0], ranked, budget)?.is_none());
+                                        Ok(())
+                                    });
+                                    if let Some(expected) = expected {
+                                        assert!(matches!(result, Err(ProductionSourceOutputErrorV1::Invalid(actual)) if actual == expected));
+                                        assert!(!completed);
+                                    } else {
+                                        result.unwrap();
+                                        assert!(completed);
+                                    }
+                                    assert_eq!(budget.storage(), floor);
+                                    Ok(())
+                                });
+                            }
+                            drop(facts);
+                            with_prepared_canonical_memory_session_v1(&projection, &inputs, effects, partition, session,
+                                |analyses, budget| {
+                                    assert_eq!(analyses.len(), 1);
+                                    assert!(std::ptr::eq(analyses[0].output(), checked.owner()));
+                                    with_authenticated_borrowed_ranked_source_roster_v1(
+                                        source, vec![full].into_boxed_slice(), budget,
+                                        |original, verification, budget| {
+                                            assert!(std::ptr::eq(original.materialized(), source));
+                                            assert_eq!(verification.roots().len(), 1);
+                                            assert!(!verification.roots()[0].verification().has_authenticated_functional_verification());
+                                            assert!(verification.roots()[0].verification().aggregate_verus_execution().is_none());
+                                            Ok(body(&analyses[0], original, &recorder, budget))
+                                        }).expect("fresh source/N correspondence, not functional Some")
+                                })
+                        })
+                    })
+                }).unwrap();
+                assert!(references.as_slice().is_empty());
+                assert_eq!(budget.storage(), live);
+                drop(view);
+                budget.release_storage(storage.retained_storage()).unwrap();
+            }
+            budget.release_storage(coordinate_bytes).unwrap();
+            drop(checked);
+            budget.release_storage(output_bytes).unwrap();
+            drop(input);
+            budget
+                .release_storage(input_storage.retained_storage())
+                .unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+
+    #[test]
+    fn invocation_global_x_joins_actual_policy3_output_and_own_full_address_on_both_targets() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(profile, None, |analysis, original, recorder, budget| {
+                assert_eq!(analysis.access_count(), 1);
+                let output = analysis.output().module();
+                let body = output.functions[0].body.as_ref().unwrap();
+                let mut intrinsics = body
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.operations)
+                    .filter(|operation| {
+                        matches!(&operation.kind, fe2o3_kernel_ir::OperationKind::Intrinsic(value)
+                        if *value == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d())
+                    });
+                assert!(intrinsics.next().is_some());
+                assert!(intrinsics.next().is_none());
+                assert!(body.blocks.iter().flat_map(|block| &block.operations).any(
+                    |operation| matches!(
+                        operation.kind,
+                        fe2o3_kernel_ir::OperationKind::Store { .. }
+                    )
+                ));
+                let floor = budget.storage();
+                analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                    assert_eq!(relation.global_access_count(), 1);
+                    relation.check_borrowed_ranked_addresses_v1(
+                        original,
+                        0,
+                        recorder.candidate(),
+                        budget,
+                    )
+                })?;
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            });
+        }
+    }
+
+    #[test]
+    fn invocation_control_rejects_forged_or_missing_source_claims_and_keeps_public_leaf_closed() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for case in 0..4 {
+                with_fixture(profile, Some(case), |_, _, _, _| {
+                    panic!("control-only case must not enter the completed address callback")
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn invocation_full_own_use_rejects_foreign_source_claim_and_root() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(profile, None, |analysis, original, recorder, budget| {
+                let floor = budget.storage();
+                analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                    let live = budget.storage();
+                    let mut claims =
+                        fe2o3_lower_mir_kernel::ProductionProjectionControlCandidateV1 {
+                            blocks: recorder.candidate().blocks.clone(),
+                            arguments: recorder.candidate().arguments.clone(),
+                        };
+                    let row = claims
+                        .arguments
+                        .iter_mut()
+                        .find(|row| row.source_local.index() == 8)
+                        .unwrap();
+                    row.source_local = SemanticLocalIdV1::from_index(9);
+                    assert!(matches!(
+                        relation.check_borrowed_ranked_addresses_v1(original, 0, &claims, budget),
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full address leaf source mapping differs"
+                        ))
+                    ));
+                    assert!(matches!(
+                        relation.check_borrowed_ranked_addresses_v1(
+                            original,
+                            1,
+                            recorder.candidate(),
+                            budget
+                        ),
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "full address root absent"
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), live);
+                    relation.check_borrowed_ranked_addresses_v1(
+                        original,
+                        0,
+                        recorder.candidate(),
+                        budget,
+                    )
+                })?;
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            });
+        }
+    }
+
+    #[test]
+    fn invocation_physical_callback_error_and_unwind_restore_the_original_live_floor() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(profile, None, |analysis, original, recorder, budget| {
+                let floor = budget.storage();
+                let before = budget.work();
+                let failed =
+                    analysis.with_physical_address_relation_v1::<()>(budget, |relation, budget| {
+                        relation.check_borrowed_ranked_addresses_v1(
+                            original,
+                            0,
+                            recorder.candidate(),
+                            budget,
+                        )?;
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "invocation callback marker",
+                        ))
+                    });
+                assert!(matches!(
+                    failed,
+                    Err(ProductionSourceOutputErrorV1::Invalid(
+                        "invocation callback marker"
+                    ))
+                ));
+                assert_eq!(budget.storage(), floor);
+                assert!(budget.work() > before);
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    analysis.with_physical_address_relation_v1::<()>(budget, |relation, budget| {
+                        relation.check_borrowed_ranked_addresses_v1(
+                            original,
+                            0,
+                            recorder.candidate(),
+                            budget,
+                        )?;
+                        std::panic::panic_any(73u32)
+                    })
+                }))
+                .expect_err("the original callback panic must resume");
+                assert_eq!(panic.downcast_ref::<u32>(), Some(&73));
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            });
+        }
+    }
+}
