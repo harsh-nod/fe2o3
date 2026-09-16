@@ -5,10 +5,10 @@
 //! Retained means the operation identity survived, not that its operands stayed
 //! unchanged. Value endpoints are not fabricated instruction coordinates.
 
-use crate::{
-    KIR_PLIRON_PRODUCTION_PASSES_V12, KirBridgeCoordinateV1 as Coordinate, OperationGraphEpochV1,
-    PlironOptimizationPassV1,
-};
+#[cfg(test)]
+use crate::KIR_PLIRON_PRODUCTION_PASSES_V12;
+use crate::fixed_policy_v3::FixedPolicy;
+use crate::{KirBridgeCoordinateV1 as Coordinate, OperationGraphEpochV1, PlironOptimizationPassV1};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError, Module,
@@ -129,6 +129,30 @@ pub(crate) struct CaptureLimitsV12 {
 }
 
 impl CaptureLimitsV12 {
+    pub(crate) fn for_policy_bytes(bytes: usize, policy: FixedPolicy) -> Result<Self> {
+        let historical = Self::for_bytes(bytes)?;
+        match policy {
+            FixedPolicy::Historical2 => Ok(historical),
+            FixedPolicy::Checked3 => historical.for_policy3_nodes(historical.nodes),
+        }
+    }
+    pub(crate) fn for_policy3_nodes(self, bound: usize) -> Result<Self> {
+        if bound == 0 {
+            return Err(KirOptimizationMapErrorV12::Limit);
+        }
+        let nodes = self.nodes.min(bound);
+        // The extra pass creates no operations. A separate policy-3 cap allows
+        // two additional replacement/erasure observations per registered node.
+        // Exceeding it is a sticky refusal, never an incomplete transcript.
+        let events = nodes
+            .checked_mul(10)
+            .ok_or(KirOptimizationMapErrorV12::Arithmetic)?;
+        Ok(Self {
+            nodes,
+            events,
+            targets: events,
+        })
+    }
     pub(crate) const fn node_limit(self) -> usize {
         self.nodes
     }
@@ -212,7 +236,7 @@ mod replay_work;
 use replay_work::ReplayCensusV12;
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct KirOptimizationMapV12 {
+pub(crate) struct MapData {
     input: Identity,
     output: Identity,
     nodes: Vec<Node>,
@@ -224,7 +248,75 @@ pub struct KirOptimizationMapV12 {
     synthesized: Vec<Coordinate>,
     digest: [u8; 32],
 }
+
+/// Historical seven-pass policy-2 observation. Its wire identity is unchanged.
+#[derive(Debug, Eq, PartialEq)]
+pub struct KirOptimizationMapV12 {
+    data: MapData,
+}
+
+/// Separate eight-pass policy-3 observation, not semantic or execution authority.
+#[derive(Debug, Eq, PartialEq)]
+pub struct KirOptimizationMapPolicy3V12 {
+    data: MapData,
+}
+
+// A single owned payload does not add a policy tag or duplicate graph storage.
+const _: () = assert!(size_of::<KirOptimizationMapV12>() == size_of::<MapData>());
+const _: () = assert!(size_of::<KirOptimizationMapPolicy3V12>() == size_of::<MapData>());
+
+macro_rules! map_accessors {
+    ($owner:ident, $policy:expr) => {
+        impl $owner {
+            pub const fn input_identity(&self) -> &Identity {
+                self.data.input_identity()
+            }
+            pub const fn output_identity(&self) -> &Identity {
+                self.data.output_identity()
+            }
+            pub const fn digest(&self) -> &[u8; 32] {
+                self.data.digest()
+            }
+            pub fn comparison_work(&self) -> std::result::Result<usize, ResourceError> {
+                self.data.comparison_work()
+            }
+            pub fn relations(&self) -> &[KirOptimizationRelationV12] {
+                self.data.relations()
+            }
+            pub fn targets(&self, relation: &KirOptimizationRelationV12) -> Option<&[Endpoint]> {
+                self.data.targets(relation)
+            }
+            pub fn synthesized_operations(&self) -> &[Coordinate] {
+                self.data.synthesized_operations()
+            }
+            pub fn matches_execution(&self, report: &crate::PlironOptimizationReportV1) -> bool {
+                self.data.matches_execution(report)
+            }
+            pub fn check_against(
+                &self,
+                input: &Owner,
+                output: &Owner,
+                budget: &mut Budget<'_>,
+            ) -> Result<()> {
+                self.data.check_against(input, output, budget, $policy)
+            }
+            pub(crate) const fn neutral_data_v1(&self) -> &MapData {
+                &self.data
+            }
+        }
+    };
+}
+map_accessors!(KirOptimizationMapV12, FixedPolicy::Historical2);
+map_accessors!(KirOptimizationMapPolicy3V12, FixedPolicy::Checked3);
+
+#[cfg(test)]
 impl KirOptimizationMapV12 {
+    fn compute_digest(&self) -> [u8; 32] {
+        self.data.compute_digest(FixedPolicy::Historical2)
+    }
+}
+
+impl MapData {
     pub const fn input_identity(&self) -> &Identity {
         &self.input
     }
@@ -273,13 +365,15 @@ impl KirOptimizationMapV12 {
         input: &Owner,
         output: &Owner,
         budget: &mut Budget<'_>,
+        policy: FixedPolicy,
     ) -> Result<()> {
         if self.input != *input.canonical().identity()
             || self.output != *output.canonical().identity()
         {
             return Err(KirOptimizationMapErrorV12::Identity);
         }
-        let limits = CaptureLimitsV12::for_bytes(input.canonical().canonical_bytes().len())?;
+        let limits =
+            CaptureLimitsV12::for_policy_bytes(input.canonical().canonical_bytes().len(), policy)?;
         let census = ReplayCensusV12::derive(
             &self.nodes,
             &self.events,
@@ -291,7 +385,7 @@ impl KirOptimizationMapV12 {
         budget.charge_work(census.check_work(limits.targets)?)?;
         let floor = budget.storage();
         budget.reserve_storage(limits.storage()?)?;
-        let result = self.check_inner(input.module(), output.module(), limits);
+        let result = self.check_inner(input.module(), output.module(), limits, policy);
         // All scratch owned by check_inner has dropped on both Result paths.
         budget.release_storage(
             budget
@@ -302,7 +396,13 @@ impl KirOptimizationMapV12 {
         result
     }
 
-    fn check_inner(&self, input: &Module, output: &Module, limits: CaptureLimitsV12) -> Result<()> {
+    fn check_inner(
+        &self,
+        input: &Module,
+        output: &Module,
+        limits: CaptureLimitsV12,
+        policy: FixedPolicy,
+    ) -> Result<()> {
         if self.nodes.len() > limits.nodes
             || self.events.len() > limits.events
             || self.targets.len() > limits.targets
@@ -326,13 +426,24 @@ impl KirOptimizationMapV12 {
         if outputs.windows(2).any(|w| w[0] == w[1]) || outputs != module_endpoints(output)? {
             return Err(KirOptimizationMapErrorV12::Coverage);
         }
-        validate_lifecycle(&self.nodes, &self.events, &self.terminal, &self.passes)?;
+        match policy {
+            FixedPolicy::Historical2 => {
+                validate_lifecycle(&self.nodes, &self.events, &self.terminal, &self.passes)?
+            }
+            FixedPolicy::Checked3 => validate_lifecycle_for_policy(
+                &self.nodes,
+                &self.events,
+                &self.terminal,
+                &self.passes,
+                policy,
+            )?,
+        }
         let (relations, targets, synthesized) =
             derive_relations(&self.nodes, &self.events, &self.terminal, limits.targets)?;
         if relations != self.relations
             || targets != self.targets
             || synthesized != self.synthesized
-            || self.compute_digest() != self.digest
+            || self.compute_digest(policy) != self.digest
         {
             return Err(KirOptimizationMapErrorV12::Relation);
         }
@@ -364,9 +475,9 @@ impl KirOptimizationMapV12 {
         Ok(n)
     }
 
-    fn compute_digest(&self) -> [u8; 32] {
+    fn compute_digest(&self, policy: FixedPolicy) -> [u8; 32] {
         let mut h = Sha256::new();
-        h.update(b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-2/OBSERVED-V1\0");
+        h.update(policy.map_domain());
         h.update(self.input.digest());
         h.update(self.input.canonical_length().to_le_bytes());
         h.update(self.output.digest());
@@ -529,13 +640,22 @@ fn validate_lifecycle(
     terminal: &[Option<Endpoint>],
     passes: &[PassSpan],
 ) -> Result<()> {
-    if passes.len() != 7 || passes[0].input_epoch == 0 {
+    validate_lifecycle_for_policy(nodes, events, terminal, passes, FixedPolicy::Historical2)
+}
+fn validate_lifecycle_for_policy(
+    nodes: &[Node],
+    events: &[Event],
+    terminal: &[Option<Endpoint>],
+    passes: &[PassSpan],
+    policy: FixedPolicy,
+) -> Result<()> {
+    if passes.len() != policy.passes().len() || passes[0].input_epoch == 0 {
         return Err(KirOptimizationMapErrorV12::Passes);
     }
     let mut end = 0;
     let mut epoch = passes[0].input_epoch;
     for (index, span) in passes.iter().enumerate() {
-        if span.pass != KIR_PLIRON_PRODUCTION_PASSES_V12[index]
+        if span.pass != policy.passes()[index]
             || span.input_epoch != epoch
             || span.output_epoch < span.input_epoch
             || span.output_epoch - span.input_epoch > 1
@@ -1025,6 +1145,7 @@ pub(crate) type LiveRosterV12 = Vec<(LiveKeyV12, Endpoint)>;
 #[derive(Clone)]
 pub(crate) struct CaptureV12(Arc<Mutex<CaptureStateV12>>);
 struct CaptureStateV12 {
+    policy: FixedPolicy,
     limits: CaptureLimitsV12,
     ids: HashMap<LiveKeyV12, u32>,
     nodes: Vec<Node>,
@@ -1036,7 +1157,15 @@ struct CaptureStateV12 {
 }
 impl CaptureV12 {
     pub(crate) fn new(limits: CaptureLimitsV12, roster: &LiveRosterV12) -> Result<Self> {
+        Self::new_for_policy(limits, roster, FixedPolicy::Historical2)
+    }
+    pub(crate) fn new_for_policy(
+        limits: CaptureLimitsV12,
+        roster: &LiveRosterV12,
+        policy: FixedPolicy,
+    ) -> Result<Self> {
         let mut state = CaptureStateV12 {
+            policy,
             limits,
             ids: HashMap::new(),
             nodes: Vec::new(),
@@ -1064,7 +1193,7 @@ impl CaptureV12 {
             .map_err(|_| KirOptimizationMapErrorV12::Allocation)?;
         state
             .passes
-            .try_reserve_exact(7)
+            .try_reserve_exact(policy.passes().len())
             .map_err(|_| KirOptimizationMapErrorV12::Allocation)?;
         for &(key, endpoint) in roster {
             state.register(key, Some(endpoint))?;
@@ -1073,6 +1202,19 @@ impl CaptureV12 {
     }
     pub(crate) fn observer(&self) -> Box<dyn RewriteObserver> {
         Box::new(self.clone())
+    }
+    pub(crate) fn require_policy(&self, policy: FixedPolicy) -> Result<()> {
+        if self.0.is_poisoned() {
+            return Err(KirOptimizationMapErrorV12::UnsupportedMutation);
+        }
+        let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
+        if state.policy != policy {
+            return Err(KirOptimizationMapErrorV12::Passes);
+        }
+        Ok(())
     }
     pub(crate) fn failure(&self) -> Option<KirOptimizationMapErrorV12> {
         if self.0.is_poisoned() {
@@ -1095,8 +1237,8 @@ impl CaptureV12 {
         let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if state.failure.is_some()
             || state.current.is_some()
-            || state.passes.len() >= 7
-            || KIR_PLIRON_PRODUCTION_PASSES_V12[state.passes.len()] != pass
+            || state.passes.len() >= state.policy.passes().len()
+            || state.policy.passes()[state.passes.len()] != pass
         {
             state.failure = Some(KirOptimizationMapErrorV12::Passes);
             return false;
@@ -1172,12 +1314,36 @@ impl CaptureV12 {
         roster: &LiveRosterV12,
         budget: &mut Budget<'_>,
     ) -> Result<(KirOptimizationMapV12, usize)> {
+        self.finish_data(input, output, roster, budget, FixedPolicy::Historical2)
+            .map(|(data, storage)| (KirOptimizationMapV12 { data }, storage))
+    }
+    pub(crate) fn finish_policy3(
+        &self,
+        input: &Owner,
+        output: &Owner,
+        roster: &LiveRosterV12,
+        budget: &mut Budget<'_>,
+    ) -> Result<(KirOptimizationMapPolicy3V12, usize)> {
+        self.finish_data(input, output, roster, budget, FixedPolicy::Checked3)
+            .map(|(data, storage)| (KirOptimizationMapPolicy3V12 { data }, storage))
+    }
+    fn finish_data(
+        &self,
+        input: &Owner,
+        output: &Owner,
+        roster: &LiveRosterV12,
+        budget: &mut Budget<'_>,
+        policy: FixedPolicy,
+    ) -> Result<(MapData, usize)> {
         if self.0.is_poisoned() {
             return Err(KirOptimizationMapErrorV12::UnsupportedMutation);
         }
         let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(error) = &state.failure {
             return Err(error.clone());
+        }
+        if state.policy != policy {
+            return Err(KirOptimizationMapErrorV12::Passes);
         }
         let floor = budget.storage();
         let census = ReplayCensusV12::derive(
@@ -1205,7 +1371,7 @@ impl CaptureV12 {
             }
             let (relations, targets, synthesized) =
                 derive_relations(&state.nodes, &state.events, &terminal, state.limits.targets)?;
-            let mut map = KirOptimizationMapV12 {
+            let mut map = MapData {
                 input: *input.canonical().identity(),
                 output: *output.canonical().identity(),
                 nodes: state.nodes.clone(),
@@ -1217,8 +1383,8 @@ impl CaptureV12 {
                 synthesized,
                 digest: [0; 32],
             };
-            map.digest = map.compute_digest();
-            map.check_inner(input.module(), output.module(), state.limits)?;
+            map.digest = map.compute_digest(policy);
+            map.check_inner(input.module(), output.module(), state.limits, policy)?;
             let retained = map.retained_storage()?;
             if retained > state.limits.storage()? {
                 return Err(KirOptimizationMapErrorV12::Limit);
@@ -1384,7 +1550,7 @@ impl RewriteObserver for CaptureV12 {
 
 // Private read-only witness access for the separately metered neutral occurrence
 // rows. Existing map bytes, lifecycle validation and target reports are frozen.
-impl KirOptimizationMapV12 {
+impl MapData {
     pub(crate) fn neutral_node_count_v1(&self) -> usize {
         self.nodes.len()
     }
@@ -1540,7 +1706,8 @@ mod tests {
         }
     }
     fn row(map: &KirOptimizationMapV12, coordinate: Coordinate) -> &KirOptimizationRelationV12 {
-        map.relations
+        map.data
+            .relations
             .iter()
             .find(|row| row.source == coordinate)
             .unwrap()
@@ -1597,7 +1764,7 @@ mod tests {
             KirOptimizationDispositionV12::Moved
         );
         // Source coordinates use physical ordinals, not source BlockId(7/99).
-        assert!(map.relations.iter().all(|row| !matches!(
+        assert!(map.data.relations.iter().all(|row| !matches!(
             row.source,
             Coordinate::Operation { block: 7 | 99, .. }
                 | Coordinate::Terminator { block: 7 | 99, .. }
@@ -1616,29 +1783,29 @@ mod tests {
             let (output, report, mut map) = run(&input);
             match alteration {
                 0 => {
-                    map.relations[0].disposition = KirOptimizationDispositionV12::Eliminated;
+                    map.data.relations[0].disposition = KirOptimizationDispositionV12::Eliminated;
                 }
                 1 => {
-                    map.terminal[0] = None;
+                    map.data.terminal[0] = None;
                 }
                 2 => {
-                    map.events.push(Event {
+                    map.data.events.push(Event {
                         pass: 6,
                         change: Change::Erase(u32::MAX),
                     });
-                    map.passes[6].end += 1;
+                    map.data.passes[6].end += 1;
                 }
                 3 => {
-                    map.nodes[0].input = None;
+                    map.data.nodes[0].input = None;
                 }
                 4 => {
-                    for pass in &mut map.passes {
+                    for pass in &mut map.data.passes {
                         pass.input_epoch += 1;
                         pass.output_epoch += 1;
                     }
                 }
                 _ => {
-                    map.digest[0] ^= 1;
+                    map.data.digest[0] ^= 1;
                 }
             }
             let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
@@ -2012,10 +2179,10 @@ mod tests {
             // Operand constants remain used by the conservatively retained op.
             assert!(row(&map, coord(0)).identity_survived());
             assert!(row(&map, coord(1)).identity_survived());
-            assert!(map.events.iter().any(|event| matches!(event.change,
-                Change::Replace(a, b) if map.nodes[a as usize].input ==
+            assert!(map.data.events.iter().any(|event| matches!(event.change,
+                Change::Replace(a, b) if map.data.nodes[a as usize].input ==
                     Some(Endpoint::Result { operation: coord(2), result: 0 })
-                    && map.nodes[b as usize].input.is_none())));
+                    && map.data.nodes[b as usize].input.is_none())));
         }
     }
 }

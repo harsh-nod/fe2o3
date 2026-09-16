@@ -55,8 +55,8 @@ fn mapped_finish_result_failure_after_map_construction_restores_floor_and_retrie
     // Census=6+6+5=17. Finish runs two checks plus128*L*(N+1).
     let bytes = input.canonical().canonical_bytes().len();
     let nodes = (2 * bytes + 64).min(131_072);
-    assert_eq!(baseline_map.neutral_node_count_v1(), 5);
-    assert_eq!(baseline_map.neutral_event_count_v1(), 3);
+    assert_eq!(baseline_map.neutral_data_v1().neutral_node_count_v1(), 5);
+    assert_eq!(baseline_map.neutral_data_v1().neutral_event_count_v1(), 3);
     let census_work = 17;
     let map_work = 50_705;
     let retry_work = 51_473;
