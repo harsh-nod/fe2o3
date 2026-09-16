@@ -10,6 +10,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+#[path = "tests/rust_call_body_tests.rs"]
 mod rust_call_body;
 
 const FIXTURE_SOURCE: &str = r#"

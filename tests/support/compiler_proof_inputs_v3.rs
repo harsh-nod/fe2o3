@@ -26,6 +26,46 @@ use fe2o3_verifier::{
 use sha2::{Digest, Sha256};
 
 const PRODUCTION_RUSTC_LLVM_TARGET: &str = "amdgcn-amd-amdhsa";
+
+#[allow(
+    dead_code,
+    reason = "shared support includes consumers without RustCall tests"
+)]
+pub(crate) fn rust_call_empty_helper_v28(seed: u8) -> SemanticFunctionDeclV1 {
+    let owner = semantic_owner(seed);
+    let old = &owner.semantic().functions()[0];
+    let unit = old.abi().source_output_type();
+    let abi = SemanticFunctionAbiV1::from_rustc_with_source_signature(
+        old.abi().identity(),
+        old.abi().layout_identity(),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::RustCall,
+        false,
+        false,
+        0,
+        vec![unit],
+        unit,
+        vec![],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap()
+    .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+    .unwrap();
+    SemanticFunctionDeclV1::new(
+        old.identity(),
+        SemanticFunctionRoleV1::InternalHelper,
+        old.item_definition_identity(),
+        old.monomorphization_identity(),
+        old.generic_type_arguments_identity(),
+        old.const_generic_arguments_identity(),
+        old.source(),
+        abi,
+        old.locals().to_vec(),
+        old.entry(),
+        old.blocks().to_vec(),
+    )
+    .unwrap()
+}
 const PRODUCTION_AMDHSA_DATA_LAYOUT: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 const PRODUCTION_TARGET_CPU: &str = "gfx942";
 const PRODUCTION_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
