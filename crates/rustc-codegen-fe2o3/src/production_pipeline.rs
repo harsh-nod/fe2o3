@@ -2427,7 +2427,8 @@ fn compiler_semantic_storage_map_v1(
                     ),
                 )?;
                 let variable_ownership = match declaration.role() {
-                    SemanticLocalRoleV1::Argument(source_ordinal) => ownership
+                    SemanticLocalRoleV1::Argument(source_ordinal)
+                    | SemanticLocalRoleV1::RustCallTupleField { argument: source_ordinal, .. } => ownership
                         .get(source_ordinal as usize)
                         .copied()
                         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(

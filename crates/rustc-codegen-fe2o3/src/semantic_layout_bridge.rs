@@ -787,6 +787,18 @@ fn bridge_type(
             false,
         )?),
         TypeLayoutKind::Adt(adt) => bridge_adt(facts, adt, target, path)?,
+        TypeLayoutKind::Closure { identity, fields } => MirTypeKind::Struct(MirStructType {
+            identity: format!("rustc-closure:{}", crate::encode_hex(identity)),
+            aggregate: bridge_aggregate(
+                fields,
+                facts.size_bytes,
+                target,
+                path,
+                FieldNames::Named,
+                &[],
+                false,
+            )?,
+        }),
     };
     let semantic = MirSemanticType { layout, kind };
     semantic
@@ -1175,20 +1187,22 @@ fn layout_preserves_pointer_niche(
         TypeLayoutKind::Pointer(pointer) => Ok(base_offset == niche_offset
             && facts.size_bytes == niche_size
             && pointer.address_space == address_space),
-        TypeLayoutKind::Tuple(fields) => fields.iter().try_fold(false, |found, field| {
-            let offset = base_offset
-                .checked_add(field.offset_bytes)
-                .ok_or_else(|| inconsistent(path, "nested niche field offset overflows u64"))?;
-            Ok(found
-                || layout_preserves_pointer_niche(
-                    &field.layout,
-                    offset,
-                    niche_offset,
-                    niche_size,
-                    address_space,
-                    path,
-                )?)
-        }),
+        TypeLayoutKind::Tuple(fields) | TypeLayoutKind::Closure { fields, .. } => {
+            fields.iter().try_fold(false, |found, field| {
+                let offset = base_offset
+                    .checked_add(field.offset_bytes)
+                    .ok_or_else(|| inconsistent(path, "nested niche field offset overflows u64"))?;
+                Ok(found
+                    || layout_preserves_pointer_niche(
+                        &field.layout,
+                        offset,
+                        niche_offset,
+                        niche_size,
+                        address_space,
+                        path,
+                    )?)
+            })
+        }
         TypeLayoutKind::Adt(adt) if adt.kind == AdtKind::Struct && adt.variants.len() == 1 => adt
             .variants[0]
             .fields
@@ -2480,6 +2494,27 @@ mod tests {
             vec![field(0, 0, None, u64::MAX, u32_facts())],
         ];
         for fields in malformed_fields {
+            let closure_fields = fields
+                .iter()
+                .cloned()
+                .map(|mut field| {
+                    field.name = Some(field.source_index.to_string());
+                    field
+                })
+                .collect();
+            let closure = memory_layout(
+                "closure",
+                8,
+                4,
+                TypeLayoutKind::Closure {
+                    identity: [7; 32],
+                    fields: closure_fields,
+                },
+            );
+            assert!(matches!(
+                bridge_type(&closure, &target(), "root"),
+                Err(SemanticLayoutBridgeError::Inconsistent { .. })
+            ));
             let tuple = memory_layout("tuple", 8, 4, TypeLayoutKind::Tuple(fields));
             assert!(matches!(
                 bridge_type(&tuple, &target(), "root"),

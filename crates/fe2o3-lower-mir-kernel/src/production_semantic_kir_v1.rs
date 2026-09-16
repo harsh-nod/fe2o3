@@ -50,8 +50,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
     SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
-    SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
-    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
+    SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
+    semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -7713,7 +7713,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     let mut expected_entries = Vec::with_capacity(module.kernels.len());
     let mut expected_helpers = Vec::new();
     let mut retained_correspondence = BTreeSet::new();
-    let mut closure_budget = ReachableClosureBlockBudgetV1::new(max_blocks);
+    let mut closure_budget = ReachableClosureBudgetV1::new(max_blocks);
     for (kernel, expected_root_id) in module.kernels.iter().zip(expected_roots) {
         let root_id = semantic_roots_by_symbol
             .get(kernel.id.as_str())
@@ -7974,7 +7974,7 @@ fn validate_parameter_correspondence_v1(
     let semantic_argument_count = function
         .locals()
         .iter()
-        .filter(|declaration| matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)))
+        .filter(|declaration| declaration.role().is_entry_argument())
         .count();
     if bindings.len().checked_add(component_bindings.len()) != Some(target.parameters.len()) {
         return false;
@@ -7983,13 +7983,11 @@ fn validate_parameter_correspondence_v1(
         let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
             return false;
         };
-        matches!(
-            function
-                .locals()
-                .get(local)
-                .map(|declaration| declaration.role()),
-            Some(SemanticLocalRoleV1::Argument(_))
-        ) && binding.correspondence_owner == correspondence_owner
+        function
+            .locals()
+            .get(local)
+            .is_some_and(|declaration| declaration.role().is_entry_argument())
+            && binding.correspondence_owner == correspondence_owner
             && binding.semantic_function == semantic_function
             && target.parameters.contains(&binding.kernel_ir_value)
     });
@@ -7997,13 +7995,11 @@ fn validate_parameter_correspondence_v1(
         let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
             return false;
         };
-        matches!(
-            function
-                .locals()
-                .get(local)
-                .map(|declaration| declaration.role()),
-            Some(SemanticLocalRoleV1::Argument(_))
-        ) && binding.correspondence_owner == correspondence_owner
+        function
+            .locals()
+            .get(local)
+            .is_some_and(|declaration| declaration.role().is_entry_argument())
+            && binding.correspondence_owner == correspondence_owner
             && binding.semantic_function == semantic_function
             && !binding.projection.is_empty()
             && target.parameters.contains(&binding.kernel_ir_value)
@@ -8015,25 +8011,56 @@ fn validate_parameter_correspondence_v1(
         let Some(declaration) = function.locals().get(local) else {
             return false;
         };
-        let SemanticLocalRoleV1::Argument(argument) = declaration.role() else {
-            return false;
+        let abi = function.abi();
+        let exact_ignored = |value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1| {
+            value.ty() == declaration.ty()
+                && value.value().adjusted().is_none()
+                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
         };
-        let Ok(argument) = usize::try_from(argument) else {
-            return false;
+        let argument_ignored = match declaration.role() {
+            SemanticLocalRoleV1::Argument(argument)
+                if abi.extern_abi()
+                    == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+                    && argument == abi.fixed_count() =>
+            {
+                abi.source_input_types().get(argument as usize) == Some(&declaration.ty())
+                    && abi
+                        .adjusted_arguments()
+                        .iter()
+                        .filter(|value| {
+                            matches!(
+                                value.role(),
+                                SemanticAbiArgumentRoleV1::RustCallTupleField(_)
+                            )
+                        })
+                        .all(|value| {
+                            value.value().adjusted().is_none()
+                                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
+                        })
+            }
+            SemanticLocalRoleV1::Argument(argument) => {
+                abi.source_input_types().get(argument as usize) == Some(&declaration.ty())
+                    && abi
+                        .adjusted_arguments()
+                        .get(argument as usize)
+                        .is_some_and(exact_ignored)
+            }
+            SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
+                argument == abi.fixed_count()
+                    && (abi.fixed_count() as usize)
+                        .checked_add(field as usize)
+                        .and_then(|index| abi.adjusted_arguments().get(index))
+                        .is_some_and(|value| {
+                            value.role() == SemanticAbiArgumentRoleV1::RustCallTupleField(field)
+                                && exact_ignored(value)
+                        })
+            }
+            SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => false,
         };
         binding.correspondence_owner == correspondence_owner
             && binding.semantic_function == semantic_function
             && binding.semantic_type == declaration.ty()
-            && function.abi().source_input_types().get(argument) == Some(&binding.semantic_type)
-            && function
-                .abi()
-                .adjusted_arguments()
-                .get(argument)
-                .is_some_and(|abi| {
-                    abi.ty() == binding.semantic_type
-                        && abi.value().adjusted().is_none()
-                        && matches!(abi.mode(), SemanticAbiPassModeV1::Ignore)
-                })
+            && argument_ignored
     });
     let mut represented = BTreeSet::new();
     represented.extend(bindings.iter().map(|binding| binding.semantic_local));
@@ -9731,6 +9758,7 @@ struct LoweredFunctionPlanV1 {
     parameter_declarations: Vec<(u32, usize, SemanticTypeIdV1)>,
     parameter_types: Vec<Type>,
     parameter_values: Vec<ValueId>,
+    call_arguments: Vec<HelperCallArgumentV1>,
     parameter_local_bindings: Vec<PlannedParameterLocalBindingV1>,
     parameter_component_bindings: Vec<SemanticKirParameterComponentBindingV1>,
     ignored_parameter_bindings: Vec<SemanticKirIgnoredParameterBindingV1>,
@@ -9740,8 +9768,16 @@ struct LoweredFunctionPlanV1 {
 #[derive(Clone)]
 struct LoweredFunctionSignatureV1 {
     parameter_semantic_types: Vec<SemanticTypeIdV1>,
+    call_arguments: Vec<HelperCallArgumentV1>,
     parameter_types: Vec<Type>,
     result_types: Vec<Type>,
+}
+
+#[derive(Clone)]
+struct HelperCallArgumentV1 {
+    source_argument: u32,
+    tuple_field: Option<u32>,
+    component: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -9775,14 +9811,19 @@ struct LoweredFunctionResultV1 {
     emitted_operations: usize,
 }
 
-struct ReachableClosureBlockBudgetV1 {
+struct ReachableClosureBudgetV1 {
     limit: usize,
     consumed: usize,
+    argument_rows: usize,
 }
 
-impl ReachableClosureBlockBudgetV1 {
+impl ReachableClosureBudgetV1 {
     const fn new(limit: usize) -> Self {
-        Self { limit, consumed: 0 }
+        Self {
+            limit,
+            consumed: 0,
+            argument_rows: 0,
+        }
     }
 
     fn charge(&mut self, blocks: usize) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -9797,12 +9838,48 @@ impl ReachableClosureBlockBudgetV1 {
         self.consumed = actual;
         Ok(())
     }
+
+    fn charge_arguments(
+        &mut self,
+        rows: usize,
+        limit: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let actual = self.argument_rows.saturating_add(rows);
+        enforce_limit(
+            ProductionSemanticKirResourceV1::AnalysisStorage,
+            actual,
+            limit,
+        )?;
+        self.argument_rows = actual;
+        Ok(())
+    }
+
+    fn charge_parameter_expansion(
+        &mut self,
+        logical: usize,
+        previous: usize,
+        added: usize,
+        limit: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.charge_arguments(
+            previous.saturating_add(added).max(logical) - previous.max(logical),
+            limit,
+        )
+    }
+}
+
+fn logical_argument_rows_v1(function: &SemanticFunctionDeclV1) -> usize {
+    function
+        .abi()
+        .source_input_types()
+        .len()
+        .max(function.abi().adjusted_arguments().len())
 }
 
 fn direct_defined_callees_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     function_id: SemanticFunctionIdV1,
-    block_budget: &mut ReachableClosureBlockBudgetV1,
+    block_budget: &mut ReachableClosureBudgetV1,
 ) -> Result<Vec<SemanticFunctionIdV1>, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -9875,7 +9952,7 @@ fn reachable_defined_closure_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     entry: SemanticFunctionIdV1,
     limit: usize,
-    block_budget: &mut ReachableClosureBlockBudgetV1,
+    block_budget: &mut ReachableClosureBudgetV1,
 ) -> Result<Vec<SemanticFunctionIdV1>, ProductionSemanticKirErrorV1> {
     let mut reachable = BTreeSet::from([entry]);
     let mut pending = VecDeque::from([entry]);
@@ -9964,13 +10041,25 @@ fn semantic_function_parameters_v1(
     function_id: SemanticFunctionIdV1,
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<(u32, usize, SemanticTypeIdV1)>, ProductionSemanticKirErrorV1> {
+    if function.abi().extern_abi()
+        == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+    {
+        return Err(unsupported(
+            function_id.index(),
+            None,
+            None,
+            "kernel entry requires an ordinary source ABI",
+        ));
+    }
     let mut parameters = function
         .locals()
         .iter()
         .enumerate()
         .filter_map(|(local, declaration)| match declaration.role() {
             SemanticLocalRoleV1::Argument(argument) => Some((argument, local, declaration.ty())),
-            SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+            SemanticLocalRoleV1::Return
+            | SemanticLocalRoleV1::Temporary
+            | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
         })
         .collect::<Vec<_>>();
     parameters.sort_by_key(|(argument, _, _)| *argument);
@@ -10043,12 +10132,30 @@ fn shared_slice_helper_parameter_v1(
 }
 
 fn direct_scalar_helper_plan_v1(
-    types: &[SemanticTypeDeclV1],
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     correspondence_owner: SemanticFunctionIdV1,
     function_id: SemanticFunctionIdV1,
-    function: &SemanticFunctionDeclV1,
     kernel_ir_function: FunctionId,
+    max_argument_rows: usize,
+    closure_budget: &mut ReachableClosureBudgetV1,
 ) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    let arguments = semantic
+        .logical_arguments_v1(function_id)
+        .map_err(|error| match error {
+            fe2o3_mir_model::SemanticLogicalArgumentErrorV1::AllocationFailure => {
+                ProductionSemanticKirErrorV1::AllocationFailure {
+                    resource: ProductionSemanticKirResourceV1::DebugBindings,
+                }
+            }
+            fe2o3_mir_model::SemanticLogicalArgumentErrorV1::UnknownFunction => unsupported(
+                function_id.index(),
+                None,
+                None,
+                "helper function is missing",
+            ),
+        })?;
+    let function = &semantic.functions()[function_id.index() as usize];
+    let types = semantic.types();
     if function.role() != SemanticFunctionRoleV1::InternalHelper || function.export().is_some() {
         return Err(unsupported(
             function_id.index(),
@@ -10058,14 +10165,7 @@ fn direct_scalar_helper_plan_v1(
         ));
     }
     let abi = function.abi();
-    let parameters = semantic_function_parameters_v1(function_id, function)?;
-    if abi.can_unwind()
-        || abi.c_variadic()
-        || !abi.hidden_arguments().is_empty()
-        || abi.adjusted_arguments().len() != parameters.len()
-        || abi.source_input_types().len() != parameters.len()
-        || usize::try_from(abi.fixed_count()) != Ok(parameters.len())
-    {
+    if abi.can_unwind() || abi.c_variadic() || !abi.hidden_arguments().is_empty() {
         return Err(unsupported(
             function_id.index(),
             None,
@@ -10073,102 +10173,217 @@ fn direct_scalar_helper_plan_v1(
             "helper does not have an exact non-unwinding direct scalar ABI",
         ));
     }
-    let mut parameter_types = Vec::with_capacity(parameters.len());
-    let mut parameter_values = Vec::with_capacity(parameters.len());
-    let mut parameter_local_bindings = Vec::new();
-    parameter_local_bindings
-        .try_reserve_exact(parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    let mut parameter_component_bindings = Vec::new();
-    parameter_component_bindings
-        .try_reserve_exact(parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    for (((source_argument, local, local_ty), argument), source_ty) in parameters
-        .iter()
-        .zip(abi.adjusted_arguments())
-        .zip(abi.source_input_types())
-    {
-        let shared_slice =
-            shared_slice_helper_parameter_v1(types, function, *source_argument, *source_ty);
-        if local_ty != source_ty
-            || argument.ty() != *source_ty
-            || argument.value().adjusted().is_some()
-            || (!shared_slice && !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_)))
+    for argument in arguments.source_arguments() {
+        if matches!(
+            argument.binding(),
+            fe2o3_mir_model::SemanticSourceArgumentBindingV1::ExpandedTuple([])
+        ) && argument.source_ownership() != SemanticSourceArgumentOwnershipV1::ByValue
         {
             return Err(unsupported(
                 function_id.index(),
                 None,
                 None,
-                "helper parameter is not an exact direct scalar or scalar carrier",
+                "empty expanded helper argument lacks an exact by-value source ABI",
             ));
         }
-        let value = u32::try_from(*local).map(ValueId).map_err(|_| {
-            unsupported(
+    }
+    let parameters = function
+        .locals()
+        .iter()
+        .enumerate()
+        .filter_map(|(local, declaration)| {
+            let source = match declaration.role() {
+                SemanticLocalRoleV1::Argument(source)
+                | SemanticLocalRoleV1::RustCallTupleField {
+                    argument: source, ..
+                } => source,
+                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => return None,
+            };
+            Some((source, local, declaration.ty()))
+        })
+        .collect::<Vec<_>>();
+    let mut parameter_types = Vec::new();
+    let mut parameter_values = Vec::new();
+    let mut call_arguments = Vec::new();
+    let mut parameter_component_bindings = Vec::new();
+    let mut local_values = BTreeMap::<usize, Vec<ValueDef>>::new();
+    let mut flattened = BTreeSet::new();
+    let mut next_value = u32::try_from(function.locals().len()).map_err(|_| {
+        unsupported(
+            function_id.index(),
+            None,
+            None,
+            "helper local identity exceeds Kernel IR",
+        )
+    })?;
+    for mapped in arguments.adjusted_arguments() {
+        let argument = mapped.abi();
+        let local = mapped.local().index() as usize;
+        if argument.value().adjusted().is_some() || argument.value().pointee_override().is_some() {
+            return Err(unsupported(
                 function_id.index(),
                 None,
                 None,
-                "helper local identity exceeds Kernel IR",
-            )
-        })?;
-        let direct_type = if shared_slice {
-            lower_parameter_type(types, &[], *source_ty)
+                "helper parameter has an adjusted ABI type",
+            ));
+        }
+        let shared_slice = mapped.tuple_field().is_none()
+            && shared_slice_helper_parameter_v1(
+                types,
+                function,
+                mapped.source_argument(),
+                argument.ty(),
+            );
+        let components = if shared_slice {
+            vec![(
+                Vec::new(),
+                argument.ty(),
+                lower_parameter_type(types, &[], argument.ty())?,
+            )]
+        } else if matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+            && let Ok(scalar) = lower_scalar_type(types, argument.ty())
+        {
+            vec![(Vec::new(), argument.ty(), scalar)]
         } else {
-            lower_scalar_type(types, *source_ty)
+            if mapped.source_ownership() != SemanticSourceArgumentOwnershipV1::ByValue
+                || !matches!(
+                    argument.mode(),
+                    SemanticAbiPassModeV1::Ignore
+                        | SemanticAbiPassModeV1::Direct(_)
+                        | SemanticAbiPassModeV1::Pair { .. }
+                )
+            {
+                return Err(unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "helper parameter is not an exact by-value scalar aggregate or shared slice",
+                ));
+            }
+            lower_by_value_parameter_components_v1(types, function, argument)?
+                .into_iter()
+                .map(|(path, ty, kir, _, _)| (path, ty, kir))
+                .collect()
         };
-        let (parameter_ty, local_binding) = match direct_type {
-            Ok(parameter_ty) => (
-                parameter_ty.clone(),
-                PlannedParameterLocalBindingV1::Direct {
-                    local: *local,
-                    value,
-                    ty: parameter_ty,
-                },
-            ),
-            Err(scalar_error) => {
-                let Some(field) = exact_transparent_scalar_carrier_field_v1(types, *source_ty)
-                else {
-                    return Err(scalar_error);
-                };
-                if argument.role() != SemanticAbiArgumentRoleV1::Source
-                    || argument.value().pointee_override().is_some()
-                    || abi
-                        .source_argument_ownership()
-                        .get(*source_argument as usize)
-                        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-                {
-                    return Err(unsupported(
+        closure_budget.charge_parameter_expansion(
+            logical_argument_rows_v1(function),
+            parameter_types.len(),
+            components.len(),
+            max_argument_rows,
+        )?;
+        parameter_types
+            .try_reserve(components.len())
+            .and_then(|_| parameter_values.try_reserve(components.len()))
+            .and_then(|_| call_arguments.try_reserve(components.len()))
+            .and_then(|_| parameter_component_bindings.try_reserve(components.len()))
+            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::DebugBindings,
+            })?;
+        let values = local_values.entry(local).or_default();
+        values.try_reserve(components.len()).map_err(|_| {
+            ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::DebugBindings,
+            }
+        })?;
+        if components.is_empty() {
+            flattened.insert(local);
+        }
+        for (component, (path, semantic_component_type, parameter_ty)) in
+            components.into_iter().enumerate()
+        {
+            let mut projection = Vec::new();
+            projection
+                .try_reserve_exact(path.len() + usize::from(mapped.local_field().is_some()))
+                .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                    resource: ProductionSemanticKirResourceV1::DebugBindings,
+                })?;
+            projection.extend(
+                mapped
+                    .local_field()
+                    .map(SemanticKirParameterProjectionV1::Field),
+            );
+            projection.extend(path);
+            let value = if values.is_empty() {
+                ValueId(local as u32)
+            } else {
+                let value = ValueId(next_value);
+                next_value = next_value.checked_add(1).ok_or_else(|| {
+                    unsupported(
                         function_id.index(),
                         None,
                         None,
-                        "helper scalar carrier lacks an exact by-value source ABI",
-                    ));
-                }
-                let parameter_ty = lower_scalar_type(types, field)?;
+                        "helper parameter value identity overflow",
+                    )
+                })?;
+                value
+            };
+            values.push(ValueDef::new(value, parameter_ty.clone()));
+            if !projection.is_empty() {
+                flattened.insert(local);
                 parameter_component_bindings.push(SemanticKirParameterComponentBindingV1 {
                     correspondence_owner,
                     semantic_function: function_id,
-                    semantic_local: SemanticLocalIdV1::from_index(*local as u32),
-                    semantic_component_type: field,
-                    projection: vec![SemanticKirParameterProjectionV1::Field(0)].into_boxed_slice(),
+                    semantic_local: mapped.local(),
+                    semantic_component_type,
+                    projection: projection.into_boxed_slice(),
                     kernel_ir_value: value,
                 });
-                (
-                    parameter_ty.clone(),
-                    PlannedParameterLocalBindingV1::Flattened {
-                        local: *local,
-                        semantic_type: *source_ty,
-                        values: vec![ValueDef::new(value, parameter_ty)],
-                    },
-                )
+            }
+            parameter_types.push(parameter_ty);
+            parameter_values.push(value);
+            call_arguments.push(HelperCallArgumentV1 {
+                source_argument: mapped.source_argument(),
+                tuple_field: mapped.tuple_field(),
+                component: (!shared_slice).then_some(component),
+            });
+        }
+    }
+    let mut parameter_local_bindings = Vec::new();
+    let mut ignored_parameter_bindings = Vec::new();
+    parameter_local_bindings
+        .try_reserve_exact(parameters.len())
+        .and_then(|_| ignored_parameter_bindings.try_reserve_exact(parameters.len()))
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+            resource: ProductionSemanticKirResourceV1::DebugBindings,
+        })?;
+    for (source_argument, local, semantic_type) in &parameters {
+        let values = local_values.remove(local).unwrap_or_default();
+        if values.is_empty() {
+            if types[semantic_type.index() as usize].layout().size_bytes() != Some(0)
+                || abi
+                    .source_argument_ownership()
+                    .get(*source_argument as usize)
+                    != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+            {
+                return Err(unsupported(
+                    function_id.index(),
+                    None,
+                    None,
+                    "helper entry local has no physical argument",
+                ));
+            }
+            binding_from_value_defs(types, *semantic_type, &[])?;
+            ignored_parameter_bindings.push(SemanticKirIgnoredParameterBindingV1 {
+                correspondence_owner,
+                semantic_function: function_id,
+                semantic_local: SemanticLocalIdV1::from_index(*local as u32),
+                semantic_type: *semantic_type,
+            });
+        }
+        let binding = if !flattened.contains(local) && values.len() == 1 {
+            PlannedParameterLocalBindingV1::Direct {
+                local: *local,
+                value: values[0].id,
+                ty: values[0].ty.clone(),
+            }
+        } else {
+            PlannedParameterLocalBindingV1::Flattened {
+                local: *local,
+                semantic_type: *semantic_type,
+                values,
             }
         };
-        parameter_types.push(parameter_ty);
-        parameter_values.push(value);
-        parameter_local_bindings.push(local_binding);
+        parameter_local_bindings.push(binding);
     }
 
     let return_locals = function
@@ -10225,9 +10440,10 @@ fn direct_scalar_helper_plan_v1(
         parameter_declarations: parameters,
         parameter_types,
         parameter_values,
+        call_arguments,
         parameter_local_bindings,
         parameter_component_bindings,
-        ignored_parameter_bindings: Vec::new(),
+        ignored_parameter_bindings,
         result_types,
     })
 }
@@ -10623,7 +10839,7 @@ fn lower_module_with_assert_origins_v1(
                 "one direct kernel body or an exact transparent KernelResult wrapper is required",
             )
         })?;
-        let mut closure_budget = ReachableClosureBlockBudgetV1::new(limits.max_blocks);
+        let mut closure_budget = ReachableClosureBudgetV1::new(limits.max_blocks);
         let mut private_array_work = PrivateArrayLazyBudgetV1::new(1, limits.max_operations);
         let (module, mut correspondence, _) = lower_single_root_module(
             owner,
@@ -10688,7 +10904,7 @@ fn lower_module_with_assert_origins_v1(
     let mut parameter_bindings = Vec::new();
     let mut parameter_component_bindings = Vec::new();
     let mut ignored_parameter_bindings = Vec::new();
-    let mut closure_budget = ReachableClosureBlockBudgetV1::new(limits.max_blocks);
+    let mut closure_budget = ReachableClosureBudgetV1::new(limits.max_blocks);
 
     for (root_ordinal, launch) in authenticated_launch_roots.iter().copied().enumerate() {
         let (root_module, mut root_correspondence, root_payload) = lower_single_root_module(
@@ -11139,7 +11355,7 @@ fn lower_single_root_module(
     limits: ProductionSemanticKirLimitsV1,
     selected_root: SemanticFunctionIdV1,
     authenticated_launch: Option<RetainedRankedLaunchRootV1>,
-    closure_budget: &mut ReachableClosureBlockBudgetV1,
+    closure_budget: &mut ReachableClosureBudgetV1,
     validate_correspondence: bool,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
@@ -11199,6 +11415,24 @@ fn lower_single_root_module(
         limits.max_functions,
         closure_budget,
     )?;
+    // Bound logical mappings before allocating plans, including empty source
+    // tuples and ignored ABI rows. Calls and reused roots consume work too.
+    for function_id in &closure {
+        let function = &semantic.functions()[function_id.index() as usize];
+        closure_budget
+            .charge_arguments(logical_argument_rows_v1(function), limits.max_operations)?;
+        for block in function.blocks() {
+            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+                && let Some(SemanticCallableDeclV1::Defined { function: callee }) =
+                    semantic.callables().get(call.callee().index() as usize)
+            {
+                closure_budget.charge_arguments(
+                    logical_argument_rows_v1(&semantic.functions()[callee.index() as usize]),
+                    limits.max_operations,
+                )?;
+            }
+        }
+    }
     let body = semantic
         .functions()
         .get(selection.body().index() as usize)
@@ -11265,6 +11499,12 @@ fn lower_single_root_module(
         );
         let direct_error = match direct {
             Ok(parameter_ty) => {
+                closure_budget.charge_parameter_expansion(
+                    logical_argument_rows_v1(body),
+                    entry_parameter_types.len(),
+                    1,
+                    limits.max_operations,
+                )?;
                 let value = u32::try_from(*local).map(ValueId).map_err(|_| {
                     unsupported(
                         selection.body().index(),
@@ -11306,6 +11546,12 @@ fn lower_single_root_module(
 
         let components =
             lower_by_value_kernel_parameter_components_v1(semantic.types(), body, *argument, *ty)?;
+        closure_budget.charge_parameter_expansion(
+            logical_argument_rows_v1(body),
+            entry_parameter_types.len(),
+            components.len(),
+            limits.max_operations,
+        )?;
         if components.is_empty() {
             entry_ignored_parameter_bindings.push(SemanticKirIgnoredParameterBindingV1 {
                 correspondence_owner: selected_root,
@@ -11378,20 +11624,50 @@ fn lower_single_root_module(
         parameter_declarations: entry_parameters,
         parameter_types: entry_parameter_types,
         parameter_values: entry_parameter_values,
+        call_arguments: Vec::new(),
         parameter_local_bindings: entry_parameter_local_bindings,
         parameter_component_bindings: entry_parameter_component_bindings,
         ignored_parameter_bindings: entry_ignored_parameter_bindings,
         result_types: Vec::new(),
     });
     for function_id in closure.iter().copied().skip(1) {
-        let function = &semantic.functions()[function_id.index() as usize];
         plans.push(direct_scalar_helper_plan_v1(
-            semantic.types(),
+            semantic,
             selected_root,
             function_id,
-            function,
             defined_function_ids[&function_id].clone(),
+            limits.max_operations,
+            closure_budget,
         )?);
+    }
+    // Declaration expansion was charged before growing each parameter roster.
+    // Charge its repetition at call sites before cloning signatures or bodies.
+    let expanded_parameter_rows = plans
+        .iter()
+        .map(|plan| {
+            (
+                plan.semantic_function,
+                plan.parameter_types
+                    .len()
+                    .saturating_sub(logical_argument_rows_v1(
+                        &semantic.functions()[plan.semantic_function.index() as usize],
+                    )),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for plan in &plans {
+        let function = &semantic.functions()[plan.semantic_function.index() as usize];
+        for block in function.blocks() {
+            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+                && let Some(SemanticCallableDeclV1::Defined { function: callee }) =
+                    semantic.callables().get(call.callee().index() as usize)
+            {
+                let rows = expanded_parameter_rows
+                    .get(callee)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                closure_budget.charge_arguments(*rows, limits.max_operations)?;
+            }
+        }
     }
     let defined_function_signatures = plans
         .iter()
@@ -11399,11 +11675,12 @@ fn lower_single_root_module(
             (
                 plan.semantic_function,
                 LoweredFunctionSignatureV1 {
-                    parameter_semantic_types: plan
-                        .parameter_declarations
-                        .iter()
-                        .map(|(_, _, ty)| *ty)
-                        .collect(),
+                    parameter_semantic_types: semantic.functions()
+                        [plan.semantic_function.index() as usize]
+                        .abi()
+                        .source_input_types()
+                        .to_vec(),
+                    call_arguments: plan.call_arguments.clone(),
                     parameter_types: plan.parameter_types.clone(),
                     result_types: plan.result_types.clone(),
                 },
@@ -11718,7 +11995,9 @@ fn semantic_source_argument_for_kir_parameter_v1(
     }
     match function.locals().get(local.index() as usize)?.role() {
         SemanticLocalRoleV1::Argument(argument) => Some(argument),
-        SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+        SemanticLocalRoleV1::Return
+        | SemanticLocalRoleV1::Temporary
+        | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
     }
 }
 
@@ -12074,9 +12353,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             let declaration = self.function.locals().get(*local as usize).ok_or_else(|| {
                 unsupported(0, Some(block.index()), None, "promoted local is missing")
             })?;
-            if block == self.function.entry()
-                && matches!(declaration.role(), SemanticLocalRoleV1::Argument(_))
-            {
+            if block == self.function.entry() && declaration.role().is_entry_argument() {
                 continue;
             }
             self.locals[*local as usize] = None;
@@ -17499,8 +17776,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call target has no exact KIR signature",
                 )
             })?;
-        if call.arguments().len() != signature.parameter_types.len()
-            || signature.parameter_semantic_types.len() != signature.parameter_types.len()
+        if call.arguments().len() != signature.parameter_semantic_types.len()
+            || signature.call_arguments.len() != signature.parameter_types.len()
             || signature.result_types.len() > 1
         {
             return Err(unsupported(
@@ -17516,14 +17793,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             _ => PreparedSemanticCallDestinationV1::Unprojected,
         };
-        let mut arguments = Vec::with_capacity(call.arguments().len());
-        for ((argument, expected_semantic), expected) in call
+        // Moving each source operand once precedes outer-tuple expansion.
+        let mut source_bindings = Vec::new();
+        source_bindings
+            .try_reserve_exact(call.arguments().len())
+            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
+            })?;
+        for (argument, expected) in call
             .arguments()
             .iter()
             .zip(&signature.parameter_semantic_types)
-            .zip(&signature.parameter_types)
         {
-            if semantic_operand_type(argument) != *expected_semantic {
+            if semantic_operand_type(argument) != *expected {
                 return Err(unsupported(
                     self.semantic_function.index(),
                     Some(block.index()),
@@ -17531,45 +17813,80 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call source argument type changed",
                 ));
             }
-            let binding = self.lower_operand(block, None, argument, operations)?;
-            let (value, actual) =
-                if exact_transparent_scalar_carrier_field_v1(self.types, *expected_semantic)
-                    .is_some()
-                {
-                    let values = binding.values().map_err(|detail| {
+            source_bindings.push(self.lower_operand(block, None, argument, operations)?);
+        }
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve_exact(signature.parameter_types.len())
+            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
+            })?;
+        let mut flattened = None;
+        for (projection, expected) in signature
+            .call_arguments
+            .iter()
+            .zip(&signature.parameter_types)
+        {
+            let source = source_bindings
+                .get(projection.source_argument as usize)
+                .ok_or_else(|| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "defined call projection has no source argument",
+                    )
+                })?;
+            let binding = match (source, projection.tuple_field) {
+                (SemanticValueBindingV1::Aggregate(fields), Some(field)) => {
+                    fields.get(field as usize).ok_or_else(|| {
                         unsupported(
                             self.semantic_function.index(),
                             Some(block.index()),
                             None,
-                            detail,
-                        )
-                    })?;
-                    let [(value, actual)] = values.as_slice() else {
-                        return Err(unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "defined call scalar carrier does not have one physical component",
-                        ));
-                    };
-                    (*value, actual.clone())
-                } else {
-                    binding.value().map_err(|detail| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            detail,
+                            "defined call tuple field is missing",
                         )
                     })?
-                };
-            if &actual != expected {
-                return Err(unsupported(
+                }
+                (_, None) => source,
+                (_, Some(_)) => {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "defined call RustCall argument is not a tuple binding",
+                    ));
+                }
+            };
+            let failure = |detail| {
+                unsupported(
                     self.semantic_function.index(),
                     Some(block.index()),
                     None,
-                    "defined call argument type changed",
-                ));
+                    detail,
+                )
+            };
+            let (value, actual) = match projection.component {
+                None => binding.value().map_err(failure)?,
+                Some(component) => {
+                    let key = (projection.source_argument, projection.tuple_field);
+                    if flattened
+                        .as_ref()
+                        .is_none_or(|(previous, _)| *previous != key)
+                    {
+                        flattened = Some((key, binding.values().map_err(failure)?));
+                    }
+                    flattened
+                        .as_ref()
+                        .unwrap()
+                        .1
+                        .get(component)
+                        .cloned()
+                        .ok_or_else(|| failure("defined call aggregate component is missing"))?
+                }
+            };
+            if &actual != expected {
+                return Err(failure("defined call argument type changed"));
             }
             arguments.push(value);
         }
@@ -23195,6 +23512,46 @@ fn lower_by_value_kernel_parameter_components_v1(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
+    let argument = usize::try_from(argument).map_err(|_| {
+        unsupported(
+            0,
+            None,
+            None,
+            "kernel argument index does not fit this host",
+        )
+    })?;
+    if function.abi().source_argument_ownership().get(argument)
+        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+        || function.abi().source_input_types().get(argument) != Some(&ty)
+    {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "aggregate kernel argument lacks exact by-value ABI ownership",
+        ));
+    }
+    let abi = function
+        .abi()
+        .adjusted_arguments()
+        .get(argument)
+        .ok_or_else(|| unsupported(0, None, None, "aggregate kernel argument ABI is absent"))?;
+    if abi.ty() != ty {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "aggregate kernel argument ABI type changed",
+        ));
+    }
+    lower_by_value_parameter_components_v1(types, function, abi)
+}
+
+fn lower_by_value_parameter_components_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1,
+) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
     fn append(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
@@ -23386,31 +23743,8 @@ fn lower_by_value_kernel_parameter_components_v1(
         }
     }
 
-    let argument = usize::try_from(argument).map_err(|_| {
-        unsupported(
-            0,
-            None,
-            None,
-            "kernel argument index does not fit this host",
-        )
-    })?;
-    if function.abi().source_argument_ownership().get(argument)
-        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-        || function.abi().source_input_types().get(argument) != Some(&ty)
-    {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "aggregate kernel argument lacks exact by-value ABI ownership",
-        ));
-    }
-    let abi = function
-        .abi()
-        .adjusted_arguments()
-        .get(argument)
-        .ok_or_else(|| unsupported(0, None, None, "aggregate kernel argument ABI is absent"))?;
-    if abi.ty() != ty || abi.value().adjusted().is_some() {
+    let ty = abi.ty();
+    if abi.value().adjusted().is_some() {
         return Err(unsupported(
             0,
             None,
@@ -33371,13 +33705,13 @@ mod resource_tests {
         let owner = helper_closure_semantic_owner();
         let semantic = owner.semantic();
         let root = SemanticFunctionIdV1::from_index(0);
-        let mut exact_budget = ReachableClosureBlockBudgetV1::new(3);
+        let mut exact_budget = ReachableClosureBudgetV1::new(3);
         assert_eq!(
             reachable_defined_closure_v1(semantic, root, 2, &mut exact_budget).unwrap(),
             vec![root, SemanticFunctionIdV1::from_index(1)],
         );
 
-        let mut short_budget = ReachableClosureBlockBudgetV1::new(2);
+        let mut short_budget = ReachableClosureBudgetV1::new(2);
         assert!(matches!(
             reachable_defined_closure_v1(semantic, root, 2, &mut short_budget),
             Err(ProductionSemanticKirErrorV1::ResourceLimit {

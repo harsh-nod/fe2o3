@@ -990,13 +990,20 @@ fn expected_multi_root_parameter_bindings_v1(
 ) -> Result<BTreeMap<(u32, u32), u32>, FinalizedSemanticDebugMapErrorV1> {
     let mut expected = BTreeMap::new();
     for (&semantic_function, (semantic, _, body)) in functions {
+        if semantic.abi().extern_abi()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
         let mut arguments = semantic
             .locals()
             .iter()
             .enumerate()
             .filter_map(|(local, declaration)| match declaration.role() {
                 SemanticLocalRoleV1::Argument(argument) => Some((argument, local)),
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
             })
             .collect::<Vec<_>>();
         arguments.sort_unstable();

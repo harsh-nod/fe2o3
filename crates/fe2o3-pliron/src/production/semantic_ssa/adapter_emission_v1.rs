@@ -67,6 +67,7 @@ pub(in crate::production::semantic_ssa) enum SemanticSsaEventRoleV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::production::semantic_ssa) enum SemanticSsaEntryOriginV1 {
     Argument(u32),
+    RustCallTupleField { argument: u32, field: u32 },
     ImplicitCapability,
 }
 

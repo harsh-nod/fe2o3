@@ -1,11 +1,16 @@
-//! Compiler-authenticated bounded closure admission for the gfx942 pilot.
+//! Bounded closure admission from the live rustc target and monomorphized MIR.
 //!
 //! This profile recognizes concrete rustc closure types, records their
-//! physical capture layout, and emits a static-call lowering plan only when
-//! every use of the closure is understood. It does not authorize arbitrary
-//! MIR V2 lowering.
+//! physical capture layout, and rejects uses outside the supported profile.
+//! The observation checks collection/import continuity, not closure transport,
+//! semantic equivalence, or authorization to lower the body.
 
-use crate::rust_type_layout_general::{TypeLayoutFacts, extract_general_layout};
+use crate::rust_type_layout_general::{TypeLayoutFacts, TypeLayoutKind, extract_general_layout};
+use crate::rustc_semantic_adapter_v1::{
+    canonical_function_identities_v1, canonical_target_layout_v1, rustc_mir_body_sha256_v1,
+};
+use crate::semantic_layout_bridge::rustc_semantic_layout_target_v1;
+use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionIdentityV1, SemanticLayoutIdentityV1};
 use rustc_hir::Mutability;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
@@ -16,7 +21,6 @@ use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
     ClosureKind, EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv,
 };
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -85,15 +89,23 @@ pub(crate) struct StaticClosureCallV1 {
     pub(crate) target_definition_hash: [u8; 16],
 }
 
-/// Compiler-sealed plan for direct environment reconstruction and static call.
+/// The existing compiler identity axes under which bounded admission succeeded.
+/// No independent lowering recipe or proof identity is introduced.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Gfx942ClosureLoweringV1 {
-    environments: Vec<ClosureEnvironmentV1>,
-    calls: Vec<StaticClosureCallV1>,
-    identity: [u8; 32],
+pub(crate) struct CompilerClosureObservationV2 {
+    function: SemanticFunctionIdentityV1,
+    mir_body: [u8; 32],
+    target: SemanticLayoutIdentityV1,
 }
 
-impl Gfx942ClosureLoweringV1 {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BoundedClosureAdmissionV2 {
+    environments: Vec<ClosureEnvironmentV1>,
+    calls: Vec<StaticClosureCallV1>,
+    observation: CompilerClosureObservationV2,
+}
+
+impl BoundedClosureAdmissionV2 {
     pub(crate) fn environments(&self) -> &[ClosureEnvironmentV1] {
         &self.environments
     }
@@ -102,9 +114,34 @@ impl Gfx942ClosureLoweringV1 {
         &self.calls
     }
 
-    pub(crate) const fn identity(&self) -> [u8; 32] {
-        self.identity
+    pub(crate) fn into_observation(self) -> CompilerClosureObservationV2 {
+        self.observation
     }
+}
+
+pub(crate) fn observe_closures_v2<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<Option<BoundedClosureAdmissionV2>, ClosureProfileErrorV1> {
+    if !contains_concrete_closure_v1(tcx, instance)? {
+        return Ok(None);
+    }
+    analyze_bounded_closures_v2(tcx, instance, ClosureOriginPolicyV1::Either).map(Some)
+}
+
+pub(crate) fn revalidate_closure_observation_v2<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    retained: Option<&CompilerClosureObservationV2>,
+) -> Result<(), ClosureProfileErrorV1> {
+    let observed =
+        observe_closures_v2(tcx, instance)?.map(BoundedClosureAdmissionV2::into_observation);
+    if retained != observed.as_ref() {
+        return Err(ClosureProfileErrorV1::new(
+            "collection/import closure presence, function, MIR body, or live target changed",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,39 +155,39 @@ impl ClosureProfileErrorV1 {
 
 impl fmt::Display for ClosureProfileErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "gfx942 closure profile rejected MIR: {}", self.0)
+        write!(
+            formatter,
+            "bounded closure profile rejected MIR: {}",
+            self.0
+        )
     }
 }
 
 impl std::error::Error for ClosureProfileErrorV1 {}
 
-pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
+pub(crate) fn analyze_bounded_closures_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     policy: ClosureOriginPolicyV1,
-    selected_target: &str,
-) -> Result<Gfx942ClosureLoweringV1, ClosureProfileErrorV1> {
-    let processor = selected_target
-        .split(':')
-        .next()
-        .unwrap_or(selected_target)
-        .trim();
-    if processor != "gfx942" {
-        return Err(ClosureProfileErrorV1::new(format!(
-            "the bounded closure profile supports gfx942, not `{selected_target}`"
-        )));
-    }
+) -> Result<BoundedClosureAdmissionV2, ClosureProfileErrorV1> {
+    let target = rustc_semantic_layout_target_v1(tcx).map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "live closure layout target is unavailable: {error}"
+        ))
+    })?;
     if tcx.sess.target.pointer_width != 64 {
         return Err(ClosureProfileErrorV1::new(
-            "the bounded gfx942 profile requires a 64-bit compiler target",
+            "the bounded closure profile requires a 64-bit compiler target",
         ));
     }
     let body = tcx.instance_mir(instance.def);
     reject_dynamic_types(tcx, instance, body)?;
+    let own_receiver = own_closure_receiver_v1(tcx, instance, body)?;
     let creations = closure_creations(body)?;
     let typed_closure_locals = body
         .local_decls
         .iter_enumerated()
+        .filter(|(local, _)| Some(*local) != own_receiver)
         .filter_map(|(local, declaration)| {
             normalized_ty(tcx, instance, declaration.ty, "closure local")
                 .ok()
@@ -163,6 +200,9 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
     let mut closure_locals = BTreeSet::new();
 
     for (local, declaration) in body.local_decls.iter_enumerated() {
+        if Some(local) == own_receiver {
+            continue;
+        }
         let ty = normalized_ty(tcx, instance, declaration.ty, "closure local")?;
         let TyKind::Closure(def_id, args) = ty.kind() else {
             continue;
@@ -262,6 +302,7 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
                     "capture {source_index} has unsupported physical layout: {error}"
                 ))
             })?;
+            validate_capture_layout_v1(&facts, origin)?;
             let field = layout.field(&layout_cx, source_index);
             if field.size.bytes() != facts.size_bytes
                 || field.align.abi.bytes() != facts.abi_alignment_bytes
@@ -309,11 +350,14 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
         &closure_locals,
         &aliases,
     )?;
-    let identity = lowering_identity(&environments, &calls);
-    Ok(Gfx942ClosureLoweringV1 {
+    Ok(BoundedClosureAdmissionV2 {
         environments,
         calls,
-        identity,
+        observation: CompilerClosureObservationV2 {
+            function: canonical_function_identities_v1(tcx, instance).function(),
+            mir_body: rustc_mir_body_sha256_v1(tcx, instance),
+            target: canonical_target_layout_v1(&target).identity(),
+        },
     })
 }
 
@@ -322,13 +366,48 @@ pub(crate) fn contains_concrete_closure_v1<'tcx>(
     instance: Instance<'tcx>,
 ) -> Result<bool, ClosureProfileErrorV1> {
     let body = tcx.instance_mir(instance.def);
-    for declaration in &body.local_decls {
+    let own_receiver = own_closure_receiver_v1(tcx, instance, body)?;
+    for (local, declaration) in body.local_decls.iter_enumerated() {
+        if Some(local) == own_receiver {
+            continue;
+        }
         let ty = normalized_ty(tcx, instance, declaration.ty, "closure presence check")?;
         if matches!(ty.kind(), TyKind::Closure(..)) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+fn own_closure_receiver_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+) -> Result<Option<Local>, ClosureProfileErrorV1> {
+    let InstanceKind::Item(definition) = instance.def else {
+        return Ok(None);
+    };
+    if tcx.def_kind(definition) != rustc_hir::def::DefKind::Closure {
+        return Ok(None);
+    }
+    let signature =
+        crate::rustc_semantic_plan_v1::source_signature_v1(tcx, instance).map_err(|error| {
+            ClosureProfileErrorV1::new(format!("closure receiver signature: {error}"))
+        })?;
+    let local = Local::from_usize(1);
+    let declaration = body
+        .local_decls
+        .get(local)
+        .ok_or_else(|| ClosureProfileErrorV1::new("closure body has no receiver"))?;
+    let actual = normalized_ty(tcx, instance, declaration.ty, "closure body receiver")?;
+    if body.arg_count == 0 || signature.inputs().first() != Some(&actual) {
+        return Err(ClosureProfileErrorV1::new(
+            "closure body receiver identity changed",
+        ));
+    }
+    // The executing environment is not a new callable value. Its capture
+    // accesses still pass through ordinary body construction and SSA checks.
+    Ok(Some(local))
 }
 
 fn require_origin(
@@ -429,6 +508,48 @@ fn closure_creations(
         }
     }
     Ok(result)
+}
+
+// Extraction already bounds the depth and node count of this layout tree.
+fn validate_capture_layout_v1(
+    facts: &TypeLayoutFacts,
+    origin: ClosureOriginV1,
+) -> Result<(), ClosureProfileErrorV1> {
+    use crate::rust_type_layout_general::PointerKind;
+
+    match &facts.kind {
+        TypeLayoutKind::Closure { .. } => Err(ClosureProfileErrorV1::new(
+            "nested closure captures are outside the bounded profile",
+        )),
+        TypeLayoutKind::Scalar(_) => Ok(()),
+        TypeLayoutKind::Pointer(pointer) => {
+            match pointer.kind {
+                PointerKind::ConstRaw | PointerKind::MutRaw => {
+                    return Err(ClosureProfileErrorV1::new(
+                        "raw-pointer captures have no allocation authority",
+                    ));
+                }
+                PointerKind::SharedReference | PointerKind::MutableReference
+                    if origin == ClosureOriginV1::HostArgument =>
+                {
+                    return Err(ClosureProfileErrorV1::new(
+                        "host closure references require an eligible allocation/completion token; none is present in V1",
+                    ));
+                }
+                PointerKind::SharedReference | PointerKind::MutableReference => {}
+            }
+            validate_capture_layout_v1(&pointer.pointee, origin)
+        }
+        TypeLayoutKind::Array(array) => validate_capture_layout_v1(&array.element, origin),
+        TypeLayoutKind::Tuple(fields) => fields
+            .iter()
+            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin)),
+        TypeLayoutKind::Adt(adt) => adt
+            .variants
+            .iter()
+            .flat_map(|variant| &variant.fields)
+            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin)),
+    }
 }
 
 fn closure_reference_aliases(
@@ -921,40 +1042,6 @@ fn tuple_argument_count<'tcx>(
         ));
     };
     Ok(fields.len())
-}
-
-fn lowering_identity(
-    environments: &[ClosureEnvironmentV1],
-    calls: &[StaticClosureCallV1],
-) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(b"fe2o3.gfx942-closure-lowering.v1\0");
-    hash.update((environments.len() as u64).to_le_bytes());
-    for environment in environments {
-        hash.update((environment.local as u64).to_le_bytes());
-        hash.update([environment.origin as u8, environment.call_kind as u8]);
-        hash.update(environment.definition_hash);
-        hash.update(environment.size_bytes.to_le_bytes());
-        hash.update(environment.alignment_bytes.to_le_bytes());
-        hash.update((environment.captures.len() as u64).to_le_bytes());
-        for capture in &environment.captures {
-            hash.update((capture.source_index as u64).to_le_bytes());
-            hash.update((capture.memory_index as u64).to_le_bytes());
-            hash.update(capture.offset_bytes.to_le_bytes());
-            hash.update([capture.mode as u8]);
-            hash.update(capture.layout.size_bytes.to_le_bytes());
-            hash.update(capture.layout.abi_alignment_bytes.to_le_bytes());
-        }
-    }
-    hash.update((calls.len() as u64).to_le_bytes());
-    for call in calls {
-        hash.update((call.block as u64).to_le_bytes());
-        hash.update((call.closure_local as u64).to_le_bytes());
-        hash.update([call.call_kind as u8]);
-        hash.update((call.argument_count as u64).to_le_bytes());
-        hash.update(call.target_definition_hash);
-    }
-    hash.finalize().into()
 }
 
 #[cfg(test)]

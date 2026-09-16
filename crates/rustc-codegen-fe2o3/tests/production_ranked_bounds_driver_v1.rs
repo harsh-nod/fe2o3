@@ -929,6 +929,92 @@ fn ordinary_source_wrapping_integers_match_rust_in_simulation() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
+    const CANARY: u32 = 0xa5c3_7e19;
+    let target = ScratchTarget::new();
+    for architecture in ["gfx942", "gfx950"] {
+        let bundle_path = target
+            .path()
+            .join(format!("rust-call-{architecture}.fe2sim"));
+        let exported = output(
+            simulation_export_command_for_feature(
+                architecture,
+                &bundle_path,
+                &target.path().join(architecture),
+                None,
+                "rust_call",
+            ),
+            "export ordinary Rust FnOnce closures",
+        );
+        assert!(exported.status.success(), "{}", exported.stderr);
+        for (seed, lhs, rhs) in [
+            (13_u32, 29_u32, 11_u32),
+            (0, 0, 0),
+            (u32::MAX, 1, 2),
+            (0, 1, u32::MAX),
+        ] {
+            let expected = [
+                (seed ^ lhs).wrapping_sub(rhs).wrapping_add(lhs),
+                seed.wrapping_sub(lhs),
+                lhs.wrapping_sub(seed ^ rhs).wrapping_add(lhs),
+            ];
+            for grid in [64_usize, 128] {
+                let initial = CANARY.to_le_bytes().repeat(grid + 3);
+                let mut arguments = [seed, lhs, rhs]
+                    .into_iter()
+                    .map(|value| {
+                        json!({
+                            "kind": "scalar", "type": "u32", "bits": format!("0x{value:08x}")
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                for _ in 0..3 {
+                    arguments.push(json!({
+                        "kind": "buffer", "element": "u32", "access": "read_write",
+                        "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
+                    }));
+                }
+                let request_path = target.path().join("rust-call-request.json");
+                std::fs::write(
+                    &request_path,
+                    serde_json::to_vec(&json!({
+                        "schema": "fe2o3-simulation-request-v1", "kernel": "rust_call",
+                        "grid": [grid, 1, 1], "workgroup": [64, 1, 1], "arguments": arguments,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let admitted =
+                    fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
+                        .unwrap();
+                let execution = admitted
+                    .input()
+                    .module
+                    .simulate(
+                        &admitted.input().request,
+                        admitted.input().simulation_target(),
+                        admitted.input().simulation_limits,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
+                    });
+                assert_eq!(execution.invocations_executed(), grid as u64);
+                for (index, value) in expected.into_iter().enumerate() {
+                    let mut expected_bytes = value.to_le_bytes().repeat(grid);
+                    expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                    assert_eq!(
+                        execution.buffer(index + 3).unwrap().bytes(),
+                        expected_bytes,
+                        "{architecture} {seed:#x} {lhs:#x} {rhs:#x} output {index}",
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_source_launch_wrapping_integers_match_rust_in_simulation() {
     const CANARY: u64 = 0xa5c3_7e19_4b82_d6f0;
     const WORKGROUP: usize = 64;

@@ -172,6 +172,8 @@ pub enum ProductionSemanticSsaEventRoleV1 {
 pub enum ProductionSemanticSsaEntryOriginV1 {
     /// Original source argument role, not a native or ranked parameter ordinal.
     Argument(u32),
+    /// A field of the outer source tuple in an expanded RustCall body.
+    RustCallTupleField { argument: u32, field: u32 },
     /// Authenticated implicit capability local.
     ImplicitCapability,
 }

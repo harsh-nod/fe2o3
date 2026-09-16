@@ -10203,7 +10203,9 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 SemanticLocalRoleV1::Argument(argument) => Some(
                     DeterministicScalarSummaryV1::Exact(self.ranked_argument(argument as usize)?),
                 ),
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
             }
         } else if self.definitions[local].len() != usize::from(self.local_definitions[local]) {
             None
@@ -17415,7 +17417,9 @@ impl<'model, 'state, 'proof> PureUniformIndexProjectorV1<'model, 'state, 'proof>
                 SemanticLocalRoleV1::Argument(origin) => {
                     self.argument(origin as usize, maximum).map(Some)
                 }
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => Ok(None),
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => Ok(None),
             };
         }
         if self.local_definitions.get(local).copied() != Some(1) {

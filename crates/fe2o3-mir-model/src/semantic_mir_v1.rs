@@ -40,6 +40,9 @@ pub const INERT_SEMANTIC_MIR_VERSION_V12: u16 = 12;
 pub const INERT_SEMANTIC_MIR_VERSION_V13: u16 = 13;
 pub const INERT_SEMANTIC_MIR_VERSION_V14: u16 = 14;
 pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
+// V16-V26 belong to incompatible unpublished capability drafts; V27 is held
+// for the independently coordinated numerical-relation contract.
+pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -62,6 +65,7 @@ pub enum SemanticMirWireVersionV1 {
     V13,
     V14,
     V15,
+    V28,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -81,6 +85,7 @@ impl SemanticMirWireVersionV1 {
             Self::V13 => INERT_SEMANTIC_MIR_VERSION_V13,
             Self::V14 => INERT_SEMANTIC_MIR_VERSION_V14,
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
+            Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
         }
     }
 
@@ -100,6 +105,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V13 => Some(Self::V13),
             INERT_SEMANTIC_MIR_VERSION_V14 => Some(Self::V14),
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
+            INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
             _ => None,
         }
     }
@@ -3011,6 +3017,17 @@ pub enum SemanticLocalRoleV1 {
     Return,
     Argument(u32),
     Temporary,
+    /// A field of the final RustCall source tuple, not a physical ABI ordinal.
+    RustCallTupleField {
+        argument: u32,
+        field: u32,
+    },
+}
+
+impl SemanticLocalRoleV1 {
+    pub const fn is_entry_argument(self) -> bool {
+        matches!(self, Self::Argument(_) | Self::RustCallTupleField { .. })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6227,6 +6244,14 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V15, limits)
     }
 
+    /// Admits under V28, preserving expanded RustCall argument locals.
+    pub fn admit_exact_v28(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V28, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6234,7 +6259,8 @@ impl InertSemanticMirRequestV1 {
     /// V11 when the compiler trap terminal is present, V12 for checked
     /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
     /// V14 for checked disjoint-block component projection, and V15 for checked
-    /// column-major BF16 B operands.
+    /// column-major BF16 B operands. V28 retains RustCall tuple-field locals
+    /// and the unit spelling of an empty RustCall source tuple.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -12942,28 +12968,34 @@ fn validate_rust_call_expansion(
     if abi.extern_abi() != SemanticExternAbiV1::RustCall {
         return Ok(());
     }
-    let tuple_type = *abi
-        .source_input_types()
-        .last()
-        .ok_or(SemanticMirErrorV1::InvalidFunctionAbi)?;
-    let SemanticTypeShapeV1::Tuple(tuple_fields) = &request.types[tuple_type.0 as usize].shape
-    else {
-        return Err(SemanticMirErrorV1::InvalidFunctionAbi);
-    };
+    let tuple_fields = rust_call_tuple_fields(request, abi)?;
     let expanded = &abi.arguments[abi.fixed_count as usize..abi.adjusted_arguments().len()];
-    if expanded.len() != tuple_fields.fields.len()
-        || expanded
-            .iter()
-            .zip(tuple_fields.fields.iter())
-            .enumerate()
-            .any(|(index, (argument, field_type))| {
+    if expanded.len() != tuple_fields.len()
+        || expanded.iter().zip(tuple_fields.iter()).enumerate().any(
+            |(index, (argument, field_type))| {
                 argument.role != SemanticAbiArgumentRoleV1::RustCallTupleField(index as u32)
                     || argument.value.source_ty != *field_type
-            })
+            },
+        )
     {
         return Err(SemanticMirErrorV1::InvalidFunctionAbi);
     }
     Ok(())
+}
+
+fn rust_call_tuple_fields<'a>(
+    request: &'a InertSemanticMirRequestV1,
+    abi: &SemanticFunctionAbiV1,
+) -> Result<&'a [SemanticTypeIdV1], SemanticMirErrorV1> {
+    let tuple_type = abi
+        .source_input_types()
+        .last()
+        .ok_or(SemanticMirErrorV1::InvalidFunctionAbi)?;
+    match &request.types[tuple_type.0 as usize].shape {
+        SemanticTypeShapeV1::Tuple(tuple) => Ok(tuple.fields()),
+        SemanticTypeShapeV1::Unit => Ok(&[]),
+        _ => Err(SemanticMirErrorV1::InvalidFunctionAbi),
+    }
 }
 
 fn validate_local_roles(
@@ -12974,6 +13006,13 @@ fn validate_local_roles(
     let mut return_count = 0_usize;
     let source_arguments = function.abi.source_input_types();
     let mut arguments = vec![None; source_arguments.len()];
+    let tuple_fields = (function.abi.extern_abi() == SemanticExternAbiV1::RustCall)
+        .then(|| rust_call_tuple_fields(context.request, &function.abi))
+        .transpose()?;
+    let mut expanded_fields = vec![false; tuple_fields.map_or(0, |fields| fields.len())];
+    let invalid_roles = || SemanticMirErrorV1::InvalidLocalRoles {
+        function: function_id,
+    };
     for (local_index, local) in function.locals.iter().enumerate() {
         let local_id = SemanticLocalIdV1(local_index as u32);
         let location = SemanticMirLocationV1::Local {
@@ -13005,7 +13044,33 @@ fn validate_local_roles(
                     });
                 }
             }
+            SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
+                let fields = tuple_fields.ok_or_else(invalid_roles)?;
+                let slot = expanded_fields
+                    .get_mut(field as usize)
+                    .ok_or_else(invalid_roles)?;
+                if argument != function.abi.fixed_count()
+                    || std::mem::replace(slot, true)
+                    || local.ty != fields[field as usize]
+                {
+                    return Err(invalid_roles());
+                }
+            }
             SemanticLocalRoleV1::Temporary => {}
+        }
+    }
+    if tuple_fields.is_some() {
+        let argument = function.abi.fixed_count() as usize;
+        let packed = arguments.get_mut(argument).ok_or_else(invalid_roles)?;
+        if packed.is_some() {
+            if expanded_fields.iter().any(|present| *present) {
+                return Err(invalid_roles());
+            }
+        } else if expanded_fields.iter().all(|present| *present) {
+            // An expanded zero-field tuple still accounts for a source argument.
+            *packed = Some(source_arguments[argument]);
+        } else {
+            return Err(invalid_roles());
         }
     }
     if return_count != 1 || arguments.iter().any(Option::is_none) {
@@ -16600,6 +16665,31 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         )
     });
     let mut required = SemanticMirWireVersionV1::V2;
+    let unit_rust_call = |abi: &SemanticFunctionAbiV1| {
+        abi.extern_abi() == SemanticExternAbiV1::RustCall
+            && abi
+                .source_input_types()
+                .last()
+                .and_then(|ty| request.types.get(ty.0 as usize))
+                .is_some_and(|ty| matches!(ty.shape, SemanticTypeShapeV1::Unit))
+    };
+    if request.functions.iter().any(|function| {
+        unit_rust_call(&function.abi)
+            || function
+                .locals
+                .iter()
+                .any(|local| matches!(local.role, SemanticLocalRoleV1::RustCallTupleField { .. }))
+            || (function.abi.extern_abi() == SemanticExternAbiV1::RustCall
+                && !function.locals.iter().any(|local| {
+                    local.role == SemanticLocalRoleV1::Argument(function.abi.fixed_count())
+                }))
+    }) || request.callables.iter().any(|callable| match callable {
+        SemanticCallableDeclV1::Defined { .. } => false,
+        SemanticCallableDeclV1::CompilerIntrinsic { binding, .. }
+        | SemanticCallableDeclV1::DeviceFfiImport { binding, .. } => unit_rust_call(&binding.abi),
+    }) {
+        required = SemanticMirWireVersionV1::V28;
+    }
     if request.callables.iter().any(|callable| {
         matches!(
             callable,
@@ -17522,6 +17612,17 @@ fn encode_function(
                 writer.u32(index)?;
             }
             SemanticLocalRoleV1::Temporary => writer.u8(2)?,
+            SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
+                if wire_version < SemanticMirWireVersionV1::V28 {
+                    return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                        requested: wire_version,
+                        required: SemanticMirWireVersionV1::V28,
+                    });
+                }
+                writer.u8(3)?;
+                writer.u32(argument)?;
+                writer.u32(field)?;
+            }
         }
         encode_source(writer, local.source)?;
     }
@@ -17598,6 +17699,12 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    // V28 changes entry-local roles, not the published intrinsic grammar.
+    let wire_version = if wire_version == SemanticMirWireVersionV1::V28 {
+        SemanticMirWireVersionV1::V15
+    } else {
+        wire_version
+    };
     match operation {
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
             writer.u8(0)?;

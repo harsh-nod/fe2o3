@@ -7,10 +7,10 @@ use std::{error::Error, fmt};
 
 use crate::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticStatementKindV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
-    SemanticTypeShapeV1, SemanticUncheckedBinaryOpV1,
+    SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticOperandV1,
+    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
+    SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1,
+    SemanticUncheckedBinaryOpV1,
 };
 
 /// Maximum charged CFG, statement, definition, and dominator work.
@@ -1053,7 +1053,7 @@ fn local_definition_counts(
         function
             .locals()
             .iter()
-            .map(|local| u8::from(matches!(local.role(), SemanticLocalRoleV1::Argument(_)))),
+            .map(|local| u8::from(local.role().is_entry_argument())),
     );
     let mut record = |place: &SemanticPlaceV1| {
         let Some(slot) = definitions.get_mut(place.local().index() as usize) else {

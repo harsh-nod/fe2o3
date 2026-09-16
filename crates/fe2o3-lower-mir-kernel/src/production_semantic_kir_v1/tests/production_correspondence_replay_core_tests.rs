@@ -175,7 +175,7 @@ fn correspondence_core_preserves_exact_structural_rejections() {
         .select_kernel_body_for_root_v1(roots[0])
         .unwrap()
         .body();
-    let mut closure_budget = ReachableClosureBlockBudgetV1::new(2);
+    let mut closure_budget = ReachableClosureBudgetV1::new(2);
     assert!(matches!(
         reachable_defined_closure_v1(
             semantic,

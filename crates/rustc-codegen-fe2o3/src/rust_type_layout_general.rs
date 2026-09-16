@@ -308,6 +308,10 @@ pub(crate) enum TypeLayoutKind {
     Pointer(PointerLayoutFacts),
     Array(ArrayLayoutFacts),
     Tuple(Vec<FieldLayoutFacts>),
+    Closure {
+        identity: [u8; 32],
+        fields: Vec<FieldLayoutFacts>,
+    },
     Adt(AdtLayoutFacts),
 }
 
@@ -536,6 +540,48 @@ impl<'tcx> Extractor<'tcx> {
             TyKind::Tuple(_) => {
                 TypeLayoutKind::Tuple(self.aggregate_fields(layout, None, &path, depth)?)
             }
+            TyKind::Closure(_, arguments) => {
+                let captures = arguments.as_closure().upvar_tys();
+                if captures.len() != layout.fields.count() {
+                    return Err(GeneralLayoutExtractError::InconsistentLayout {
+                        path,
+                        detail: "closure capture count disagrees with its layout".to_owned(),
+                    });
+                }
+                self.reserve(
+                    &path,
+                    LimitKind::Fields,
+                    captures.len(),
+                    self.limits.max_fields_per_aggregate,
+                )?;
+                for (index, capture) in captures.iter().enumerate() {
+                    let capture = self
+                        .tcx
+                        .try_normalize_erasing_regions(TypingEnv::fully_monomorphized(), capture)
+                        .map_err(|error| GeneralLayoutExtractError::Normalization {
+                            rust_type: type_name(capture),
+                            detail: format!("{error:?}"),
+                        })?;
+                    if capture != layout.field(&self.layout_cx, index).ty {
+                        return Err(GeneralLayoutExtractError::InconsistentLayout {
+                            path,
+                            detail: format!(
+                                "closure capture {index} type disagrees with its layout"
+                            ),
+                        });
+                    }
+                }
+                let names = (0..captures.len())
+                    .map(|index| index.to_string())
+                    .collect::<Vec<_>>();
+                TypeLayoutKind::Closure {
+                    identity: *crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
+                        self.tcx, ty,
+                    )
+                    .as_bytes(),
+                    fields: self.aggregate_fields(layout, Some(&names), &path, depth)?,
+                }
+            }
             TyKind::Adt(definition, _) => {
                 TypeLayoutKind::Adt(self.adt_facts(ty, definition, layout, &path, depth)?)
             }
@@ -566,14 +612,11 @@ impl<'tcx> Extractor<'tcx> {
                     rust_type: type_name(ty),
                 });
             }
-            TyKind::Closure(..)
-            | TyKind::CoroutineClosure(..)
-            | TyKind::Coroutine(..)
-            | TyKind::CoroutineWitness(..) => {
+            TyKind::CoroutineClosure(..) | TyKind::Coroutine(..) | TyKind::CoroutineWitness(..) => {
                 return Err(GeneralLayoutExtractError::UnsupportedType {
                     path,
                     rust_type: type_name(ty),
-                    detail: "closure and coroutine layouts require capture identity facts",
+                    detail: "coroutine layouts require state identity facts",
                 });
             }
             TyKind::Pat(base, _) => {
@@ -1146,6 +1189,27 @@ const NODE: Node = Node { next: core::ptr::null() };
 
 fn target() {}
 const FUNCTION: fn() = target;
+
+#[derive(Clone, Copy)]
+struct Marker;
+
+fn captureless() -> impl Fn(u32) -> u32 { |value| value ^ 1 }
+fn mixed_captures(byte: u8, word: u64, flag: bool) -> impl Fn() -> u64 {
+    let marker = Marker;
+    move || { let _copy = marker; (byte as u64) ^ word ^ (flag as u64) }
+}
+fn first_closure(seed: u32) -> impl Fn() -> u32 { move || seed ^ 1 }
+fn second_closure(seed: u32) -> impl Fn() -> u32 { move || seed ^ 2 }
+fn shared_capture(seed: &u32) -> impl Fn() -> u32 { move || *seed }
+fn mutable_capture(seed: &mut u32) -> impl FnMut(u32) -> u32 {
+    move |delta| { *seed ^= delta; *seed }
+}
+fn generic_closure<T: Copy>(seed: T) -> impl Fn() -> T { move || seed }
+fn generic_u32(seed: u32) -> impl Fn() -> u32 { generic_closure(seed) }
+fn generic_f32(seed: f32) -> impl Fn() -> f32 { generic_closure(seed) }
+fn optional_capture(seed: &u32, word: u64, byte: u8) -> Option<impl Fn() -> u64> {
+    Some(move || (*seed as u64) ^ word ^ (byte as u64))
+}
 "#;
 
     struct DriverResults {
@@ -1157,6 +1221,7 @@ const FUNCTION: fn() = target;
         unmonomorphized: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         unit: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         bounded: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
+        closures: Vec<closure_layout_tests::ClosureLayoutResult>,
     }
 
     #[derive(Default)]
@@ -1188,6 +1253,7 @@ const FUNCTION: fn() = target;
                         ..ExtractionLimits::default()
                     },
                 ),
+                closures: closure_layout_tests::extract_closures(tcx),
             });
             Compilation::Stop
         }
@@ -1254,6 +1320,8 @@ const FUNCTION: fn() = target;
         rustc_driver::run_compiler(&args, &mut callbacks);
         callbacks.results.expect("layout callback did not run")
     }
+
+    mod closure_layout_tests;
 
     #[test]
     fn memory_order_is_inverted_into_source_order() {
