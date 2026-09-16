@@ -1792,7 +1792,6 @@ mod legacy_scope_tests {
             );
         }
         assert_eq!(budget.storage(), floor);
-        drop(budget);
         let program = assertion_project(materialized).unwrap();
         assert!(program.all_kernel_checks_are_clean());
         let ProductionRankedSemanticProgramV1 {
