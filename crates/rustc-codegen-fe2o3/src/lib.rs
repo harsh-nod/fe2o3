@@ -282,6 +282,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             } else {
                 None
             };
+            let context_producers =
+                collector::capture_context_producers_v1(tcx).unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] context producer capture failed: {error}"
+                    ))
+                });
             let mono_partitions = tcx.collect_and_partition_mono_items(());
             let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
             if production_device_admission.is_some() != (kernel_count > 0) {
@@ -331,6 +337,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             target,
+                            context_producers,
                         ) {
                             Ok(closure) => closure,
                             Err(error) => tcx.dcx().fatal(format!(

@@ -2,6 +2,7 @@
 fn generative_provider_items_require_exact_reviewed_identity() {
     for item in [
         TrustedDeviceItem::KernelContext,
+        TrustedDeviceItem::KernelContextIssue,
         TrustedDeviceItem::ExecutionWorkgroupCapability,
         TrustedDeviceItem::ExecutionWorkgroupCurrent,
         TrustedDeviceItem::MaskedTile1D,

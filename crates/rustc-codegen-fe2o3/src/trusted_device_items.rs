@@ -37,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xc5, 0xa5, 0x6c, 0xda, 0xcf, 0xb1, 0xbe, 0x97, 0x1f, 0x24, 0x7f, 0xd6, 0xd6, 0x68, 0x6b, 0x91,
-    0x3d, 0x27, 0xda, 0xd2, 0xc0, 0xec, 0xe5, 0x98, 0x8b, 0x09, 0x50, 0x63, 0xae, 0x49, 0xe2, 0xb4,
+    0xe0, 0xc7, 0xd0, 0xa9, 0xa9, 0x95, 0xfc, 0x33, 0x6a, 0x5a, 0x75, 0xe1, 0x43, 0xd7, 0x48, 0xeb,
+    0x51, 0x19, 0x46, 0x46, 0xcb, 0xe5, 0x4f, 0xa3, 0x59, 0xa2, 0x58, 0x48, 0x93, 0x01, 0x85, 0x16,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -362,6 +362,7 @@ pub(crate) enum TrustedDeviceItem {
     AmdGpuInline(TrustedAmdGpuInlineOperation),
     AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation),
     KernelContext,
+    KernelContextIssue,
     ExecutionWorkgroupCapability,
     ExecutionWorkgroupCurrent,
     MaskedTile1D,
@@ -372,6 +373,11 @@ pub(crate) enum TrustedDeviceItem {
 }
 
 const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
+    (
+        TrustedDeviceItem::KernelContextIssue,
+        "fe2o3_device_kernel_context_issue_v1",
+        "fe2o3_device::KernelContext::__compiler_issue",
+    ),
     (
         TrustedDeviceItem::KernelContext,
         "fe2o3_device_kernel_context_v1",
@@ -1690,6 +1696,9 @@ fn validate_safe_execution_provider_definition_v1(
 fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static str {
     match item {
         TrustedDeviceItem::KernelContext => "fe2o3_device::context::KernelContext",
+        TrustedDeviceItem::KernelContextIssue => {
+            "fe2o3_device::context::{impl#4}::__compiler_issue"
+        }
         TrustedDeviceItem::ExecutionWorkgroupCapability => {
             "fe2o3_device::execution::WorkgroupCapability"
         }
@@ -1927,6 +1936,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
         TrustedDeviceItem::KernelContext
+            | TrustedDeviceItem::KernelContextIssue
             | TrustedDeviceItem::ExecutionWorkgroupCapability
             | TrustedDeviceItem::ExecutionWorkgroupCurrent
             | TrustedDeviceItem::MaskedTile1D
@@ -3436,7 +3446,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("c5a56cdacfb1be971f247fd6d6686b913d27dad2c0ece5988b095063ae49e2b4")
+            digest("e0c7d0a9a995fc336a5a75e143d748eb51194646cbe54fa359a2584893018516")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3843,6 +3853,7 @@ mod tests {
         let items = [
             TrustedDeviceItem::KernelError,
             TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::KernelContextIssue,
             TrustedDeviceItem::ExecutionWorkgroupCapability,
             TrustedDeviceItem::ExecutionWorkgroupCurrent,
             TrustedDeviceItem::MaskedTile1D,

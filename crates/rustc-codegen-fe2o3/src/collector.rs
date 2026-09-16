@@ -36,6 +36,9 @@ use std::fmt;
 
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 
+mod kernel_context_auth_v1;
+pub(crate) use kernel_context_auth_v1::{CapturedContextProducersV1, capture_context_producers_v1};
+mod kernel_context_frontend_v1;
 mod production_importer_v1;
 
 pub(crate) use production_importer_v1::{
@@ -118,6 +121,7 @@ pub struct CollectedFunction<'tcx> {
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
     closure_observation: Option<Box<crate::closure_profile_v1::CompilerClosureObservationV2>>,
+    kernel_context_contract: Option<kernel_context_frontend_v1::BoundContextEntryV1>,
 }
 
 /// Source-level kernel contract authenticated against one exact rustc instance.
@@ -312,9 +316,15 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
     target: crate::production_target_v1::RetainedProductionTargetV1,
+    context_producers: CapturedContextProducersV1<'tcx>,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let collection =
-        collect_device_functions(tcx, cgus, verbose, target.canonical_name().to_owned())?;
+    let collection = collect_device_functions(
+        tcx,
+        cgus,
+        verbose,
+        target.canonical_name().to_owned(),
+        context_producers,
+    )?;
     let roots = collection
         .functions
         .iter()
@@ -348,6 +358,7 @@ fn collect_device_functions<'tcx>(
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
     target: String,
+    context_producers: CapturedContextProducersV1<'tcx>,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
     let ffi_declarations =
         crate::device_ffi::collect_declarations(tcx, cgus).map_err(|error| CollectError {
@@ -360,7 +371,8 @@ fn collect_device_functions<'tcx>(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let mut collector = DeviceCollector::new(tcx, verbose, ffi_declarations, target);
+    let mut collector =
+        DeviceCollector::new(tcx, verbose, ffi_declarations, target, context_producers);
 
     for declaration in ffi_exports {
         if declaration.contract.direction == crate::device_ffi::DeviceFfiDirection::Export {
@@ -376,7 +388,9 @@ fn collect_device_functions<'tcx>(
         }
     }
 
-    for root in kernel_roots(tcx, cgus).map_err(CollectError::from)? {
+    for root in kernel_roots(tcx, cgus, &collector.context_producers.declarations)
+        .map_err(CollectError::from)?
+    {
         let instance = root.target;
         let raw_name = tcx.def_path_str(instance.def_id());
         if verbose {
@@ -418,6 +432,7 @@ struct KernelRoot<T> {
     generated_host_contract_identity: Option<GeneratedHostContractIdV3>,
     kernel_binding: Option<KernelBindingIdV1>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+    kernel_context_contract: Option<kernel_context_frontend_v1::BoundContextEntryV1>,
     reference_effect_binding:
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
 }
@@ -497,6 +512,7 @@ impl From<RegistrationError> for CollectError {
 fn kernel_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
+    context_declarations: &[kernel_context_frontend_v1::DeclaredContextEntryV1<'tcx>],
 ) -> Result<Vec<KernelRoot<Instance<'tcx>>>, RegistrationError> {
     let mut functions_by_symbol = BTreeMap::new();
 
@@ -567,6 +583,12 @@ fn kernel_roots<'tcx>(
     bind_resource_contract_registrations(tcx, &mut roots, resource_records)?;
     let reference_records = decode_reference_binding_registrations(tcx)?;
     bind_reference_binding_registrations(tcx, &mut roots, reference_records)?;
+    kernel_context_frontend_v1::bind_v1(
+        tcx,
+        &functions_by_symbol,
+        &mut roots,
+        context_declarations,
+    )?;
     Ok(roots)
 }
 
@@ -2129,6 +2151,7 @@ fn validate_registration_records<T: Copy>(
             generated_host_contract_identity,
             kernel_binding,
             frontend_contract: None,
+            kernel_context_contract: None,
             reference_effect_binding: None,
         });
     }
@@ -2179,6 +2202,7 @@ fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
 
 struct DeviceCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
+    context_producers: CapturedContextProducersV1<'tcx>,
     seen: BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
     call_chains: BTreeMap<
         crate::device_ffi::DeviceFfiInstanceIdentity,
@@ -2308,9 +2332,11 @@ impl<'tcx> DeviceCollector<'tcx> {
         verbose: bool,
         ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
         target: String,
+        context_producers: CapturedContextProducersV1<'tcx>,
     ) -> Self {
         Self {
             tcx,
+            context_producers,
             seen: BTreeSet::new(),
             call_chains: BTreeMap::new(),
             call_edges: BTreeMap::new(),
@@ -2410,6 +2436,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 reference_effect_binding: None,
                 dead_branches: None,
                 closure_observation: None,
+                kernel_context_contract: None,
             });
         }
         Ok(())
@@ -2423,6 +2450,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             generated_host_contract_identity,
             kernel_binding,
             frontend_contract,
+            kernel_context_contract,
             reference_effect_binding,
         } = root;
         if !self.used_export_names.insert(export_name.clone()) {
@@ -2452,6 +2480,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 reference_effect_binding,
                 dead_branches: None,
                 closure_observation: None,
+                kernel_context_contract,
             });
         }
         Ok(())
@@ -2533,6 +2562,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         self.authenticate_production_kernel_source_safety()?;
         self.authenticate_reachable_frontend_contracts()?;
+        kernel_context_auth_v1::authenticate_v1(&mut self)?;
 
         let device_ffi = crate::device_ffi::validate_local_closure(
             self.tcx,
@@ -3381,6 +3411,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             reference_effect_binding: None,
             dead_branches: None,
             closure_observation: None,
+            kernel_context_contract: None,
         });
         Ok(())
     }

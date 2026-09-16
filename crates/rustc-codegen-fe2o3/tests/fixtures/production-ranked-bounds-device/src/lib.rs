@@ -1,7 +1,16 @@
 #![no_std]
 
+#[cfg(feature = "provider_context_protocol")]
+mod context_protocol {
+    include!(env!("FE2O3_CONTEXT_PROTOCOL_SOURCE"));
+}
+
 #[cfg(any(
     feature = "provider_context",
+    feature = "provider_context_entry",
+    feature = "provider_context_entry_result",
+    feature = "provider_context_helper_issue",
+    feature = "provider_context_unregistered_issue",
     feature = "provider_context_alias",
     feature = "provider_context_nested",
     feature = "provider_context_reference",
@@ -113,6 +122,7 @@ use fe2o3_device::{Wave64, WaveLane};
     launch(required = [64, 1, 1], max = [64, 1, 1]),
 )]
 #[cfg(not(any(
+    feature = "provider_context_protocol",
     feature = "bf16_mfma_column_major_b",
     feature = "bf16_mfma_row_major_b",
     feature = "oob",
@@ -126,6 +136,10 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "rust_call",
     feature = "dynamic_local_array",
     feature = "provider_context",
+    feature = "provider_context_entry",
+    feature = "provider_context_entry_result",
+    feature = "provider_context_helper_issue",
+    feature = "provider_context_unregistered_issue",
     feature = "provider_context_alias",
     feature = "provider_context_nested",
     feature = "provider_context_reference",
