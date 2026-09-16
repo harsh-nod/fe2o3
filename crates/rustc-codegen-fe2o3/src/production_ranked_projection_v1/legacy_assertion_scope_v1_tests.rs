@@ -301,7 +301,11 @@ mod legacy_scope_tests {
                         .filter(|operation| {
                             matches!(
                                 operation.kind,
-                                fe2o3_kernel_ir::OperationKind::AllocaPrivate { count: None, .. }
+                                fe2o3_kernel_ir::OperationKind::Alloca {
+                                    count: None,
+                                    address_space: fe2o3_kernel_ir::AddressSpace::Private,
+                                    ..
+                                }
                             )
                         })
                         .count();

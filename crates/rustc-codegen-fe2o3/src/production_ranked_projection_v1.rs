@@ -60,7 +60,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
+    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
 };
 #[cfg(test)]

@@ -243,8 +243,8 @@
 
         // Existing inert non-private rows do not query the source or its ledger.
         let retained = production_access_sources(
-            &assertion_types(),
-            &literal_assertion(true, true, false),
+            &projection_types(),
+            &projection_function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]),
             &blocks,
             &sites,
             &mut ComponentDynamicAssertionFactsV1,
@@ -297,8 +297,8 @@
 
         // Existing inert non-private rows do not query the source or its ledger.
         let retained = production_access_sources(
-            &assertion_types(),
-            &literal_assertion(true, true, false),
+            &projection_types(),
+            &projection_function(vec![block(0, vec![], SemanticTerminatorKindV1::Return)]),
             &blocks,
             &sites,
             &mut ComponentDynamicAssertionFactsV1,
