@@ -1,0 +1,4 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.33s
+  Executable unittests src/lib.rs (target/debug/deps/fe2o3_kfd-6457f2b90c780e5d)
+  Executable unittests src/lib.rs (target/debug/deps/fe2o3_runtime-6da97149b4b59494)

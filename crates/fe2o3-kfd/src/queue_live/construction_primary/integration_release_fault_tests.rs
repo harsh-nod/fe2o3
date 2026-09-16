@@ -2,97 +2,6 @@ use super::*;
 use crate::shared_memory::CleanupStageV1 as Stage;
 use fe2o3_runtime_model::{QueueHistoryEventKindV1, QueueSyscallStatusV1};
 
-#[test]
-fn constructed_primary_release_after_pristine_abort_preserves_original_queue_and_refunds() {
-    use crate::shared_memory::{DataCleanupCustodyV1, DispatchDataReleaseV1};
-
-    let (mut parent, t, gate) = constructed(true);
-    let ids = original_resource_ids(&parent);
-    let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
-    let before = RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
-    let buffers = parent
-        .dispatch
-        .as_ref()
-        .unwrap()
-        .prepare_pristine_abort_v1()
-        .unwrap();
-    let engine = &mut parent.engine;
-    let loan = engine
-        .backend
-        .session
-        .primary_loan(&mut engine.foundation)
-        .unwrap();
-    let mut abort = parent
-        .dispatch
-        .take()
-        .unwrap()
-        .begin_pristine_abort_v1(buffers);
-    abort.release_controls(&mut engine.backend.session).unwrap();
-    let (continuation, data, identities) = abort.into_detached();
-    assert_eq!(
-        data.iter()
-            .map(Gfx942FixedDispatchDataV1::sdma_storage_identity)
-            .collect::<Vec<_>>(),
-        before.data_order_v1()
-    );
-    assert_eq!(
-        data.iter()
-            .map(Gfx942FixedDispatchDataV1::storage_identity)
-            .collect::<Vec<_>>(),
-        identities
-    );
-    let mut returned: Vec<_> = data.into_iter().map(DataCleanupCustodyV1::new).collect();
-    for owner in &mut returned {
-        engine.backend.session.release_data(owner).unwrap();
-        assert!(owner.is_complete());
-    }
-    engine
-        .backend
-        .session
-        .primary_reclaim(&mut engine.foundation, loan)
-        .unwrap();
-    let returned_before: Vec<_> = returned
-        .iter()
-        .map(DataCleanupCustodyV1::observation)
-        .collect();
-    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
-    state.release_in_place(&mut parent).unwrap();
-    assert_eq!(
-        state
-            .resources
-            .as_ref()
-            .unwrap()
-            .observation()
-            .controls
-            .map(|c| c.identity),
-        ids
-    );
-    assert_eq!(
-        state.signals.as_ref().unwrap().observation().identity,
-        signal_id
-    );
-    assert!(state.dispatch.is_none() && state.complete && !parent.poisoned);
-    assert_eq!(
-        returned
-            .iter()
-            .map(DataCleanupCustodyV1::observation)
-            .collect::<Vec<_>>(),
-        returned_before
-    );
-    parent
-        .engine
-        .backend
-        .session
-        .primary_assert_all_released_v1();
-    assert_no_retry(&mut parent, &mut state, &t);
-    drop(state);
-    drop(parent);
-    drop((continuation, returned));
-    assert_eq!(gate.teardown_count(), 0);
-    assert_eq!(gate.observation(), (false, false));
-    assert_eq!(t.borrow().local_resources.live(), (0, 0, 0));
-}
-
 #[derive(Clone, Copy, Debug)]
 enum DataFault {
     Native(&'static str),
@@ -259,8 +168,12 @@ fn constructed_primary_release_dispatch_host_data_model_boundaries_retain_charge
 fn constructed_primary_release_resource_model_boundaries_keep_native_and_model_prefixes() {
     for index in 0..4 {
         for stage in [
+            Stage::UnmapPreflight,
+            Stage::UnmapEvidence,
             Stage::UnmapProjection,
             Stage::UnmapCommit,
+            Stage::ReleasePreflight,
+            Stage::ReleaseEvidence,
             Stage::ReleaseProjection,
             Stage::ReleaseCommit,
         ] {

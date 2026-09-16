@@ -358,6 +358,15 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
         snapshot
     }
 
+    pub(crate) fn primary_signal_cleanup_snapshot_v1(
+        &self,
+        signals: &ControlCleanupCustodyV1,
+    ) -> Snapshot {
+        let mut snapshot = self.primary_restored_memory_snapshot_v1();
+        snapshot.controls.push(signals.observation());
+        snapshot
+    }
+
     pub(crate) fn control_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
         self.assert_disposed_controls_v1();
         Snapshot::from_fixture(
@@ -426,7 +435,144 @@ impl Snapshot {
     }
 }
 
+struct SignalPrefixV1 {
+    stage: Stage,
+    checks: usize,
+    model_unmapped: bool,
+    native_unmapped: bool,
+    native_calls: usize,
+    settled: bool,
+    quarantined: bool,
+}
+
 impl Snapshot {
+    pub(crate) fn assert_constructed_signal_currentness_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        signals: &ControlCleanupCustodyV1,
+        point: usize,
+    ) {
+        assert!((1..=6).contains(&point));
+        self.assert_constructed_signal_prefix_v1(
+            memory,
+            signals,
+            SignalPrefixV1 {
+                stage: if point <= 2 {
+                    Stage::NativeUnmap
+                } else {
+                    Stage::NativeRelease
+                },
+                checks: point,
+                model_unmapped: point >= 3,
+                native_unmapped: point >= 3,
+                native_calls: [0, 1, 1, 2, 3, 4][point - 1],
+                settled: false,
+                quarantined: true,
+            },
+        );
+    }
+
+    pub(crate) fn assert_constructed_signal_projection_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        signals: &ControlCleanupCustodyV1,
+        stage: Stage,
+        panicked: bool,
+    ) {
+        let (checks, native_calls, model_unmapped, native_unmapped, settled) = match stage {
+            Stage::UnmapPreflight | Stage::UnmapEvidence => (0, 0, false, false, false),
+            Stage::UnmapProjection | Stage::UnmapCommit => (2, 1, false, true, false),
+            Stage::ReleasePreflight | Stage::ReleaseEvidence | Stage::ReleaseProjection => {
+                (2, 1, true, true, false)
+            }
+            Stage::ReleaseCommit => (6, 4, true, true, true),
+            _ => panic!("not a model failure boundary"),
+        };
+        self.assert_constructed_signal_prefix_v1(
+            memory,
+            signals,
+            SignalPrefixV1 {
+                stage,
+                checks,
+                model_unmapped,
+                native_unmapped,
+                native_calls,
+                settled,
+                quarantined: panicked
+                    || !matches!(stage, Stage::UnmapPreflight | Stage::UnmapEvidence),
+            },
+        );
+    }
+
+    fn assert_constructed_signal_prefix_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        signals: &ControlCleanupCustodyV1,
+        prefix: SignalPrefixV1,
+    ) {
+        let after = memory.primary_signal_cleanup_snapshot_v1(signals);
+        let active = signals.observation();
+        let original = &self.controls[0];
+        assert_eq!(active.identity, original.identity);
+        assert_eq!(active.layout, original.layout);
+        assert_eq!(active.profile_type, original.profile_type);
+        assert_eq!(active.stage, prefix.stage);
+        assert!(active.started && active.failed && !signals.is_complete());
+        assert_eq!(active.native_disposed, prefix.native_calls == 4);
+        assert_eq!(
+            active.owner,
+            if prefix.native_calls == 4 {
+                "NativeDisposed"
+            } else if prefix.native_unmapped {
+                "Unmapped"
+            } else {
+                "Mapped"
+            }
+        );
+        assert_eq!(
+            active.unmap,
+            if prefix.native_calls == 0 {
+                (false, None, None)
+            } else {
+                (true, Some(true), Some(1))
+            }
+        );
+        assert_eq!(
+            active.disposal,
+            std::array::from_fn(|i| if i + 1 < prefix.native_calls {
+                (true, Some(true))
+            } else {
+                (false, None)
+            })
+        );
+        assert_eq!(after.currentness, self.currentness + prefix.checks);
+        assert_eq!(after.retained_device_bytes, self.retained_device_bytes);
+        assert_eq!(
+            after.phase,
+            if prefix.quarantined {
+                SharedMemorySessionPhaseV1::Quarantined
+            } else {
+                self.phase
+            }
+        );
+        self.assert_control_transition_snapshot_v1(
+            &after,
+            (memory.fixture.vm, memory.fixture.engine.session_id),
+            &[active.identity],
+            (
+                0,
+                prefix.model_unmapped,
+                prefix.native_calls,
+                Some((
+                    prefix.native_unmapped,
+                    prefix.native_calls,
+                    prefix.settled,
+                    prefix.native_calls >= 3,
+                )),
+            ),
+        );
+    }
+
     pub(crate) fn assert_primary_currentness_failure_v1(
         &self,
         mut after: Self,
@@ -566,10 +712,10 @@ impl Snapshot {
             "exact native identities and order"
         );
         assert_eq!(after.devices, self.devices);
-        assert_eq!(after.usage, self.usage);
         assert_eq!(after.storage, self.storage);
         assert_eq!(after.identity, self.identity);
         let mut released_va = 0;
+        let mut usage = self.usage;
         for r in &self.records {
             let index = order
                 .iter()
@@ -586,6 +732,13 @@ impl Snapshot {
                 record.free_attempted |= free_attempted;
                 if settled {
                     released_va += r.layout.gpu_va_bytes();
+                    if r.charged {
+                        record.charged = false;
+                        let usage = usage.0.as_mut().expect("charged host control account");
+                        usage.used_backing_bytes -= r.layout.gpu_va_bytes();
+                        usage.used_allocation_records -= 1;
+                        usage.retained_records -= 1;
+                    }
                 }
                 record
             } else {
@@ -598,6 +751,7 @@ impl Snapshot {
             );
         }
         assert_eq!(after.records.len(), self.records.len());
+        assert_eq!(after.usage, usage);
         assert_eq!(after.retained_va, self.retained_va - released_va);
         assert_eq!(after.process_poisoned, self.process_poisoned);
         match (&self.certificate, &after.certificate) {

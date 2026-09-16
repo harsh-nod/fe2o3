@@ -31,6 +31,12 @@ native success probe are recorded in the
 Other profiles, public native fault/account observations and full qualification
 remain open; R125 remains the accepted checkpoint.
 
+The [late-release packet](evidence/dev-r126-late-release-2026-09-16/README.md)
+adds the remaining queue-resource/signal CPU boundary matrices and a genuine
+post-pristine-abort ledger join through the shared release/admission drivers.
+GNU/musl each pass 308 selected KFD tests and 745 runtime tests. This closes those
+CPU coverage gaps, not the native fault, other-profile or full R126 qualification.
+
 Preceding Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each
 pass 2,865 tests with five ignored; seventeen source gates, ten auxiliary checks,

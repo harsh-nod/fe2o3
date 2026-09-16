@@ -222,6 +222,171 @@ fn expected_queue_record(
 }
 
 impl Snapshot {
+    pub(crate) fn assert_constructed_queue_currentness_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        custody: &QueueResourceCleanupCustodyV1,
+        point: usize,
+    ) {
+        self.assert_queue_currentness_snapshot_v1(
+            &memory.primary_queue_cleanup_snapshot_v1(custody),
+            memory.fixture.vm,
+            &custody.observation(),
+            point,
+        );
+    }
+
+    fn assert_queue_currentness_snapshot_v1(
+        &self,
+        after: &Self,
+        vm: VmKeyV1,
+        state: &crate::shared_memory::QueueResourceCleanupObservationV1,
+        point: usize,
+    ) {
+        assert!((1..=24).contains(&point));
+        let release = point > 8;
+        let index = if release {
+            (point - 9) / 4
+        } else {
+            (point - 1) / 2
+        };
+        let at = if release {
+            (point - 9) % 4 + 1
+        } else {
+            (point - 1) % 2 + 1
+        };
+        let unmapped = if release { 4 } else { index };
+        let released = if release { index } else { 0 };
+        assert_eq!((state.unmapped, state.released), (unmapped, released));
+        assert!(state.started && state.failed);
+        assert_eq!(
+            after.model,
+            expected_model_in_vm(vm, self, unmapped, released)
+        );
+        assert_eq!(after.currentness, self.currentness + point);
+        let successful = if release {
+            (at - 1).min(release_calls(self, index).len())
+        } else {
+            0
+        };
+        assert_eq!(after.retained_va, retained_va_after(self, released));
+        let calls = if release {
+            4 + (0..released)
+                .map(|i| release_calls(self, i).len())
+                .sum::<usize>()
+                + successful
+        } else {
+            index + usize::from(at == 2)
+        };
+        assert_eq!(after.calls, all_calls(self)[..self.calls.len() + calls]);
+        for i in 0..4 {
+            let current = &after.controls[i];
+            assert_eq!(current.identity, self.controls[i].identity);
+            assert_eq!(current.profile_type, self.controls[i].profile_type);
+            assert_eq!(current.layout, self.controls[i].layout);
+            assert_eq!(
+                current.disposal,
+                if i < released {
+                    disposal_progress(i, release_calls(self, i).len(), None)
+                } else if release && i == index {
+                    disposal_progress(i, successful, None)
+                } else {
+                    [(false, None); 3]
+                }
+            );
+            if !release && i > index {
+                assert_eq!(current, &self.controls[i], "untouched unmap suffix");
+            } else if i != index {
+                assert!(current.started && !current.failed);
+                assert_eq!(
+                    current.stage,
+                    if i < released {
+                        Stage::Complete
+                    } else {
+                        Stage::Unmapped
+                    }
+                );
+                assert_eq!(
+                    current.owner,
+                    if i < released {
+                        "NativeDisposed"
+                    } else {
+                        "Unmapped"
+                    }
+                );
+                assert_eq!(current.native_disposed, i < released);
+                assert_eq!(current.unmap, (true, Some(true), Some(1)));
+            }
+            let (was_unmapped, native_calls, disposed, settled) = if i == index {
+                (release, successful, release && at == 4, false)
+            } else {
+                (
+                    i < unmapped,
+                    if i < released {
+                        release_calls(self, i).len()
+                    } else {
+                        0
+                    },
+                    i < released,
+                    i < released,
+                )
+            };
+            assert_eq!(
+                record(after, i),
+                &expected_queue_record(self, i, was_unmapped, native_calls, disposed, settled)
+            );
+        }
+        let active = &state.controls[index];
+        assert!(active.failed);
+        assert_eq!(
+            active.stage,
+            if release {
+                Stage::NativeRelease
+            } else {
+                Stage::NativeUnmap
+            }
+        );
+        assert_eq!(active.native_disposed, release && at == 4);
+        assert_eq!(
+            active.owner,
+            if !release {
+                "Mapped"
+            } else if at == 4 {
+                "NativeDisposed"
+            } else {
+                "Unmapped"
+            }
+        );
+        assert_eq!(
+            active.unmap,
+            if release || at == 2 {
+                (true, Some(true), Some(1))
+            } else {
+                (false, None, None)
+            }
+        );
+        if index == 1 {
+            assert_eq!(active.disposal[2], (false, None));
+        }
+        assert_eq!(after.phase, SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(after.identity, self.identity);
+        assert_eq!(after.certificate, self.certificate);
+        assert_eq!(after.usage, self.usage);
+        assert_eq!(after.devices, self.devices);
+        assert_eq!(after.retained_device_bytes, self.retained_device_bytes);
+        assert_eq!(after.storage, self.storage);
+        assert_eq!(after.process_poisoned, self.process_poisoned);
+        assert_eq!(after.records.len(), self.records.len());
+        for record in &self.records {
+            if !self.controls.iter().any(|c| c.identity.id == record.id) {
+                assert_eq!(
+                    after.records.iter().find(|r| r.id == record.id).unwrap(),
+                    record
+                );
+            }
+        }
+    }
+
     pub(crate) fn assert_constructed_queue_projection_v1(
         &self,
         memory: &crate::shared_memory::PreparationMemoryFixtureV1,
@@ -231,10 +396,26 @@ impl Snapshot {
     ) {
         let after = memory.primary_queue_cleanup_snapshot_v1(custody);
         let state = custody.observation();
-        let release = matches!(stage, Stage::ReleaseProjection | Stage::ReleaseCommit);
+        let release = matches!(
+            stage,
+            Stage::ReleasePreflight
+                | Stage::ReleaseEvidence
+                | Stage::ReleaseProjection
+                | Stage::ReleaseCommit
+        );
         let disposed = stage == Stage::ReleaseCommit;
-        let native_unmaps = if release { 4 } else { index + 1 };
+        let native_unmaps = if release {
+            4
+        } else {
+            index + usize::from(matches!(stage, Stage::UnmapProjection | Stage::UnmapCommit))
+        };
         let (unmapped, released) = if release { (4, index) } else { (index, 0) };
+        let checks = if release {
+            8 + 4 * (index + usize::from(disposed))
+        } else {
+            2 * native_unmaps
+        };
+        assert_eq!(after.currentness, self.currentness + checks);
         assert_eq!(
             (state.started, state.failed, state.unmapped, state.released),
             (true, true, unmapped, released)
@@ -262,6 +443,7 @@ impl Snapshot {
         assert_eq!(after.devices, self.devices);
         assert_eq!(after.usage, self.usage);
         assert_eq!(after.storage, self.storage);
+        assert_eq!(after.records.len(), self.records.len());
         for i in 0..4 {
             let settled = i < released || (i == index && disposed);
             let native_calls = if settled {
@@ -294,8 +476,23 @@ impl Snapshot {
                 after.controls[i].disposal,
                 disposal_progress(i, native_calls, None)
             );
-            if !after.controls[i].started {
-                assert_eq!(after.controls[i], self.controls[i]);
+            if !release && i > index {
+                assert_eq!(
+                    after.controls[i], self.controls[i],
+                    "untouched unmap suffix"
+                );
+            } else if i != index {
+                let current = &after.controls[i];
+                assert!(current.started && !current.failed);
+                assert_eq!(
+                    current.stage,
+                    if i < released {
+                        Stage::Complete
+                    } else {
+                        Stage::Unmapped
+                    }
+                );
+                assert_eq!(current.unmap, (true, Some(true), Some(1)));
             }
         }
         for record in &self.records {
@@ -610,98 +807,7 @@ fn queue_cleanup_currentness_sweep_preserves_userptr_reservation_and_disposal_bo
             }
             let after = f.snapshot();
             let state = f.custody.observation();
-            let release = point > 8;
-            let index = if release {
-                (point - 9) / 4
-            } else {
-                (point - 1) / 2
-            };
-            let at = if release {
-                (point - 9) % 4 + 1
-            } else {
-                (point - 1) % 2 + 1
-            };
-            let unmapped = if release { 4 } else { index };
-            let released = if release { index } else { 0 };
-            assert_eq!((state.unmapped, state.released), (unmapped, released));
-            assert!(state.failed);
-            assert_eq!(after.model, expected_model(&f, &before, unmapped, released));
-            assert_eq!(after.currentness, before.currentness + point);
-            let successful = if release {
-                (at - 1).min(release_calls(&before, index).len())
-            } else {
-                0
-            };
-            assert_eq!(after.retained_va, retained_va_after(&before, released));
-            let calls = if release {
-                4 + (0..released)
-                    .map(|i| release_calls(&before, i).len())
-                    .sum::<usize>()
-                    + successful
-            } else {
-                index + usize::from(at == 2)
-            };
-            assert_eq!(
-                after.calls,
-                all_calls(&before)[..before.calls.len() + calls]
-            );
-            for i in 0..4 {
-                assert_eq!(
-                    after.controls[i].disposal,
-                    if i < released {
-                        disposal_progress(i, release_calls(&before, i).len(), None)
-                    } else if release && i == index {
-                        disposal_progress(i, successful, None)
-                    } else {
-                        [(false, None); 3]
-                    }
-                );
-            }
-            assert_eq!(
-                record(&after, index),
-                &expected_queue_record(
-                    &before,
-                    index,
-                    release,
-                    successful,
-                    release && at == 4,
-                    false
-                )
-            );
-            assert_eq!(state.controls[index].native_disposed, release && at == 4);
-            assert_eq!(
-                state.controls[index].owner,
-                if !release {
-                    "Mapped"
-                } else if at == 4 {
-                    "NativeDisposed"
-                } else {
-                    "Unmapped"
-                }
-            );
-            if index == 1 {
-                assert_eq!(state.controls[index].disposal[2], (false, None));
-            }
-            for i in 0..4 {
-                if i != index {
-                    assert_eq!(
-                        record(&after, i),
-                        &expected_queue_record(
-                            &before,
-                            i,
-                            i < unmapped,
-                            if i < released {
-                                release_calls(&before, i).len()
-                            } else {
-                                0
-                            },
-                            i < released,
-                            i < released
-                        )
-                    );
-                }
-            }
-            assert_eq!(after.phase, SharedMemorySessionPhaseV1::Quarantined);
+            before.assert_queue_currentness_snapshot_v1(&after, f.memory.fixture.vm, &state, point);
             f.check_retention(&before);
             f.reject_retry();
         }

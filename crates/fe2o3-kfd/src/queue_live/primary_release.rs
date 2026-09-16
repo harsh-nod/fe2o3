@@ -23,6 +23,19 @@ pub(super) use driver::{
 };
 pub(super) use driver::{PrimaryReleaseStateV1, preflight_primary_owners_v1};
 
+pub(super) fn primary_dispatch_release_admitted_v1(
+    unpublished: &UnpublishedDispatchStateV1,
+    attached: bool,
+    recycled: Option<u64>,
+    count: usize,
+    identities: usize,
+    insertion: Option<usize>,
+) -> bool {
+    count == 0
+        && (unpublished.is_clear()
+            || unpublished.quiescent(true, attached, recycled, count, identities, insertion))
+}
+
 /// Retains the queue, native results and memory owners through terminal teardown.
 /// A failed or unfinished owner must remain retained until process termination.
 #[must_use = "primary teardown must complete or remain retained until process termination"]
@@ -87,17 +100,15 @@ impl ComputeAqlQueueSessionV1 {
     pub fn preflight_primary_release_v1(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if !self.supports_retained_primary_release_v1()?
             || self.terminal_poisoned
-            || self.detached_data_count != 0
             || self.terminal_dependency.is_some()
-            || (!self.unpublished_dispatch.is_clear()
-                && !self.unpublished_dispatch.quiescent(
-                    true,
-                    self.dispatch.is_some(),
-                    self.detached_dispatch_generation,
-                    self.detached_data_count,
-                    self.detached_data_identities.len(),
-                    self.detached_next_insertion_index,
-                ))
+            || !primary_dispatch_release_admitted_v1(
+                &self.unpublished_dispatch,
+                self.dispatch.is_some(),
+                self.detached_dispatch_generation,
+                self.detached_data_count,
+                self.detached_data_identities.len(),
+                self.detached_next_insertion_index,
+            )
         {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "unsupported or busy primary release",

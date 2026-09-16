@@ -4,13 +4,17 @@ use super::*;
 use crate::queue::dispatch_binding::control_release::RetainedControlSnapshotV1;
 use crate::queue::live::primary_release::{
     PrimaryReleaseMemoryV1, PrimaryReleaseParentV1, PrimaryReleasePartsV1, PrimaryReleaseStateV1,
-    preflight_primary_owners_v1,
+    preflight_primary_owners_v1, primary_dispatch_release_admitted_v1,
 };
 use crate::queue_linux::primary_fixture::LocalRuntimeObservationV1;
 use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV1};
 
+#[path = "integration_release_detached_tests.rs"]
+mod detached_cases;
 #[path = "integration_release_fault_tests.rs"]
 mod fault_cases;
+#[path = "integration_release_late_tests.rs"]
+mod late_cases;
 #[path = "integration_pool_trim_tests.rs"]
 mod pool_trim_cases;
 #[path = "integration_release_sdma_tests.rs"]
@@ -28,6 +32,11 @@ struct Parent {
     submission: NativeAqlSubmissionOwnerV1,
     completion: CompletionSignalArenaOwnerV1,
     dependency: ComputeDependencySessionOwnerV1,
+    unpublished: UnpublishedDispatchStateV1,
+    detached_count: usize,
+    detached_generation: Option<u64>,
+    detached_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
+    detached_next: Option<usize>,
     poisoned: bool,
 }
 
@@ -36,6 +45,18 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
         if self.poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "fixture parent poisoned",
+            ));
+        }
+        if !primary_dispatch_release_admitted_v1(
+            &self.unpublished,
+            self.dispatch.is_some(),
+            self.detached_generation,
+            self.detached_count,
+            self.detached_identities.len(),
+            self.detached_next,
+        ) {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unsupported or busy primary release",
             ));
         }
         self.dependency
@@ -72,6 +93,7 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
     }
     fn poison_release(&mut self) {
         self.poisoned = true;
+        self.unpublished.continuation = None;
         self.dependency.poison();
         self.completion.poison_owner();
         self.submission.poison();
@@ -96,6 +118,9 @@ impl PrimaryReleaseMemoryV1 for Memory {
         memory_step("release-resources")?;
         trace().borrow_mut().release_snapshot =
             Some(self.primary_queue_cleanup_snapshot_v1(resources));
+        if let Some((offset, panic)) = trace().borrow().queue_release_currentness_fault {
+            self.primary_fail_currentness_v1(offset, panic);
+        }
         let result = self.primary_release_queue_resources_v1(
             resources,
             trace().borrow().queue_release_projection_fault,
@@ -111,11 +136,15 @@ impl PrimaryReleaseMemoryV1 for Memory {
         signals: &mut ControlCleanupCustodyV1,
     ) -> Result<(), MemorySessionError> {
         memory_step("release-signals")?;
-        trace().borrow_mut().signal_snapshot = Some(self.primary_restored_memory_snapshot_v1());
+        trace().borrow_mut().signal_snapshot =
+            Some(self.primary_signal_cleanup_snapshot_v1(signals));
         if let Some((operation, panic)) = trace().borrow().signal_fault {
             self.fail_cleanup(operation, panic);
         }
-        self.primary_release_signals_v1(signals)
+        if let Some((offset, panic)) = trace().borrow().signal_currentness_fault {
+            self.primary_fail_currentness_v1(offset, panic);
+        }
+        self.primary_release_signals_v1(signals, trace().borrow().signal_projection_fault)
     }
 }
 
@@ -225,6 +254,11 @@ fn constructed_on_gate(
         submission: complete.submission,
         completion: complete.completion_owner,
         dependency: complete.dependency_owner,
+        unpublished: UnpublishedDispatchStateV1::default(),
+        detached_count: 0,
+        detached_generation: None,
+        detached_identities: Vec::new(),
+        detached_next: None,
         poisoned: false,
     };
     parent

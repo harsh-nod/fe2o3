@@ -188,6 +188,7 @@ impl PreparationMemoryFixtureV1 {
     pub(crate) fn primary_release_signals_v1(
         &mut self,
         signals: &mut ControlCleanupCustodyV1,
+        fault: Option<(control_cleanup::CleanupStageV1, bool)>,
     ) -> Result<(), MemorySessionError> {
         assert!(matches!(
             self.fixture.ownership.phase,
@@ -196,6 +197,16 @@ impl PreparationMemoryFixtureV1 {
         let before = signals.observation();
         let f = &mut self.fixture;
         let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
+        projection.fault = fault.map(|(stage, panic)| {
+            (
+                stage,
+                if panic {
+                    adapter::ProjectionFaultV1::Panic
+                } else {
+                    adapter::ProjectionFaultV1::Error
+                },
+            )
+        });
         let result = catch_unwind(AssertUnwindSafe(|| {
             control_cleanup::release_v1(&mut f.engine, &mut projection, signals, || {
                 self.control_release_process_poisoned += 1

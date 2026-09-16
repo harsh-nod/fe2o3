@@ -1,0 +1,1163 @@
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_detached_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_detached_tests.rs
+new file mode 100644
+index 000000000..04c24e900
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_detached_tests.rs
+@@ -0,0 +1,280 @@
++//! Genuine pristine-abort owners join the detached ledger and primary admission.
++
++use super::*;
++use crate::queue::live::data_insertion::DetachedInsertionLedgerV1;
++use crate::queue::live::data_release::{DataReleaseContextV1, settle_data_release_v1};
++use crate::shared_memory::{DataCleanupCustodyV1, DispatchDataReleaseV1};
++
++struct ReleaseContext<'a> {
++    parent: &'a mut Parent,
++    retained: Vec<DataCleanupCustodyV1>,
++    loans: usize,
++    retakes: usize,
++}
++
++impl DataReleaseContextV1 for ReleaseContext<'_> {
++    fn require_unbound(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        let p = &self.parent;
++        if p.poisoned
++            || !p.unpublished.quiescent(
++                p.completion.ensure_releasable().is_ok(),
++                p.dispatch.is_some(),
++                p.detached_generation,
++                p.detached_count,
++                p.detached_identities.len(),
++                p.detached_next,
++            )
++        {
++            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
++        }
++        Ok(())
++    }
++
++    fn ledger(&mut self) -> DetachedInsertionLedgerV1<'_> {
++        DetachedInsertionLedgerV1 {
++            identities: &mut self.parent.detached_identities,
++            count: &mut self.parent.detached_count,
++            next: &mut self.parent.detached_next,
++        }
++    }
++
++    fn release(
++        &mut self,
++        root: &mut DataCleanupCustodyV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        let before = ledger_snapshot(self.parent);
++        let (lower, retake) = execute_live_model_custody_v1(
++            self,
++            |context| {
++                let e = &mut context.parent.engine;
++                assert!(e.backend.foundation_in_engine);
++                let loan = e.backend.session.primary_loan(&mut e.foundation)?;
++                e.backend.foundation_in_engine = false;
++                context.loans += 1;
++                Ok::<_, ComputeAqlQueueSessionErrorV1>(loan)
++            },
++            |context| context.parent.engine.backend.session.release_data(root),
++            |context, loan| {
++                let e = &mut context.parent.engine;
++                assert!(!e.backend.foundation_in_engine);
++                e.backend.session.primary_reclaim(&mut e.foundation, loan)?;
++                e.backend.foundation_in_engine = true;
++                context.retakes += 1;
++                Ok(())
++            },
++            |context| context.parent.poison_release(),
++        )?;
++        assert_eq!(
++            ledger_snapshot(self.parent),
++            before,
++            "ledger commits only after retake"
++        );
++        retake?;
++        lower?;
++        assert!(root.is_complete());
++        Ok(())
++    }
++
++    fn retain(&mut self, root: DataCleanupCustodyV1) {
++        self.retained.push(root);
++    }
++
++    fn poison(&mut self, panicked: bool) {
++        self.parent.poison_release();
++        if panicked {
++            Fixture::poison();
++        }
++    }
++}
++
++#[derive(Debug, PartialEq, Eq)]
++struct LedgerSnapshot {
++    count: usize,
++    recycled: Option<u64>,
++    identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
++    insertion: Option<usize>,
++    continuation: (usize, u64),
++    storage: (usize, usize),
++}
++
++fn ledger_snapshot(parent: &Parent) -> LedgerSnapshot {
++    let continuation = parent.unpublished.continuation.as_ref().unwrap();
++    LedgerSnapshot {
++        count: parent.detached_count,
++        recycled: parent.detached_generation,
++        identities: parent.detached_identities.clone(),
++        insertion: parent.detached_next,
++        continuation: (
++            core::ptr::from_ref(continuation) as usize,
++            continuation.next_generation_for_test(),
++        ),
++        storage: (
++            parent.detached_identities.as_ptr() as usize,
++            parent.detached_identities.capacity(),
++        ),
++    }
++}
++
++fn assert_borrowed_rejection(parent: &Parent, t: &Rc<RefCell<Trace>>, gate: &LocalGateV1) {
++    let ledger = ledger_snapshot(parent);
++    let memory = parent
++        .engine
++        .backend
++        .session
++        .primary_release_memory_snapshot_v1(&parent.engine.foundation);
++    let calls = t.borrow().calls.clone();
++    let resources = original_resource_ids(parent);
++    let signal = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++    let local = t.borrow().local_resources.live();
++    assert!(matches!(
++        parent.preflight_release(),
++        Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "unsupported or busy primary release"
++        ))
++    ));
++    assert_eq!(ledger_snapshot(parent), ledger);
++    assert_eq!(
++        parent
++            .engine
++            .backend
++            .session
++            .primary_release_memory_snapshot_v1(&parent.engine.foundation),
++        memory
++    );
++    assert_eq!(t.borrow().calls, calls);
++    assert_eq!(original_resource_ids(parent), resources);
++    assert_eq!(
++        Memory::primary_token_identity(parent.signals.as_ref().unwrap()),
++        signal
++    );
++    assert_eq!(t.borrow().local_resources.live(), local);
++    assert!(parent.engine.backend.foundation_in_engine && !parent.poisoned);
++    assert_eq!(gate.teardown_count(), 0);
++    assert_eq!(gate.observation(), (false, false));
++}
++
++#[test]
++fn constructed_primary_release_after_pristine_abort_requires_settled_detached_ledger() {
++    let (mut parent, t, gate) = constructed(true);
++    let ids = original_resource_ids(&parent);
++    let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++    let before = RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
++    let buffers = parent
++        .dispatch
++        .as_ref()
++        .unwrap()
++        .prepare_pristine_abort_v1()
++        .unwrap();
++    let engine = &mut parent.engine;
++    let loan = engine
++        .backend
++        .session
++        .primary_loan(&mut engine.foundation)
++        .unwrap();
++    engine.backend.foundation_in_engine = false;
++    let mut abort = parent
++        .dispatch
++        .take()
++        .unwrap()
++        .begin_pristine_abort_v1(buffers);
++    abort.release_controls(&mut engine.backend.session).unwrap();
++    engine
++        .backend
++        .session
++        .primary_reclaim(&mut engine.foundation, loan)
++        .unwrap();
++    engine.backend.foundation_in_engine = true;
++    let (continuation, data, identities) = abort.into_detached();
++    assert_eq!(
++        data.iter()
++            .map(Gfx942FixedDispatchDataV1::sdma_storage_identity)
++            .collect::<Vec<_>>(),
++        before.data_order_v1()
++    );
++    assert_eq!(
++        data.iter()
++            .map(Gfx942FixedDispatchDataV1::storage_identity)
++            .collect::<Vec<_>>(),
++        identities
++    );
++    parent.unpublished.continuation = Some(continuation);
++    parent.detached_count = data.len();
++    parent.detached_identities = identities;
++    let original = ledger_snapshot(&parent);
++    let mut context = ReleaseContext {
++        parent: &mut parent,
++        retained: Vec::new(),
++        loans: 0,
++        retakes: 0,
++    };
++    for (index, owner) in data.into_iter().enumerate() {
++        assert_borrowed_rejection(context.parent, &t, &gate);
++        let result = settle_data_release_v1(&mut context, owner);
++        assert!(!result.transport);
++        result.into_result().unwrap();
++        assert_eq!(context.parent.detached_count, original.count - index - 1);
++        assert_eq!(
++            context.parent.detached_identities,
++            original.identities[index + 1..]
++        );
++        assert_eq!(context.parent.detached_next, Some(0));
++        assert_eq!(
++            ledger_snapshot(context.parent).continuation,
++            original.continuation
++        );
++    }
++    assert!(context.retained.is_empty());
++    assert_eq!(
++        (context.loans, context.retakes),
++        (original.count, original.count)
++    );
++    drop(context);
++    parent.preflight_release().unwrap();
++
++    // Borrowed rejection must neither consume the continuation nor start teardown.
++    parent.detached_count = 1;
++    assert_borrowed_rejection(&parent, &t, &gate);
++    parent.detached_count = 0;
++    parent.detached_identities.push(original.identities[0]);
++    assert_borrowed_rejection(&parent, &t, &gate);
++    parent.detached_identities.clear();
++    parent.detached_generation = Some(1);
++    assert_borrowed_rejection(&parent, &t, &gate);
++    parent.detached_generation = None;
++    parent.detached_next = Some(1);
++    assert_borrowed_rejection(&parent, &t, &gate);
++    parent.detached_next = Some(0);
++    parent.preflight_release().unwrap();
++
++    let settled = ledger_snapshot(&parent);
++    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++    state.release_in_place(&mut parent).unwrap();
++    assert_eq!(
++        state
++            .resources
++            .as_ref()
++            .unwrap()
++            .observation()
++            .controls
++            .map(|c| c.identity),
++        ids
++    );
++    assert_eq!(
++        state.signals.as_ref().unwrap().observation().identity,
++        signal_id
++    );
++    assert!(state.dispatch.is_none() && state.complete && !parent.poisoned);
++    assert_eq!(ledger_snapshot(&parent), settled);
++    parent
++        .engine
++        .backend
++        .session
++        .primary_assert_all_released_v1();
++    assert_no_retry(&mut parent, &mut state, &t);
++    assert_eq!(ledger_snapshot(&parent), settled);
++    drop(state);
++    drop(parent);
++    assert_eq!(gate.teardown_count(), 0);
++    assert_eq!(gate.observation(), (false, false));
++    assert_eq!(t.borrow().local_resources.live(), (0, 0, 0));
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs
+index ce39d49fc..013a372d6 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_fault_tests.rs
+@@ -5,91 +4,0 @@ use fe2o3_runtime_model::{QueueHistoryEventKindV1, QueueSyscallStatusV1};
+-#[test]
+-fn constructed_primary_release_after_pristine_abort_preserves_original_queue_and_refunds() {
+-    use crate::shared_memory::{DataCleanupCustodyV1, DispatchDataReleaseV1};
+-
+-    let (mut parent, t, gate) = constructed(true);
+-    let ids = original_resource_ids(&parent);
+-    let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
+-    let before = RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
+-    let buffers = parent
+-        .dispatch
+-        .as_ref()
+-        .unwrap()
+-        .prepare_pristine_abort_v1()
+-        .unwrap();
+-    let engine = &mut parent.engine;
+-    let loan = engine
+-        .backend
+-        .session
+-        .primary_loan(&mut engine.foundation)
+-        .unwrap();
+-    let mut abort = parent
+-        .dispatch
+-        .take()
+-        .unwrap()
+-        .begin_pristine_abort_v1(buffers);
+-    abort.release_controls(&mut engine.backend.session).unwrap();
+-    let (continuation, data, identities) = abort.into_detached();
+-    assert_eq!(
+-        data.iter()
+-            .map(Gfx942FixedDispatchDataV1::sdma_storage_identity)
+-            .collect::<Vec<_>>(),
+-        before.data_order_v1()
+-    );
+-    assert_eq!(
+-        data.iter()
+-            .map(Gfx942FixedDispatchDataV1::storage_identity)
+-            .collect::<Vec<_>>(),
+-        identities
+-    );
+-    let mut returned: Vec<_> = data.into_iter().map(DataCleanupCustodyV1::new).collect();
+-    for owner in &mut returned {
+-        engine.backend.session.release_data(owner).unwrap();
+-        assert!(owner.is_complete());
+-    }
+-    engine
+-        .backend
+-        .session
+-        .primary_reclaim(&mut engine.foundation, loan)
+-        .unwrap();
+-    let returned_before: Vec<_> = returned
+-        .iter()
+-        .map(DataCleanupCustodyV1::observation)
+-        .collect();
+-    let mut state = PrimaryReleaseStateV1::<Fixture>::new();
+-    state.release_in_place(&mut parent).unwrap();
+-    assert_eq!(
+-        state
+-            .resources
+-            .as_ref()
+-            .unwrap()
+-            .observation()
+-            .controls
+-            .map(|c| c.identity),
+-        ids
+-    );
+-    assert_eq!(
+-        state.signals.as_ref().unwrap().observation().identity,
+-        signal_id
+-    );
+-    assert!(state.dispatch.is_none() && state.complete && !parent.poisoned);
+-    assert_eq!(
+-        returned
+-            .iter()
+-            .map(DataCleanupCustodyV1::observation)
+-            .collect::<Vec<_>>(),
+-        returned_before
+-    );
+-    parent
+-        .engine
+-        .backend
+-        .session
+-        .primary_assert_all_released_v1();
+-    assert_no_retry(&mut parent, &mut state, &t);
+-    drop(state);
+-    drop(parent);
+-    drop((continuation, returned));
+-    assert_eq!(gate.teardown_count(), 0);
+-    assert_eq!(gate.observation(), (false, false));
+-    assert_eq!(t.borrow().local_resources.live(), (0, 0, 0));
+-}
+-
+@@ -261,0 +171,2 @@ fn constructed_primary_release_resource_model_boundaries_keep_native_and_model_p
++            Stage::UnmapPreflight,
++            Stage::UnmapEvidence,
+@@ -263,0 +175,2 @@ fn constructed_primary_release_resource_model_boundaries_keep_native_and_model_p
++            Stage::ReleasePreflight,
++            Stage::ReleaseEvidence,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_late_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_late_tests.rs
+new file mode 100644
+index 000000000..7ff831702
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_late_tests.rs
+@@ -0,0 +1,175 @@
++//! Late joined failures retain earlier native receipts and the original suffix.
++
++use super::*;
++use crate::shared_memory::CleanupStageV1 as Stage;
++
++fn assert_currentness_failure(
++    result: std::thread::Result<Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1>>,
++    panic: bool,
++) {
++    if panic {
++        assert_eq!(
++            result.unwrap_err().downcast_ref::<(&str, &str)>(),
++            Some(&("N2 native panic", "currentness"))
++        );
++    } else {
++        assert!(matches!(
++            result.unwrap(),
++            Err(ComputeAqlQueueSessionErrorV1::Memory(
++                MemorySessionError::Injected("currentness")
++            ))
++        ));
++    }
++}
++
++#[test]
++fn constructed_primary_release_late_resource_currentness_keeps_all_original_suffixes() {
++    for point in 1..=24 {
++        for panic in [false, true] {
++            let (mut parent, t, gate) = constructed(true);
++            let dispatch =
++                RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap());
++            let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++            t.borrow_mut().queue_release_currentness_fault = Some((point, panic));
++            let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++            let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++            assert_currentness_failure(result, panic);
++            assert!(state.destroy.attempted && state.destroy.returned.is_some());
++            assert!(state.authority.is_none() && !parent.engine.backend.foundation_in_engine);
++            parent
++                .engine
++                .backend
++                .session
++                .primary_assert_permanently_restored_v1(&parent.engine.foundation);
++            t.borrow_mut()
++                .release_snapshot
++                .take()
++                .unwrap()
++                .assert_constructed_queue_currentness_v1(
++                    &parent.engine.backend.session,
++                    state.resources.as_ref().unwrap(),
++                    point,
++                );
++            dispatch.assert_restored_v1(
++                RetainedControlSnapshotV1::ordinary_owner_v1(parent.dispatch.as_ref().unwrap()),
++                true,
++            );
++            assert_eq!(
++                Memory::primary_token_identity(parent.signals.as_ref().unwrap()),
++                signal_id
++            );
++            assert!(
++                state.dispatch.is_none()
++                    && state.signals.is_none()
++                    && !state.complete
++                    && parent.poisoned
++            );
++            assert!(!t.borrow().calls.contains(&"complete-shadows"));
++            assert!(state.gate.is_some());
++            assert_eq!(gate.teardown_count(), 1);
++            assert!(gate.observation().1);
++            assert_no_retry(&mut parent, &mut state, &t);
++        }
++    }
++}
++
++fn assert_signal_suffix(
++    parent: &Parent,
++    state: &PrimaryReleaseStateV1<Fixture>,
++    gate: &LocalGateV1,
++) {
++    assert!(state.resources.as_ref().unwrap().is_complete());
++    assert!(state.dispatch.as_ref().unwrap().is_complete());
++    assert!(
++        parent.dispatch.is_none() && parent.signals.is_none() && !state.complete && parent.poisoned
++    );
++    assert!(state.gate.is_some() && state.signals.is_some());
++    assert_eq!(gate.teardown_count(), 1);
++    assert!(gate.observation().1);
++    assert!(!parent.engine.backend.foundation_in_engine);
++    parent
++        .engine
++        .backend
++        .session
++        .primary_assert_permanently_restored_v1(&parent.engine.foundation);
++}
++
++#[test]
++fn constructed_primary_release_signal_currentness_preserves_unsettled_disposal_receipts() {
++    for point in 1..=6 {
++        for panic in [false, true] {
++            let (mut parent, t, gate) = constructed(true);
++            let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++            t.borrow_mut().signal_currentness_fault = Some((point, panic));
++            let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++            let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++            assert_currentness_failure(result, panic);
++            assert_signal_suffix(&parent, &state, &gate);
++            assert_eq!(
++                state.signals.as_ref().unwrap().observation().identity,
++                signal_id
++            );
++            t.borrow_mut()
++                .signal_snapshot
++                .take()
++                .unwrap()
++                .assert_constructed_signal_currentness_v1(
++                    &parent.engine.backend.session,
++                    state.signals.as_ref().unwrap(),
++                    point,
++                );
++            assert_no_retry(&mut parent, &mut state, &t);
++        }
++    }
++}
++
++#[test]
++fn constructed_primary_release_signal_model_boundaries_keep_refunds_and_model_commits_separate() {
++    for stage in [
++        Stage::UnmapPreflight,
++        Stage::UnmapEvidence,
++        Stage::UnmapProjection,
++        Stage::UnmapCommit,
++        Stage::ReleasePreflight,
++        Stage::ReleaseEvidence,
++        Stage::ReleaseProjection,
++        Stage::ReleaseCommit,
++    ] {
++        for panic in [false, true] {
++            let (mut parent, t, gate) = constructed(true);
++            let signal_id = Memory::primary_token_identity(parent.signals.as_ref().unwrap());
++            t.borrow_mut().signal_projection_fault = Some((stage, panic));
++            let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++            let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, Stage)>(),
++                    Some(&("control cleanup projection", stage))
++                );
++            } else {
++                assert!(matches!(
++                    result.unwrap(),
++                    Err(ComputeAqlQueueSessionErrorV1::Memory(
++                        MemorySessionError::Injected("control cleanup projection")
++                    ))
++                ));
++            }
++            assert_signal_suffix(&parent, &state, &gate);
++            assert_eq!(
++                state.signals.as_ref().unwrap().observation().identity,
++                signal_id
++            );
++            t.borrow_mut()
++                .signal_snapshot
++                .take()
++                .unwrap()
++                .assert_constructed_signal_projection_v1(
++                    &parent.engine.backend.session,
++                    state.signals.as_ref().unwrap(),
++                    stage,
++                    panic,
++                );
++            assert_no_retry(&mut parent, &mut state, &t);
++        }
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index 8294d3483..0c6fb2eef 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -7 +7 @@ use crate::queue::live::primary_release::{
+-    preflight_primary_owners_v1,
++    preflight_primary_owners_v1, primary_dispatch_release_admitted_v1,
+@@ -11,0 +12,2 @@ use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV
++#[path = "integration_release_detached_tests.rs"]
++mod detached_cases;
+@@ -13,0 +16,2 @@ mod fault_cases;
++#[path = "integration_release_late_tests.rs"]
++mod late_cases;
+@@ -30,0 +35,5 @@ struct Parent {
++    unpublished: UnpublishedDispatchStateV1,
++    detached_count: usize,
++    detached_generation: Option<u64>,
++    detached_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
++    detached_next: Option<usize>,
+@@ -40,0 +50,12 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
++        if !primary_dispatch_release_admitted_v1(
++            &self.unpublished,
++            self.dispatch.is_some(),
++            self.detached_generation,
++            self.detached_count,
++            self.detached_identities.len(),
++            self.detached_next,
++        ) {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unsupported or busy primary release",
++            ));
++        }
+@@ -74,0 +96 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
++        self.unpublished.continuation = None;
+@@ -98,0 +121,3 @@ impl PrimaryReleaseMemoryV1 for Memory {
++        if let Some((offset, panic)) = trace().borrow().queue_release_currentness_fault {
++            self.primary_fail_currentness_v1(offset, panic);
++        }
+@@ -114 +139,2 @@ impl PrimaryReleaseMemoryV1 for Memory {
+-        trace().borrow_mut().signal_snapshot = Some(self.primary_restored_memory_snapshot_v1());
++        trace().borrow_mut().signal_snapshot =
++            Some(self.primary_signal_cleanup_snapshot_v1(signals));
+@@ -118 +144,4 @@ impl PrimaryReleaseMemoryV1 for Memory {
+-        self.primary_release_signals_v1(signals)
++        if let Some((offset, panic)) = trace().borrow().signal_currentness_fault {
++            self.primary_fail_currentness_v1(offset, panic);
++        }
++        self.primary_release_signals_v1(signals, trace().borrow().signal_projection_fault)
+@@ -227,0 +257,5 @@ fn constructed_on_gate(
++        unpublished: UnpublishedDispatchStateV1::default(),
++        detached_count: 0,
++        detached_generation: None,
++        detached_identities: Vec::new(),
++        detached_next: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+index 8951ddd8f..3652e9f40 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+@@ -49,0 +50 @@ struct Trace {
++    queue_release_currentness_fault: Option<(usize, bool)>,
+@@ -53,0 +55,2 @@ struct Trace {
++    signal_currentness_fault: Option<(usize, bool)>,
++    signal_projection_fault: Option<(crate::shared_memory::CleanupStageV1, bool)>,
+diff --git a/crates/fe2o3-kfd/src/queue_live/primary_release.rs b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+index 91a65ca79..55c7aa28a 100644
+--- a/crates/fe2o3-kfd/src/queue_live/primary_release.rs
++++ b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+@@ -25,0 +26,13 @@ pub(super) use driver::{PrimaryReleaseStateV1, preflight_primary_owners_v1};
++pub(super) fn primary_dispatch_release_admitted_v1(
++    unpublished: &UnpublishedDispatchStateV1,
++    attached: bool,
++    recycled: Option<u64>,
++    count: usize,
++    identities: usize,
++    insertion: Option<usize>,
++) -> bool {
++    count == 0
++        && (unpublished.is_clear()
++            || unpublished.quiescent(true, attached, recycled, count, identities, insertion))
++}
++
+@@ -90 +102,0 @@ impl ComputeAqlQueueSessionV1 {
+-            || self.detached_data_count != 0
+@@ -92,9 +104,8 @@ impl ComputeAqlQueueSessionV1 {
+-            || (!self.unpublished_dispatch.is_clear()
+-                && !self.unpublished_dispatch.quiescent(
+-                    true,
+-                    self.dispatch.is_some(),
+-                    self.detached_dispatch_generation,
+-                    self.detached_data_count,
+-                    self.detached_data_identities.len(),
+-                    self.detached_next_insertion_index,
+-                ))
++            || !primary_dispatch_release_admitted_v1(
++                &self.unpublished_dispatch,
++                self.dispatch.is_some(),
++                self.detached_dispatch_generation,
++                self.detached_data_count,
++                self.detached_data_identities.len(),
++                self.detached_next_insertion_index,
++            )
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+index d2aabbb7d..698165267 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+@@ -190,0 +191 @@ impl PreparationMemoryFixtureV1 {
++        fault: Option<(control_cleanup::CleanupStageV1, bool)>,
+@@ -198,0 +200,10 @@ impl PreparationMemoryFixtureV1 {
++        projection.fault = fault.map(|(stage, panic)| {
++            (
++                stage,
++                if panic {
++                    adapter::ProjectionFaultV1::Panic
++                } else {
++                    adapter::ProjectionFaultV1::Error
++                },
++            )
++        });
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
+index 79449f81b..1e032071f 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
+@@ -360,0 +361,9 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
++    pub(crate) fn primary_signal_cleanup_snapshot_v1(
++        &self,
++        signals: &ControlCleanupCustodyV1,
++    ) -> Snapshot {
++        let mut snapshot = self.primary_restored_memory_snapshot_v1();
++        snapshot.controls.push(signals.observation());
++        snapshot
++    }
++
+@@ -428,0 +438,10 @@ impl Snapshot {
++struct SignalPrefixV1 {
++    stage: Stage,
++    checks: usize,
++    model_unmapped: bool,
++    native_unmapped: bool,
++    native_calls: usize,
++    settled: bool,
++    quarantined: bool,
++}
++
+@@ -429,0 +449,127 @@ impl Snapshot {
++    pub(crate) fn assert_constructed_signal_currentness_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        signals: &ControlCleanupCustodyV1,
++        point: usize,
++    ) {
++        assert!((1..=6).contains(&point));
++        self.assert_constructed_signal_prefix_v1(
++            memory,
++            signals,
++            SignalPrefixV1 {
++                stage: if point <= 2 {
++                    Stage::NativeUnmap
++                } else {
++                    Stage::NativeRelease
++                },
++                checks: point,
++                model_unmapped: point >= 3,
++                native_unmapped: point >= 3,
++                native_calls: [0, 1, 1, 2, 3, 4][point - 1],
++                settled: false,
++                quarantined: true,
++            },
++        );
++    }
++
++    pub(crate) fn assert_constructed_signal_projection_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        signals: &ControlCleanupCustodyV1,
++        stage: Stage,
++        panicked: bool,
++    ) {
++        let (checks, native_calls, model_unmapped, native_unmapped, settled) = match stage {
++            Stage::UnmapPreflight | Stage::UnmapEvidence => (0, 0, false, false, false),
++            Stage::UnmapProjection | Stage::UnmapCommit => (2, 1, false, true, false),
++            Stage::ReleasePreflight | Stage::ReleaseEvidence | Stage::ReleaseProjection => {
++                (2, 1, true, true, false)
++            }
++            Stage::ReleaseCommit => (6, 4, true, true, true),
++            _ => panic!("not a model failure boundary"),
++        };
++        self.assert_constructed_signal_prefix_v1(
++            memory,
++            signals,
++            SignalPrefixV1 {
++                stage,
++                checks,
++                model_unmapped,
++                native_unmapped,
++                native_calls,
++                settled,
++                quarantined: panicked
++                    || !matches!(stage, Stage::UnmapPreflight | Stage::UnmapEvidence),
++            },
++        );
++    }
++
++    fn assert_constructed_signal_prefix_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        signals: &ControlCleanupCustodyV1,
++        prefix: SignalPrefixV1,
++    ) {
++        let after = memory.primary_signal_cleanup_snapshot_v1(signals);
++        let active = signals.observation();
++        let original = &self.controls[0];
++        assert_eq!(active.identity, original.identity);
++        assert_eq!(active.layout, original.layout);
++        assert_eq!(active.profile_type, original.profile_type);
++        assert_eq!(active.stage, prefix.stage);
++        assert!(active.started && active.failed && !signals.is_complete());
++        assert_eq!(active.native_disposed, prefix.native_calls == 4);
++        assert_eq!(
++            active.owner,
++            if prefix.native_calls == 4 {
++                "NativeDisposed"
++            } else if prefix.native_unmapped {
++                "Unmapped"
++            } else {
++                "Mapped"
++            }
++        );
++        assert_eq!(
++            active.unmap,
++            if prefix.native_calls == 0 {
++                (false, None, None)
++            } else {
++                (true, Some(true), Some(1))
++            }
++        );
++        assert_eq!(
++            active.disposal,
++            std::array::from_fn(|i| if i + 1 < prefix.native_calls {
++                (true, Some(true))
++            } else {
++                (false, None)
++            })
++        );
++        assert_eq!(after.currentness, self.currentness + prefix.checks);
++        assert_eq!(after.retained_device_bytes, self.retained_device_bytes);
++        assert_eq!(
++            after.phase,
++            if prefix.quarantined {
++                SharedMemorySessionPhaseV1::Quarantined
++            } else {
++                self.phase
++            }
++        );
++        self.assert_control_transition_snapshot_v1(
++            &after,
++            (memory.fixture.vm, memory.fixture.engine.session_id),
++            &[active.identity],
++            (
++                0,
++                prefix.model_unmapped,
++                prefix.native_calls,
++                Some((
++                    prefix.native_unmapped,
++                    prefix.native_calls,
++                    prefix.settled,
++                    prefix.native_calls >= 3,
++                )),
++            ),
++        );
++    }
++
+@@ -569 +714,0 @@ impl Snapshot {
+-        assert_eq!(after.usage, self.usage);
+@@ -572,0 +718 @@ impl Snapshot {
++        let mut usage = self.usage;
+@@ -588,0 +735,7 @@ impl Snapshot {
++                    if r.charged {
++                        record.charged = false;
++                        let usage = usage.0.as_mut().expect("charged host control account");
++                        usage.used_backing_bytes -= r.layout.gpu_va_bytes();
++                        usage.used_allocation_records -= 1;
++                        usage.retained_records -= 1;
++                    }
+@@ -600,0 +754 @@ impl Snapshot {
++        assert_eq!(after.usage, usage);
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
+index f78dba813..6ccec73e9 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
+@@ -224,0 +225,165 @@ impl Snapshot {
++    pub(crate) fn assert_constructed_queue_currentness_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        point: usize,
++    ) {
++        self.assert_queue_currentness_snapshot_v1(
++            &memory.primary_queue_cleanup_snapshot_v1(custody),
++            memory.fixture.vm,
++            &custody.observation(),
++            point,
++        );
++    }
++
++    fn assert_queue_currentness_snapshot_v1(
++        &self,
++        after: &Self,
++        vm: VmKeyV1,
++        state: &crate::shared_memory::QueueResourceCleanupObservationV1,
++        point: usize,
++    ) {
++        assert!((1..=24).contains(&point));
++        let release = point > 8;
++        let index = if release {
++            (point - 9) / 4
++        } else {
++            (point - 1) / 2
++        };
++        let at = if release {
++            (point - 9) % 4 + 1
++        } else {
++            (point - 1) % 2 + 1
++        };
++        let unmapped = if release { 4 } else { index };
++        let released = if release { index } else { 0 };
++        assert_eq!((state.unmapped, state.released), (unmapped, released));
++        assert!(state.started && state.failed);
++        assert_eq!(
++            after.model,
++            expected_model_in_vm(vm, self, unmapped, released)
++        );
++        assert_eq!(after.currentness, self.currentness + point);
++        let successful = if release {
++            (at - 1).min(release_calls(self, index).len())
++        } else {
++            0
++        };
++        assert_eq!(after.retained_va, retained_va_after(self, released));
++        let calls = if release {
++            4 + (0..released)
++                .map(|i| release_calls(self, i).len())
++                .sum::<usize>()
++                + successful
++        } else {
++            index + usize::from(at == 2)
++        };
++        assert_eq!(after.calls, all_calls(self)[..self.calls.len() + calls]);
++        for i in 0..4 {
++            let current = &after.controls[i];
++            assert_eq!(current.identity, self.controls[i].identity);
++            assert_eq!(current.profile_type, self.controls[i].profile_type);
++            assert_eq!(current.layout, self.controls[i].layout);
++            assert_eq!(
++                current.disposal,
++                if i < released {
++                    disposal_progress(i, release_calls(self, i).len(), None)
++                } else if release && i == index {
++                    disposal_progress(i, successful, None)
++                } else {
++                    [(false, None); 3]
++                }
++            );
++            if !release && i > index {
++                assert_eq!(current, &self.controls[i], "untouched unmap suffix");
++            } else if i != index {
++                assert!(current.started && !current.failed);
++                assert_eq!(
++                    current.stage,
++                    if i < released {
++                        Stage::Complete
++                    } else {
++                        Stage::Unmapped
++                    }
++                );
++                assert_eq!(
++                    current.owner,
++                    if i < released {
++                        "NativeDisposed"
++                    } else {
++                        "Unmapped"
++                    }
++                );
++                assert_eq!(current.native_disposed, i < released);
++                assert_eq!(current.unmap, (true, Some(true), Some(1)));
++            }
++            let (was_unmapped, native_calls, disposed, settled) = if i == index {
++                (release, successful, release && at == 4, false)
++            } else {
++                (
++                    i < unmapped,
++                    if i < released {
++                        release_calls(self, i).len()
++                    } else {
++                        0
++                    },
++                    i < released,
++                    i < released,
++                )
++            };
++            assert_eq!(
++                record(after, i),
++                &expected_queue_record(self, i, was_unmapped, native_calls, disposed, settled)
++            );
++        }
++        let active = &state.controls[index];
++        assert!(active.failed);
++        assert_eq!(
++            active.stage,
++            if release {
++                Stage::NativeRelease
++            } else {
++                Stage::NativeUnmap
++            }
++        );
++        assert_eq!(active.native_disposed, release && at == 4);
++        assert_eq!(
++            active.owner,
++            if !release {
++                "Mapped"
++            } else if at == 4 {
++                "NativeDisposed"
++            } else {
++                "Unmapped"
++            }
++        );
++        assert_eq!(
++            active.unmap,
++            if release || at == 2 {
++                (true, Some(true), Some(1))
++            } else {
++                (false, None, None)
++            }
++        );
++        if index == 1 {
++            assert_eq!(active.disposal[2], (false, None));
++        }
++        assert_eq!(after.phase, SharedMemorySessionPhaseV1::Quarantined);
++        assert_eq!(after.identity, self.identity);
++        assert_eq!(after.certificate, self.certificate);
++        assert_eq!(after.usage, self.usage);
++        assert_eq!(after.devices, self.devices);
++        assert_eq!(after.retained_device_bytes, self.retained_device_bytes);
++        assert_eq!(after.storage, self.storage);
++        assert_eq!(after.process_poisoned, self.process_poisoned);
++        assert_eq!(after.records.len(), self.records.len());
++        for record in &self.records {
++            if !self.controls.iter().any(|c| c.identity.id == record.id) {
++                assert_eq!(
++                    after.records.iter().find(|r| r.id == record.id).unwrap(),
++                    record
++                );
++            }
++        }
++    }
++
+@@ -234 +399,7 @@ impl Snapshot {
+-        let release = matches!(stage, Stage::ReleaseProjection | Stage::ReleaseCommit);
++        let release = matches!(
++            stage,
++            Stage::ReleasePreflight
++                | Stage::ReleaseEvidence
++                | Stage::ReleaseProjection
++                | Stage::ReleaseCommit
++        );
+@@ -236 +407,5 @@ impl Snapshot {
+-        let native_unmaps = if release { 4 } else { index + 1 };
++        let native_unmaps = if release {
++            4
++        } else {
++            index + usize::from(matches!(stage, Stage::UnmapProjection | Stage::UnmapCommit))
++        };
+@@ -237,0 +413,6 @@ impl Snapshot {
++        let checks = if release {
++            8 + 4 * (index + usize::from(disposed))
++        } else {
++            2 * native_unmaps
++        };
++        assert_eq!(after.currentness, self.currentness + checks);
+@@ -264,0 +446 @@ impl Snapshot {
++        assert_eq!(after.records.len(), self.records.len());
+@@ -297,2 +479,17 @@ impl Snapshot {
+-            if !after.controls[i].started {
+-                assert_eq!(after.controls[i], self.controls[i]);
++            if !release && i > index {
++                assert_eq!(
++                    after.controls[i], self.controls[i],
++                    "untouched unmap suffix"
++                );
++            } else if i != index {
++                let current = &after.controls[i];
++                assert!(current.started && !current.failed);
++                assert_eq!(
++                    current.stage,
++                    if i < released {
++                        Stage::Complete
++                    } else {
++                        Stage::Unmapped
++                    }
++                );
++                assert_eq!(current.unmap, (true, Some(true), Some(1)));
+@@ -613,92 +810 @@ fn queue_cleanup_currentness_sweep_preserves_userptr_reservation_and_disposal_bo
+-            let release = point > 8;
+-            let index = if release {
+-                (point - 9) / 4
+-            } else {
+-                (point - 1) / 2
+-            };
+-            let at = if release {
+-                (point - 9) % 4 + 1
+-            } else {
+-                (point - 1) % 2 + 1
+-            };
+-            let unmapped = if release { 4 } else { index };
+-            let released = if release { index } else { 0 };
+-            assert_eq!((state.unmapped, state.released), (unmapped, released));
+-            assert!(state.failed);
+-            assert_eq!(after.model, expected_model(&f, &before, unmapped, released));
+-            assert_eq!(after.currentness, before.currentness + point);
+-            let successful = if release {
+-                (at - 1).min(release_calls(&before, index).len())
+-            } else {
+-                0
+-            };
+-            assert_eq!(after.retained_va, retained_va_after(&before, released));
+-            let calls = if release {
+-                4 + (0..released)
+-                    .map(|i| release_calls(&before, i).len())
+-                    .sum::<usize>()
+-                    + successful
+-            } else {
+-                index + usize::from(at == 2)
+-            };
+-            assert_eq!(
+-                after.calls,
+-                all_calls(&before)[..before.calls.len() + calls]
+-            );
+-            for i in 0..4 {
+-                assert_eq!(
+-                    after.controls[i].disposal,
+-                    if i < released {
+-                        disposal_progress(i, release_calls(&before, i).len(), None)
+-                    } else if release && i == index {
+-                        disposal_progress(i, successful, None)
+-                    } else {
+-                        [(false, None); 3]
+-                    }
+-                );
+-            }
+-            assert_eq!(
+-                record(&after, index),
+-                &expected_queue_record(
+-                    &before,
+-                    index,
+-                    release,
+-                    successful,
+-                    release && at == 4,
+-                    false
+-                )
+-            );
+-            assert_eq!(state.controls[index].native_disposed, release && at == 4);
+-            assert_eq!(
+-                state.controls[index].owner,
+-                if !release {
+-                    "Mapped"
+-                } else if at == 4 {
+-                    "NativeDisposed"
+-                } else {
+-                    "Unmapped"
+-                }
+-            );
+-            if index == 1 {
+-                assert_eq!(state.controls[index].disposal[2], (false, None));
+-            }
+-            for i in 0..4 {
+-                if i != index {
+-                    assert_eq!(
+-                        record(&after, i),
+-                        &expected_queue_record(
+-                            &before,
+-                            i,
+-                            i < unmapped,
+-                            if i < released {
+-                                release_calls(&before, i).len()
+-                            } else {
+-                                0
+-                            },
+-                            i < released,
+-                            i < released
+-                        )
+-                    );
+-                }
+-            }
+-            assert_eq!(after.phase, SharedMemorySessionPhaseV1::Quarantined);
++            before.assert_queue_currentness_snapshot_v1(&after, f.memory.fixture.vm, &state, point);

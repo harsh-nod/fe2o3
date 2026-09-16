@@ -350,27 +350,55 @@ These are focused KFD and full runtime library checks, not fresh full-KFD or
 workspace regressions, formal proof, native fault qualification or performance
 evidence. R125 remains the accepted checkpoint.
 
+## Late Cleanup And Detached Ledger Joins
+
+The constructed primary driver now covers all 24 queue-resource currentness
+boundaries, all six signal currentness boundaries, and all eight model stages
+for each of the four queue resources and the final signal, with errors and
+panics separately. Oracles check original identities/layouts, untouched suffixes,
+native calls and receipts, model prefixes, account refunds, retained VA, lower
+phase, terminal parent, retained gate and inert retry. Final currentness can
+retain a fully disposed signal without a refund; release-commit failure can
+retain the refund while the model remains only unmapped. Signal
+`UnmapPreflight`/`UnmapEvidence` errors preserve the lower phase, while panics
+quarantine it.
+
+The post-pristine-abort test now installs the actual returned continuation and
+identity ledger on its constructed parent. It closes the abort model loan
+before returning data, then uses the shared detached-data release driver with
+one genuine loan/retake per original owner. Production and the constructed
+parent share the unchanged borrowed primary-admission predicate. Every partial
+ledger rejects teardown; the fully settled ledger admits it. Count/identity
+disagreement, recycled-generation substitution and an out-of-range insertion
+index reject without changing memory, native calls, owners, continuation or
+gate state. Final teardown refunds all backing and preserves the settled ledger.
+This joins genuine CPU fixture owners and production drivers; it is not public
+Linux forwarding or native fault evidence.
+
+GNU/musl each pass 308 selected KFD tests, including all 30 constructed-parent
+release tests, and 745 runtime library tests with one hardware test ignored.
+Strict all-target Clippy, formatting and the unchanged unsafe-source policy
+pass. Two read-only reviews checked the shared admission and exact failure
+oracles. See the [late-release development receipt](evidence/dev-r126-late-release-2026-09-16/README.md).
+These results close the listed late CPU joins, not R126 qualification.
+
 ## Remaining Qualification
 
-1. Extend constructed-parent coverage to the remaining late queue-resource and
-   signal currentness/model joins and the concrete post-pristine-abort detached
-   ledger admission. Lower exhaustive matrices and the generic post-abort fixture
-   do not substitute for these joins.
-2. Extend the no-dispatch native successful-Drop probe to applicable dispatch and
+1. Extend the no-dispatch native successful-Drop probe to applicable dispatch and
    failure-retention paths. Corrupted-observation model rejection, scripted native
    errors and actual hardware outcomes retain distinct evidence scopes.
-3. Qualify the new directional route through genuine public runtime workflows,
+2. Qualify the new directional route through genuine public runtime workflows,
    including failure retention, account observations and assigned compute-lane
    destruction-profile events. A manually installed queue or scripted early
    shutdown return is not public-workflow evidence. Pending ordinary/XGMI/window
    owner matrices and remaining integrated resource/model joins need completion.
-4. Qualify pool-trim failure retention and account observations through public
+3. Qualify pool-trim failure retention and account observations through public
    native runtime workflows. Constructed-parent CPU matrices and the packetless
    native success probe do not substitute for these fault paths. Other consuming
    SDMA eviction/disposal routes remain outside the new trim root.
-5. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
+4. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
    calibrations and independent evidence review before R126 acceptance.
-6. Qualify applicable additional queue profiles, native GPU execution, formal
+5. Qualify applicable additional queue profiles, native GPU execution, formal
    correspondence, aggregate-memory behavior and matched HIP/HSA performance.
 
 The initial ordinary-primary profile does not remove other queue profiles from

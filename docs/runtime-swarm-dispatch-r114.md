@@ -25,6 +25,13 @@ accepted. Then connect N5
 DATA-ADOPT, actual I2 ISSUE, C4/C5 completion/readback/typed replies and C6
 Stop/drain/graphs. Other queue modes and cold-output profiles remain required.
 
+Subsequent R126 directional-SDMA and pool-trim retention are implemented. The
+[late-release packet](evidence/dev-r126-late-release-2026-09-16/README.md) now joins
+the remaining queue-resource/signal CPU failure boundaries and genuine
+post-pristine-abort ledger admission. GNU/musl each pass 308 selected KFD tests
+and 745 runtime tests. Native faults, other profiles and full qualification
+remain open; R125 remains accepted.
+
 Preceding Native checkpoint: [R124 ordinary recycled detach is locally accepted](runtime-live-recycled-detach-v1.md),
 with [476 raw artifacts](evidence/local-r124-live-recycled-detach-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,882 tests with

@@ -47,6 +47,12 @@ successful shutdown. The [development receipt](evidence/dev-r126-pool-trim-2026-
 separates CPU fault coverage from packetless native success. Full qualification,
 native failure/accounting evidence and remaining R126 joins are still open.
 
+The [late-release packet](evidence/dev-r126-late-release-2026-09-16/README.md)
+now closes the late queue-resource/signal currentness and model CPU joins, plus
+genuine post-pristine-abort detached-ledger admission. GNU/musl each pass 308
+selected KFD tests and 745 runtime tests, with one hardware test ignored.
+Public native faults, other profiles and full R126 qualification remain open.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with
