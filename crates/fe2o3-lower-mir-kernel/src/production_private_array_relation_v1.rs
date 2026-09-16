@@ -1013,7 +1013,8 @@ impl ProductionPreRankedKirOwnerV1 {
     /// The inert count grants no functional, artifact or launch authority.
     /// `None` is restricted to the sealed promoted-local case; a retained but
     /// unsupported, missing or malformed initializer remains an error. Keep
-    /// this owner's complete graph and assertion-origin floor in `budget`.
+    /// this owner's complete graph, assertion-origin and helper-memory floor
+    /// in `budget`.
     pub fn materialized_private_array_initializer_count(
         &self,
         selected_root: SemanticFunctionIdV1,
@@ -1024,11 +1025,7 @@ impl ProductionPreRankedKirOwnerV1 {
         use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
         use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as ResourceError;
         budget.charge_work(3).map_err(Resource)?;
-        let floor = self
-            .executable_storage
-            .retained_storage()
-            .checked_add(self.assert_origins.storage.payload_storage())
-            .ok_or(Resource(ResourceError::Arithmetic))?;
+        let floor = self.retained_analysis_storage_v1();
         if budget.storage() < floor {
             return Err(Resource(ResourceError::Accounting));
         }
@@ -1255,7 +1252,8 @@ impl ProductionPreRankedKirOwnerV1 {
     /// slot. A retained but unsupported or missing relation is an error. Only
     /// constant indices are supported; the result grants no source-value,
     /// functional-refinement, artifact or launch authority. The caller must keep
-    /// this owner's graph and assertion-origin payload reserved in `budget`.
+    /// this owner's graph, assertion-origin and helper-memory payload reserved
+    /// in `budget`.
     /// This allocation-free query uses the constructor-selected body; it does
     /// not replay lowering or invoke a new source planner.
     pub fn has_materialized_private_array_access(
@@ -1278,7 +1276,7 @@ impl ProductionPreRankedKirOwnerV1 {
     /// absent, or mismatched retained relations remain errors. The returned
     /// integer is inert: it grants no source-value, refinement, artifact or
     /// launch authority. It neither installs a row nor changes the source plan.
-    /// Keep the same graph and assertion-origin storage floor reserved. One
+    /// Keep the same complete retained-analysis storage floor reserved. One
     /// fixed extraction work unit precedes the unchanged allocation-free query.
     pub fn materialized_private_array_constant_index(
         &self,
@@ -1305,11 +1303,7 @@ impl ProductionPreRankedKirOwnerV1 {
         use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
         use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as ResourceError;
         budget.charge_work(3).map_err(Resource)?;
-        let floor = self
-            .executable_storage
-            .retained_storage()
-            .checked_add(self.assert_origins.storage.payload_storage())
-            .ok_or(Resource(ResourceError::Arithmetic))?;
+        let floor = self.retained_analysis_storage_v1();
         if budget.storage() < floor {
             return Err(Resource(ResourceError::Accounting));
         }
