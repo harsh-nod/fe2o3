@@ -35,9 +35,7 @@ fn promoted_transport_descriptor_v1(
                 SemanticPromotedTransportV1::Semantic(binding),
             ));
         }
-        if matches!(declaration.role(), SemanticLocalRoleV1::Argument(_))
-            && direct_parameters.contains_key(&current)
-        {
+        if declaration.role().is_entry_argument() && direct_parameters.contains_key(&current) {
             return Ok((
                 declaration.ty(),
                 SemanticPromotedTransportV1::DirectParameter {
@@ -157,7 +155,7 @@ impl SemanticControlFlowSsaPlanV1 {
                 types[declaration.ty().index() as usize].shape(),
                 SemanticTypeShapeV1::Array { .. }
             ) {
-                if matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)) {
+                if declaration.role().is_entry_argument() {
                     return Err(unsupported(
                         semantic_function.index(),
                         None,
@@ -293,7 +291,21 @@ impl SemanticControlFlowSsaPlanV1 {
             )?;
             let kernel_types =
                 binding.transport_types(types, transport_semantic_type, direct_parameters)?;
+            let ordinary_empty = kernel_types.is_empty()
+                && matches!(
+                    binding,
+                    SemanticPromotedTransportV1::Semantic(SemanticPromotedBindingV1::Ordinary)
+                )
+                && types[transport_semantic_type.index() as usize]
+                    .layout()
+                    .size_bytes()
+                    == Some(0)
+                && binding_from_value_defs(types, transport_semantic_type, &[])?
+                    .values()
+                    .map_err(|detail| unsupported(semantic_function.index(), None, None, detail))?
+                    .is_empty();
             if kernel_types.is_empty()
+                && !ordinary_empty
                 && !matches!(
                     binding,
                     SemanticPromotedTransportV1::Semantic(

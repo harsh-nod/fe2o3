@@ -430,9 +430,7 @@ fn retained_local_initialization_entries_with_budget_v1(
     let mut entry_initialized = BTreeSet::new();
     for (local, declaration) in function.locals().iter().enumerate() {
         let local = local as u32;
-        if retained.contains(&local)
-            && matches!(declaration.role(), SemanticLocalRoleV1::Argument(_))
-        {
+        if retained.contains(&local) && declaration.role().is_entry_argument() {
             insert_retained_initialization_v1(local, &mut entry_initialized, budget)?;
         }
     }

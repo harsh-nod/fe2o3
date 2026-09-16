@@ -573,6 +573,7 @@ struct BodyProducerV1<'a, 'owner, 'tcx> {
     body: &'a Body<'tcx>,
     function: SemanticFunctionIdV1,
     type_ids: HashMap<Ty<'tcx>, SemanticTypeIdV1>,
+    rust_call_tuple_argument: Option<u32>,
     locals_by_raw: Vec<&'a ProductionSemanticLocalBindingV1>,
     locals_by_semantic: Vec<&'a ProductionSemanticLocalBindingV1>,
     blocks_by_raw: Vec<&'a ProductionSemanticBlockBindingV1>,
@@ -709,12 +710,13 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             false,
             SemanticMirResourceV1::Blocks,
         )?;
-        Ok(Self {
+        let mut producer = Self {
             tcx: input.tcx,
             instance: input.instance,
             body: input.body,
             function: input.function,
             type_ids,
+            rust_call_tuple_argument: None,
             locals_by_raw,
             locals_by_semantic,
             blocks_by_raw,
@@ -726,7 +728,98 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             consumed_terminal_expansions,
             consumed_normalized_intrinsics,
             owner,
-        })
+        };
+        producer.validate_argument_locals(&input.abi)?;
+        Ok(producer)
+    }
+
+    fn validate_argument_locals(
+        &mut self,
+        abi: &SemanticFunctionAbiV1,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        let signature = crate::rustc_semantic_plan_v1::source_signature_v1(self.tcx, self.instance)
+            .map_err(|detail| unsupported(detail, None, None))?;
+        if signature.inputs().len() != abi.source_input_types().len()
+            || self.type_id(signature.output(), None, None)? != abi.source_output_type()
+            || normalize_type_v1(self.tcx, self.instance, self.body.return_ty())
+                .map_err(|_| table("return local normalization"))?
+                != signature.output()
+        {
+            return Err(table("body source signature"));
+        }
+        for (source, semantic) in signature.inputs().iter().zip(abi.source_input_types()) {
+            if self.type_id(*source, None, None)? != *semantic {
+                return Err(table("body source argument type"));
+            }
+        }
+        if (signature.abi == rustc_abi::ExternAbi::RustCall)
+            != (abi.extern_abi() == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall)
+        {
+            return Err(table("body RustCall ABI disagreement"));
+        }
+        let expanded =
+            self.tcx.def_kind(self.instance.def_id()) == rustc_hir::def::DefKind::Closure;
+        let (prefix, fields) = if signature.abi == rustc_abi::ExternAbi::RustCall {
+            let (tuple, prefix) = signature
+                .inputs()
+                .split_last()
+                .ok_or_else(|| table("RustCall source tuple"))?;
+            let TyKind::Tuple(fields) = tuple.kind() else {
+                return Err(table("RustCall source tuple"));
+            };
+            if abi.extern_abi() != fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+                || abi.fixed_count() as usize != prefix.len()
+                || self.body.spread_arg.map(|local| local.index())
+                    != if expanded {
+                        None
+                    } else {
+                        Some(signature.inputs().len())
+                    }
+            {
+                return Err(table("RustCall body argument form"));
+            }
+            if expanded {
+                (prefix, Some(*fields))
+            } else {
+                (signature.inputs(), None)
+            }
+        } else {
+            if expanded || self.body.spread_arg.is_some() {
+                return Err(table("ordinary body argument form"));
+            }
+            (signature.inputs(), None)
+        };
+        let count = prefix
+            .len()
+            .checked_add(fields.map_or(0, |fields| fields.len()))
+            .ok_or_else(|| table("body argument count"))?;
+        if self.body.arg_count != count {
+            return Err(table("body argument count"));
+        }
+        for (index, expected) in prefix
+            .iter()
+            .copied()
+            .chain(fields.into_iter().flat_map(|fields| fields.iter()))
+            .enumerate()
+        {
+            self.work()?;
+            let raw = self
+                .body
+                .local_decls
+                .get(rustc_middle::mir::Local::from_usize(index + 1))
+                .ok_or_else(|| table("body argument local"))?;
+            if normalize_type_v1(self.tcx, self.instance, raw.ty)
+                .map_err(|_| table("argument local normalization"))?
+                != expected
+            {
+                return Err(table("body argument local type"));
+            }
+        }
+        if expanded {
+            self.rust_call_tuple_argument =
+                Some(u32::try_from(prefix.len()).map_err(|_| table("RustCall tuple ordinal"))?);
+        }
+        Ok(())
     }
 
     fn construct_locals(
@@ -746,7 +839,11 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             locals.push(SemanticLocalDeclV1::new(
                 binding.identity,
                 ty,
-                semantic_local_role_v1(binding.rustc_local, self.body.arg_count)?,
+                semantic_local_role_v1(
+                    binding.rustc_local,
+                    self.body.arg_count,
+                    self.rust_call_tuple_argument,
+                )?,
                 binding.source,
             ));
         }
@@ -925,9 +1022,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                             SemanticAggregateKindV1::Aggregate
                         }
                     }
-                    AggregateKind::Closure(..) => {
-                        return Err(unsupported("closure aggregate rvalue", block, statement));
-                    }
+                    AggregateKind::Closure(..) => SemanticAggregateKindV1::Aggregate,
                     AggregateKind::CoroutineClosure(..) => {
                         return Err(unsupported(
                             "coroutine-closure aggregate rvalue",
@@ -2097,6 +2192,7 @@ fn validate_export_role_v1(
 fn semantic_local_role_v1(
     raw_local: u32,
     argument_count: usize,
+    rust_call_tuple_argument: Option<u32>,
 ) -> Result<SemanticLocalRoleV1, ProductionSemanticBodyErrorV1> {
     if raw_local == u32::try_from(RETURN_PLACE.index()).unwrap_or(0) {
         return Ok(SemanticLocalRoleV1::Return);
@@ -2104,6 +2200,15 @@ fn semantic_local_role_v1(
     let raw = usize::try_from(raw_local).map_err(|_| table("local role"))?;
     if raw <= argument_count {
         let argument = raw.checked_sub(1).ok_or_else(|| table("local role"))?;
+        if let Some(tuple) = rust_call_tuple_argument
+            && argument >= tuple as usize
+        {
+            return Ok(SemanticLocalRoleV1::RustCallTupleField {
+                argument: tuple,
+                field: u32::try_from(argument - tuple as usize)
+                    .map_err(|_| table("RustCall field ordinal"))?,
+            });
+        }
         Ok(SemanticLocalRoleV1::Argument(
             u32::try_from(argument).map_err(|_| table("local role"))?,
         ))
@@ -2360,21 +2465,48 @@ mod tests {
     #[test]
     fn local_roles_follow_rustc_body_numbering() {
         assert_eq!(
-            semantic_local_role_v1(0, 2).unwrap(),
+            semantic_local_role_v1(0, 2, None).unwrap(),
             SemanticLocalRoleV1::Return
         );
         assert_eq!(
-            semantic_local_role_v1(1, 2).unwrap(),
+            semantic_local_role_v1(1, 2, None).unwrap(),
             SemanticLocalRoleV1::Argument(0)
         );
         assert_eq!(
-            semantic_local_role_v1(2, 2).unwrap(),
+            semantic_local_role_v1(2, 2, None).unwrap(),
             SemanticLocalRoleV1::Argument(1)
         );
         assert_eq!(
-            semantic_local_role_v1(3, 2).unwrap(),
+            semantic_local_role_v1(3, 2, None).unwrap(),
             SemanticLocalRoleV1::Temporary
         );
+    }
+
+    #[test]
+    fn expanded_rust_call_roles_preserve_receiver_and_outer_field_ordinals() {
+        for arity in 0..=3 {
+            assert_eq!(
+                semantic_local_role_v1(0, arity + 1, Some(1)).unwrap(),
+                SemanticLocalRoleV1::Return
+            );
+            assert_eq!(
+                semantic_local_role_v1(1, arity + 1, Some(1)).unwrap(),
+                SemanticLocalRoleV1::Argument(0)
+            );
+            for field in 0..arity {
+                assert_eq!(
+                    semantic_local_role_v1((field + 2) as u32, arity + 1, Some(1)).unwrap(),
+                    SemanticLocalRoleV1::RustCallTupleField {
+                        argument: 1,
+                        field: field as u32
+                    }
+                );
+            }
+            assert_eq!(
+                semantic_local_role_v1((arity + 2) as u32, arity + 1, Some(1)).unwrap(),
+                SemanticLocalRoleV1::Temporary
+            );
+        }
     }
 
     #[test]

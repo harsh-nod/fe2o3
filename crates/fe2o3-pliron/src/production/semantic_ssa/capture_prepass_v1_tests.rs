@@ -64,53 +64,70 @@ fn block_prepass_denial_precedes_traversal_and_does_not_consume_elisions() {
 
 #[test]
 fn entry_prepass_denial_precedes_local_visits_and_preserves_implicit_cursor() {
-    let (types, function, callables) = two_implicit_scopes();
-    let transparent = transparent_borrow_sites_v1(&function, &callables);
-    let entries = prepare_semantic_ssa_adapter_with_observer_v1(
-        &function,
-        Some(&types),
-        &callables,
-        &transparent,
-        &mut Trace::default(),
-    )
-    .unwrap()
-    .into_entries(&mut Trace::default())
-    .unwrap();
-    let mut denied = Trace {
-        reject_hook: Some(RejectedHook::EntryPass),
-        ..Trace::default()
-    };
-    let mut output = CountOutput::default();
-    assert_eq!(
-        entries.emit_entries(&mut output, &mut denied),
-        Err(EmissionError::Observer(HOOK_DENIED))
-    );
-    assert_eq!(denied.entry_passes, [(8, 2)]);
-    assert!(denied.visits.is_empty());
-    assert!(denied.entries.is_empty());
-    assert!(denied.input.is_empty());
-    assert_eq!(output.counts.tuple(), (0, 0, 0, 0, 0));
+    for (role, expected) in [
+        (SemanticLocalRoleV1::Argument(0), Entry::Argument(0)),
+        (
+            SemanticLocalRoleV1::RustCallTupleField {
+                argument: 1,
+                field: 2,
+            },
+            Entry::RustCallTupleField {
+                argument: 1,
+                field: 2,
+            },
+        ),
+    ] {
+        let (types, function, callables) = two_implicit_scopes();
+        let mut locals = function.locals().to_vec();
+        locals[3] = test_local(194, 2, role);
+        let function = replace_source_parts(&function, locals, function.blocks().to_vec());
+        let transparent = transparent_borrow_sites_v1(&function, &callables);
+        let entries = prepare_semantic_ssa_adapter_with_observer_v1(
+            &function,
+            Some(&types),
+            &callables,
+            &transparent,
+            &mut Trace::default(),
+        )
+        .unwrap()
+        .into_entries(&mut Trace::default())
+        .unwrap();
+        let mut denied = Trace {
+            reject_hook: Some(RejectedHook::EntryPass),
+            ..Trace::default()
+        };
+        let mut output = CountOutput::default();
+        assert_eq!(
+            entries.emit_entries(&mut output, &mut denied),
+            Err(EmissionError::Observer(HOOK_DENIED))
+        );
+        assert_eq!(denied.entry_passes, [(8, 2)]);
+        assert!(denied.visits.is_empty());
+        assert!(denied.entries.is_empty());
+        assert!(denied.input.is_empty());
+        assert_eq!(output.counts.tuple(), (0, 0, 0, 0, 0));
 
-    let mut accepted = Trace::default();
-    entries.emit_entries(&mut output, &mut accepted).unwrap();
-    assert_eq!(accepted.entry_passes, [(8, 2)]);
-    assert_eq!(output.counts.tuple(), (0, 0, 0, 0, 3));
-    assert_eq!(
-        accepted.entries,
-        [
-            (0, variable(1), Entry::ImplicitCapability),
-            (1, variable(3), Entry::Argument(0)),
-            (2, variable(6), Entry::ImplicitCapability),
-        ]
-    );
+        let mut accepted = Trace::default();
+        entries.emit_entries(&mut output, &mut accepted).unwrap();
+        assert_eq!(accepted.entry_passes, [(8, 2)]);
+        assert_eq!(output.counts.tuple(), (0, 0, 0, 0, 3));
+        assert_eq!(
+            accepted.entries,
+            [
+                (0, variable(1), Entry::ImplicitCapability),
+                (1, variable(3), expected),
+                (2, variable(6), Entry::ImplicitCapability),
+            ]
+        );
 
-    let mut denied_real = Trace {
-        reject_hook: Some(RejectedHook::EntryPass),
-        ..Trace::default()
-    };
-    assert!(matches!(entries.finish(&mut denied_real), Err(HOOK_DENIED)));
-    assert_eq!(denied_real.entry_passes, [(8, 2)]);
-    assert!(denied_real.visits.is_empty());
-    assert!(denied_real.entries.is_empty());
-    assert!(denied_real.input.is_empty());
+        let mut denied_real = Trace {
+            reject_hook: Some(RejectedHook::EntryPass),
+            ..Trace::default()
+        };
+        assert!(matches!(entries.finish(&mut denied_real), Err(HOOK_DENIED)));
+        assert_eq!(denied_real.entry_passes, [(8, 2)]);
+        assert!(denied_real.visits.is_empty());
+        assert!(denied_real.entries.is_empty());
+        assert!(denied_real.input.is_empty());
+    }
 }

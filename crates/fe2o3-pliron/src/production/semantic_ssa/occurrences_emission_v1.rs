@@ -504,6 +504,9 @@ impl grammar::SemanticSsaEmissionObserverV1 for Observer<'_, '_, '_, '_> {
                 grammar::SemanticSsaEntryOriginV1::Argument(n) => {
                     ProductionSemanticSsaEntryOriginV1::Argument(n)
                 }
+                grammar::SemanticSsaEntryOriginV1::RustCallTupleField { argument, field } => {
+                    ProductionSemanticSsaEntryOriginV1::RustCallTupleField { argument, field }
+                }
                 grammar::SemanticSsaEntryOriginV1::ImplicitCapability => {
                     ProductionSemanticSsaEntryOriginV1::ImplicitCapability
                 }

@@ -87,6 +87,7 @@ enum TerminalIdentitySchemaV1 {
 pub(crate) enum ProductionSemanticImportErrorV1 {
     Target(ProductionTargetErrorV1),
     RootCustodyMismatch,
+    ClosureAdmission(crate::closure_profile_v1::ClosureProfileErrorV1),
     LimitExceeded {
         resource: SemanticMirResourceV1,
         actual: u64,
@@ -119,6 +120,9 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::Target(error) => write!(formatter, "semantic import target rejection: {error}"),
             Self::RootCustodyMismatch => formatter.write_str(
                 "semantic importer rejected collector root custody before MIR construction",
+            ),
+            Self::ClosureAdmission(error) => write!(
+                formatter, "semantic import closure admission rejected: {error}"
             ),
             Self::LimitExceeded {
                 resource,
@@ -182,6 +186,7 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             Self::FunctionAbiConstruction(error) => Some(error.as_ref()),
             Self::BodyConstruction(error) => Some(error.as_ref()),
             Self::SemanticSchema(error) => Some(error),
+            Self::ClosureAdmission(error) => Some(error),
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
             | Self::LineageTranscriptTooLarge { .. }
@@ -4231,6 +4236,12 @@ fn build_identity_inventory_v1<'tcx>(
     let target = canonical_target_layout_v1(target.rustc_layout());
     let mut functions = Vec::with_capacity(collection.functions.len());
     for function in &collection.functions {
+        crate::closure_profile_v1::revalidate_closure_observation_v2(
+            tcx,
+            function.instance,
+            function.closure_observation.as_deref(),
+        )
+        .map_err(ProductionSemanticImportErrorV1::ClosureAdmission)?;
         functions.push(RetainedSemanticFunctionProducerV1 {
             identities: canonical_function_identities_v1(tcx, function.instance),
             instance: function.instance,

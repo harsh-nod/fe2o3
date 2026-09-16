@@ -1355,6 +1355,12 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_source_launch_wrapping_integers_match_rust_in_simulation -- \
         --ignored --exact
+  run_step rocm-production-simulation-rust-call \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_source_rust_call_closures_match_rust_in_simulation -- \
+        --ignored --exact
   run_step rocm-production-simulation-sqrt \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

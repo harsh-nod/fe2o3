@@ -34,6 +34,8 @@ mod pre_ranked_materialization_v1;
 mod pre_ranked_multiroot_v1;
 #[path = "production_semantic_kir_v1/retained_array_v1.rs"]
 mod retained_array_v1;
+#[path = "production_semantic_kir_v1/rust_call_tests.rs"]
+mod rust_call_tests;
 #[path = "production_semantic_kir_v1/shared_slice_helper_v1.rs"]
 mod shared_slice_helper_v1;
 #[path = "production_semantic_kir_v1/slice_indexed_store_v1.rs"]
@@ -4334,18 +4336,23 @@ fn transparent_helper_carrier_rejects_loose_layout_and_wrong_ownership() {
         exact_transparent_scalar_carrier_field_v1(&loose_types, TRANSPARENT_HELPER_CARRIER_TYPE,),
         None
     );
-    assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            transparent_helper_carrier_owner_v1(
-                TransparentHelperCarrierFixtureV1::LooseStorageOnly,
-            ),
-            ProductionSemanticKirLimitsV1::default(),
+    let Err(error) = ProductionSemanticKirOwnerV1::try_lower(
+        transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::LooseStorageOnly),
+        ProductionSemanticKirLimitsV1::default(),
+    ) else {
+        panic!("restricted scalar validity must not become a loose aggregate transport");
+    };
+    assert!(
+        matches!(
+            error,
+            ProductionSemanticKirErrorV1::Unsupported {
+                function: 1,
+                detail: "aggregate kernel argument ABI mode does not match its scalar components",
+                ..
+            }
         ),
-        Err(ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
-            semantic_type: 3,
-            ..
-        })
-    ));
+        "{error}"
+    );
 
     let exact_types =
         transparent_helper_carrier_types_v1(TransparentHelperCarrierFixtureV1::WrongOwnership);
@@ -4360,7 +4367,7 @@ fn transparent_helper_carrier_rejects_loose_layout_and_wrong_ownership() {
         ),
         Err(ProductionSemanticKirErrorV1::Unsupported {
             function: 1,
-            detail: "helper scalar carrier lacks an exact by-value source ABI",
+            detail: "helper parameter is not an exact by-value scalar aggregate or shared slice",
             ..
         })
     ));
