@@ -482,11 +482,7 @@ fn shared_slice_helper_load_is_not_mislabeled_pure() {
             owner(Shape::Read, false),
             ProductionSemanticKirLimitsV1::default()
         ),
-        Err(ProductionSemanticKirErrorV1::Unsupported {
-            function: 1,
-            detail: "reachable deterministic scalar helper is not interprocedurally complete and pure",
-            ..
-        })
+        Err(ProductionSemanticKirErrorV1::HelperEffectsUnavailable { function: 1, .. })
     ));
 }
 

@@ -431,7 +431,8 @@ fn materialize_induction_body_predicate_v1(
             "an induction body predicate changed its exact source successors",
         ));
     }
-    let operand = |operand: &ProjectedInductionPredicateOperandV1| match operand {
+    let operand = |operand: &ProjectedInductionPredicateOperandV1|
+        -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> { match operand {
         ProjectedInductionPredicateOperandV1::Uniform(value) => Ok(*value),
         ProjectedInductionPredicateOperandV1::Induction { ordinal, .. } => {
             let argument = live
@@ -449,6 +450,7 @@ fn materialize_induction_body_predicate_v1(
                 })?,
             })
         }
+    }
     };
     let arguments_for = |target: usize| {
         let target_live =

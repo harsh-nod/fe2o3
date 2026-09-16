@@ -442,14 +442,17 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
             && oob.stderr.contains(&oob_source_location)
-            && oob.stderr.contains("kernel.index_constant 64")
-            && oob
-                .stderr
-                .contains("ranked PLIRON before rejected lowering")
+            && oob.stderr.contains("pre-ranked materialization failed")
             && oob
                 .stderr
                 .contains("lowering stopped before target IR or artifact emission"),
         "out-of-bounds diagnostic was incomplete:\n{}",
+        oob.stderr,
+    );
+    assert!(
+        !oob.stderr
+            .contains("ranked PLIRON before rejected lowering"),
+        "early materialization failure claimed a ranked graph:\n{}",
         oob.stderr,
     );
     for forbidden in ["kernel-ir-v1", "GeneralGemm", "Unknown/Unproved"] {
@@ -741,11 +744,24 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
     );
 
     let helper = run_feature_extraction(&ScratchTarget::new(), "barrier_helper");
+    let helper_declaration = format!(":{}:", ranked_bounds_fixture_line("fn helper_barrier()"));
     assert!(
         !helper.status.success()
+            && helper.stderr.contains("pre-ranked materialization failed")
             && helper.stderr.contains(
-                "a call terminator before exact callable memory-effect summaries are available"
-            ),
+                "reachable deterministic scalar helper is not interprocedurally complete and pure"
+            )
+            && helper.stderr.lines().any(|line| {
+                line.contains("helper declaration at Rust source")
+                    && line.contains(&helper_declaration)
+            })
+            && helper
+                .stderr
+                .contains("lowering stopped before target IR or artifact emission")
+            && !helper
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && !helper.stderr.contains("safety-verified lowering input"),
         "helper-mediated barrier bypassed the semantic boundary:\n{}",
         helper.stderr,
     );
@@ -1244,6 +1260,17 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         .expect("decode compiler-produced simulation bundle");
     assert_eq!(bundle.target(), "gfx942:xnack-");
     assert_eq!(bundle.kernel_count(), 1);
+    let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7())
+        .expect("decode compiler-produced launch geometry");
+    assert_eq!(module.kernels.len(), 1);
+    assert_eq!(
+        module.kernels[0].domain.extents().next(),
+        Some(fe2o3_kernel_ir::LaunchExtent::Static(64))
+    );
+    assert_eq!(
+        module.kernels[0].workgroup_size,
+        Some(fe2o3_kernel_ir::WorkgroupSize::new(64, 1, 1))
+    );
     assert_eq!(
         bundle.compiler_execution_binding(),
         &fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly
@@ -1321,7 +1348,7 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         serde_json::to_vec(&json!({
             "schema": "fe2o3-simulation-request-v1",
             "kernel": "barrier_before_access",
-            "grid": [1, 1, 1],
+            "grid": [64, 1, 1],
             "workgroup": [64, 1, 1],
             "arguments": [{
                 "kind": "buffer",
@@ -3274,23 +3301,20 @@ fn ordinary_rust_struct_argument_exports_exact_v4_components() {
         .abi()
         .identity()
         .as_bytes();
-    let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xa6; 32]).unwrap();
-    let backend_module =
-        fe2o3_runtime::RuntimeBackendV1::load_module_v1(&mut backend, 1, bundle.canonical_bytes())
-            .unwrap();
-    let unavailable = fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
-        &mut backend,
-        backend_module,
+    let mut explicit_kernarg = [0xa5; 40];
+    explicit_kernarg[0..4].copy_from_slice(&0x1122_3344_u32.to_le_bytes());
+    explicit_kernarg[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+    explicit_kernarg[16..24].fill(0);
+    explicit_kernarg[24..32].copy_from_slice(&64_u64.to_le_bytes());
+    explicit_kernarg[32..40].copy_from_slice(&3_u64.to_le_bytes());
+    execute_aggregate_bundle_through_sim_runtime(
+        bundle.canonical_bytes(),
         "aggregate_pair_struct",
         abi_identity,
+        &explicit_kernarg,
+        16,
+        0x0102_0304_0506_0708,
     );
-    assert!(matches!(
-        unavailable,
-        Err(fe2o3_runtime::RuntimeBackendFailureV1::Rejected(
-            fe2o3_sim_runtime::SimRuntimeBackendErrorV1::UnsupportedBundle(detail)
-        )) if detail.contains("semantic source type is not an exact pointer or reference")
-    ));
-    fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, backend_module).unwrap();
 }
 
 #[test]
@@ -3596,8 +3620,8 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     }
 }
 
-fn execute_aggregate_bundle_v5_through_sim_runtime(
-    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV5,
+fn execute_aggregate_bundle_through_sim_runtime(
+    bundle: &[u8],
     kernel_name: &str,
     signature: [u8; 32],
     explicit_kernarg: &[u8],
@@ -3622,7 +3646,15 @@ fn execute_aggregate_bundle_v5_through_sim_runtime(
     backend
         .write_allocation_v1(allocation, 0, &[0; 64 * 8])
         .unwrap();
-    let module = backend.load_module_v1(1, bundle.canonical_bytes()).unwrap();
+    let module = backend.load_module_v1(1, bundle).unwrap();
+    let mut wrong_signature = signature;
+    wrong_signature[0] ^= 1;
+    assert!(matches!(
+        backend.resolve_kernel_v1(module, kernel_name, wrong_signature),
+        Err(fe2o3_runtime::RuntimeBackendFailureV1::Rejected(
+            fe2o3_sim_runtime::SimRuntimeBackendErrorV1::InvalidKernel(detail)
+        )) if detail == "semantic ABI signature mismatch"
+    ));
     let kernel = backend
         .resolve_kernel_v1(module, kernel_name, signature)
         .unwrap();
@@ -3971,8 +4003,8 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
         // The only pointer bytes are the output binding. Aggregate leaves are
         // separate scalars, and the 0xa5 physical padding remains unread.
         explicit_kernarg[output_slot as usize..output_slot as usize + 8].fill(0);
-        execute_aggregate_bundle_v5_through_sim_runtime(
-            &bundle,
+        execute_aggregate_bundle_through_sim_runtime(
+            bundle.canonical_bytes(),
             feature,
             *root.abi().identity().as_bytes(),
             &explicit_kernarg,

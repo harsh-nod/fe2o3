@@ -45,6 +45,7 @@ pub(crate) enum ProductionPipelineError {
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    PreRankedMaterialization(fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -88,6 +89,12 @@ pub(crate) enum ProductionPipelineError {
     CompilerExecutionReceiptTransportBindingMismatch,
 }
 
+impl From<Box<ProductionPipelineError>> for ProductionPipelineError {
+    fn from(error: Box<Self>) -> Self {
+        *error
+    }
+}
+
 impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -109,6 +116,9 @@ impl fmt::Display for ProductionPipelineError {
             }
             Self::RankedVerification(error) => {
                 write!(formatter, "production compilation ranked verification failed: {error}")
+            }
+            Self::PreRankedMaterialization(error) => {
+                write!(formatter, "production compilation pre-ranked materialization failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
@@ -263,6 +273,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
+            Self::PreRankedMaterialization(error) => Some(error),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
@@ -432,8 +443,14 @@ pub(crate) struct ProductionCompilation<'tcx, Stage> {
     invariant_session: PhantomData<fn(TyCtxt<'tcx>) -> TyCtxt<'tcx>>,
 }
 
-/// Move-only production stage retaining rustc identities, transaction
-/// bindings, admitted semantic MIR, and the owner-held verified PLIRON graph.
+/// Exact executable graph and source launch custody, before ranked checks.
+struct MaterializedNeutralProductionCompilation {
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    ranked_roots: Vec<crate::production_ranked_projection_v1::ProductionRankedRootInputV1>,
+    bindings: AuthenticatedProductionBindings,
+}
+
+/// Move-only production stage retaining ranked checks and the same executable graph.
 pub(crate) struct RankedVerifiedProductionCompilation {
     ranked: crate::production_ranked_projection_v1::ProductionRankedSemanticProgramV1,
     bindings: AuthenticatedProductionBindings,
@@ -3260,6 +3277,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()
     }
 
@@ -3272,8 +3290,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .admit_formal_memory()?
             .lower_production_target()
     }
@@ -3289,8 +3308,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .into_simulation_bundle_v1(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
@@ -3306,8 +3326,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .into_simulation_bundle_v2(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
@@ -3322,8 +3343,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .into_simulation_bundle_v3(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
@@ -3339,8 +3361,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .into_simulation_bundle_v4(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
@@ -3357,8 +3380,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         admitted
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .into_simulation_bundle_v5()
     }
 
@@ -3370,8 +3394,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         self.import_semantic_mir()?
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?
+            .materialize_target_neutral()?
             .verify_general_kernel_checks()?
-            .lower_target_neutral()?
+            .attach_target_neutral_checks()?
             .into_simulation_bundle_v6()
     }
 
@@ -3466,9 +3491,9 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
         ProductionPipelineError::SemanticImport(error)
     }
 
-    fn verify_general_kernel_checks(
+    fn materialize_target_neutral(
         self,
-    ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
+    ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
             semantic_ssa,
             bindings,
@@ -3496,9 +3521,73 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
                 )
             })
             .collect::<Result<Vec<_>, ProductionPipelineError>>()?;
-        let ranked =
-            crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
+        let launch =
+            crate::production_ranked_projection_v1::source_launch_roster_for_ranked_inputs_v1(
+                &semantic_ssa,
+                &ranked_roots,
+            )
+            .map_err(crate::production_ranked_projection_v1::source_launch_projection_error_v1)
+            .map_err(ProductionPipelineError::RankedProjection)?;
+        let resource_error = |error| {
+            ProductionPipelineError::PreRankedMaterialization(
+                fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Canonical(
+                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12::Resource(error),
+                ),
+            )
+        };
+        let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
+            .map_err(|_| {
+            resource_error(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+            )
+        })?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+            &mut work,
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+        );
+        let materialized =
+            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
                 semantic_ssa,
+                launch,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                &mut budget,
+            )
+            .map_err(ProductionPipelineError::PreRankedMaterialization)?;
+        // Accept the graph and sealed origin transfers before any next phase.
+        // This local ledger does not claim coverage of source-ranked analyses.
+        let retained_storage = materialized
+            .executable_storage()
+            .retained_storage()
+            .checked_add(materialized.assert_origin_storage().payload_storage())
+            .ok_or_else(|| {
+                resource_error(
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                )
+            })?;
+        budget
+            .reserve_storage(retained_storage)
+            .map_err(resource_error)?;
+        Ok(MaterializedNeutralProductionCompilation {
+            materialized,
+            ranked_roots,
+            bindings,
+        })
+    }
+}
+
+impl MaterializedNeutralProductionCompilation {
+    fn verify_general_kernel_checks(
+        self,
+    ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
+        let Self {
+            materialized,
+            ranked_roots,
+            bindings,
+        } = self;
+        let ranked =
+            crate::production_ranked_projection_v1::project_and_verify_ranked_materialized_semantic_mir_v1(
+                materialized,
                 &ranked_roots,
                 &bindings.reference_effect_bindings,
             )
@@ -3508,7 +3597,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
 }
 
 impl RankedVerifiedProductionCompilation {
-    fn lower_target_neutral(
+    fn attach_target_neutral_checks(
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
@@ -3526,9 +3615,8 @@ impl RankedVerifiedProductionCompilation {
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(ranked_verification.every_functional_verification_is_coherent());
         let lowered =
-            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
                 receipt,
-                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
             )
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
         let exact_translation_roster = {
@@ -3552,6 +3640,7 @@ impl RankedVerifiedProductionCompilation {
 
 #[cfg(test)]
 mod tests {
+    include!("production_pipeline_pre_ranked_routes_tests.rs");
     use super::*;
 
     #[test]
@@ -3759,11 +3848,14 @@ mod tests {
         let ssa = transaction
             .find(".construct_semantic_ssa()?")
             .expect("mandatory semantic SSA custody");
+        let materialize = transaction
+            .find(".materialize_target_neutral()?")
+            .expect("fixed pre-ranked materialization");
         let lower = transaction
-            .find(".lower_target_neutral()?")
+            .find(".attach_target_neutral_checks()?")
             .expect("target-neutral lowering");
         assert!(
-            ssa < verify && verify < lower,
+            ssa < materialize && materialize < verify && verify < lower,
             "semantic SSA, ranked verification, and lowering typestates are out of order",
         );
         assert!(
@@ -3773,7 +3865,7 @@ mod tests {
     }
 
     #[test]
-    fn referenced_kernels_complete_all_functional_gates_before_kir_lowering() {
+    fn referenced_kernels_complete_all_functional_gates_before_checked_attachment() {
         let projection = include_str!("production_ranked_projection_v1.rs");
         let semantic = projection
             .find("derive_and_reconcile_mir_pliron_semantic_contract_v1")
@@ -3795,12 +3887,12 @@ mod tests {
             .map(|offset| roster + offset)
             .expect("complete ranked module receipt transition");
         let lowering = pipeline[module..]
-            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks")
+            .find("ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks")
             .map(|offset| module + offset)
             .expect("KIR lowering transition");
         assert!(
             roster < module && module < lowering,
-            "KIR lowering ran before functional verification"
+            "checked attachment ran before functional verification"
         );
     }
 
@@ -3815,7 +3907,7 @@ mod tests {
             .map(|offset| roster + offset)
             .expect("complete module receipt authority");
         let kir = pipeline[module..]
-            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks")
+            .find("ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks")
             .map(|offset| module + offset)
             .expect("KIR authority transition");
         assert!(roster < module && module < kir);

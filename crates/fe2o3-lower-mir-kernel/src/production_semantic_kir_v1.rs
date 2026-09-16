@@ -45,10 +45,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
     SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
     SemanticProjectionV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1,
-    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
+    SemanticStatementKindV1, SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1,
+    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
@@ -799,6 +799,32 @@ pub enum ProductionSemanticKirErrorV1 {
         /// Stable rejection reason.
         detail: &'static str,
     },
+    /// An exact fixed-array index is outside its declared extent.
+    FixedArrayIndexOutOfBounds {
+        /// Source semantic function index, including non-entry helper bodies.
+        function: u32,
+        /// Source semantic block index.
+        block: u32,
+        /// Source statement ordinal, or the block terminator.
+        statement: Option<u32>,
+        /// Root local of the indexed place.
+        local: u32,
+        /// Exact unsigned index, or offset from the end when `from_end` is true.
+        index: u128,
+        /// Declared fixed-array element count.
+        length: u64,
+        /// Whether the projection subtracts the offset from the array length.
+        from_end: bool,
+        /// Retained provenance, not a guessed location from another statement.
+        source: Box<SemanticSourceProvenanceV1>,
+    },
+    /// A reachable helper lacks the complete, pure effect contract required here.
+    HelperEffectsUnavailable {
+        /// Exact semantic helper function index.
+        function: u32,
+        /// Helper declaration provenance, not a caller or effect-operation span.
+        declaration_source: Box<SemanticSourceProvenanceV1>,
+    },
     /// A semantic local is used before an SSA value is available on this path.
     MissingLocalDefinition {
         /// Source semantic function index.
@@ -919,6 +945,42 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 formatter,
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block:?}, statement {statement:?}: {detail}",
             ),
+            Self::FixedArrayIndexOutOfBounds {
+                function,
+                block,
+                statement,
+                local,
+                index,
+                length,
+                from_end,
+                source,
+            } => {
+                write!(
+                    formatter,
+                    "error[FE2O3-BOUNDS-001]: fixed-size array index is out of bounds\n  = semantic function {function}, block {block}, statement {statement:?}, local {local}\n  = ",
+                )?;
+                fmt_semantic_source_location_v1(formatter, **source)?;
+                if *from_end {
+                    write!(
+                        formatter,
+                        "\n  = required: 0 < {index} <= {length} (from-end offset)"
+                    )?;
+                } else {
+                    write!(formatter, "\n  = required: {index} < {length}")?;
+                }
+                formatter.write_str("\n  = lowering stopped before target IR or artifact emission")
+            }
+            Self::HelperEffectsUnavailable {
+                function,
+                declaration_source,
+            } => {
+                write!(
+                    formatter,
+                    "semantic-to-Kernel-IR lowering rejected function {function}: reachable deterministic scalar helper is not interprocedurally complete and pure\n  = helper declaration at ",
+                )?;
+                fmt_semantic_source_location_v1(formatter, **declaration_source)?;
+                formatter.write_str("\n  = lowering stopped before target IR or artifact emission")
+            }
             Self::MissingLocalDefinition {
                 function,
                 block,
@@ -1025,6 +1087,8 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
+            | Self::FixedArrayIndexOutOfBounds { .. }
+            | Self::HelperEffectsUnavailable { .. }
             | Self::MissingLocalDefinition { .. }
             | Self::RetainedLocalStorage { .. }
             | Self::EnumPayloadUnavailable { .. }
@@ -1034,6 +1098,21 @@ impl Error for ProductionSemanticKirErrorV1 {
             | Self::CorrespondenceMismatch => None,
         }
     }
+}
+
+fn fmt_semantic_source_location_v1(
+    formatter: &mut fmt::Formatter<'_>,
+    source: SemanticSourceProvenanceV1,
+) -> fmt::Result {
+    let Some(origin) = source.call_site().or_else(|| source.expansion()) else {
+        return formatter.write_str("Rust source location unavailable");
+    };
+    formatter.write_str("Rust source ")?;
+    for byte in &origin.file().as_bytes()[..6] {
+        write!(formatter, "{byte:02x}")?;
+    }
+    let (line, column) = origin.start_coordinate();
+    write!(formatter, ":{line}:{column}")
 }
 
 /// Exact source and ranked-graph location of one projected memory access.
@@ -11909,12 +11988,15 @@ fn lower_single_root_module(
             .function(&plan.kernel_ir_function)
             .is_some_and(|decision| decision.is_complete_and_pure())
         {
-            return Err(unsupported(
-                plan.semantic_function.index(),
-                None,
-                None,
-                "reachable deterministic scalar helper is not interprocedurally complete and pure",
-            ));
+            let declaration_source = semantic
+                .functions()
+                .get(plan.semantic_function.index() as usize)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                .source();
+            return Err(ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
+                function: plan.semantic_function.index(),
+                declaration_source: Box::new(declaration_source),
+            });
         }
     }
 
@@ -21393,7 +21475,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             .emitted_unsigned_constants
                             .get(&index)
                             .copied()
-                            .and_then(|index| usize::try_from(index).ok())
                             .ok_or_else(|| {
                                 unsupported(
                                     0,
@@ -21402,14 +21483,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                                     "by-value array component requires an exact constant index",
                                 )
                             })?;
-                        binding = fields.get(index).cloned().ok_or_else(|| {
-                            unsupported(
-                                0,
-                                Some(block.index()),
-                                statement,
-                                "by-value array constant index is out of range",
-                            )
-                        })?;
+                        let index = self.checked_by_value_array_index(
+                            block,
+                            statement,
+                            place,
+                            u128::from(index),
+                            *length,
+                            false,
+                        )?;
+                        binding = fields[index].clone();
                         current_type = projection.result_type();
                         continue;
                     }
@@ -21494,30 +21576,35 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             "constant index does not select a by-value aggregate",
                         ));
                     };
-                    let offset = usize::try_from(offset).map_err(|_| {
-                        unsupported(
-                            0,
+                    let Some(SemanticTypeShapeV1::Array { length, .. }) = self
+                        .types
+                        .get(current_type.index() as usize)
+                        .map(SemanticTypeDeclV1::shape)
+                    else {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
                             Some(block.index()),
                             statement,
-                            "by-value array constant index does not fit this host",
-                        )
-                    })?;
-                    let index = if from_end {
-                        fields.len().checked_sub(offset)
-                    } else {
-                        Some(offset)
+                            "indexed aggregate binding is not a fixed-size array",
+                        ));
                     };
-                    binding = index
-                        .and_then(|index| fields.get(index))
-                        .cloned()
-                        .ok_or_else(|| {
-                            unsupported(
-                                0,
-                                Some(block.index()),
-                                statement,
-                                "by-value array constant index is out of range",
-                            )
-                        })?;
+                    if usize::try_from(*length) != Ok(fields.len()) {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            statement,
+                            "indexed array binding differs from its semantic length",
+                        ));
+                    }
+                    let index = self.checked_by_value_array_index(
+                        block,
+                        statement,
+                        place,
+                        u128::from(offset),
+                        *length,
+                        from_end,
+                    )?;
+                    binding = fields[index].clone();
                 }
                 SemanticProjectionKindV1::Subslice { .. } => {
                     return Err(unsupported(
@@ -21531,6 +21618,54 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             current_type = projection.result_type();
         }
         Ok(binding)
+    }
+
+    fn checked_by_value_array_index(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        place: &SemanticPlaceV1,
+        index: u128,
+        length: u64,
+        from_end: bool,
+    ) -> Result<usize, ProductionSemanticKirErrorV1> {
+        let resolved = if from_end {
+            u128::from(length).checked_sub(index)
+        } else {
+            Some(index)
+        };
+        if let Some(resolved) = resolved.filter(|resolved| *resolved < u128::from(length)) {
+            return usize::try_from(resolved).map_err(|_| {
+                unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    statement,
+                    "in-bounds array component index does not fit this host",
+                )
+            });
+        }
+        let source = self
+            .function
+            .blocks()
+            .get(block.index() as usize)
+            .and_then(|block| match statement {
+                Some(ordinal) => block
+                    .statements()
+                    .get(ordinal as usize)
+                    .map(|value| value.source()),
+                None => Some(block.terminator().source()),
+            })
+            .unwrap_or_else(SemanticSourceProvenanceV1::unavailable);
+        Err(ProductionSemanticKirErrorV1::FixedArrayIndexOutOfBounds {
+            function: self.semantic_function.index(),
+            block: block.index(),
+            statement,
+            local: place.local().index(),
+            index,
+            length,
+            from_end,
+            source: Box::new(source),
+        })
     }
 
     fn bind_destination(
@@ -26037,6 +26172,9 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    mod fixed_array_bounds_v1_tests {
+        include!("production_semantic_kir_v1/fixed_array_bounds_v1_tests.rs");
+    }
     include!("production_semantic_kir_v1/resource_01_tests.rs");
     mod private_array_resource_tests {
         include!("production_semantic_kir_v1/tests/production_private_array_resource_tests.rs");
