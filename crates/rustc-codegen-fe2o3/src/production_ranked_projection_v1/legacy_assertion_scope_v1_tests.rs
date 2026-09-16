@@ -1708,7 +1708,7 @@ mod legacy_scope_tests {
         let function = private_slice_composition_source_v1(mode);
         let ssa = assertion_ssa_functions(types.clone(), vec![function.clone()]);
         let materialized =
-            materialize_ranked_fixture_v1(ssa, &[ranked_root_input_1d(A_NAME, 247, 64)]);
+            materialize_ranked_fixture_v1(ssa, &[ranked_root_input_1d(A_NAME, 247, 64)]).unwrap();
         let reads = if matches!(mode, PrivateSliceCompositionV1::TwoReads) {
             2
         } else {
