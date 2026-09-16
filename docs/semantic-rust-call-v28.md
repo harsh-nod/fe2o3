@@ -152,8 +152,32 @@ Shared-slice helpers still expose one slice parameter despite LLVM's `Pair`
 transport. Authenticated pointer/slice wrappers retain their typed marker fields
 and carrier containment. Pointees and active enum/union variants are not inferred
 from entry types. Root/helper ABI restrictions are unchanged, including exact
-root Cast/Indirect aggregate transport and the narrower helper surface.
+root Cast/Indirect aggregate transport and exact helper transport checks.
 Function-level ABI checks run even when the adjusted argument roster is empty.
+
+## Shared-slice captures
+
+An owned `FnOnce` receiver or ordinary by-value helper aggregate may contain
+immutable scalar-slice references. Each slice is one read-only global KIR value,
+not two parameters: its two physical ABI words are checked separately for exact
+layout and offsets. Aggregate parents remain composite nodes; slice leaves have
+`Parameter` coverage and zero-sized fields have `Zero` coverage. RustCall tuple
+fields use the same rule in both packed and expanded MIR.
+
+Capture observation records the sized reference carrier and scalar element
+layout through a bounded, capture-only extraction policy. It does not pretend
+that the unsized slice pointee is an owned sized value. Ordinary general-layout
+extraction retains its previous unsized-pointee refusal. Host closure references,
+mutable/raw slice captures, nested borrowed references and reference-valued
+elements remain outside this path.
+
+For example, moving `SliceToken(&[u32], ((), ()))` into a closure and consuming
+that token in a retained `len()` helper preserves one slice value and every
+zero-sized source node. This grants neither ownership of the input allocation
+nor permission to read its elements. The existing complete-purity helper gate
+still rejects loads, stores, barriers and capability effects. Kernel-root
+aggregate arguments and helper results remain pointer-free. Context issuance,
+borrowed output captures and workgroup/epoch transport are separate work.
 
 The same scoped constructor is used by production correspondence validation.
 Complete representation checking precedes consumer callbacks. Temporary indices
@@ -240,6 +264,21 @@ and the source-variable association of physical edge slots. Coordinated changes
 to graph and anchors must pass that replay, not merely agree with each other.
 The existing V4/V5 refusal gates remain in place: this adds no serialized proof
 relation, new capability version, protected proof result or launch authority.
+
+Frozen V4/V5 parameter rows cannot encode ignored or projected arguments,
+including a singleton aggregate whose only represented field is a slice.
+Producers, lineage preparation and independent verifiers reject that source
+envelope before trusting supplied rows. A whole-local row cannot substitute for
+the missing field projection. Ordinary direct scalars and whole shared slices
+retain their existing support; source-selected kernel entry handling is separate.
+
+Authority-free debug bundles retain helper variables as well as kernel variables.
+Source and typed-storage maps share the production function index. V3/V5/V6
+decoding checks consistent, injective function associations and exact whole-value
+parameter slots, value identities, generations and representations. A component
+slice does not become a whole aggregate variable: unavailable aggregate storage
+stays explicit. These joins do not independently prove the absolute source meaning
+of a coherently replaced helper map; they grant no compiler or execution authority.
 
 ## Evidence boundary
 

@@ -93,6 +93,7 @@ mod simulation_bundle_v3;
 mod simulation_bundle_v4;
 mod simulation_bundle_v5;
 mod simulation_bundle_v6;
+mod simulation_variable_storage;
 mod standard_atomics;
 mod terminator_operands_v1;
 mod types;

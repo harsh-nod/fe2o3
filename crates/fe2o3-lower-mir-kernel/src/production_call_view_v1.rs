@@ -293,6 +293,7 @@ impl<'s, 'w> ProductionCallViewV1<'s, 'w> {
             append_parameter_structure_v1(
                 types,
                 self.result_shape.source_type,
+                ParameterLeafPolicyV1::PointerFree,
                 &mut Vec::new(),
                 &mut Vec::new(),
                 &mut 0,

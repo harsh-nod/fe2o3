@@ -37,6 +37,7 @@ const SYNTHETIC_RECORD_BYTES_V4: usize = 16;
 const PARAMETER_RECORD_BYTES_V4: usize = 12;
 
 include!("production_correspondence_result_envelope_v4.rs");
+include!("production_correspondence_parameter_envelope_v4.rs");
 
 /// Exact semantic block to KIR block correspondence under the current versioned KIR owner.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -266,6 +267,19 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
             })
         {
             return Err(ProductionCorrespondenceEvidenceErrorV4::UnsupportedAggregateResult);
+        }
+        if !legacy_correspondence_source_parameters_supported_v4(semantic)
+            || !correspondence.parameter_component_bindings().is_empty()
+            || !correspondence.ignored_parameter_bindings().is_empty()
+            || correspondence.lowered_functions().iter().any(|row| {
+                row.role() == crate::SemanticKirFunctionRoleV1::InternalHelper
+                    && !legacy_correspondence_helper_parameters_supported_v4(
+                        semantic.types(),
+                        semantic.functions()[row.semantic_function().index() as usize].abi(),
+                    )
+            })
+        {
+            return Err(ProductionCorrespondenceEvidenceErrorV4::UnsupportedParameterComponents);
         }
         let function_count = u32::try_from(covered_functions.len())
             .map_err(|_| ProductionCorrespondenceEvidenceErrorV4::Overflow)?;
@@ -559,6 +573,8 @@ pub enum ProductionCorrespondenceEvidenceErrorV4 {
     LiveOwner(String),
     /// Frozen V4/V5 custody cannot represent aggregate result components.
     UnsupportedAggregateResult,
+    /// Frozen V4/V5 custody cannot represent projected or ignored parameters.
+    UnsupportedParameterComponents,
     /// Nested semantic induction report evidence failed.
     Induction(SemanticU32InductionEvidenceErrorV1),
     /// Aggregate exceeds the outer receipt budget.
@@ -591,6 +607,9 @@ impl fmt::Display for ProductionCorrespondenceEvidenceErrorV4 {
             Self::LiveOwner(error) => write!(formatter, "live semantic-KIR owner failed: {error}"),
             Self::UnsupportedAggregateResult => formatter
                 .write_str("V4/V5 correspondence does not encode aggregate result components"),
+            Self::UnsupportedParameterComponents => formatter.write_str(
+                "V4/V5 correspondence does not encode projected or ignored parameter components",
+            ),
             Self::Induction(error) => {
                 write!(formatter, "semantic induction evidence failed: {error}")
             }

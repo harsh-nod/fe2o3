@@ -676,3 +676,6 @@ fn shared_slice_helper_subset_does_not_admit_mutable_or_unowned_pairs() {
 
 #[path = "shared_slice_helper_llvm_v1.rs"]
 mod llvm_abi;
+
+#[path = "shared_slice_capture_v1.rs"]
+mod captures;

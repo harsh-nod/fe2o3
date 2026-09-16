@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 const PRODUCTION_RUSTC_LLVM_TARGET: &str = "amdgcn-amd-amdhsa";
 
 include!("compiler_result_proof_inputs_v1.rs");
+include!("compiler_parameter_proof_inputs_v1.rs");
 
 #[allow(
     dead_code,

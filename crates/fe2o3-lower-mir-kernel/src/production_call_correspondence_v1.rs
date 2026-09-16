@@ -138,7 +138,12 @@ fn helper_result_components_v1(
         types[abi.source_output_type().index() as usize].shape(),
         SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
     );
-    let components = lower_by_value_abi_components_v1(types, function, abi.return_value())?;
+    let components = lower_by_value_abi_components_v1(
+        types,
+        function,
+        abi.return_value(),
+        ParameterLeafPolicyV1::PointerFree,
+    )?;
     let local =
         u32::try_from(local).map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
     Ok(HelperResultShapeV1 {

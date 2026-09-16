@@ -342,6 +342,12 @@ fn check_argument_trace_v1<'w, R>(
             first,
             end: slot,
             atomic,
+            policy: match instance.role {
+                SemanticKirFunctionRoleV1::KernelEntry => ParameterLeafPolicyV1::PointerFree,
+                SemanticKirFunctionRoleV1::InternalHelper => {
+                    ParameterLeafPolicyV1::SharedSliceLeaves
+                }
+            },
         });
         budget.release_storage(budget.storage() - shape_floor)?;
     }

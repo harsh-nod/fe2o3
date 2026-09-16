@@ -10131,6 +10131,10 @@ fn shared_slice_helper_parameter_v1(
     {
         return false;
     }
+    shared_slice_leaf_v1(types, ty)
+}
+
+fn shared_slice_leaf_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
     let Some(declaration) = types.get(ty.index() as usize) else {
         return false;
     };
@@ -10151,6 +10155,31 @@ fn shared_slice_helper_parameter_v1(
     else {
         return false;
     };
+    let SemanticBackendReprV1::ScalarPair { first, second } = declaration.layout().backend_repr()
+    else {
+        return false;
+    };
+    if declaration.layout().size_bytes() != Some(16)
+        || declaration.layout().alignment_bytes() != 8
+        || !matches!(
+            first.primitive(),
+            SemanticBackendPrimitiveV1::Pointer {
+                address_space: 0,
+                size_bytes: 8,
+                alignment_bytes: 8
+            }
+        )
+        || !matches!(
+            second.primitive(),
+            SemanticBackendPrimitiveV1::Integer {
+                bits: 64,
+                signed: false,
+                alignment_bytes: 8
+            }
+        )
+    {
+        return false;
+    }
     // Full source/type/ABI admission precedes this representation selection.
     matches!(
         types
@@ -11125,7 +11154,7 @@ type ByValueKernelParameterComponentV1 = (
     SemanticTypeIdV1,
     Type,
     u64,
-    SemanticBackendScalarV1,
+    ParameterAbiLeafV1,
 );
 
 fn order_correspondence_records_v1<T, F>(
@@ -23194,13 +23223,19 @@ fn lower_by_value_parameter_components_v1(
     function: &SemanticFunctionDeclV1,
     abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1,
 ) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
-    lower_by_value_abi_components_v1(types, function, abi.value())
+    lower_by_value_abi_components_v1(
+        types,
+        function,
+        abi.value(),
+        ParameterLeafPolicyV1::PointerFree,
+    )
 }
 
 fn lower_by_value_abi_components_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     abi: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
+    policy: ParameterLeafPolicyV1,
 ) -> Result<Vec<ByValueKernelParameterComponentV1>, ProductionSemanticKirErrorV1> {
     let ty = abi.ty();
     if abi.adjusted().is_some() {
@@ -23222,6 +23257,7 @@ fn lower_by_value_abi_components_v1(
     append_parameter_structure_v1(
         types,
         ty,
+        policy,
         &mut path,
         &mut output,
         &mut structural_nodes,
@@ -23232,36 +23268,41 @@ fn lower_by_value_abi_components_v1(
         .layout()
         .size_bytes()
         .ok_or_else(|| unsupported(0, None, None, "by-value argument layout is unsized"))?;
-    let mut leaf_ranges = Vec::new();
-    leaf_ranges.try_reserve_exact(output.len()).map_err(|_| {
-        ProductionSemanticKirErrorV1::AllocationFailure {
+    let mut words = Vec::new();
+    words
+        .try_reserve_exact(output.len().saturating_mul(2))
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
             resource: ProductionSemanticKirResourceV1::DebugBindings,
-        }
-    })?;
-    for (_, _, _, offset, scalar) in &output {
-        let width = scalar.primitive().size_bytes().ok_or_else(|| {
-            unsupported(
-                0,
-                None,
-                None,
-                "by-value scalar component has no exact byte width",
-            )
         })?;
-        let end = offset.checked_add(width).ok_or_else(|| {
-            unsupported(0, None, None, "by-value scalar component range overflows")
-        })?;
-        if end > source_size {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "by-value scalar component exceeds its source layout",
-            ));
+    for (_, _, _, offset, leaf) in &output {
+        for (relative, scalar) in leaf.words() {
+            let offset = offset
+                .checked_add(relative)
+                .ok_or_else(|| unsupported(0, None, None, "by-value ABI word offset overflows"))?;
+            let width = scalar.primitive().size_bytes().ok_or_else(|| {
+                unsupported(
+                    0,
+                    None,
+                    None,
+                    "by-value scalar component has no exact byte width",
+                )
+            })?;
+            let end = offset.checked_add(width).ok_or_else(|| {
+                unsupported(0, None, None, "by-value scalar component range overflows")
+            })?;
+            if end > source_size {
+                return Err(unsupported(
+                    0,
+                    None,
+                    None,
+                    "by-value scalar component exceeds its source layout",
+                ));
+            }
+            words.push((offset, end, scalar));
         }
-        leaf_ranges.push((*offset, end));
     }
-    leaf_ranges.sort_unstable();
-    if leaf_ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+    words.sort_unstable_by_key(|word| word.0);
+    if words.windows(2).any(|pair| pair[0].1 > pair[1].0) {
         return Err(unsupported(
             0,
             None,
@@ -23281,8 +23322,8 @@ fn lower_by_value_abi_components_v1(
         SemanticAbiPassModeV1::Direct(attributes) => {
             match types[ty.index() as usize].layout().backend_repr() {
                 SemanticBackendReprV1::Scalar(root_scalar) => matches!(
-                    output.as_slice(),
-                    [(_, _, _, 0, leaf_scalar)] if leaf_scalar == root_scalar
+                    words.as_slice(),
+                    [(0, _, leaf_scalar)] if leaf_scalar == root_scalar
                 ),
                 SemanticBackendReprV1::Memory { sized: true } => {
                     function.abi().spec_abi_unadjusted()
@@ -23320,13 +23361,9 @@ fn lower_by_value_abi_components_v1(
                 .ok_or_else(|| {
                     unsupported(0, None, None, "aggregate ABI scalar offset overflows")
                 })?;
-            match output.as_slice() {
-                [(_, _, _, a_offset, a), (_, _, _, b_offset, b)] => {
-                    (*a_offset == 0 && a == first && *b_offset == second_offset && b == second)
-                        || (*b_offset == 0
-                            && b == first
-                            && *a_offset == second_offset
-                            && a == second)
+            match words.as_slice() {
+                [(0, _, a), (b_offset, _, b)] => {
+                    a == first && *b_offset == second_offset && b == second
                 }
                 _ => false,
             }

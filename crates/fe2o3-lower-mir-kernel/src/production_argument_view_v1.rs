@@ -121,6 +121,7 @@ struct AdjustedArgumentShapeV1 {
     first: usize,
     end: usize,
     atomic: bool,
+    policy: ParameterLeafPolicyV1,
 }
 
 #[derive(Clone, Copy)]
@@ -528,12 +529,7 @@ impl<'s> ArgumentViewDataV1<'s> {
             budget.charge_work(1)?;
             let coverage = if node.physical.is_empty() {
                 ProductionArgumentCoverageV1::Zero
-            } else if shape.atomic
-                || matches!(
-                    self.semantic.types()[node.ty.index() as usize].shape(),
-                    SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
-                )
-            {
+            } else if shape.atomic || node.represented_leaf {
                 let slot = shape.first + node.physical.start;
                 let physical = self
                     .physical(slot, budget)?
@@ -582,6 +578,7 @@ impl<'s> ArgumentViewDataV1<'s> {
             append_parameter_structure_v1(
                 self.semantic.types(),
                 mapped.abi().ty(),
+                shape.policy,
                 &mut path,
                 &mut output,
                 &mut nodes,
@@ -717,6 +714,7 @@ fn visit_atomic_argument_structure_v1(
                     ty: frame.ty,
                     path: &path[..frame.path_length],
                     physical: 0..end,
+                    represented_leaf: false,
                 },
                 budget,
             )?;

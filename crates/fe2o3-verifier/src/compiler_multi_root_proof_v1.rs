@@ -727,6 +727,12 @@ fn decode_and_validate_correspondence(
             "V4/V5 correspondence does not encode aggregate result components",
         ));
     }
+    if !fe2o3_lower_mir_kernel::legacy_correspondence_source_parameters_supported_v4(semantic_mir) {
+        return Err(correspondence_error(
+            expected_ordinal,
+            "V4/V5 correspondence does not encode projected or ignored parameter components",
+        ));
+    }
     let mut reader = CorrespondenceReaderV1::new(bytes);
     let ordinal = u32::try_from(expected_ordinal).map_err(|_| {
         CompilerMultiRootProofValidationErrorV1::CorrespondencePayload {
@@ -806,6 +812,17 @@ fn decode_and_validate_correspondence(
             return Err(correspondence_error(
                 expected_ordinal,
                 "V4/V5 correspondence does not encode aggregate result components",
+            ));
+        }
+        if role == 2
+            && !fe2o3_lower_mir_kernel::legacy_correspondence_helper_parameters_supported_v4(
+                semantic_mir.types(),
+                semantic.abi(),
+            )
+        {
+            return Err(correspondence_error(
+                expected_ordinal,
+                "V4/V5 correspondence does not encode projected or ignored parameter components",
             ));
         }
         let target = kernel_ir
@@ -1848,6 +1865,22 @@ mod tests {
             out.extend_from_slice(&u32::try_from(bytes.len()).unwrap().to_le_bytes());
             out.extend_from_slice(bytes);
         };
+        let parameter_owner = compiler_proof_inputs_v3::ordinary_aggregate_parameter_owner_v1(0x20);
+        assert!(matches!(
+            decode_and_validate_correspondence(
+                b"",
+                0,
+                roster.root(0).unwrap(),
+                parameter_owner.semantic(),
+                &kir
+            ),
+            Err(
+                CompilerMultiRootProofValidationErrorV1::CorrespondencePayload {
+                    detail: "V4/V5 correspondence does not encode projected or ignored parameter components",
+                    ..
+                }
+            )
+        ));
         for width in [1, 2] {
             let owner = compiler_proof_inputs_v3::ordinary_aggregate_result_owner_v1(0x20, width);
             let semantic = owner.semantic();

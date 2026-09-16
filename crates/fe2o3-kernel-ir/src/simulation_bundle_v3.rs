@@ -422,7 +422,9 @@ impl VerifiedSimulationBundleV3 {
         }
         let source_map = DebugSourceMapDocumentV2::from_canonical_json_bytes(inner.debug_map())
             .map_err(|_| SimulationBundleErrorV3::InvalidV2Bundle)?;
-        validate_source_variable_storage(&storage_map, &source_map)?;
+        let module = crate::decode_module_v7(inner.canonical_kir_v7())
+            .map_err(|_| SimulationBundleErrorV3::StorageMapBindingMismatch)?;
+        validate_source_variable_storage(&storage_map, &source_map, &module)?;
         let map = storage_map.to_canonical_json_bytes()?;
         let total = HEADER_BYTES_V3
             .checked_add(inner.canonical_bytes().len())
@@ -525,7 +527,9 @@ impl VerifiedSimulationBundleV3 {
         }
         let source_map = DebugSourceMapDocumentV2::from_canonical_json_bytes(inner.debug_map())
             .map_err(|_| SimulationBundleErrorV3::InvalidV2Bundle)?;
-        validate_source_variable_storage(&map, &source_map)?;
+        let module = crate::decode_module_v7(inner.canonical_kir_v7())
+            .map_err(|_| SimulationBundleErrorV3::StorageMapBindingMismatch)?;
+        validate_source_variable_storage(&map, &source_map, &module)?;
         Ok(Self {
             identity: SimulationBundleIdentityV3(domain_hash(BUNDLE_IDENTITY_DOMAIN_V3, &bytes)),
             canonical_bytes: bytes,
@@ -601,55 +605,18 @@ impl Deref for VerifiedSimulationBundleV3 {
     }
 }
 
-trait DebugSourceMapDocumentVariableKey {
-    fn identity(&self) -> [u8; 32];
-}
-impl DebugSourceMapDocumentVariableKey for crate::DebugSourceVariableV2 {
-    fn identity(&self) -> [u8; 32] {
-        self.identity()
-    }
-}
-
 fn validate_source_variable_storage(
     map: &SemanticStorageMapV1,
     source_map: &DebugSourceMapDocumentV2,
+    module: &crate::Module,
 ) -> Result<(), SimulationBundleErrorV3> {
-    if source_map.variables().len() != map.variables.len() {
-        return Err(SimulationBundleErrorV3::StorageMapBindingMismatch);
-    }
-    for binding in &map.variables {
-        let source_index = source_map
-            .variables()
-            .binary_search_by_key(
-                &binding.variable_identity,
-                DebugSourceMapDocumentVariableKey::identity,
-            )
-            .map_err(|_| SimulationBundleErrorV3::StorageMapBindingMismatch)?;
-        let source = &source_map.variables()[source_index];
-        let function_ordinal = map
-            .kernels
-            .iter()
-            .find(|kernel| kernel.semantic_body == binding.semantic_function)
-            .map(|kernel| u64::from(kernel.kir_function_ordinal))
-            .ok_or(SimulationBundleErrorV3::StorageMapBindingMismatch)?;
-        if source.function_ordinal() != function_ordinal {
-            return Err(SimulationBundleErrorV3::StorageMapBindingMismatch);
-        }
-        match (&binding.storage, source.function_binding()) {
-            (
-                SemanticStorageBindingV1::ExactKirParameter {
-                    kir_value_ordinal, ..
-                },
-                Some(source_binding),
-            ) if source_binding.generation() == 1
-                && source_binding.value_ordinal() == u64::from(*kir_value_ordinal) => {}
-            (SemanticStorageBindingV1::ExactKirParameter { .. }, _) | (_, Some(_)) => {
-                return Err(SimulationBundleErrorV3::StorageMapBindingMismatch);
-            }
-            (_, None) => {}
-        }
-    }
-    Ok(())
+    crate::simulation_variable_storage::validate_variable_storage(
+        &map.kernels,
+        &map.variables,
+        source_map,
+        module,
+    )
+    .map_err(|_| SimulationBundleErrorV3::StorageMapBindingMismatch)
 }
 
 pub fn simulation_semantic_mir_identity_v3(bytes: &[u8]) -> [u8; 32] {

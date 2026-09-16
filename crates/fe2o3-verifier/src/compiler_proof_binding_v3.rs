@@ -763,6 +763,11 @@ fn validate_lossless_correspondence_v4(
             "V4/V5 correspondence does not encode aggregate result components",
         ));
     }
+    if !fe2o3_lower_mir_kernel::legacy_correspondence_source_parameters_supported_v4(semantic_mir) {
+        return Err(structural_v4(
+            "V4/V5 correspondence does not encode projected or ignored parameter components",
+        ));
+    }
     let selected = semantic_mir.select_kernel_body_v1().ok_or_else(|| {
         structural_v4("correspondence entry is not the selected source kernel body")
     })?;
@@ -821,6 +826,16 @@ fn validate_lossless_correspondence_v4(
         {
             return Err(structural_v4(
                 "V4/V5 correspondence does not encode aggregate result components",
+            ));
+        }
+        if kernel_function.role == fe2o3_kernel_ir::FunctionRole::InternalHelper
+            && !fe2o3_lower_mir_kernel::legacy_correspondence_helper_parameters_supported_v4(
+                semantic_mir.types(),
+                semantic_function.abi(),
+            )
+        {
+            return Err(structural_v4(
+                "V4/V5 correspondence does not encode projected or ignored parameter components",
             ));
         }
         let kernel_body = kernel_function.body.as_ref().expect("filtered definition");
@@ -1635,6 +1650,37 @@ mod rust_call_parameter_tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn v4_parameter_envelope_rejects_singleton_projection_independently_of_rows() {
+        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+                proof.kernel_ir().to_vec(),
+            )
+            .unwrap();
+        let correspondence =
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();
+        let source = compiler_proof_inputs_v3::ordinary_aggregate_parameter_owner_v1(0x20);
+        assert!(
+            fe2o3_lower_mir_kernel::legacy_correspondence_source_results_supported_v4(
+                source.semantic()
+            )
+        );
+        assert!(
+            !fe2o3_lower_mir_kernel::legacy_correspondence_source_parameters_supported_v4(
+                source.semantic()
+            )
+        );
+        assert!(matches!(
+            validate_lossless_correspondence_v4(source.semantic(), &module, &correspondence),
+            Err(
+                CompilerProofInputValidationErrorV3::StructuralCorrespondence {
+                    detail: "V4/V5 correspondence does not encode projected or ignored parameter components",
+                }
+            )
+        ));
     }
 
     #[test]

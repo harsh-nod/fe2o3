@@ -2,11 +2,40 @@ struct ParameterStructureNodeV1<'a> {
     ty: SemanticTypeIdV1,
     path: &'a [ProductionArgumentProjectionV1],
     physical: std::ops::Range<usize>,
+    represented_leaf: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ParameterLeafPolicyV1 {
+    PointerFree,
+    SharedSliceLeaves,
+}
+
+#[derive(Clone, Copy)]
+enum ParameterAbiLeafV1 {
+    Scalar(SemanticBackendScalarV1),
+    SharedSlicePair {
+        first: SemanticBackendScalarV1,
+        second: SemanticBackendScalarV1,
+    },
+}
+
+impl ParameterAbiLeafV1 {
+    fn words(self) -> impl Iterator<Item = (u64, SemanticBackendScalarV1)> {
+        match self {
+            Self::Scalar(scalar) => [Some((0, scalar)), None],
+            Self::SharedSlicePair { first, second } => [Some((0, first)), Some((8, second))],
+        }
+        .into_iter()
+        .flatten()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn append_parameter_structure_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
+    policy: ParameterLeafPolicyV1,
     path: &mut Vec<ProductionArgumentProjectionV1>,
     output: &mut Vec<ByValueKernelParameterComponentV1>,
     structural_nodes: &mut usize,
@@ -39,14 +68,55 @@ fn append_parameter_structure_v1(
     let first = output.len();
     match declaration.shape() {
         SemanticTypeShapeV1::Unit => Ok(()),
-        SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
-            let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr() else {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "by-value scalar leaf lacks exact scalar backend representation",
-                ));
+        SemanticTypeShapeV1::Scalar(_)
+        | SemanticTypeShapeV1::ValidityScalar(_)
+        | SemanticTypeShapeV1::Pointer(_) => {
+            let (kir, leaf) = match declaration.shape() {
+                SemanticTypeShapeV1::Pointer(_)
+                    if policy == ParameterLeafPolicyV1::SharedSliceLeaves
+                        && shared_slice_leaf_v1(types, ty) =>
+                {
+                    let SemanticBackendReprV1::ScalarPair { first, second } =
+                        declaration.layout().backend_repr()
+                    else {
+                        return Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "shared slice leaf lacks a scalar-pair carrier",
+                        ));
+                    };
+                    (
+                        lower_parameter_type(types, &[], ty)?,
+                        ParameterAbiLeafV1::SharedSlicePair {
+                            first: *first,
+                            second: *second,
+                        },
+                    )
+                }
+                SemanticTypeShapeV1::Pointer(_) => {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "embedded pointer kernel arguments have no owned region binding",
+                    ));
+                }
+                _ => {
+                    let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr()
+                    else {
+                        return Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "by-value scalar leaf lacks exact scalar backend representation",
+                        ));
+                    };
+                    (
+                        lower_scalar_type(types, ty)?,
+                        ParameterAbiLeafV1::Scalar(*scalar),
+                    )
+                }
             };
             let mut retained_path = Vec::new();
             retained_path.try_reserve_exact(path.len()).map_err(|_| {
@@ -78,13 +148,7 @@ fn append_parameter_structure_v1(
                 .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
                     resource: ProductionSemanticKirResourceV1::DebugBindings,
                 })?;
-            output.push((
-                retained_path,
-                ty,
-                lower_scalar_type(types, ty)?,
-                offset,
-                *scalar,
-            ));
+            output.push((retained_path, ty, kir, offset, leaf));
             Ok(())
         }
         SemanticTypeShapeV1::Array { element, length } => {
@@ -138,6 +202,7 @@ fn append_parameter_structure_v1(
                 append_parameter_structure_v1(
                     types,
                     *element,
+                    policy,
                     path,
                     output,
                     structural_nodes,
@@ -183,6 +248,7 @@ fn append_parameter_structure_v1(
                 append_parameter_structure_v1(
                     types,
                     field,
+                    policy,
                     path,
                     output,
                     structural_nodes,
@@ -199,12 +265,6 @@ fn append_parameter_structure_v1(
             None,
             "by-value enum kernel arguments require variant-aware packing evidence",
         )),
-        SemanticTypeShapeV1::Pointer(_) => Err(unsupported(
-            0,
-            None,
-            None,
-            "embedded pointer kernel arguments have no owned region binding",
-        )),
         _ => Err(unsupported(
             0,
             None,
@@ -216,5 +276,11 @@ fn append_parameter_structure_v1(
         ty,
         path,
         physical: first..output.len(),
+        represented_leaf: matches!(
+            declaration.shape(),
+            SemanticTypeShapeV1::Scalar(_)
+                | SemanticTypeShapeV1::ValidityScalar(_)
+                | SemanticTypeShapeV1::Pointer(_)
+        ),
     })
 }

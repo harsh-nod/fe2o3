@@ -1017,11 +1017,15 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
             calls > 0,
             "ordinary tuple-result Call must survive optimization"
         );
-        for (seed, lhs, rhs) in [
-            (13_u32, 29_u32, 11_u32),
-            (0, 0, 0),
-            (u32::MAX, 1, 2),
-            (0, 1, u32::MAX),
+        assert_shared_slice_call_chain_v1(&module);
+        let typed_bundle_path = assert_shared_slice_source_v1(architecture, &target);
+        for (seed, lhs, rhs, input_length) in [
+            (13_u32, 29_u32, 11_u32, 3_usize),
+            (0, 0, 0, 0),
+            (u32::MAX, 1, 2, 1),
+            (0, 1, u32::MAX, 65),
+            (7, 11, 13, 129),
+            (u32::MAX, 29, 11, 3),
         ] {
             let expected = [
                 (seed ^ lhs).wrapping_sub(rhs).wrapping_add(lhs),
@@ -1044,6 +1048,15 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                         "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
                     }));
                 }
+                let input_bytes = seed.to_le_bytes().repeat(input_length);
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_only",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&input_bytes)),
+                }));
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_write",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
+                }));
                 let request_path = target.path().join("rust-call-request.json");
                 std::fs::write(
                     &request_path,
@@ -1054,9 +1067,11 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                     .unwrap(),
                 )
                 .unwrap();
-                let admitted =
-                    fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
-                        .unwrap();
+                let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(
+                    &typed_bundle_path,
+                    &request_path,
+                )
+                .unwrap();
                 let execution = admitted
                     .input()
                     .module
@@ -1069,6 +1084,10 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                         panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
                     });
                 assert_eq!(execution.invocations_executed(), grid as u64);
+                assert_eq!(execution.buffer(6).unwrap().bytes(), input_bytes);
+                let mut expected_length = (input_length as u32).to_le_bytes().repeat(grid);
+                expected_length.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                assert_eq!(execution.buffer(7).unwrap().bytes(), expected_length);
                 for (index, value) in expected.into_iter().enumerate() {
                     let mut expected_bytes = value.to_le_bytes().repeat(grid);
                     expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
@@ -1082,6 +1101,8 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
         }
     }
 }
+
+include!("production_ranked_bounds_driver_v1/shared_slice_call_assertions.rs");
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]

@@ -33,15 +33,22 @@ pub fn legacy_correspondence_result_supported_v4(
 pub fn legacy_correspondence_source_results_supported_v4(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
 ) -> bool {
+    legacy_source_function_envelope_v4(semantic, false, |function| {
+        legacy_correspondence_result_supported_v4(semantic.types(), function.abi())
+    })
+}
+
+fn legacy_source_function_envelope_v4(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    allow_roots: bool,
+    supported: impl Fn(&fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1) -> bool,
+) -> bool {
     use fe2o3_mir_model::semantic_mir_v1::{SemanticCallableDeclV1, SemanticTerminatorKindV1};
     let unsupported = semantic
         .functions()
         .iter()
         .enumerate()
-        .filter_map(|(index, function)| {
-            (!legacy_correspondence_result_supported_v4(semantic.types(), function.abi()))
-                .then_some(index)
-        })
+        .filter_map(|(index, function)| (!supported(function)).then_some(index))
         .collect::<BTreeSet<_>>();
     if unsupported.is_empty() {
         return true;
@@ -53,6 +60,9 @@ pub fn legacy_correspondence_source_results_supported_v4(
             return false;
         };
         bodies.insert(selected.body().index() as usize);
+        if allow_roots {
+            bodies.insert(selected.root().index() as usize);
+        }
         if selected.has_transparent_result_wrapper() {
             wrappers.insert((
                 selected.root().index() as usize,
