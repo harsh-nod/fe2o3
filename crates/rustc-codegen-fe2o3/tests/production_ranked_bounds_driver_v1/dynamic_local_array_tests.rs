@@ -158,10 +158,15 @@ fn ordinary_source_dynamic_local_array_matches_rust_in_simulation() {
                     .unwrap();
                     let input = admitted.input();
                     let mut observed = ArrayIndexObservation::default();
+                    // CLI inputs disable observation; this sink needs its own bounded event budget.
+                    let observed_limits = fe2o3_kir_sim::SimulationLimitsV1 {
+                        max_events: 65_536,
+                        ..input.simulation_limits
+                    };
                     let result = input.module.simulate_observed_with_sink(
                         &input.request,
                         input.simulation_target(),
-                        input.simulation_limits,
+                        observed_limits,
                         &mut observed,
                     );
                     assert!(
