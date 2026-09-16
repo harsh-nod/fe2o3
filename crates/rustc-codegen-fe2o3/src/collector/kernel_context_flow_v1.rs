@@ -360,9 +360,9 @@ fn authenticate<'tcx>(
                     ));
                 }
                 let output = source_signature_v1(tcx, root).map_err(error)?.output();
-                if !matches!(values.origins[0], Some(Origin::Result))
-                    && !(output.is_unit() && matches!(values.origins[0], None | Some(Origin::Unit)))
-                {
+                let valid_return = matches!(values.origins[0], Some(Origin::Result))
+                    || (output.is_unit() && matches!(values.origins[0], None | Some(Origin::Unit)));
+                if !valid_return {
                     return Err(error(
                         "physical return does not originate from the logical helper",
                     ));
