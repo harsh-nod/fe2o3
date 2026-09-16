@@ -1733,6 +1733,58 @@ impl Error for CompilerMultiRootProofValidationErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[allow(dead_code)]
+    mod compiler_proof_inputs_v3 {
+        use crate as fe2o3_verifier;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/compiler_proof_inputs_v3.rs"
+        ));
+    }
+
+    #[test]
+    fn multi_root_rejects_rust_call_even_when_expansion_has_no_parameters() {
+        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            proof.semantic_mir(), fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        ).unwrap();
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+                proof.kernel_ir().to_vec(),
+            )
+            .unwrap();
+        let body = module.functions[0].body.as_ref().unwrap();
+        let ordinary = &semantic.semantic().functions()[0];
+        let rust_call = compiler_proof_inputs_v3::rust_call_empty_helper_v28(0x20);
+        let ordinary_functions = BTreeMap::from([(
+            0,
+            CorrespondenceFunctionBindingV1 {
+                semantic: ordinary,
+                body,
+            },
+        )]);
+        assert!(
+            validate_correspondence_parameter_bindings(7, &ordinary_functions, &BTreeMap::new())
+                .is_ok()
+        );
+        let rust_call_functions = BTreeMap::from([(
+            0,
+            CorrespondenceFunctionBindingV1 {
+                semantic: &rust_call,
+                body,
+            },
+        )]);
+        assert!(matches!(
+            validate_correspondence_parameter_bindings(7, &rust_call_functions, &BTreeMap::new()),
+            Err(
+                CompilerMultiRootProofValidationErrorV1::CorrespondencePayload {
+                    root: 7,
+                    detail: "parameter correspondence does not encode RustCall components",
+                }
+            )
+        ));
+    }
     use fe2o3_compiler_lineage::{
         MultiRootNeutralKirIdentityV2, MultiRootProofRosterInputsV2,
         MultiRootProofRosterRootInputV2,

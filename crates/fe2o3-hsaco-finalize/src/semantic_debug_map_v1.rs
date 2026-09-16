@@ -2222,6 +2222,34 @@ mod production_correspondence_tests {
         ));
     }
 
+    #[test]
+    fn debug_map_rejects_rust_call_even_when_expansion_has_no_parameters() {
+        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            proof.semantic_mir(), fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        ).unwrap();
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+                proof.kernel_ir().to_vec(),
+            )
+            .unwrap();
+        let body = module.functions[0].body.as_ref().unwrap();
+        let ordinary = &semantic.semantic().functions()[0];
+        let rust_call = compiler_proof_inputs_v3::rust_call_empty_helper_v28(0x20);
+        assert!(
+            expected_multi_root_parameter_bindings_v1(&BTreeMap::from([(0, (ordinary, 0, body))]))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            expected_multi_root_parameter_bindings_v1(&BTreeMap::from([(
+                0,
+                (&rust_call, 0, body)
+            )])),
+            Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+        ));
+    }
+
     struct ExactMapFixture {
         map: SemanticDebugMapDocumentV1,
         source_map: Vec<u8>,
