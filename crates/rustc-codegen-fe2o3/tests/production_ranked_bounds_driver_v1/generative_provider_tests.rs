@@ -103,5 +103,7 @@ fn staged_generative_providers_reject_without_export_authority() {
         );
         assert!(control.is_file());
     }
+    // The protocol matrix builds its own fixture; release this completed cache first.
+    drop(target);
     check_kernel_context_source_protocol();
 }
