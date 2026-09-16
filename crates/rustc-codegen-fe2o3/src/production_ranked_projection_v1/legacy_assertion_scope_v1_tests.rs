@@ -128,7 +128,7 @@ mod legacy_scope_tests {
     #[test]
     fn private_array_indexed_write_attaches_through_both_existing_routes() {
         for legacy in [false, true] {
-            attach_private_write_fixture_v1(
+            let _owner = attach_private_write_fixture_v1(
                 literal_assertion(true, true, false),
                 legacy,
                 |materialized, root| assert_private_write_row_v1(materialized, root, 1),
@@ -279,7 +279,7 @@ mod legacy_scope_tests {
                 let prefix = statements.len() as u32;
                 statements.extend_from_slice(old.blocks()[0].statements());
                 let function = private_write_statements_v1(&old, statements);
-                attach_private_write_fixture_v1(function, legacy, |materialized, root| {
+                let _owner = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
                     assert_private_write_row_v1(materialized, root, prefix + 1);
                     let promoted = materialized
                         .semantic_ssa()
