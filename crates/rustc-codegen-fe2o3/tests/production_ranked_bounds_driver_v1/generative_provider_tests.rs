@@ -69,21 +69,17 @@ fn staged_generative_providers_reject_without_export_authority() {
     );
     assert!(!llvm.exists(), "rejected provider emitted LLVM");
 
-    let control = target.path().join("ordinary-zst.fe2sim");
-    let result = output(
-        simulation_export_command_for_feature(
-            "gfx942",
-            &control,
-            &build_dir,
-            Some(5),
-            "aggregate_zst",
-        ),
-        "preserve ordinary zero-sized source arguments",
-    );
-    assert!(
-        result.status.success(),
-        "ordinary ZST rejected:\n{}",
-        result.stderr
-    );
-    assert!(control.is_file());
+    for feature in ["aggregate_zst", "provider_phantom"] {
+        let control = target.path().join(format!("{feature}.fe2sim"));
+        let result = output(
+            simulation_export_command_for_feature("gfx942", &control, &build_dir, Some(5), feature),
+            "preserve ordinary zero-sized source arguments",
+        );
+        assert!(
+            result.status.success(),
+            "{feature} rejected:\n{}",
+            result.stderr
+        );
+        assert!(control.is_file());
+    }
 }
