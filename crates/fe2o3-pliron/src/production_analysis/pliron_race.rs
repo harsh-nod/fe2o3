@@ -208,6 +208,145 @@ fn race_resource_upper_bound_for_shape_v1(
     presburger_shape: Option<(usize, usize)>,
     limits: ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    finish_race_resource_preflight_v1(
+        calculate_race_resource_upper_bound_for_shape_v1(
+            census,
+            invocation_shape,
+            presburger_shape,
+        ),
+        limits,
+        trace_race_resource_preflight_v1,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct RaceResourcePreflightNumbersV1 {
+    census: ProductionAnalysisInputCensusV1,
+    invocation_shape: Option<(usize, usize)>,
+    presburger_shape: Option<(usize, usize)>,
+    effects: usize,
+    effect_pairs: usize,
+    pairs: usize,
+    rank: usize,
+    potential_effect_instances: usize,
+    charged_effect_instances: usize,
+    retained_effect_instances: usize,
+    retained_finding_count: usize,
+    name_storage: usize,
+    per_finding_storage: usize,
+    work: usize,
+    raw_evaluation_work: usize,
+    presburger_work: usize,
+    symbolic_work: usize,
+    effect_state: usize,
+    address_state: usize,
+    attempted_finding: usize,
+    conflict_class_storage: usize,
+    raw_evaluation_temporary: usize,
+    presburger_temporary: usize,
+    temporary: usize,
+    bound: ProductionAnalysisResourceUpperBoundV1,
+}
+
+fn finish_race_resource_preflight_v1(
+    numbers: Result<RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitV1>,
+    limits: ProductionAnalysisResourceLimitsV1,
+    observe: impl FnOnce(&RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitsV1),
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    let numbers = numbers?;
+    observe(&numbers, limits);
+    limits.require(
+        ProductionAnalysisResourcePhaseV1::RaceFreedom,
+        numbers.bound,
+    )
+}
+
+fn trace_race_resource_preflight_v1(
+    numbers: &RaceResourcePreflightNumbersV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+) {
+    if std::env::var_os("FE2O3_TRACE_RANKED_CUSTODY_V1").is_none() {
+        return;
+    }
+    write_race_resource_preflight_v1(true, &mut std::io::stderr().lock(), numbers, limits);
+}
+
+fn write_race_resource_preflight_v1(
+    enabled: bool,
+    writer: &mut impl std::io::Write,
+    numbers: &RaceResourcePreflightNumbersV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+) {
+    if !enabled {
+        return;
+    }
+    let (static_invocations, static_rank) = numbers.invocation_shape.unwrap_or((0, 0));
+    let (presburger_invocations, presburger_rank) = numbers.presburger_shape.unwrap_or((0, 0));
+    // Only this fixed roster of numeric fields is emitted; I/O cannot admit the phase.
+    let _ = writeln!(
+        writer,
+        concat!(
+            "RACE_RESOURCE_PREFLIGHT_V1 stage=local_require units=logical",
+            " blocks={} operations={} successors={} ranked_accesses={}",
+            " allocation_effects={} identifier_bytes={} canonical_bytes={}",
+            " static_present={} static_invocations={} static_rank={}",
+            " presburger_present={} presburger_invocations={} presburger_rank={}",
+            " effects={} effect_pairs={} pairs={} rank={} potential_instances={}",
+            " charged_instances={} retained_instances={} finding_count={}",
+            " name_storage={} per_finding_storage={} core_work={} raw_work={}",
+            " presburger_work={} symbolic_work={} effect_state={} address_state={}",
+            " attempted_finding={} conflict_class_storage={} raw_temporary={}",
+            " presburger_temporary={} temporary={} work={} retained={} peak={}",
+            " remaining_work={} remaining_peak={} word_bits={}"
+        ),
+        numbers.census.blocks,
+        numbers.census.operations,
+        numbers.census.successors,
+        numbers.census.ranked_accesses,
+        numbers.census.allocation_effects,
+        numbers.census.identifier_bytes,
+        numbers.census.canonical_bytes,
+        usize::from(numbers.invocation_shape.is_some()),
+        static_invocations,
+        static_rank,
+        usize::from(numbers.presburger_shape.is_some()),
+        presburger_invocations,
+        presburger_rank,
+        numbers.effects,
+        numbers.effect_pairs,
+        numbers.pairs,
+        numbers.rank,
+        numbers.potential_effect_instances,
+        numbers.charged_effect_instances,
+        numbers.retained_effect_instances,
+        numbers.retained_finding_count,
+        numbers.name_storage,
+        numbers.per_finding_storage,
+        numbers.work,
+        numbers.raw_evaluation_work,
+        numbers.presburger_work,
+        numbers.symbolic_work,
+        numbers.effect_state,
+        numbers.address_state,
+        numbers.attempted_finding,
+        numbers.conflict_class_storage,
+        numbers.raw_evaluation_temporary,
+        numbers.presburger_temporary,
+        numbers.temporary,
+        numbers.bound.work_upper_bound(),
+        numbers.bound.retained_storage_upper_bound(),
+        numbers.bound.peak_storage_upper_bound(),
+        limits.max_work(),
+        limits.max_peak_storage(),
+        usize::BITS,
+    );
+}
+
+fn calculate_race_resource_upper_bound_for_shape_v1(
+    census: ProductionAnalysisInputCensusV1,
+    invocation_shape: Option<(usize, usize)>,
+    presburger_shape: Option<(usize, usize)>,
+) -> Result<RaceResourcePreflightNumbersV1, ProductionAnalysisResourceLimitV1> {
     let effects = checked_race_sum_v1(&[census.ranked_accesses, census.allocation_effects])?;
     let effect_pairs = effects
         .checked_add(1)
@@ -334,7 +473,33 @@ fn race_resource_upper_bound_for_shape_v1(
         retained_findings,
         temporary,
     )?;
-    limits.require(ProductionAnalysisResourcePhaseV1::RaceFreedom, bound)
+    Ok(RaceResourcePreflightNumbersV1 {
+        census,
+        invocation_shape,
+        presburger_shape,
+        effects,
+        effect_pairs,
+        pairs,
+        rank,
+        potential_effect_instances,
+        charged_effect_instances,
+        retained_effect_instances,
+        retained_finding_count,
+        name_storage,
+        per_finding_storage,
+        work,
+        raw_evaluation_work,
+        presburger_work,
+        symbolic_work,
+        effect_state,
+        address_state,
+        attempted_finding,
+        conflict_class_storage,
+        raw_evaluation_temporary,
+        presburger_temporary,
+        temporary,
+        bound,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
