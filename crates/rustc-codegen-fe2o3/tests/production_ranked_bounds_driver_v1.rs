@@ -3644,6 +3644,57 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             }
             _ => {}
         }
+        let kernel = &map.kernels()[0];
+        let output_slot: u32 = match feature {
+            "aggregate_pair_tuple" | "aggregate_pair_array" => 16,
+            "aggregate_zst" => 0,
+            "aggregate_nested" => 24,
+            _ => unreachable!(),
+        };
+        let offset = output_slot as usize;
+        let mut explicit_kernarg = vec![0xa5; offset + 24];
+        let expected = match feature {
+            "aggregate_zst" => 3,
+            "aggregate_pair_array" => {
+                explicit_kernarg[0..8].copy_from_slice(&0x1122_3344_5566_7788_u64.to_le_bytes());
+                explicit_kernarg[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+                0x0102_0304_0506_0708
+            }
+            "aggregate_pair_tuple" | "aggregate_nested" => {
+                explicit_kernarg[0..4].copy_from_slice(&0x1122_3344_u32.to_le_bytes());
+                explicit_kernarg[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+                if feature == "aggregate_nested" {
+                    explicit_kernarg[16..18].copy_from_slice(&0x1234_u16.to_le_bytes());
+                    explicit_kernarg[18..20].copy_from_slice(&0x5678_u16.to_le_bytes());
+                }
+                0x0102_0304_0506_0708
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(kernel.explicit_kernarg_bytes(), output_slot + 24);
+        assert_eq!(kernel.explicit_kernarg_alignment(), 8);
+        let output = &kernel.arguments()[1].storage().components().unwrap()[0];
+        assert_eq!(output.value_slot().byte_offset(), output_slot);
+        assert_eq!(
+            output.metadata_slot().unwrap().byte_offset(),
+            output_slot + 8
+        );
+        let scale = &kernel.arguments()[2].storage().components().unwrap()[0];
+        assert_eq!(scale.value_slot().byte_offset(), output_slot + 16);
+        explicit_kernarg[offset..offset + 8].fill(0);
+        explicit_kernarg[offset + 8..offset + 16].copy_from_slice(&64_u64.to_le_bytes());
+        explicit_kernarg[offset + 16..offset + 24].copy_from_slice(&3_u64.to_le_bytes());
+        execute_aggregate_bundle_through_sim_runtime(
+            bundle.canonical_bytes(),
+            feature,
+            *semantic.functions()[kernel.semantic_root() as usize]
+                .abi()
+                .identity()
+                .as_bytes(),
+            &explicit_kernarg,
+            output_slot,
+            expected,
+        );
     }
 
     let nested_request = target.path().join("aggregate-nested-request.json");
@@ -3730,40 +3781,6 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     assert_eq!(response["session"]["simulated"], true);
     assert_eq!(response["session"]["hardware_observed"], false);
 
-    for feature in ["aggregate_pair_array", "aggregate_nested"] {
-        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV4::from_canonical_bytes(
-            std::fs::read(target.path().join(format!("{feature}-v4.fe2sim"))).unwrap(),
-        )
-        .unwrap();
-        let map =
-            fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
-                .unwrap();
-        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
-            bundle.semantic_mir(),
-            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
-        )
-        .unwrap();
-        let abi_identity = *semantic.functions()[map.kernels()[0].semantic_root() as usize]
-            .abi()
-            .identity()
-            .as_bytes();
-        let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xb6; 32]).unwrap();
-        let module = fe2o3_runtime::RuntimeBackendV1::load_module_v1(
-            &mut backend,
-            1,
-            bundle.canonical_bytes(),
-        )
-        .unwrap();
-        fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
-            &mut backend,
-            module,
-            feature,
-            abi_identity,
-        )
-        .unwrap();
-        fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, module).unwrap();
-    }
-
     for (feature, typed_reason) in [
         ("aggregate_enum", "variant-aware packing evidence"),
         ("aggregate_pointer", "contains a pointer or reference"),
@@ -3809,21 +3826,26 @@ fn execute_aggregate_bundle_through_sim_runtime(
 ) {
     use fe2o3_runtime::RuntimeBackendV1 as _;
 
+    const GUARD: usize = 8;
+    const OUTPUT_BYTES: usize = 64 * 8;
+
     let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xc2; 32]).unwrap();
     assert!(!backend.uses_gpu());
     assert!(!backend.evidence().hardware);
     assert!(!backend.evidence().performance_prediction);
     let stream = backend.create_stream_v1(1).unwrap();
+    let mut initial = vec![0xa5; OUTPUT_BYTES + 2 * GUARD];
+    initial[GUARD..GUARD + OUTPUT_BYTES].fill(0);
     let allocation = backend
         .allocate_v1(
             1,
             fe2o3_runtime::RuntimeMemoryKindV1::HostVisible,
-            64 * 8,
+            initial.len() as u64,
             8,
         )
         .unwrap();
     backend
-        .write_allocation_v1(allocation, 0, &[0; 64 * 8])
+        .write_allocation_v1(allocation, 0, &initial)
         .unwrap();
     let module = backend.load_module_v1(1, bundle).unwrap();
     let mut wrong_signature = signature;
@@ -3841,8 +3863,8 @@ fn execute_aggregate_bundle_through_sim_runtime(
         region: fe2o3_runtime::BackendMemoryRegionV1 {
             allocation,
             access: fe2o3_runtime::RuntimeAccessV1::ReadWrite,
-            byte_offset: 0,
-            byte_len: 64 * 8,
+            byte_offset: GUARD as u64,
+            byte_len: OUTPUT_BYTES as u64,
         },
         kernarg_byte_offset: output_pointer_slot,
     }];
@@ -3870,13 +3892,22 @@ fn execute_aggregate_bundle_through_sim_runtime(
             .unwrap(),
         fe2o3_runtime::BackendPollV1::Succeeded
     );
-    let mut output = vec![0; 64 * 8];
+    let mut output = vec![0; initial.len()];
     backend
         .read_allocation_v1(allocation, 0, &mut output)
         .unwrap();
-    assert!(output.chunks_exact(8).all(|bytes| {
-        u64::from_le_bytes(bytes.try_into().expect("one complete u64 output")) == expected
-    }));
+    assert_eq!(&output[..GUARD], &initial[..GUARD]);
+    assert_eq!(
+        &output[GUARD + OUTPUT_BYTES..],
+        &initial[GUARD + OUTPUT_BYTES..]
+    );
+    assert!(
+        output[GUARD..GUARD + OUTPUT_BYTES]
+            .chunks_exact(8)
+            .all(|bytes| {
+                u64::from_le_bytes(bytes.try_into().expect("one complete u64 output")) == expected
+            })
+    );
     backend.release_submission_v1(submission).unwrap();
     backend.destroy_stream_v1(stream).unwrap();
     backend.unload_module_v1(module).unwrap();
@@ -3892,6 +3923,7 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
     };
 
     let target = ScratchTarget::new();
+    let export_target = target.path().join("aggregate-v5-export-target");
     let debug_target = target.path().join("aggregate-v5-debug-target");
     let build_debugger = Command::new(env!("CARGO"))
         .current_dir(workspace())
@@ -3920,7 +3952,7 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
             simulation_export_command_for_feature(
                 "gfx942",
                 &bundle_path,
-                &target.path().join(format!("{feature}-v5-target")),
+                &export_target,
                 Some(5),
                 feature,
             ),
@@ -4201,7 +4233,7 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
             simulation_export_command_for_feature(
                 "gfx942",
                 &target.path().join(format!("{feature}-v5.fe2sim")),
-                &target.path().join(format!("{feature}-v5-target")),
+                &export_target,
                 Some(5),
                 feature,
             ),
