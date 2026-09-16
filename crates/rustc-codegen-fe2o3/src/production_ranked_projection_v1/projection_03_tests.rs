@@ -955,6 +955,7 @@
         types: &[SemanticTypeDeclV1],
     ) -> ProjectionLocalContractsV1 {
         ProjectionLocalContractsV1 {
+            atomic_allocations: AuthenticatedAtomicAllocationsV1::default(),
             immutable_locals: immutable_local_array_candidates_v1(
                 function,
                 &assertion_definition_inventory(function).unwrap(),

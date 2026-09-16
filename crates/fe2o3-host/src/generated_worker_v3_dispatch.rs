@@ -186,6 +186,8 @@ where
         self.validate_worker_v3_launch_geometry(geometry)
             .map_err(GeneratedWorkerV3PrepareErrorV1::LaunchAuthorization)?;
 
+        reject_legacy_atomic_runtime_v1(self.descriptor().arguments())?;
+
         let generated = Arguments::generated_argument_layout_v1()
             .map_err(GeneratedWorkerV3PrepareErrorV1::GeneratedLayout)?;
         // SAFETY: the unsafe generated trait implementation supplies an independent compiler
@@ -367,6 +369,19 @@ impl Drop for WorkerV3AlignedKernargV1 {
     }
 }
 
+fn reject_legacy_atomic_runtime_v1(
+    arguments: &[fe2o3_kernel_descriptor::LogicalArgumentV1],
+) -> Result<(), GeneratedWorkerV3PrepareErrorV1> {
+    // V1 layout/alias declarations do not join a runtime coherence contract.
+    if arguments
+        .iter()
+        .any(|argument| argument.alias() == fe2o3_kernel_descriptor::AliasSemantics::SharedAtomic)
+    {
+        return Err(GeneratedWorkerV3PrepareErrorV1::AtomicRuntimeContractUnavailable);
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GeneratedWorkerV3PrepareErrorV1 {
@@ -378,6 +393,7 @@ pub enum GeneratedWorkerV3PrepareErrorV1 {
     Bind(GeneratedArgumentPackError),
     Arguments(GeneratedWorkerV3ArgumentErrorV1),
     PackedSubstitution,
+    AtomicRuntimeContractUnavailable,
     Alias(AliasAdmissionError),
     PhysicalKernarg,
 }
@@ -401,6 +417,38 @@ pub enum GeneratedWorkerV3ArgumentErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_atomic_slice_descriptor_cannot_grant_runtime_authority() {
+        use fe2o3_kernel_descriptor::*;
+        let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_atomic_slice_u32());
+        let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_atomic_slice_u32());
+        let argument = LogicalArgumentV1::shared_atomic_slice_u32(
+            0,
+            ValidName::new("channels").unwrap(),
+            &source,
+            &layout,
+            0,
+        )
+        .unwrap();
+        assert!(matches!(
+            reject_legacy_atomic_runtime_v1(&[argument]),
+            Err(GeneratedWorkerV3PrepareErrorV1::AtomicRuntimeContractUnavailable)
+        ));
+        let source =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U32));
+        let layout =
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::U32));
+        let argument = LogicalArgumentV1::shared_slice(
+            0,
+            ValidName::new("values").unwrap(),
+            &source,
+            &layout,
+            0,
+        )
+        .unwrap();
+        assert!(reject_legacy_atomic_runtime_v1(&[argument]).is_ok());
+    }
 
     #[test]
     fn physical_kernarg_admits_only_explicit_only_or_exact_cov6_hidden_metadata() {

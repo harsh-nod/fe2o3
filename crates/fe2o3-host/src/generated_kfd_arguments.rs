@@ -26,6 +26,8 @@ use fe2o3_artifacts::RustDisjointIndexSpaceV1;
 
 const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-OBSERVATION/V1\0";
 
+include!("generated_kfd_atomic_slice_v1.rs");
+
 /// Compiler-generated address-free argument bridge for one exact kernel signature.
 ///
 /// # Safety
@@ -79,6 +81,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         admission
             .revalidate_retained_currentness_token(current)
             .map_err(GeneratedKfdPrepareError::CurrentPublication)?;
+        reject_unjoined_atomic_runtime_v1(admission.descriptor())?;
         let generated = Arguments::generated_argument_layout()
             .map_err(GeneratedKfdPrepareError::GeneratedLayout)?;
         let plan = validate_worker_v3_argument_packing(
@@ -869,6 +872,7 @@ pub enum GeneratedKfdPrepareError {
     PackingPlan(GeneratedArgumentPackingError),
     Bind(GeneratedKfdArgumentError),
     PackedSubstitution,
+    AtomicRuntimeContractUnavailable,
 }
 
 impl fmt::Display for GeneratedKfdPrepareError {
@@ -889,6 +893,9 @@ impl fmt::Display for GeneratedKfdPrepareError {
                     "generated KFD layout differs from the descriptor: {error}"
                 )
             }
+            Self::AtomicRuntimeContractUnavailable => formatter.write_str(
+                "atomic slice requires a joined runtime atomic-coherence contract; V1 layout agreement alone grants no dispatch authority",
+            ),
             Self::Bind(error) => write!(formatter, "generated KFD binding failed: {error}"),
             Self::PackedSubstitution => {
                 formatter.write_str("generated KFD packed arguments differ from the descriptor")

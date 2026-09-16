@@ -235,6 +235,12 @@ fn construct_type_v1<'tcx>(
     }
     let rust_type_kind = if matches!(producer.ty.kind(), TyKind::Str) {
         SemanticRustTypeKindV1::Str
+    } else if crate::rust_type_layout_v3::is_genuine_core_atomic_u32_v1(
+        context.tcx,
+        context.layout_cx,
+        producer.ty,
+    ) {
+        SemanticRustTypeKindV1::CoreAtomicU32
     } else {
         SemanticRustTypeKindV1::Ordinary
     };

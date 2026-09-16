@@ -184,10 +184,10 @@ pub use generated_argument_plan::{
 #[doc(hidden)]
 pub use generated_kfd_arguments::{
     CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
-    GeneratedKfdBufferBindingObservationV1, GeneratedKfdCompletion, GeneratedKfdCompletionError,
-    GeneratedKfdPackedArguments, GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError,
-    GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
-    GeneratedKfdWriteSlice,
+    GeneratedKfdAtomicSliceU32, GeneratedKfdBufferBindingObservationV1, GeneratedKfdCompletion,
+    GeneratedKfdCompletionError, GeneratedKfdPackedArguments, GeneratedKfdPackingObservationV1,
+    GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
+    GeneratedKfdSliceBinding, GeneratedKfdWriteSlice,
 };
 pub use generated_kfd_invocation::{
     GENERATED_KFD_DIFFERENTIAL_OBSERVATION_SCHEMA_V1,
@@ -303,10 +303,10 @@ pub mod __generated {
         CompilerGeneratedSemanticWitnessErrorV1, GeneratedArgumentFieldProperty,
         GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
         GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedKfdArgumentBinding,
-        GeneratedKfdArgumentError, GeneratedKfdCompletion, GeneratedKfdCompletionError,
-        GeneratedKfdPackedArguments, GeneratedKfdPrepareError, GeneratedKfdReadSlice,
-        GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding, GeneratedKfdWriteSlice,
-        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
+        GeneratedKfdArgumentError, GeneratedKfdAtomicSliceU32, GeneratedKfdCompletion,
+        GeneratedKfdCompletionError, GeneratedKfdPackedArguments, GeneratedKfdPrepareError,
+        GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
+        GeneratedKfdWriteSlice, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
         GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
         GeneratedWorkerV3KfdInvocationError, ValidatedCompilerGeneratedSemanticWitnessV1,
         semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,

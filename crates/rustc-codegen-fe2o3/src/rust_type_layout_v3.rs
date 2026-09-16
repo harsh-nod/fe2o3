@@ -28,6 +28,7 @@ const SLICE_BYTES: u64 = 16;
 pub(crate) enum GeneralTypedArgumentKindV3 {
     Scalar(RustScalarElementTypeV1),
     SharedSlice(RustScalarElementTypeV1),
+    SharedAtomicSliceU32,
     WriteOnlyDisjointSlice(RustScalarElementTypeV1),
     DisjointSlice(RustScalarElementTypeV1),
     GlobalMutPointer(RustScalarElementTypeV1),
@@ -42,6 +43,7 @@ impl GeneralTypedArgumentKindV3 {
             | Self::WriteOnlyDisjointSlice(scalar)
             | Self::DisjointSlice(scalar)
             | Self::GlobalMutPointer(scalar) => Some(scalar),
+            Self::SharedAtomicSliceU32 => Some(RustScalarElementTypeV1::U32),
             Self::CompilerLaidOutByValue => None,
         }
     }
@@ -251,6 +253,8 @@ fn validate_general_typed_launch_v3(
     Ok(())
 }
 
+include!("rust_type_layout_v3/core_atomic_u32_v1.rs");
+
 fn extract_argument<'tcx>(
     tcx: TyCtxt<'tcx>,
     layout_cx: &LayoutCx<'tcx>,
@@ -270,6 +274,20 @@ fn extract_argument<'tcx>(
     if let TyKind::Ref(_, pointee, HirMutability::Not) = *ty.kind()
         && let TyKind::Slice(element) = *pointee.kind()
     {
+        if is_genuine_core_atomic_u32_v1(tcx, layout_cx, element) {
+            let layout = slice_layout(
+                layout_cx,
+                ty,
+                RustScalarElementTypeV1::U32,
+                false,
+                RustSourceTypeShapeV1::SharedAtomicSliceU32,
+                &argument(),
+            )?;
+            return Ok(GeneralTypedArgumentV3::from_layout(
+                GeneralTypedArgumentKindV3::SharedAtomicSliceU32,
+                layout,
+            ));
+        }
         let scalar = scalar_type(element).ok_or_else(|| {
             GeneralTypedExtractError::new(format!(
                 "{} has unsupported shared-slice element type `{element}`",
@@ -888,6 +906,19 @@ fn build_abi_field(
                 ArgumentOwnership::SharedBorrow,
                 AliasClass::SharedReadOnly,
             ),
+            GeneralTypedArgumentKindV3::SharedAtomicSliceU32 => (
+                SLICE_BYTES,
+                POINTER_ALIGNMENT,
+                AbiKind::Slice {
+                    element_size: 4,
+                    element_alignment: 4,
+                },
+                Mutability::Immutable,
+                Access::ReadWrite,
+                AddressSpace::Global,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedAtomic,
+            ),
             GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => (
                 SLICE_BYTES,
                 POINTER_ALIGNMENT,
@@ -970,6 +1001,7 @@ fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
             (scalar.size_bytes(), scalar.size_bytes() as u32)
         }
         GeneralTypedArgumentKindV3::SharedSlice(_)
+        | GeneralTypedArgumentKindV3::SharedAtomicSliceU32
         | GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
         | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
         GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (POINTER_BYTES, POINTER_ALIGNMENT),
@@ -1085,6 +1117,13 @@ mod tests {
             ),
             GeneralTypedArgumentKindV3::SharedSlice(_) => (
                 RustSourceTypeShapeV1::shared_slice(scalar),
+                RustcAbiClassV1::ScalarPair,
+                16,
+                8,
+                slice_components(scalar, RustPointerMutabilityV1::Const),
+            ),
+            GeneralTypedArgumentKindV3::SharedAtomicSliceU32 => (
+                RustSourceTypeShapeV1::SharedAtomicSliceU32,
                 RustcAbiClassV1::ScalarPair,
                 16,
                 8,

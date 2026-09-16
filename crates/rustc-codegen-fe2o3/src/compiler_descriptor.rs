@@ -76,6 +76,7 @@ impl TypedDescriptorRootV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum DescriptorArgumentKindV1 {
     SharedSlice(ScalarTypeV1),
+    SharedAtomicSliceU32,
     DisjointSlice(ScalarTypeV1),
     GlobalMutPointer(ScalarTypeV1),
     Scalar(ScalarTypeV1),
@@ -207,6 +208,9 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     GeneralTypedArgumentKindV3::SharedSlice(_) => {
                                         AccessMode::ReadOnly
                                     }
+                                    GeneralTypedArgumentKindV3::SharedAtomicSliceU32 => {
+                                        AccessMode::ReadWrite
+                                    }
                                     GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
                                         AccessMode::WriteOnly
                                     }
@@ -319,6 +323,9 @@ fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgum
         }
         GeneralTypedArgumentKindV3::SharedSlice(_) => {
             DescriptorArgumentKindV1::SharedSlice(scalar.expect("slice kind has a scalar"))
+        }
+        GeneralTypedArgumentKindV3::SharedAtomicSliceU32 => {
+            DescriptorArgumentKindV1::SharedAtomicSliceU32
         }
         GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
             DescriptorArgumentKindV1::DisjointSlice(scalar.expect("slice kind has a scalar"))
@@ -704,6 +711,7 @@ fn validate_production_v1_descriptor_root_evidence(
             matches!(
                 argument.kind,
                 DescriptorArgumentKindV1::SharedSlice(_)
+                    | DescriptorArgumentKindV1::SharedAtomicSliceU32
                     | DescriptorArgumentKindV1::DisjointSlice(_)
                     | DescriptorArgumentKindV1::GlobalMutPointer(_)
             )
@@ -726,6 +734,7 @@ fn validate_production_v1_descriptor_root_evidence(
             ))?;
         let expected_access = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_) => KirAccessMode::ReadOnly,
+            DescriptorArgumentKindV1::SharedAtomicSliceU32 => KirAccessMode::ReadWrite,
             DescriptorArgumentKindV1::DisjointSlice(_) => match argument.access {
                 AccessMode::WriteOnly => KirAccessMode::WriteOnly,
                 AccessMode::ReadWrite => KirAccessMode::ReadWrite,
@@ -741,6 +750,7 @@ fn validate_production_v1_descriptor_root_evidence(
         };
         let expected_kind = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_)
+            | DescriptorArgumentKindV1::SharedAtomicSliceU32
             | DescriptorArgumentKindV1::DisjointSlice(_) => FormalParameterKind::Slice,
             DescriptorArgumentKindV1::GlobalMutPointer(_) => FormalParameterKind::Pointer,
             DescriptorArgumentKindV1::Scalar(_)
@@ -807,6 +817,12 @@ fn production_descriptor_argument_matches_kernel_type_v1(
             actual.address_space == AddressSpace::Global
                 && actual.access == KirAccessMode::ReadOnly
                 && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+        }
+        (DescriptorArgumentKindV1::SharedAtomicSliceU32, KirType::Slice(actual)) => {
+            descriptor_access == AccessMode::ReadWrite
+                && actual.address_space == AddressSpace::Global
+                && actual.access == KirAccessMode::ReadWrite
+                && actual.element.as_scalar() == Some(fe2o3_kernel_ir::ScalarType::U32)
         }
         (DescriptorArgumentKindV1::DisjointSlice(scalar), KirType::Slice(actual)) => {
             actual.address_space == AddressSpace::Global
@@ -958,7 +974,8 @@ fn validate_production_v1_semantic_root_ownership_evidence(
         )?;
         let expected_ownership = match argument.kind {
             DescriptorArgumentKindV1::Scalar(_) => SemanticSourceArgumentOwnershipV1::ByValue,
-            DescriptorArgumentKindV1::SharedSlice(_) => {
+            DescriptorArgumentKindV1::SharedSlice(_)
+            | DescriptorArgumentKindV1::SharedAtomicSliceU32 => {
                 SemanticSourceArgumentOwnershipV1::SharedBorrow
             }
             DescriptorArgumentKindV1::DisjointSlice(_) => {
@@ -1194,6 +1211,15 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
                         device_layout,
                         argument.offset,
                     ),
+                    DescriptorArgumentKindV1::SharedAtomicSliceU32 => {
+                        LogicalArgumentV1::shared_atomic_slice_u32(
+                            source_index,
+                            name,
+                            source_type,
+                            device_layout,
+                            argument.offset,
+                        )
+                    }
                     DescriptorArgumentKindV1::DisjointSlice(_) => {
                         LogicalArgumentV1::disjoint_slice(
                             source_index,
@@ -1308,6 +1334,10 @@ fn descriptor_records(
         DescriptorArgumentKindV1::SharedSlice(scalar) => (
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(scalar)),
             DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(scalar)),
+        ),
+        DescriptorArgumentKindV1::SharedAtomicSliceU32 => (
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_atomic_slice_u32()),
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_atomic_slice_u32()),
         ),
         DescriptorArgumentKindV1::DisjointSlice(scalar) => (
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(scalar)),
@@ -1658,6 +1688,7 @@ impl std::error::Error for CompilerDescriptorError {}
 
 #[cfg(test)]
 mod tests {
+    include!("compiler_descriptor_atomic_slice_tests.rs");
     use super::*;
     use crate::kernel_ir_codegen::{
         bind_compiler_descriptor_source_v1, construct_inert_compiler_module_text_v1,
@@ -1870,6 +1901,9 @@ mod tests {
         let (layout, access) = match kind {
             DescriptorArgumentKindV1::Scalar(_) => (scalar_layout(), AccessMode::ByValue),
             DescriptorArgumentKindV1::SharedSlice(_) => (layout(false), AccessMode::ReadOnly),
+            DescriptorArgumentKindV1::SharedAtomicSliceU32 => {
+                panic!("atomic descriptor fixtures require their distinct nominal layout")
+            }
             DescriptorArgumentKindV1::DisjointSlice(_) => (layout(true), AccessMode::ReadWrite),
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 (global_mut_pointer_layout(), AccessMode::ReadWrite)

@@ -38,6 +38,7 @@ fn total_read_cfg_fixture(
                 ProductionRankedValueV1::Argument(9),
             ],
             checked_success: None,
+            atomic: None,
             comparisons: vec![
                 (
                     ProductionRankedValueV1::Argument(8),

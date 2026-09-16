@@ -263,6 +263,8 @@ fn canonical_slice_layout_with_source_v1(
     .expect("supported slice layout is canonical")
 }
 
+include!("generated_atomic_argument_plan_v1.rs");
+
 /// Compiler-generated expectation for one complete logical kernel ABI.
 ///
 /// This is inert metadata. Constructing it does not authenticate an artifact
@@ -1412,6 +1414,11 @@ pub enum GeneratedArgumentPackError {
         argument_index: usize,
         length: u64,
     },
+    SliceByteExtentOverflow {
+        argument_index: usize,
+        length: usize,
+        element_size: usize,
+    },
     PhysicalComponentMismatch {
         argument_index: usize,
         component: GeneratedPackingComponentKindV1,
@@ -1428,6 +1435,14 @@ pub enum GeneratedArgumentPackError {
 impl fmt::Display for GeneratedArgumentPackError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SliceByteExtentOverflow {
+                argument_index,
+                length,
+                element_size,
+            } => write!(
+                formatter,
+                "argument {argument_index} slice length {length} with element size {element_size} exceeds the addressable extent"
+            ),
             Self::KernargTooLarge { size, maximum } => {
                 write!(
                     formatter,
@@ -2254,6 +2269,7 @@ fn worker_v3_field_mismatch(
         DescriptorAliasSemantics::Value => AliasClass::Value,
         DescriptorAliasSemantics::SharedReadOnly => AliasClass::SharedReadOnly,
         DescriptorAliasSemantics::Exclusive => AliasClass::Exclusive,
+        DescriptorAliasSemantics::SharedAtomic => AliasClass::SharedAtomic,
     };
     let expected_mutability = match argument.ownership() {
         DescriptorOwnershipSemantics::UniqueBorrow => Mutability::Mutable,
@@ -2284,6 +2300,8 @@ fn worker_v3_field_mismatch(
             canonical_scalar_layout_v1(scalar, PointerWidth::Bits64).type_identity()
         } else if source.is_shared_slice() {
             canonical_slice_layout_v1(scalar, PointerWidth::Bits64, false).type_identity()
+        } else if source.is_shared_atomic_slice_u32() {
+            atomic_slice_u32_type_identity_v1(PointerWidth::Bits64)
         } else {
             // Descriptor V1 preserves the disjoint ownership class. The authenticated generated
             // host contract supplies the exact source mapping, with Index1D as the legacy default.

@@ -1,3 +1,5 @@
+include!("production_extraction_driver_v1/atomic_slice_lowering_v1_tests.rs");
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +17,7 @@ use fe2o3_verifier::{
 mod inert_invocation_v3;
 
 include!("production_extraction_driver_v1/generative_provider_tests.rs");
+include!("production_extraction_driver_v1/atomic_slice_admission_v1_tests.rs");
 
 struct ScratchTarget {
     path: PathBuf,

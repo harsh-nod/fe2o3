@@ -43,6 +43,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 // V16-V26 belong to incompatible unpublished capability drafts; V27 is held
 // for the independently coordinated numerical-relation contract.
 pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
+/// V29 retains genuine core AtomicU32 identity without changing older encodings.
+pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -66,6 +68,7 @@ pub enum SemanticMirWireVersionV1 {
     V14,
     V15,
     V28,
+    V29,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -86,6 +89,7 @@ impl SemanticMirWireVersionV1 {
             Self::V14 => INERT_SEMANTIC_MIR_VERSION_V14,
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
+            Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
         }
     }
 
@@ -106,6 +110,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V14 => Some(Self::V14),
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
+            INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
             _ => None,
         }
     }
@@ -1871,6 +1876,8 @@ pub enum SemanticRustTypeKindV1 {
     #[default]
     Ordinary,
     Str,
+    /// Compiler-authenticated pinned-core Atomic<u32>; its storage stays aggregate.
+    CoreAtomicU32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6252,6 +6259,14 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V28, limits)
     }
 
+    /// Admits V29's retained genuine-core AtomicU32 nominal classification.
+    pub fn admit_exact_v29(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V29, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6260,7 +6275,8 @@ impl InertSemanticMirRequestV1 {
     /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
     /// V14 for checked disjoint-block component projection, and V15 for checked
     /// column-major BF16 B operands. V28 retains RustCall tuple-field locals
-    /// and the unit spelling of an empty RustCall source tuple.
+    /// and the unit spelling of an empty RustCall source tuple. V29 retains
+    /// genuine-core AtomicU32 identity without changing the intrinsic grammar.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -9712,6 +9728,8 @@ fn ensure_identity_order(
     Ok(())
 }
 
+include!("semantic_mir_v1/core_atomic_u32_v29.rs");
+
 fn validate_type(
     context: &mut ValidationContextV1<'_>,
     id: SemanticTypeIdV1,
@@ -9778,6 +9796,9 @@ fn validate_type(
             || ty.layout.randomization_seed != 0)
     {
         return Err(SemanticMirErrorV1::InvalidTypeLayout);
+    }
+    if ty.rust_type_kind == SemanticRustTypeKindV1::CoreAtomicU32 {
+        validate_core_atomic_u32_v29(context, id)?;
     }
     let location = SemanticMirLocationV1::Type(id);
     match &ty.shape {
@@ -16674,7 +16695,15 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             }
         )
     });
-    let mut required = SemanticMirWireVersionV1::V2;
+    let mut required = if request
+        .types
+        .iter()
+        .any(|ty| ty.rust_type_kind == SemanticRustTypeKindV1::CoreAtomicU32)
+    {
+        SemanticMirWireVersionV1::V29
+    } else {
+        SemanticMirWireVersionV1::V2
+    };
     let unit_rust_call = |abi: &SemanticFunctionAbiV1| {
         abi.extern_abi() == SemanticExternAbiV1::RustCall
             && abi
@@ -16698,7 +16727,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         SemanticCallableDeclV1::CompilerIntrinsic { binding, .. }
         | SemanticCallableDeclV1::DeviceFfiImport { binding, .. } => unit_rust_call(&binding.abi),
     }) {
-        required = SemanticMirWireVersionV1::V28;
+        required = required.max(SemanticMirWireVersionV1::V28);
     }
     if request.callables.iter().any(|callable| {
         matches!(
@@ -17016,6 +17045,13 @@ fn encode_type(
     encode_optional_pointee_info(writer, ty.abi_properties.second_pointee)?;
     if ty.rust_type_kind == SemanticRustTypeKindV1::Str {
         return writer.u8(13);
+    }
+    if ty.rust_type_kind == SemanticRustTypeKindV1::CoreAtomicU32 {
+        let SemanticTypeShapeV1::Aggregate(fields) = &ty.shape else {
+            return Err(SemanticMirErrorV1::InvalidTypeLayout);
+        };
+        writer.u8(14)?;
+        return encode_type_list(writer, fields);
     }
     match &ty.shape {
         SemanticTypeShapeV1::Unit => writer.u8(0),
@@ -17709,8 +17745,8 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
-    // V28 changes entry-local roles, not the published intrinsic grammar.
-    let wire_version = if wire_version == SemanticMirWireVersionV1::V28 {
+    // V28 and V29 retain the published V15 intrinsic grammar.
+    let wire_version = if wire_version >= SemanticMirWireVersionV1::V28 {
         SemanticMirWireVersionV1::V15
     } else {
         wire_version

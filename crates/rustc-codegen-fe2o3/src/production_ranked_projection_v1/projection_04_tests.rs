@@ -110,6 +110,7 @@
             indices: vec![ProductionRankedValueV1::Local(invocation)],
             checked_success: None,
             failure: GuardedAccessFailureV1::Trap,
+            atomic: None,
             comparisons: vec![(
                 ProductionRankedValueV1::Local(invocation),
                 ProductionRankedValueV1::Argument(0),
@@ -505,6 +506,7 @@
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
                 failure: GuardedAccessFailureV1::Trap,
+                atomic: None,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),
@@ -625,6 +627,7 @@
             indices: vec![ProductionRankedValueV1::Local(shifted)],
             checked_success: None,
             failure: GuardedAccessFailureV1::Trap,
+            atomic: None,
             comparisons: vec![
                 (
                     ProductionRankedValueV1::Local(invocation),

@@ -20,13 +20,22 @@ marker.
 ## V1 boundary
 
 V1 supports scalar values, shared scalar slices, unique scalar `DisjointSlice`
-arguments, and the trusted address-space-qualified `DeviceGlobalMutPtr<T>`
-wrapper. Arbitrary Rust raw pointers still carry no ownership contract and are
+arguments, nominal shared `AtomicU32` slices, and the trusted
+address-space-qualified `DeviceGlobalMutPtr<T>` wrapper. Arbitrary Rust raw
+pointers still carry no ownership contract and are
 not supported. V1 deliberately has no generic address space, record, enum,
 union, or recursive type representation. Physical ABI components are
 restricted to scalar by-value values, one global pointer for
 `DeviceGlobalMutPtr<T>`, or a global pointer immediately followed by a by-value
 `u64` slice length.
+
+An atomic slice descriptor preserves nominal storage, shared borrowing,
+read-write atomic access and nonexclusive alias semantics. It does not prove
+runtime extent, alignment, alias separation or system-coherent memory
+eligibility. Generated host binding retains an exclusive host `AtomicU32`
+lease, but protected V1 dispatch remains rejected until a runtime atomic
+coherence contract is explicitly joined. Allocation flags and target atomic
+capability alone do not satisfy that requirement.
 
 `KernelId` is an opaque selector owned by the manifest/macro pipeline. Its 32
 bytes define logical identity directly; V1 specifies no hash preimage or
@@ -161,7 +170,12 @@ Type records, layout records, and kernels follow in that order.
 
 A source-type record is its 32-byte identity followed by `kind:u8`,
 `scalar:u8`, and zero `flags:u16`. Kinds are scalar `1`, shared slice `2`,
-`DisjointSlice` `3`, and global mutable pointer `4`. Scalar tags are `i8=1`,
+`DisjointSlice` `3`, global mutable pointer `4`, and nominal shared
+`AtomicU32` slice `5`. Kind `5` accepts only the `u32` scalar tag; it is not
+interchangeable with an ordinary shared or disjoint slice. This additive tag
+preserves all older canonical encodings; readers that do not implement it
+reject it as unknown. Knowing the descriptor does not establish runtime atomic
+coherence or dispatch authority. Scalar tags are `i8=1`,
 `u8=2`, `i16=3`, `u16=4`, `i32=5`, `u32=6`, `i64=7`, `u64=8`, `f16=9`,
 `f32=10`, and `f64=11`.
 
@@ -223,7 +237,10 @@ device-layout identities, ownership/access/alias tags, one zero reserved byte,
 `component_count:u16`, one zero `reserved:u16`, and its components. Ownership
 tags are by-value `1`, shared `2`, unique `3`; access tags are by-value `1`,
 read-only `2`, write-only `3`, read-write `4`; alias tags are value `1`, shared
-read-only `2`, exclusive `3`.
+read-only `2`, exclusive `3`, shared atomic `4`. A nominal atomic slice uses
+exactly shared ownership, read-write access and shared-atomic alias semantics,
+with a global pointer and `u64` length (16 bytes, alignment 8). Readonly and
+exclusive component substitutions are rejected.
 
 A 16-byte physical component contains `kind:u8`, `scalar:u8`, access and alias
 tags, `offset:u32`, `size:u16`, `alignment:u16`, zero `flags:u16`, and zero

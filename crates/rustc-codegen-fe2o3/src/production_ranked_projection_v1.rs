@@ -143,6 +143,7 @@ struct GuardedRankedAccessV1 {
     indices: Vec<ProductionRankedValueV1>,
     checked_success: Option<ProductionRankedValueV1>,
     failure: GuardedAccessFailureV1,
+    atomic: Option<SemanticAtomicAccessV1>,
     comparisons: Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
@@ -595,6 +596,7 @@ struct LocalProvenanceV1 {
 }
 
 struct ProjectionLocalContractsV1 {
+    atomic_allocations: AuthenticatedAtomicAllocationsV1,
     immutable_locals: Vec<bool>,
     checked_references: CheckedReferencesV1,
     allocations: Vec<Option<AllocationContractV1>>,
@@ -1765,6 +1767,7 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
+    IndexedAtomicEscape(IndexedAtomicEscapeV1),
     UnprovenDeterministicDivisor(Box<DeterministicDivisorDiagnosticV1>),
     UnresolvedCallableEffect {
         block: usize,
@@ -1860,6 +1863,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     "ranked projection structural validation failed: {error}"
                 )
             }
+            Self::IndexedAtomicEscape(diagnostic) => write!(formatter, "{diagnostic}"),
             Self::Unsupported(detail) => {
                 write!(formatter, "semantic-to-ranked projection rejected {detail}")
             }
@@ -1996,6 +2000,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
             | Self::UnprovenDeterministicDivisor(_)
+            | Self::IndexedAtomicEscape(_)
             | Self::UnresolvedCallableEffect { .. }
             | Self::UnresolvedDropEffect { .. }
             | Self::MissingAllocationProvenance { .. }
@@ -3281,7 +3286,7 @@ fn project_and_verify_ranked_root_v1(
     let mut incomplete = None;
     let mut projected_views = vec![None; function.locals().len()];
     let mut discarded_ir = String::new();
-    let intrinsic = project_intrinsic_contracts(
+    let mut intrinsic = project_intrinsic_contracts(
         semantic.callables(),
         callable_effects,
         semantic.types(),
@@ -3307,6 +3312,12 @@ fn project_and_verify_ranked_root_v1(
         &mut entry_operations,
         &mut next_value,
     )?;
+    intrinsic.local_contracts.atomic_allocations = authenticated_atomic_allocations_v1(
+        semantic.types(),
+        function,
+        &bounds_checks.checks,
+        &intrinsic.local_contracts.allocations,
+    )?;
     let switch_predicates = switch_predicates(
         function,
         &intrinsic.option_predicates,
@@ -3319,6 +3330,10 @@ fn project_and_verify_ranked_root_v1(
         let mut guarded_sites = Vec::new();
         let mut local_sources = Vec::new();
         for (statement_index, statement) in block.statements().iter().enumerate() {
+            intrinsic
+                .local_contracts
+                .atomic_allocations
+                .validate_statement(block_index, statement_index, statement)?;
             let source_start = local_sources.len();
             let guarded_start = guarded_sites.len();
             retain_incomplete(
@@ -3525,15 +3540,20 @@ fn project_and_verify_ranked_root_v1(
         }
         projected_blocks.push(projected);
     }
-    if bounds_checks.checks.iter().any(|check| {
-        check.must_authorize_access
+    for check in &bounds_checks.checks {
+        if check.must_authorize_access
+            && !intrinsic
+                .local_contracts
+                .atomic_allocations
+                .authorizes_bounds(*check)?
             && projected_blocks
                 .get(check.access_block)
                 .is_none_or(|block| !projected_block_uses_bounds_check(block, *check))
-    }) {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "a Rust bounds assertion does not authorize one matching projected access",
-        ));
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a Rust bounds assertion does not authorize one matching projected access",
+            ));
+        }
     }
     if !projected_blocks
         .iter()
@@ -3581,12 +3601,9 @@ fn project_and_verify_ranked_root_v1(
     let access_sources = production_access_sources(&blocks, &sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
-        .allocations
-        .iter()
-        .flatten()
-        .filter(|contract| contract.singleton_object)
-        .map(|contract| contract.allocation_origin)
-        .collect::<Vec<_>>();
+        .atomic_allocations
+        .coherent
+        .clone();
     let kernel = ProductionRankedKernelV1::new(
         function_name(root_function)?,
         bounds_checks.argument_count,
@@ -4495,6 +4512,7 @@ fn project_rust_bounds_checks(
 }
 
 include!("production_ranked_projection_v1/dynamic_local_array_v1.rs");
+include!("production_ranked_projection_v1/indexed_atomic_v1.rs");
 
 #[allow(clippy::too_many_arguments)]
 fn project_rust_bounds_checks_with_ordinary_v1(
@@ -5568,6 +5586,7 @@ fn project_strided_read_effects_v1(
             indices: vec![row, column],
             checked_success: None,
             failure: GuardedAccessFailureV1::ContinueWithoutAccess,
+            atomic: None,
             comparisons: vec![(row, rows), (column, columns)],
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
@@ -8352,6 +8371,7 @@ fn project_intrinsic_contracts(
                 indices: vec![index],
                 checked_success: None,
                 failure: GuardedAccessFailureV1::Trap,
+                atomic: None,
                 comparisons: vec![(index, extent)],
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
@@ -9048,6 +9068,7 @@ fn project_intrinsic_contracts(
             indices: vec![index],
             checked_success,
             failure: GuardedAccessFailureV1::Trap,
+            atomic: None,
             comparisons,
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
@@ -9221,6 +9242,7 @@ fn project_intrinsic_contracts(
         &enum_payload_dominance,
     )?;
     let local_contracts = ProjectionLocalContractsV1 {
+        atomic_allocations: AuthenticatedAtomicAllocationsV1::default(),
         immutable_locals: immutable_local_array_candidates_v1(function, &scalar_inventory),
         checked_references: CheckedReferencesV1 {
             origins: checked_reference_origins,
@@ -20013,6 +20035,17 @@ fn build_ranked_cfg(
                     operations.push(operation);
                 }
                 ProjectedBlockItemV1::Guarded(access) => {
+                    if access.access.is_atomic() != access.atomic.is_some()
+                        || access.atomic.is_some_and(|atomic| {
+                            atomic.scope() != SemanticAtomicScopeV1::System
+                                || access.failure != GuardedAccessFailureV1::Trap
+                                || access.checked_success.is_some()
+                        })
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "a guarded atomic effect changed its failure or scope contract",
+                        ));
+                    }
                     let predicate = GuardPredicateV1::for_access(&access);
                     let access_block = current + predicate.comparisons.len();
                     let failure_block = access_block + 1;
@@ -20054,6 +20087,14 @@ fn build_ranked_cfg(
                             view: ProductionRankedValueV1::Local(access.view),
                             index: *index,
                             success,
+                        }]
+                    } else if let Some(atomic) = access.atomic {
+                        vec![ProductionRankedOperationV1::AtomicAccess {
+                            kind: access.access,
+                            ordering: atomic_ordering_v1(atomic.ordering()),
+                            scope: atomic_scope_v1(atomic.scope()),
+                            view: ProductionRankedValueV1::Local(access.view),
+                            indices: access.indices,
                         }]
                     } else {
                         vec![ProductionRankedOperationV1::Access {
@@ -23336,7 +23377,7 @@ fn project_rvalue_reads(
         ),
         SemanticRvalueKindV1::AddressOf { place, .. }
         | SemanticRvalueKindV1::Borrow { place, .. } => {
-            project_address_formation(types, function, place, local_contracts)
+            project_address_formation(types, function, block_index, place, local_contracts)
         }
         SemanticRvalueKindV1::Length(place) | SemanticRvalueKindV1::Discriminant(place) => {
             project_place_access(
@@ -23362,86 +23403,7 @@ fn project_rvalue_reads(
     }
 }
 
-fn project_address_formation(
-    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    place: &SemanticPlaceV1,
-    local_contracts: &ProjectionLocalContractsV1,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    let local_index = place.local().index() as usize;
-    let local = function.locals().get(local_index).ok_or(
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "an address formation with an out-of-range local",
-        ),
-    )?;
-    if place.projections().is_empty() {
-        // Taking the address of a MIR local creates a private address and does
-        // not observe the value stored in that local.
-        return Ok(());
-    }
-
-    let mut current = local.ty();
-    let mut crossed_dereference = false;
-    for (projection_index, projection) in place.projections().iter().enumerate() {
-        match projection.kind() {
-            SemanticProjectionKindV1::Dereference if projection_index == 0 => {
-                let ty = types.get(current.index() as usize).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "an address formation with an out-of-range type",
-                    ),
-                )?;
-                let SemanticTypeShapeV1::Pointer(pointer) = ty.shape() else {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "an address formation whose dereferenced type is not a pointer",
-                    ));
-                };
-                memory_space(pointer.address_space())?;
-                crossed_dereference = true;
-            }
-            SemanticProjectionKindV1::Field(_)
-            | SemanticProjectionKindV1::Downcast(_)
-            | SemanticProjectionKindV1::OpaqueCast
-            | SemanticProjectionKindV1::Subtype => {}
-            SemanticProjectionKindV1::Dereference
-            | SemanticProjectionKindV1::Index(_)
-            | SemanticProjectionKindV1::ConstantIndex { .. }
-            | SemanticProjectionKindV1::Subslice { .. } => {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "indexed address formation before exact bounds-only projection",
-                ));
-            }
-        }
-        current = projection.result_type();
-    }
-
-    if crossed_dereference {
-        debug_assert_eq!(reborrowed_allocation_local_v1(place), Some(place.local()));
-        let has_allocation_contract = local_contracts
-            .allocations
-            .get(local_index)
-            .copied()
-            .flatten()
-            .is_some();
-        let has_private_provenance = matches!(
-            local_contracts
-                .allocation_provenance
-                .get(local_index)
-                .copied()
-                .flatten(),
-            Some(LocalAllocationProvenanceV1::Private(_))
-        );
-        if !has_allocation_contract && !has_private_provenance {
-            return Err(
-                ProductionRankedProjectionErrorV1::MissingAllocationProvenance {
-                    local: place.local().index(),
-                    projections: place.projections().len(),
-                    ty: local.ty().index(),
-                },
-            );
-        }
-    }
-    Ok(())
-}
+include!("production_ranked_projection_v1/address_formation_v1.rs");
 
 #[allow(clippy::too_many_arguments)]
 fn project_operand_read(
@@ -23588,6 +23550,40 @@ fn project_place_access_with_atomic(
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "an atomic access whose ordering/scope contract is missing or attached to a non-atomic access",
         ));
+    }
+    if local_contracts
+        .atomic_allocations
+        .contains_local(place.local())?
+        && !place.projections().is_empty()
+    {
+        let Some(atomic) = atomic else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an indexed atomic borrow cannot authorize an ordinary memory effect",
+            ));
+        };
+        let usage = local_contracts
+            .atomic_allocations
+            .usage(block_index, place, access, atomic)?;
+        return project_place_access_with_atomic(
+            types,
+            function,
+            usage.origin.guard.access_block,
+            bounds_checks,
+            &usage.origin.place,
+            access,
+            Some(atomic),
+            requirement,
+            source,
+            constants,
+            local_contracts,
+            guarded_accesses,
+            guarded_sites,
+            projected_views,
+            operations,
+            sources,
+            next_value,
+            ranked_ir,
+        );
     }
     if let Some(origin) =
         checked_reference_origin(place, block_index, &local_contracts.checked_references)?
@@ -23868,6 +23864,15 @@ fn project_place_access_with_atomic(
             "a write is rooted in a read-only Rust allocation",
         ));
     }
+    if atomic.is_none()
+        && local_contracts
+            .atomic_allocations
+            .atomic_only(allocation_contract.allocation_origin)?
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an atomic slice allocation cannot authorize an ordinary memory effect",
+        ));
+    }
     let view_slot = projected_views
         .get_mut(place.local().index() as usize)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -23943,9 +23948,16 @@ fn project_place_access_with_atomic(
         }
     }
     if !comparisons.is_empty() {
-        if atomic.is_some() {
+        if let Some(atomic) = atomic
+            && !local_contracts.atomic_allocations.authorizes_root(
+                block_index,
+                place,
+                access,
+                atomic,
+            )?
+        {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a dynamically bounds-checked atomic access before guarded atomic projection",
+                "a dynamic atomic access lacks its exact authenticated indexed borrow",
             ));
         }
         guarded_sites.try_reserve(1).map_err(|_| {
@@ -23960,6 +23972,7 @@ fn project_place_access_with_atomic(
                 indices: ranked_indices,
                 checked_success: None,
                 failure: GuardedAccessFailureV1::Trap,
+                atomic,
                 comparisons,
                 access,
                 memory_space,
@@ -24018,28 +24031,6 @@ fn project_place_access_with_atomic(
         semantic_site: None,
     });
     Ok(())
-}
-
-const fn atomic_ordering_v1(ordering: SemanticAtomicOrderingV1) -> AtomicOrderingAttr {
-    match ordering {
-        SemanticAtomicOrderingV1::Relaxed => AtomicOrderingAttr::Relaxed,
-        SemanticAtomicOrderingV1::Release => AtomicOrderingAttr::Release,
-        SemanticAtomicOrderingV1::Acquire => AtomicOrderingAttr::Acquire,
-        SemanticAtomicOrderingV1::AcquireRelease => AtomicOrderingAttr::AcquireRelease,
-        SemanticAtomicOrderingV1::SequentiallyConsistent => {
-            AtomicOrderingAttr::SequentiallyConsistent
-        }
-    }
-}
-
-const fn atomic_scope_v1(scope: SemanticAtomicScopeV1) -> AtomicScopeAttr {
-    match scope {
-        SemanticAtomicScopeV1::SingleThread => AtomicScopeAttr::SingleThread,
-        SemanticAtomicScopeV1::Workgroup => AtomicScopeAttr::Workgroup,
-        SemanticAtomicScopeV1::Agent => AtomicScopeAttr::Agent,
-        SemanticAtomicScopeV1::Device => AtomicScopeAttr::Device,
-        SemanticAtomicScopeV1::System => AtomicScopeAttr::System,
-    }
 }
 
 fn reserve_projected_access(
@@ -24268,6 +24259,7 @@ mod tests {
     include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/constant_slice_index_v1_tests.rs");
+    include!("production_ranked_projection_v1/indexed_atomic_v1_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");
@@ -39800,6 +39792,7 @@ mod tests {
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
                 failure: GuardedAccessFailureV1::Trap,
+                atomic: None,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),

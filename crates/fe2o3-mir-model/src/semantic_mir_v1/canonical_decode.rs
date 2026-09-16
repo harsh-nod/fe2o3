@@ -345,6 +345,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes V29's genuine-core AtomicU32 marker with unchanged V15 intrinsics.
+    pub fn decode_exact_v29_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V29),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -386,6 +398,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V14
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
+                        | SemanticMirWireVersionV1::V29
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -780,11 +793,18 @@ impl<'a> CanonicalDecoderV1<'a> {
             first_pointee: self.optional_pointee_info()?,
             second_pointee: self.optional_pointee_info()?,
         };
-        let shape_tag = self.tagged("type shape", 13)?;
-        let rust_type_kind = if shape_tag == 13 {
-            SemanticRustTypeKindV1::Str
-        } else {
-            SemanticRustTypeKindV1::Ordinary
+        let shape_tag = self.tagged(
+            "type shape",
+            if self.wire_version >= SemanticMirWireVersionV1::V29 {
+                14
+            } else {
+                13
+            },
+        )?;
+        let rust_type_kind = match shape_tag {
+            13 => SemanticRustTypeKindV1::Str,
+            14 => SemanticRustTypeKindV1::CoreAtomicU32,
+            _ => SemanticRustTypeKindV1::Ordinary,
         };
         let shape = match shape_tag {
             0 => SemanticTypeShapeV1::Unit,
@@ -853,6 +873,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element: SemanticTypeIdV1(self.u32()?),
             },
             13 => SemanticTypeShapeV1::Opaque,
+            14 => SemanticTypeShapeV1::Aggregate(self.type_list()?),
             _ => unreachable!(),
         };
         Ok(
@@ -2685,6 +2706,7 @@ mod tests {
     use super::*;
     use std::fmt::Debug;
 
+    mod atomic_u32_v29_tests;
     mod frozen_v15;
     mod rust_call_local_tests;
 

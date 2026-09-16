@@ -23250,11 +23250,16 @@ fn unsupported_rvalue_detail(value: &SemanticRvalueKindV1) -> &'static str {
     }
 }
 
+include!("production_semantic_kir_v1/atomic_slice_parameter_v1.rs");
+
 fn lower_parameter_type(
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
+    if let Some(slice) = lower_shared_atomic_slice_parameter_v1(types, ty) {
+        return Ok(slice);
+    }
     let shape = types
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
         .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?
@@ -26058,6 +26063,7 @@ mod resource_tests {
         include!("production_semantic_kir_v1/dynamic_local_array_tests.rs");
     }
     include!("production_semantic_kir_v1/resource_01_tests.rs");
+    include!("production_semantic_kir_v1/atomic_slice_translation_v1_tests.rs");
     include!("production_semantic_kir_v1/guarded_effect_flow_v1_tests.rs");
     include!("production_semantic_kir_v1/conditional_total_read_replay_v1_tests.rs");
     mod private_array_resource_tests {
@@ -30510,6 +30516,14 @@ mod resource_tests {
         effects: Vec<ProductionRankedOperationV1>,
         allocation_origin: u64,
     ) -> ProductionRankedKernelLoweringInputV1 {
+        ranked_correlation_input_with_coherence_v1(effects, allocation_origin, &[])
+    }
+
+    fn ranked_correlation_input_with_coherence_v1(
+        effects: Vec<ProductionRankedOperationV1>,
+        allocation_origin: u64,
+        coherent_allocations: &[u64],
+    ) -> ProductionRankedKernelLoweringInputV1 {
         let view = ProductionRankedValueIdV1::new(0);
         let index = ProductionRankedValueIdV1::new(1);
         let has_atomic = effects.iter().any(|operation| {
@@ -30569,7 +30583,7 @@ mod resource_tests {
             compile_ranked_kernel_for_gfx942_lowering_v1(
                 construction,
                 ProductionSessionLimitsV1::default(),
-                [],
+                coherent_allocations.iter().copied(),
             )
         } else {
             compile_ranked_kernel_for_lowering_v1(
