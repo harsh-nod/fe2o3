@@ -1,0 +1,31 @@
+error[E0382]: use of moved value: `value`
+ --> tests/ui/fail/generative_tile_consumed_once.rs:5:13
+  |
+3 | fn tile(value: MaskedTile1D<'_, u32, 1, 1, ()>) {
+  |         ----- move occurs because `value` has type `MaskedTile1D<'_, u32, 1, 1, ()>`, which does not implement the `Copy` trait
+4 |     let _ = value.into_fragment();
+  |                   --------------- `value` moved due to this method call
+5 |     let _ = value.into_fragment();
+  |             ^^^^^ value used here after move
+  |
+note: `MaskedTile1D::<'workgroup, u32, L, E, Brand, Epoch>::into_fragment` takes ownership of the receiver `self`, which moves `value`
+ --> src/tile.rs
+  |
+  |     pub fn into_fragment(self) -> LaneFragment<'workgroup, u32, L, E, Brand, Epoch> {
+  |                          ^^^^
+
+error[E0382]: use of moved value: `value`
+  --> tests/ui/fail/generative_tile_consumed_once.rs:10:13
+   |
+ 8 | fn fragment(value: LaneFragment<'_, u32, 1, 1, ()>) {
+   |             ----- move occurs because `value` has type `LaneFragment<'_, u32, 1, 1, ()>`, which does not implement the `Copy` trait
+ 9 |     let _ = value.into_parts();
+   |                   ------------ `value` moved due to this method call
+10 |     let _ = value.into_parts();
+   |             ^^^^^ value used here after move
+   |
+note: `LaneFragment::<'_, u32, L, E, Brand, Epoch>::into_parts` takes ownership of the receiver `self`, which moves `value`
+  --> src/tile.rs
+   |
+   |     pub fn into_parts(self) -> ([u32; E], [bool; E]) {
+   |                       ^^^^

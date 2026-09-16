@@ -1,0 +1,29 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/ui/fail/generative_tile_nested_scope_mix.rs:14:13
+   |
+11 |         let tile = MaskedTile1D::<u32, 1, 1, _>::load_masked(&outer, input, 0);
+   |             ---- `tile` declared here, outside of the closure body
+12 |         second.with_workgroup(|inner| {
+   |                                ----- `inner` is a reference that is only valid in the closure body
+13 |             let other = MaskedTile1D::<u32, 1, 1, _>::load_masked(&inner, input, 0);
+14 |             same_scope(tile, other);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^ `inner` escapes the closure body here
+   |
+   = note: requirement occurs because of the type `MaskedTile1D<'_, u32, 1, 1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `'_` invariant
+   = note: the struct `MaskedTile1D<'workgroup, T, L, E, Brand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/ui/fail/generative_tile_nested_scope_mix.rs:13:25
+   |
+10 |     first.with_workgroup(|outer| {
+   |                           -----
+   |                           |
+   |                           `outer` is a reference that is only valid in the closure body
+   |                           has type `WorkgroupCapability<'1, fe2o3_device::KernelCapabilityBrand<'_, fe2o3_device::UnboundKernel, CurrentTarget, RegisteredLaunch>>`
+...
+13 |             let other = MaskedTile1D::<u32, 1, 1, _>::load_masked(&inner, input, 0);
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                         |
+   |                         `outer` escapes the closure body here
+   |                         argument requires that `'1` must outlive `'static`

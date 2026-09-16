@@ -37,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x80, 0x0c, 0xfd, 0x1a, 0x9b, 0x82, 0x72, 0x27, 0x8e, 0xae, 0x79, 0xc9, 0x3c, 0xa4, 0x54, 0xcd,
-    0xe9, 0xf9, 0xc6, 0x30, 0xa9, 0xbb, 0x94, 0x66, 0xf6, 0x7b, 0x59, 0x60, 0xb0, 0xa6, 0xc8, 0x8f,
+    0xc5, 0xa5, 0x6c, 0xda, 0xcf, 0xb1, 0xbe, 0x97, 0x1f, 0x24, 0x7f, 0xd6, 0xd6, 0x68, 0x6b, 0x91,
+    0x3d, 0x27, 0xda, 0xd2, 0xc0, 0xec, 0xe5, 0x98, 0x8b, 0x09, 0x50, 0x63, 0xae, 0x49, 0xe2, 0xb4,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -361,9 +361,57 @@ pub(crate) enum TrustedDeviceItem {
     HalfOperation(TrustedHalfOperation),
     AmdGpuInline(TrustedAmdGpuInlineOperation),
     AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation),
+    KernelContext,
+    ExecutionWorkgroupCapability,
+    ExecutionWorkgroupCurrent,
+    MaskedTile1D,
+    LaneFragment1D,
+    MaskedTile1DLoadMasked,
+    MaskedTile1DIntoFragment,
+    LaneFragment1DIntoParts,
 }
 
 const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
+    (
+        TrustedDeviceItem::KernelContext,
+        "fe2o3_device_kernel_context_v1",
+        "fe2o3_device::context::KernelContext",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupCapability,
+        "fe2o3_device_workgroup_capability_v1",
+        "fe2o3_device::execution::WorkgroupCapability",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupCurrent,
+        "fe2o3_device_workgroup_capability_current_v1",
+        "fe2o3_device::KernelContext::__compiler_workgroup_capability_current",
+    ),
+    (
+        TrustedDeviceItem::MaskedTile1D,
+        "fe2o3_device_masked_tile_1d_v1",
+        "fe2o3_device::tile::MaskedTile1D",
+    ),
+    (
+        TrustedDeviceItem::LaneFragment1D,
+        "fe2o3_device_lane_fragment_1d_v1",
+        "fe2o3_device::tile::LaneFragment",
+    ),
+    (
+        TrustedDeviceItem::MaskedTile1DLoadMasked,
+        "fe2o3_device_masked_tile_1d_load_masked_v1",
+        "fe2o3_device::tile::MaskedTile1D::load_masked",
+    ),
+    (
+        TrustedDeviceItem::MaskedTile1DIntoFragment,
+        "fe2o3_device_masked_tile_1d_into_fragment_v1",
+        "fe2o3_device::tile::MaskedTile1D::into_fragment",
+    ),
+    (
+        TrustedDeviceItem::LaneFragment1DIntoParts,
+        "fe2o3_device_lane_fragment_1d_into_parts_v1",
+        "fe2o3_device::tile::LaneFragment::into_parts",
+    ),
     (
         TrustedDeviceItem::KernelError,
         "fe2o3_device_kernel_error_v1",
@@ -1641,6 +1689,20 @@ fn validate_safe_execution_provider_definition_v1(
 
 fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static str {
     match item {
+        TrustedDeviceItem::KernelContext => "fe2o3_device::context::KernelContext",
+        TrustedDeviceItem::ExecutionWorkgroupCapability => {
+            "fe2o3_device::execution::WorkgroupCapability"
+        }
+        TrustedDeviceItem::ExecutionWorkgroupCurrent => {
+            "fe2o3_device::execution::{impl#2}::__compiler_workgroup_capability_current"
+        }
+        TrustedDeviceItem::MaskedTile1D => "fe2o3_device::tile::MaskedTile1D",
+        TrustedDeviceItem::LaneFragment1D => "fe2o3_device::tile::LaneFragment",
+        TrustedDeviceItem::MaskedTile1DLoadMasked => "fe2o3_device::tile::{impl#0}::load_masked",
+        TrustedDeviceItem::MaskedTile1DIntoFragment => {
+            "fe2o3_device::tile::{impl#0}::into_fragment"
+        }
+        TrustedDeviceItem::LaneFragment1DIntoParts => "fe2o3_device::tile::{impl#1}::into_parts",
         TrustedDeviceItem::WorkgroupLdsScope => "fe2o3_device::lds::WorkgroupLdsScope",
         TrustedDeviceItem::WorkgroupLdsScopeCurrent => "fe2o3_device::lds::{impl#2}::current",
         TrustedDeviceItem::DynamicLdsExactCurrent => "fe2o3_device::lds::{impl#4}::exact_current",
@@ -1864,7 +1926,15 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
 const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
-        TrustedDeviceItem::WorkgroupLdsScope
+        TrustedDeviceItem::KernelContext
+            | TrustedDeviceItem::ExecutionWorkgroupCapability
+            | TrustedDeviceItem::ExecutionWorkgroupCurrent
+            | TrustedDeviceItem::MaskedTile1D
+            | TrustedDeviceItem::LaneFragment1D
+            | TrustedDeviceItem::MaskedTile1DLoadMasked
+            | TrustedDeviceItem::MaskedTile1DIntoFragment
+            | TrustedDeviceItem::LaneFragment1DIntoParts
+            | TrustedDeviceItem::WorkgroupLdsScope
             | TrustedDeviceItem::WorkgroupLdsScopeCurrent
             | TrustedDeviceItem::DynamicLdsExactCurrent
             | TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
@@ -3148,6 +3218,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 #[cfg(test)]
 mod tests {
     include!("trusted_device_items/core_01_tests.rs");
+    include!("trusted_device_items/generative_provider_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
 
@@ -3365,7 +3436,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("800cfd1a9b8272278eae79c93ca454cde9f9c630a9bb9466f67b5960b0a6c88f")
+            digest("c5a56cdacfb1be971f247fd6d6686b913d27dad2c0ece5988b095063ae49e2b4")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3771,6 +3842,14 @@ mod tests {
     fn semantic_registry_is_complete_and_unique() {
         let items = [
             TrustedDeviceItem::KernelError,
+            TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::ExecutionWorkgroupCapability,
+            TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            TrustedDeviceItem::MaskedTile1D,
+            TrustedDeviceItem::LaneFragment1D,
+            TrustedDeviceItem::MaskedTile1DLoadMasked,
+            TrustedDeviceItem::MaskedTile1DIntoFragment,
+            TrustedDeviceItem::LaneFragment1DIntoParts,
             TrustedDeviceItem::DisjointSlice,
             TrustedDeviceItem::WriteOnlyDisjointSlice,
             TrustedDeviceItem::StridedReadView2D,

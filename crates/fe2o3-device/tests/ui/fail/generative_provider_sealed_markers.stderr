@@ -1,0 +1,74 @@
+error[E0277]: the trait bound `ForgedTarget: context::sealed::Target` is not satisfied
+ --> tests/ui/fail/generative_provider_sealed_markers.rs:7:23
+  |
+7 | impl KernelTarget for ForgedTarget {}
+  |                       ^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `context::sealed::Target` is not implemented for `ForgedTarget`
+ --> tests/ui/fail/generative_provider_sealed_markers.rs:3:1
+  |
+3 | struct ForgedTarget;
+  | ^^^^^^^^^^^^^^^^^^^
+help: the trait `context::sealed::Target` is implemented for `CurrentTarget`
+ --> src/context.rs
+  |
+  | impl sealed::Target for CurrentTarget {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `KernelTarget`
+ --> src/context.rs
+  |
+  | pub trait KernelTarget: sealed::Target {}
+  |                         ^^^^^^^^^^^^^^ required by this bound in `KernelTarget`
+  = note: `KernelTarget` is a "sealed trait", because to implement it you also need to implement `fe2o3_device::context::sealed::Target`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following type implements the trait:
+            fe2o3_device::CurrentTarget
+
+error[E0277]: the trait bound `ForgedLaunch: context::sealed::Launch` is not satisfied
+ --> tests/ui/fail/generative_provider_sealed_markers.rs:8:23
+  |
+8 | impl KernelLaunch for ForgedLaunch {}
+  |                       ^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `context::sealed::Launch` is not implemented for `ForgedLaunch`
+ --> tests/ui/fail/generative_provider_sealed_markers.rs:4:1
+  |
+4 | struct ForgedLaunch;
+  | ^^^^^^^^^^^^^^^^^^^
+help: the trait `context::sealed::Launch` is implemented for `RegisteredLaunch`
+ --> src/context.rs
+  |
+  | impl sealed::Launch for RegisteredLaunch {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `KernelLaunch`
+ --> src/context.rs
+  |
+  | pub trait KernelLaunch: sealed::Launch {}
+  |                         ^^^^^^^^^^^^^^ required by this bound in `KernelLaunch`
+  = note: `KernelLaunch` is a "sealed trait", because to implement it you also need to implement `fe2o3_device::context::sealed::Launch`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following type implements the trait:
+            fe2o3_device::RegisteredLaunch
+
+error[E0277]: the trait bound `ForgedEpoch: execution::sealed::Epoch` is not satisfied
+ --> tests/ui/fail/generative_provider_sealed_markers.rs:9:31
+  |
+9 | impl SynchronizationEpoch for ForgedEpoch {}
+  |                               ^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `execution::sealed::Epoch` is not implemented for `ForgedEpoch`
+ --> tests/ui/fail/generative_provider_sealed_markers.rs:5:1
+  |
+5 | struct ForgedEpoch;
+  | ^^^^^^^^^^^^^^^^^^
+help: the trait `execution::sealed::Epoch` is implemented for `InitialEpoch`
+ --> src/execution.rs
+  |
+  | impl sealed::Epoch for InitialEpoch {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `SynchronizationEpoch`
+ --> src/execution.rs
+  |
+  | pub trait SynchronizationEpoch: sealed::Epoch {}
+  |                                 ^^^^^^^^^^^^^ required by this bound in `SynchronizationEpoch`
+  = note: `SynchronizationEpoch` is a "sealed trait", because to implement it you also need to implement `fe2o3_device::execution::sealed::Epoch`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following type implements the trait:
+            fe2o3_device::InitialEpoch

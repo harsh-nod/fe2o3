@@ -212,6 +212,27 @@ fn construct_type_v1<'tcx>(
     context: &TypeConstructionContextV1<'_, 'tcx>,
     producer: &RetainedSemanticTypeProducerV1<'tcx>,
 ) -> Result<SemanticTypeDeclV1, ProductionSemanticTypeErrorV1> {
+    // Nominal authority must not become an ordinary aggregate, even when unused.
+    if let TyKind::Adt(definition, _) = producer.ty.kind() {
+        match crate::trusted_device_items::classify(context.tcx, definition.did()) {
+            Some(item)
+                if crate::production_semantic_terminal_v1::is_reserved_capability_type_v1(item) =>
+            {
+                return Err(context.unsupported(
+                    "reserved capability type has no authenticated production owner",
+                ));
+            }
+            None if crate::trusted_device_items::rejected_provider(
+                context.tcx,
+                definition.did(),
+            )
+            .is_some() =>
+            {
+                return Err(context.unsupported("unauthenticated reserved device type provider"));
+            }
+            _ => {}
+        }
+    }
     let rust_type_kind = if matches!(producer.ty.kind(), TyKind::Str) {
         SemanticRustTypeKindV1::Str
     } else {

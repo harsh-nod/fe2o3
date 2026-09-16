@@ -551,3 +551,356 @@ fn matching_execution_record_does_not_admit_a_valid_foreign_semantic_body() {
     budget.release_storage(input_storage).unwrap();
     assert_eq!(budget.storage(), PREFIX);
 }
+
+fn with_semantic_replay_fixture(
+    run: impl FnOnce(
+        &Owner,
+        &Owner,
+        &CheckedOwner,
+        &InertCanonicalPolicy3ExecutionReceiptV1,
+        &mut Budget<'_>,
+    ),
+) {
+    let input = admit(&source());
+    let mut work = Work::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.charge_work(PRIOR).unwrap();
+    budget.reserve_storage(PREFIX + input.1).unwrap();
+    let checked = optimize_checked_canonical_kernel_ir_policy3_v1(&input.0, &mut budget).unwrap();
+    let checked_storage = checked.storage().retained_storage();
+    budget.reserve_storage(checked_storage).unwrap();
+    assert_ne!(
+        input.0.canonical().canonical_bytes(),
+        checked.owner().canonical().canonical_bytes()
+    );
+    let (output, output_receipt) =
+        Owner::from_module_ref_with_verification_budget_v12(checked.owner().module(), &mut budget)
+            .unwrap();
+    let output_storage = output_receipt.retained_storage();
+    budget.reserve_storage(output_storage).unwrap();
+    assert!(!std::ptr::eq(&output, checked.owner()));
+    assert_eq!(
+        output.canonical().canonical_bytes(),
+        checked.owner().canonical().canonical_bytes()
+    );
+    let wire =
+        encode_checked_canonical_policy3_execution_receipt_v1(&input.0, &checked, &mut budget)
+            .unwrap();
+    let wire_storage = wire.storage().retained_storage();
+    budget.reserve_storage(wire_storage).unwrap();
+    let floor = budget.storage();
+    run(&input.0, &output, &checked, &wire, &mut budget);
+    assert_eq!(budget.storage(), floor);
+    drop(wire);
+    budget.release_storage(wire_storage).unwrap();
+    drop(output);
+    budget.release_storage(output_storage).unwrap();
+    drop(checked);
+    budget.release_storage(checked_storage).unwrap();
+    assert_eq!(budget.storage(), PREFIX + input.1);
+}
+
+#[test]
+fn replayed_semantics_borrow_separately_admitted_output_without_authenticating_changed_claims() {
+    with_semantic_replay_fixture(|input, output, checked, wire, budget| {
+        let floor = budget.storage();
+        let replay = decode_and_check_published_policy3_semantic_relation_v1(
+            input,
+            output,
+            wire.canonical_bytes(),
+            budget,
+        )
+        .unwrap();
+        let retained = replay.storage().retained_storage();
+        assert_eq!(
+            retained,
+            replay.semantic_receipt().storage().retained_storage()
+                + size_of::<ReplayedPolicy3SemanticRelationV1<'_, '_, '_>>()
+                - size_of::<CheckedCanonicalOptimizationReceiptV1<'_, '_>>()
+        );
+        assert_eq!(budget.storage(), floor);
+        budget.reserve_storage(retained).unwrap();
+        assert!(std::ptr::eq(replay.semantic_receipt().input(), input));
+        assert!(std::ptr::eq(replay.semantic_receipt().output(), output));
+        assert_eq!(
+            replay.unauthenticated_execution_claim().canonical_bytes(),
+            checked.execution().canonical_bytes()
+        );
+        assert!(!replay.grants_authority());
+        assert!(!replay.unauthenticated_execution_claim().grants_authority());
+        drop(replay);
+        budget.release_storage(retained).unwrap();
+
+        let mut altered = wire.canonical_bytes().to_vec();
+        budget.reserve_storage(altered.capacity()).unwrap();
+        let old = u64::from_le_bytes(altered[128..136].try_into().unwrap());
+        let changed = old ^ 1;
+        altered[128..136].copy_from_slice(&changed.to_le_bytes());
+        let replay = decode_and_check_published_policy3_semantic_relation_v1(
+            input, output, &altered, budget,
+        )
+        .unwrap();
+        let retained = replay.storage().retained_storage();
+        budget.reserve_storage(retained).unwrap();
+        assert_eq!(
+            replay
+                .unauthenticated_execution_claim()
+                .declared_profile_work(),
+            changed
+        );
+        assert!(!replay.grants_authority());
+        drop(replay);
+        budget.release_storage(retained).unwrap();
+        assert!(matches!(
+            decode_and_check_canonical_policy3_execution_receipt_v1(
+                input, checked, &altered, budget
+            ),
+            Err(E::ExecutionWitness)
+        ));
+        let capacity = altered.capacity();
+        drop(altered);
+        budget.release_storage(capacity).unwrap();
+    });
+}
+
+#[test]
+fn replayed_semantics_refuse_foreign_endpoints_and_valid_framed_foreign_body() {
+    with_semantic_replay_fixture(|input, output, _, wire, budget| {
+        let foreign = admit(&Module::new("foreign-policy3-replay"));
+        budget.reserve_storage(foreign.1).unwrap();
+        assert!(matches!(
+            decode_and_check_published_policy3_semantic_relation_v1(
+                &foreign.0,
+                output,
+                wire.canonical_bytes(),
+                budget
+            ),
+            Err(E::ExecutionClaim(Policy3ExecutionClaimErrorV1::Endpoint))
+        ));
+        assert!(matches!(
+            decode_and_check_published_policy3_semantic_relation_v1(
+                input,
+                &foreign.0,
+                wire.canonical_bytes(),
+                budget
+            ),
+            Err(E::ExecutionClaim(Policy3ExecutionClaimErrorV1::Endpoint))
+        ));
+        let other = optimize_checked_canonical_kernel_ir_policy3_v1(&foreign.0, budget).unwrap();
+        let other_storage = other.storage().retained_storage();
+        budget.reserve_storage(other_storage).unwrap();
+        let foreign_wire =
+            encode_checked_canonical_policy3_execution_receipt_v1(&foreign.0, &other, budget)
+                .unwrap();
+        let wire_storage = foreign_wire.storage().retained_storage();
+        budget.reserve_storage(wire_storage).unwrap();
+        let foreign_replay = decode_and_check_published_policy3_semantic_relation_v1(
+            &foreign.0,
+            other.owner(),
+            foreign_wire.canonical_bytes(),
+            budget,
+        )
+        .unwrap();
+        drop(foreign_replay);
+        let header = CANONICAL_POLICY3_EXECUTION_RECEIPT_HEADER_V1;
+        let body = &foreign_wire.canonical_bytes()[header..];
+        let mut hybrid = wire.canonical_bytes()[..header].to_vec();
+        hybrid.extend_from_slice(body);
+        budget.reserve_storage(hybrid.capacity()).unwrap();
+        let length = hybrid.len();
+        hybrid[16..24].copy_from_slice(&(length as u64).to_le_bytes());
+        hybrid[24..32].copy_from_slice(&(body.len() as u64).to_le_bytes());
+        let floor = budget.storage();
+        assert!(matches!(
+            decode_and_check_published_policy3_semantic_relation_v1(input, output, &hybrid, budget),
+            Err(E::Semantic(SemanticError::Transition(
+                fe2o3_kernel_analysis::CanonicalKirTransitionErrorV1::Rule(
+                    "transition receipt endpoint or policy"
+                )
+            )))
+        ));
+        assert_eq!(budget.storage(), floor);
+        let capacity = hybrid.capacity();
+        drop(hybrid);
+        budget.release_storage(capacity).unwrap();
+        drop(foreign_wire);
+        budget.release_storage(wire_storage).unwrap();
+        drop(other);
+        budget.release_storage(other_storage).unwrap();
+        drop(foreign.0);
+        budget.release_storage(foreign.1).unwrap();
+    });
+}
+
+#[test]
+fn semantic_replay_outer_frame_refuses_wrong_magic_lengths_reserved_and_trailing_bytes() {
+    with_semantic_replay_fixture(|input, output, _, wire, budget| {
+        for offset in [0, 8, 10, 12, 16, 24] {
+            let mut bad = wire.canonical_bytes().to_vec();
+            let capacity = bad.capacity();
+            budget.reserve_storage(capacity).unwrap();
+            bad[offset] ^= 1;
+            let floor = budget.storage();
+            let prefix = budget.work();
+            assert!(matches!(
+                decode_and_check_published_policy3_semantic_relation_v1(
+                    input, output, &bad, budget
+                ),
+                Err(E::Header)
+            ));
+            assert_eq!(budget.work(), prefix + 32);
+            assert_eq!(budget.storage(), floor);
+            drop(bad);
+            budget.release_storage(capacity).unwrap();
+        }
+        for length in [0, 31, CANONICAL_POLICY3_EXECUTION_RECEIPT_HEADER_V1 - 1] {
+            let prefix = budget.work();
+            assert!(matches!(
+                decode_and_check_published_policy3_semantic_relation_v1(
+                    input,
+                    output,
+                    &wire.canonical_bytes()[..length],
+                    budget
+                ),
+                Err(E::Header)
+            ));
+            assert_eq!(budget.work(), prefix + 32);
+        }
+        let mut bad = wire.canonical_bytes().to_vec();
+        bad.push(0);
+        let capacity = bad.capacity();
+        budget.reserve_storage(capacity).unwrap();
+        assert!(matches!(
+            decode_and_check_published_policy3_semantic_relation_v1(input, output, &bad, budget),
+            Err(E::Header)
+        ));
+        drop(bad);
+        budget.release_storage(capacity).unwrap();
+    });
+}
+
+#[test]
+fn replay_framing_and_wrapper_boundaries_are_derived_components_not_full_query_caps() {
+    let (input, checked) = prepared();
+    let mut preparation_work = Work::new(WORK);
+    let mut preparation = Budget::new(&mut preparation_work, STORAGE);
+    preparation
+        .reserve_storage(input.1 + checked.storage().retained_storage())
+        .unwrap();
+    let wire =
+        encode_checked_canonical_policy3_execution_receipt_v1(&input.0, &checked, &mut preparation)
+            .unwrap();
+    for short in [false, true] {
+        // Outer 32 plus record (2 + 776), before any semantic decoder work.
+        let mut work = Work::new(PRIOR + 810 - usize::from(short));
+        let floor = PREFIX
+            + input.1
+            + checked.storage().retained_storage()
+            + wire.storage().retained_storage();
+        let mut budget = Budget::new(&mut work, floor);
+        budget.charge_work(PRIOR).unwrap();
+        budget.reserve_storage(floor).unwrap();
+        let (record, _) = replay_frame_v1(wire.canonical_bytes(), &mut budget).unwrap();
+        let result = read_unauthenticated_policy3_execution_claim_v1(
+            &input.0,
+            checked.owner(),
+            record,
+            &mut budget,
+        );
+        assert_eq!(result.is_ok(), !short);
+        assert_eq!(budget.work(), PRIOR + if short { 34 } else { 810 });
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(work.failed_work(), short.then_some(PRIOR + 810));
+    }
+    let wrapper = size_of::<ReplayedPolicy3SemanticRelationV1<'_, '_, '_>>()
+        - size_of::<CheckedCanonicalOptimizationReceiptV1<'_, '_>>();
+    assert_eq!(replay_wrapper_storage_v1().unwrap(), wrapper);
+    assert!(wrapper > 0);
+    for short_work in [false, true] {
+        for short_storage in [false, true] {
+            let mut work = Work::new(PRIOR + 3 - usize::from(short_work));
+            let mut budget = Budget::new(&mut work, PREFIX + wrapper - usize::from(short_storage));
+            budget.charge_work(PRIOR).unwrap();
+            budget.reserve_storage(PREFIX).unwrap();
+            let result = scoped(&mut budget, |budget| {
+                reserve_replay_wrapper_v1(PREFIX, budget)
+            });
+            assert_eq!(result.is_ok(), !short_work && !short_storage);
+            assert_eq!(budget.work(), PRIOR + if short_work { 0 } else { 3 });
+            assert_eq!(budget.storage(), PREFIX);
+            assert_eq!(
+                budget.failed_storage(),
+                (!short_work && short_storage).then_some(PREFIX + wrapper)
+            );
+            assert_eq!(work.failed_work(), short_work.then_some(PRIOR + 3));
+        }
+    }
+}
+
+#[test]
+fn replay_scope_cleans_balanced_err_panic_and_prioritizes_floor_corruption() {
+    with_semantic_replay_fixture(|input, output, _, wire, budget| {
+        let floor = budget.storage();
+        for corrupt in [false, true] {
+            for panic in [false, true] {
+                let result: Result<(), E> = scoped(budget, |budget| {
+                    let replay = decode_and_check_published_policy3_semantic_relation_v1(
+                        input,
+                        output,
+                        wire.canonical_bytes(),
+                        budget,
+                    )?;
+                    let retained = replay.storage().retained_storage();
+                    budget.reserve_storage(retained)?;
+                    drop(replay);
+                    if corrupt {
+                        budget.release_storage(retained + 1)?;
+                    }
+                    if panic {
+                        panic!("replayed semantic scope unwind");
+                    }
+                    Err(E::Header)
+                });
+                if corrupt {
+                    assert!(matches!(result, Err(E::Resource(Resource::Accounting))));
+                    assert_eq!(budget.storage(), floor - 1);
+                    budget.reserve_storage(1).unwrap(); // Repair only injected test corruption.
+                } else if panic {
+                    assert!(matches!(result, Err(E::Panicked)));
+                } else {
+                    assert!(matches!(result, Err(E::Header)));
+                }
+                assert_eq!(budget.storage(), floor);
+            }
+        }
+        // A denied semantic allocation preserves prior floor/work history;
+        // releasing unrelated held storage permits genuine same-ledger retry.
+        let held = STORAGE - budget.storage();
+        budget.reserve_storage(held).unwrap();
+        let before = budget.work();
+        assert!(
+            decode_and_check_published_policy3_semantic_relation_v1(
+                input,
+                output,
+                wire.canonical_bytes(),
+                budget
+            )
+            .is_err()
+        );
+        assert_eq!(budget.storage(), STORAGE);
+        assert!(budget.work() >= before + 810);
+        let denied = budget.failed_storage();
+        assert!(denied.is_some());
+        budget.release_storage(held).unwrap();
+        let replay = decode_and_check_published_policy3_semantic_relation_v1(
+            input,
+            output,
+            wire.canonical_bytes(),
+            budget,
+        )
+        .unwrap();
+        drop(replay);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.failed_storage(), denied);
+    });
+}

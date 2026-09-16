@@ -130,6 +130,16 @@ pub(crate) enum ProductionSemanticTerminalRuleV1 {
     Reject(TrustedDeviceItem),
 }
 
+pub(crate) const fn is_reserved_capability_type_v1(item: TrustedDeviceItem) -> bool {
+    matches!(
+        item,
+        TrustedDeviceItem::KernelContext
+            | TrustedDeviceItem::ExecutionWorkgroupCapability
+            | TrustedDeviceItem::MaskedTile1D
+            | TrustedDeviceItem::LaneFragment1D
+    )
+}
+
 pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
@@ -1134,6 +1144,14 @@ mod tests {
     #[test]
     fn every_unimplemented_terminal_is_retained_as_an_explicit_rejection() {
         for item in [
+            TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::ExecutionWorkgroupCapability,
+            TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            TrustedDeviceItem::MaskedTile1D,
+            TrustedDeviceItem::LaneFragment1D,
+            TrustedDeviceItem::MaskedTile1DLoadMasked,
+            TrustedDeviceItem::MaskedTile1DIntoFragment,
+            TrustedDeviceItem::LaneFragment1DIntoParts,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,
@@ -1147,6 +1165,7 @@ mod tests {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
             assert_eq!(rule, ProductionSemanticTerminalRuleV1::Reject(item));
             assert_eq!(rule.trusted_device_item(), item);
+            assert!(!is_traversed_reviewed_helper_v1(item));
         }
     }
 

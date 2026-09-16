@@ -20,7 +20,9 @@ use core::marker::PhantomData;
 
 pub mod atomic;
 pub mod collective;
+pub mod context;
 pub mod diagnostics;
+pub mod execution;
 pub mod ffi;
 pub mod fp8;
 pub mod gfx950;
@@ -35,6 +37,7 @@ pub mod simd;
 pub mod sync;
 pub mod tensor;
 pub mod thread;
+pub mod tile;
 pub mod views;
 pub mod wave;
 
@@ -48,7 +51,12 @@ pub use collective::{
     WORKGROUP_COLLECTIVE_CONTRACT_VERSION_V1, WorkgroupCollectiveElement,
     WorkgroupCollectiveScratch, WorkgroupCollectiveScratchError, WorkgroupCollectives,
 };
+pub use context::{
+    CurrentTarget, KernelCapabilityBrand, KernelContext, KernelLaunch, KernelTarget,
+    RegisteredLaunch, UnboundKernel,
+};
 pub use diagnostics::{clock32, debugtrap, trap};
+pub use execution::{InitialEpoch, SynchronizationEpoch, WorkgroupCapability};
 pub use fe2o3_macros::{device_export, device_import, import_device, import_kernel, kernel};
 pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
@@ -100,6 +108,9 @@ pub use thread::{
     Blocked, DisjointBlock, DisjointIndex, DisjointRowStripe2D, DisjointTile2D, GlobalGridSize,
     GlobalWorkitemId, GridExclusive, GridLeader, GridSize, Index1D, Index2D, Invocation3D,
     RowStriped2D, Shifted, ThreadIndex, Tiled2D, WorkgroupId, WorkgroupSize, WorkitemId,
+};
+pub use tile::{
+    LaneFragment, MAX_MASKED_TILE_ELEMENTS_PER_LANE_V1, MAX_MASKED_TILE_LANES_V1, MaskedTile1D,
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,

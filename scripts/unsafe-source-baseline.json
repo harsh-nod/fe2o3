@@ -981,6 +981,9 @@
   "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/local_unsafe_block.rs": {
     "block": 1
   },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/owned_unsafe_closure.rs": {
+    "block": 1
+  },
   "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/reachable_unsafe_fn.rs": {
     "block": 1,
     "function": 1

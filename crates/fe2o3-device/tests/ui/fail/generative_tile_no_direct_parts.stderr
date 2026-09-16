@@ -1,0 +1,5 @@
+error[E0599]: no method named `into_parts` found for struct `MaskedTile1D<'workgroup, T, L, E, Brand, Epoch>` in the current scope
+ --> tests/ui/fail/generative_tile_no_direct_parts.rs:4:19
+  |
+4 |     let _ = value.into_parts();
+  |                   ^^^^^^^^^^ method not found in `MaskedTile1D<'_, u32, 1, 1, ()>`

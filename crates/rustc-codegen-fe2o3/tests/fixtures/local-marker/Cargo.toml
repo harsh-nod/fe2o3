@@ -7,6 +7,11 @@ publish = false
 
 [features]
 duplicate-genuine = ["dep:fe2o3-device-real"]
+reserved-capability-spoof = []
+reserved-capability-control = []
 
 [dependencies]
 fe2o3-device-real = { package = "fe2o3-device", path = "../../../../fe2o3-device", optional = true }
+
+[lib]
+path = "src/main.rs"
