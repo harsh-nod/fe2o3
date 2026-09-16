@@ -1227,6 +1227,7 @@ for production_step in \
   rocm-production-simulation-wrapping-integers \
   rocm-production-simulation-launch-wrapping-integers \
   rocm-production-simulation-rust-call \
+  rocm-production-simulation-slice-metadata-arguments \
   rocm-production-scalar-casts \
   rocm-production-simulation-bundle-v2-source-variables \
   rocm-production-simulation-bundle-v2-invalid-name \
@@ -1261,6 +1262,10 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_rust_call_closures_match_rust_in_simulation -- --ignored --exact' \
   "$(step_command rocm-production-simulation-rust-call)" \
   'ROCm compile omitted the exact RustCall closure source regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_slice_metadata_arguments_match_rust_in_simulation -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-slice-metadata-arguments)" \
+  'ROCm compile omitted the exact slice-metadata argument source regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_source_dynamic_local_array_matches_rust_in_simulation -- --ignored --exact' \
   "$(step_command rocm-production-simulation-dynamic-local-array)" \

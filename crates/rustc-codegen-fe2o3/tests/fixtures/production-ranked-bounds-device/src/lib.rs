@@ -28,6 +28,9 @@ mod capability_provider;
 #[cfg(feature = "rust_call")]
 mod rust_call;
 
+#[cfg(feature = "slice_metadata_arguments")]
+mod slice_metadata_arguments;
+
 #[cfg(all(
     feature = "bf16_mfma_column_major_b",
     feature = "bf16_mfma_row_major_b"
@@ -133,6 +136,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "float_to_integer",
     feature = "wrapping_integer",
     feature = "launch_wrapping_integer",
+    feature = "slice_metadata_arguments",
     feature = "rust_call",
     feature = "dynamic_local_array",
     feature = "provider_context",
