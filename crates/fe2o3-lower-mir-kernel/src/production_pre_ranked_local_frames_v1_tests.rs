@@ -644,13 +644,22 @@ fn with_physical_component(
         &CanonicalKirCallEffectsV1<'_, '_>,
     ),
 ) {
-    let executable = VerifiedCanonicalKernelIrModuleV12::from_module(module).unwrap();
+    let mut work = Work::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    let (executable, executable_storage) =
+        VerifiedCanonicalKernelIrModuleV12::from_module_ref_with_verification_budget_v12(
+            &module,
+            &mut budget,
+        )
+        .unwrap();
+    drop(module);
+    budget
+        .reserve_storage(executable_storage.retained_storage())
+        .unwrap();
     assert!(std::ptr::eq(
         executable.verified_module_ref_v1().module(),
         executable.module()
     ));
-    let mut work = Work::new(usize::MAX);
-    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
     let (inventory, inventory_storage) =
         CanonicalKirInventoryV1::derive(&executable, &mut budget).unwrap();
     budget
@@ -669,6 +678,10 @@ fn with_physical_component(
     drop(inventory);
     budget
         .release_storage(inventory_storage.retained_storage())
+        .unwrap();
+    drop(executable);
+    budget
+        .release_storage(executable_storage.retained_storage())
         .unwrap();
     assert_eq!(budget.storage(), 0);
 }
