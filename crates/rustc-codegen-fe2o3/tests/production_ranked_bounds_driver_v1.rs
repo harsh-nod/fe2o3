@@ -1174,6 +1174,17 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         .expect("decode compiler-produced simulation bundle");
     assert_eq!(bundle.target(), "gfx942:xnack-");
     assert_eq!(bundle.kernel_count(), 1);
+    let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7())
+        .expect("decode compiler-produced launch geometry");
+    assert_eq!(module.kernels.len(), 1);
+    assert_eq!(
+        module.kernels[0].domain.extents().next(),
+        Some(fe2o3_kernel_ir::LaunchExtent::Static(64))
+    );
+    assert_eq!(
+        module.kernels[0].workgroup_size,
+        Some(fe2o3_kernel_ir::WorkgroupSize::new(64, 1, 1))
+    );
     assert_eq!(
         bundle.compiler_execution_binding(),
         &fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly
@@ -1251,7 +1262,7 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         serde_json::to_vec(&json!({
             "schema": "fe2o3-simulation-request-v1",
             "kernel": "barrier_before_access",
-            "grid": [1, 1, 1],
+            "grid": [64, 1, 1],
             "workgroup": [64, 1, 1],
             "arguments": [{
                 "kind": "buffer",
