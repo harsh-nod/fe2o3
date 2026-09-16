@@ -587,15 +587,22 @@ struct LocalProvenanceV1 {
 }
 
 struct ProjectionLocalContractsV1 {
+    immutable_locals: Vec<bool>,
     checked_references: CheckedReferencesV1,
     allocations: Vec<Option<AllocationContractV1>>,
     allocation_provenance: Vec<Option<LocalAllocationProvenanceV1>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedBoundsExtentSourceV1 {
+    Slice(SemanticLocalIdV1),
+    FixedArray(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedBoundsCheckV1 {
     access_block: usize,
-    slice_local: SemanticLocalIdV1,
+    extent_source: ProjectedBoundsExtentSourceV1,
     index_local: SemanticLocalIdV1,
     index: ProductionRankedValueV1,
     extent: ProductionRankedValueV1,
@@ -695,7 +702,9 @@ impl ProjectedSemanticBlockV1 {
                 source: Some(source),
                 ..
             } => source.memory_space != MemorySpaceAttr::Private,
-            ProjectedBlockItemV1::Guarded(_) => true,
+            ProjectedBlockItemV1::Guarded(access) => {
+                access.memory_space != MemorySpaceAttr::Private
+            }
             ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
             ProjectedBlockItemV1::Pipeline(_) => false,
             ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
@@ -3270,6 +3279,7 @@ fn project_and_verify_ranked_root_v1(
         &mut discarded_ir,
     )?;
     let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
+        semantic.types(),
         function,
         intrinsic.extent_argument_count,
         &intrinsic.index_values,
@@ -4374,6 +4384,7 @@ fn project_rust_bounds_checks(
     next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
     project_rust_bounds_checks_with_ordinary_v1(
+        &[],
         function,
         first_argument,
         known_indices,
@@ -4384,7 +4395,11 @@ fn project_rust_bounds_checks(
     )
 }
 
+include!("production_ranked_projection_v1/dynamic_local_array_v1.rs");
+
+#[allow(clippy::too_many_arguments)]
 fn project_rust_bounds_checks_with_ordinary_v1(
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
     known_indices: &[Option<ProjectedDisjointIndexV1>],
@@ -4482,6 +4497,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     // Separate MIR `Len` temporaries for one stable slice describe one ranked extent.
     let mut slice_extents = vec![None; function.locals().len()];
     let mut checks = Vec::new();
+    let mut fixed_proofs = None;
     for (block_index, block) in function.blocks().iter().enumerate() {
         let guard = match block.terminator().kind() {
             SemanticTerminatorKindV1::Assert {
@@ -4502,6 +4518,67 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                     // Literal array checks do not authorize a dynamic access. The
                     // projected ranked access retains both constants and the static
                     // shape verifier accepts or rejects the exact relation.
+                    continue;
+                }
+                if matches!(length, SemanticOperandV1::Constant(_)) {
+                    if fixed_proofs.is_none() {
+                        fixed_proofs = Some(SemanticAssertProofsV1::new(types, function)?);
+                    }
+                    let access_block = target.target().index() as usize;
+                    let (index_local, extent_value) = authenticate_fixed_array_guard_v1(
+                        fixed_proofs
+                            .as_mut()
+                            .expect("initialized fixed-array analysis"),
+                        block_index,
+                        access_block,
+                        condition,
+                        index,
+                        length,
+                    )?;
+                    if predecessors.get(access_block).map(Vec::as_slice) != Some(&[block_index])
+                        || access_block == function.entry().index() as usize
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a fixed-array bounds-check success block is not uniquely controlled",
+                        ));
+                    }
+                    reconcile_bounds_ordinary_index_v1(
+                        block_index,
+                        index_local,
+                        ordinary_indices,
+                        enum_payload_dominance,
+                        &mut local_values,
+                    )?;
+                    let slot = &mut local_values[index_local.index() as usize];
+                    let index = if let Some(value) = *slot {
+                        value
+                    } else {
+                        let result = next_value_id(next_value)?;
+                        reserve_operation(operations)?;
+                        operations.push(ProductionRankedOperationV1::IndexUnknown { result });
+                        let value = ProductionRankedValueV1::Local(result);
+                        *slot = Some(value);
+                        value
+                    };
+                    let result = next_value_id(next_value)?;
+                    reserve_operation(operations)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                        result,
+                        value: extent_value,
+                    });
+                    checks.try_reserve(1).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "fixed-array bounds-check storage cannot be reserved",
+                        )
+                    })?;
+                    checks.push(ProjectedBoundsCheckV1 {
+                        access_block,
+                        extent_source: ProjectedBoundsExtentSourceV1::FixedArray(extent_value),
+                        index_local,
+                        index,
+                        extent: ProductionRankedValueV1::Local(result),
+                        must_authorize_access: true,
+                    });
                     continue;
                 }
                 BoundsGuardV1 {
@@ -4620,39 +4697,13 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
         }
-        if let Some(ordinary) = ordinary_indices
-            .get(index_local.index() as usize)
-            .copied()
-            .flatten()
-        {
-            let Some(enum_payload_dominance) = enum_payload_dominance else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "ordinary enum index facts lack enum-dominance evidence",
-                ));
-            };
-            if !enum_payload_dominance.allows(
-                ordinary.availability,
-                SemanticBlockIdV1::from_index(block_index as u32),
-            ) {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "an ordinary enum index payload is used outside its authenticated variant edge",
-                ));
-            }
-            let slot = local_values.get_mut(index_local.index() as usize).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "an ordinary enum index payload is outside the semantic local table",
-                ),
-            )?;
-            match *slot {
-                None => *slot = Some(ordinary.value),
-                Some(existing) if existing == ordinary.value => {}
-                Some(_) => {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "an ordinary enum index payload conflicts with index capability authority",
-                    ));
-                }
-            }
-        }
+        reconcile_bounds_ordinary_index_v1(
+            block_index,
+            index_local,
+            ordinary_indices,
+            enum_payload_dominance,
+            &mut local_values,
+        )?;
         let mut unknown_for = |local: SemanticLocalIdV1| -> Result<
             ProductionRankedValueV1,
             ProductionRankedProjectionErrorV1,
@@ -4714,7 +4765,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
         })?;
         checks.push(ProjectedBoundsCheckV1 {
             access_block,
-            slice_local,
+            extent_source: ProjectedBoundsExtentSourceV1::Slice(slice_local),
             index_local,
             index,
             extent,
@@ -8938,6 +8989,7 @@ fn project_intrinsic_contracts(
         &enum_payload_dominance,
     )?;
     let local_contracts = ProjectionLocalContractsV1 {
+        immutable_locals: immutable_local_array_candidates_v1(function, &scalar_inventory),
         checked_references: CheckedReferencesV1 {
             origins: checked_reference_origins,
             option_dominance,
@@ -23157,12 +23209,12 @@ enum ProjectedIndexV1 {
 fn projected_bounds_check(
     checks: &[ProjectedBoundsCheckV1],
     block_index: usize,
-    slice_local: SemanticLocalIdV1,
+    extent_source: ProjectedBoundsExtentSourceV1,
     index_local: SemanticLocalIdV1,
 ) -> Result<ProjectedBoundsCheckV1, ProductionRankedProjectionErrorV1> {
     let mut matches = checks.iter().copied().filter(|check| {
         check.access_block == block_index
-            && check.slice_local == slice_local
+            && check.extent_source == extent_source
             && check.index_local == index_local
     });
     let check = matches
@@ -23323,22 +23375,45 @@ fn project_place_access_with_atomic(
                     ));
                 }
                 match types.get(current.index() as usize).map(|ty| ty.shape()) {
-                    Some(SemanticTypeShapeV1::Array { length, .. }) => {
-                        let value = constants
-                            .get(index.index() as usize)
-                            .copied()
-                            .flatten()
-                            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                                "a dynamic array index before exact static-extent guard projection",
-                            ))?;
+                    Some(SemanticTypeShapeV1::Array { length, element }) => {
                         shape.push(*length);
-                        indices.push(ProjectedIndexV1::Constant(value));
+                        if let Some(value) =
+                            constants.get(index.index() as usize).copied().flatten()
+                        {
+                            indices.push(ProjectedIndexV1::Constant(value));
+                        } else {
+                            if *length == 0
+                                || !matches!(
+                                    types[element.index() as usize].shape(),
+                                    SemanticTypeShapeV1::Scalar(_)
+                                )
+                                || access != AccessKindAttr::Read
+                                || atomic.is_some()
+                                || place.projections().len() != 1
+                                || local_contracts
+                                    .immutable_locals
+                                    .get(place.local().index() as usize)
+                                    != Some(&true)
+                            {
+                                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                    "a dynamic array index requires an immutable local scalar array",
+                                ));
+                            }
+                            let check = projected_bounds_check(
+                                bounds_checks,
+                                block_index,
+                                ProjectedBoundsExtentSourceV1::FixedArray(*length),
+                                index,
+                            )?;
+                            indices.push(ProjectedIndexV1::Dynamic(check.index));
+                            comparisons.push((check.index, check.extent));
+                        }
                     }
                     Some(SemanticTypeShapeV1::Slice { .. }) => {
                         let check = projected_bounds_check(
                             bounds_checks,
                             block_index,
-                            place.local(),
+                            ProjectedBoundsExtentSourceV1::Slice(place.local()),
                             index,
                         )?;
                         shape.push(DYNAMIC_EXTENT);
@@ -23886,6 +23961,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
+    include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");

@@ -8427,7 +8427,7 @@ struct InfallibleBoundsAssertAnalysisV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
     function: &'a SemanticFunctionDeclV1,
-    required_workgroup: [u32; 3],
+    required_workgroup: Option<[u32; 3]>,
     definitions: Vec<Option<SemanticScalarDefinitionV1>>,
     definition_counts: Vec<u8>,
     address_escaped: Vec<bool>,
@@ -8443,6 +8443,22 @@ impl<'a> InfallibleBoundsAssertAnalysisV1<'a> {
         function: &'a SemanticFunctionDeclV1,
         required_workgroup: [u32; 3],
     ) -> Result<BTreeSet<u32>, ProductionSemanticKirErrorV1> {
+        let mut analysis = Self::source_inventory_v1(types, callables, function)?;
+        analysis.required_workgroup = Some(required_workgroup);
+        let mut proved = BTreeSet::new();
+        for (block, source) in function.blocks().iter().enumerate() {
+            if analysis.proves_bounds_assert(block, source.terminator().kind())? {
+                proved.insert(block as u32);
+            }
+        }
+        Ok(proved)
+    }
+
+    fn source_inventory_v1(
+        types: &'a [SemanticTypeDeclV1],
+        callables: &'a [SemanticCallableDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let local_count = function.locals().len();
         let mut definitions = vec![None; local_count];
         let mut definition_counts = vec![0_u8; local_count];
@@ -8582,25 +8598,18 @@ impl<'a> InfallibleBoundsAssertAnalysisV1<'a> {
 
         let entry = function.entry().index() as usize;
         let reachable = semantic_reachable_blocks_v1(&successors, entry, None)?;
-        let mut analysis = Self {
+        Ok(Self {
             types,
             callables,
             function,
-            required_workgroup,
+            required_workgroup: None,
             definitions,
             definition_counts,
             address_escaped,
             successors,
             reachable,
             dominance: BTreeMap::new(),
-        };
-        let mut proved = BTreeSet::new();
-        for (block, source) in function.blocks().iter().enumerate() {
-            if analysis.proves_bounds_assert(block, source.terminator().kind())? {
-                proved.insert(block as u32);
-            }
-        }
-        Ok(proved)
+        })
     }
 
     fn proves_bounds_assert(
@@ -9012,13 +9021,16 @@ impl<'a> InfallibleBoundsAssertAnalysisV1<'a> {
                                         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis),
                                     ..
                                 }) => {
-                                    let extent = match axis {
-                                        SemanticAxisV1::X => self.required_workgroup[0],
-                                        SemanticAxisV1::Y => self.required_workgroup[1],
-                                        SemanticAxisV1::Z => self.required_workgroup[2],
-                                    };
+                                    let maximum = self.required_workgroup.and_then(|shape| {
+                                        let extent = match axis {
+                                            SemanticAxisV1::X => shape[0],
+                                            SemanticAxisV1::Y => shape[1],
+                                            SemanticAxisV1::Z => shape[2],
+                                        };
+                                        extent.checked_sub(1)
+                                    });
                                     match (
-                                        extent.checked_sub(1),
+                                        maximum,
                                         self.unsigned_bits(
                                             call.destination()
                                                 .expect("checked destination")
@@ -11773,8 +11785,10 @@ include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
+include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
+    fixed_array_analysis: Option<FixedArrayGuardAnalysisV1<'a>>,
     private_arrays: PrivateArrayFunctionRecorderV1<'a>,
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
@@ -12056,6 +12070,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         }
         Ok(Self {
+            fixed_array_analysis: None,
             private_arrays: PrivateArrayFunctionRecorderV1::new(
                 private_array_work,
                 private_array_enabled,
@@ -21156,18 +21171,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         let (index, _) = index_binding.value().map_err(|detail| {
                             unsupported(0, Some(block.index()), statement, detail)
                         })?;
-                        let index = self
-                            .emitted_unsigned_constants
-                            .get(&index)
-                            .copied()
-                            .ok_or_else(|| {
-                                unsupported(
-                                    0,
-                                    Some(block.index()),
-                                    statement,
-                                    "by-value array component requires an exact constant index",
-                                )
-                            })?;
+                        let Some(index) = self.emitted_unsigned_constants.get(&index).copied()
+                        else {
+                            binding = self.lower_dynamic_local_array_v1(
+                                block,
+                                statement,
+                                place,
+                                index_local,
+                                current_type,
+                                fields,
+                                operations,
+                            )?;
+                            current_type = projection.result_type();
+                            continue;
+                        };
                         let index = self.checked_by_value_array_index(
                             block,
                             statement,
@@ -25859,6 +25876,7 @@ mod shared_slice_helper_parameter_tests {
 mod resource_tests {
     mod fixed_array_bounds_v1_tests {
         include!("production_semantic_kir_v1/fixed_array_bounds_v1_tests.rs");
+        include!("production_semantic_kir_v1/dynamic_local_array_tests.rs");
     }
     include!("production_semantic_kir_v1/resource_01_tests.rs");
     mod private_array_resource_tests {
