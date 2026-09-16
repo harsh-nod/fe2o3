@@ -139,7 +139,7 @@ impl ProductionPreRankedKirOwnerV1 {
     /// This legacy constructor restores the floor on ordinary `Result` return;
     /// it does not provide an unwind-cleanup guarantee. An optional existing SSA
     /// occurrence-capture receipt stays separately caller-reserved and is not
-    /// included in either transferred receipt. No new capture is performed.
+    /// included in the transferred receipts. No new capture is performed.
     pub fn try_materialize_with_budget(
         semantic_ssa: ProductionSemanticSsaOwnerV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
@@ -150,7 +150,7 @@ impl ProductionPreRankedKirOwnerV1 {
         let result =
             Self::try_materialize_origins_inner_v1(semantic_ssa, source_launch, limits, budget);
         // The inner call dropped all failed payloads. On success this is the
-        // explicit transfer of graph+origin ownership and their two receipts.
+        // explicit transfer of graph, origin and helper ownership and receipts.
         let release =
             budget
                 .storage()
