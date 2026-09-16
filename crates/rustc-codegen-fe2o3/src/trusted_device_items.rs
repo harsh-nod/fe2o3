@@ -3436,7 +3436,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("800cfd1a9b8272278eae79c93ca454cde9f9c630a9bb9466f67b5960b0a6c88f")
+            digest("c5a56cdacfb1be971f247fd6d6686b913d27dad2c0ece5988b095063ae49e2b4")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3842,6 +3842,14 @@ mod tests {
     fn semantic_registry_is_complete_and_unique() {
         let items = [
             TrustedDeviceItem::KernelError,
+            TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::ExecutionWorkgroupCapability,
+            TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            TrustedDeviceItem::MaskedTile1D,
+            TrustedDeviceItem::LaneFragment1D,
+            TrustedDeviceItem::MaskedTile1DLoadMasked,
+            TrustedDeviceItem::MaskedTile1DIntoFragment,
+            TrustedDeviceItem::LaneFragment1DIntoParts,
             TrustedDeviceItem::DisjointSlice,
             TrustedDeviceItem::WriteOnlyDisjointSlice,
             TrustedDeviceItem::StridedReadView2D,
