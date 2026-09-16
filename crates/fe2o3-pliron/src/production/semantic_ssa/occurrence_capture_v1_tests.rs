@@ -354,6 +354,156 @@ fn with_capture(
 }
 
 #[test]
+fn sealed_capture_preserves_rust_call_field_origins_in_local_order() {
+    for count in [0, 3] {
+        let base = admitted_single_function_semantic();
+        let unit = SemanticTypeIdV1::from_index(0);
+        let tuple = SemanticTypeIdV1::from_index(1);
+        let value = || SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore);
+        let mut arguments = vec![SemanticAbiArgumentV1::source(value())];
+        arguments.extend(
+            (0..count).map(|field| SemanticAbiArgumentV1::rust_call_tuple_field(field, value())),
+        );
+        let abi = SemanticFunctionAbiV1::from_rustc_with_source_signature(
+            SemanticAbiIdentityV1::from_sha256(test_bytes(210)),
+            base.functions()[0].abi().layout_identity(),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::RustCall,
+            false,
+            false,
+            1,
+            vec![unit, tuple],
+            unit,
+            arguments,
+            value(),
+        )
+        .unwrap();
+        let mut locals = vec![
+            test_local(220, 0, SemanticLocalRoleV1::Return),
+            test_local(221, 0, SemanticLocalRoleV1::Argument(0)),
+        ];
+        let fields = if count == 0 { vec![] } else { vec![2, 0, 1] };
+        locals.extend(fields.iter().enumerate().map(|(local, field)| {
+            test_local(
+                222 + local as u8,
+                0,
+                SemanticLocalRoleV1::RustCallTupleField {
+                    argument: 1,
+                    field: *field,
+                },
+            )
+        }));
+        let helper = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(test_bytes(230)),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256(test_bytes(231)),
+            SemanticMonomorphizationIdentityV1::from_sha256(test_bytes(232)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(test_bytes(233)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(test_bytes(234)),
+            base.functions()[0].source(),
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            vec![test_block(235, vec![], SemanticTerminatorKindV1::Return)],
+        )
+        .unwrap();
+        let mut types = base.types().to_vec();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(test_bytes(236)),
+            SemanticLayoutIdentityV1::from_sha256(test_bytes(237)),
+            SemanticTypeLayoutV1::aggregate(
+                Some(0),
+                1,
+                fe2o3_mir_model::semantic_mir_v1::SemanticAggregateLayoutV1::new(
+                    vec![0; count as usize],
+                    vec![],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(
+                fe2o3_mir_model::semantic_mir_v1::SemanticAggregateTypeV1::new(vec![
+                    unit;
+                    count as usize
+                ])
+                .unwrap(),
+            ),
+        ));
+        let root = root_with(
+            &base.functions()[0],
+            vec![
+                test_local(238, 0, SemanticLocalRoleV1::Return),
+                test_local(239, 0, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![
+                test_block(
+                    240,
+                    vec![],
+                    SemanticTerminatorKindV1::Call(
+                        SemanticDirectCallV1::new_callable(
+                            SemanticCallableIdV1::from_index(1),
+                            [unit, tuple]
+                                .into_iter()
+                                .map(|ty| {
+                                    SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                        ty,
+                                        SemanticConstantValueV1::ZeroSized,
+                                    ))
+                                })
+                                .collect(),
+                            Some(SemanticCallDestinationV1::new(
+                                test_typed_place(1, 0),
+                                test_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                            )),
+                            SemanticUnwindActionV1::Unreachable,
+                        )
+                        .unwrap(),
+                    ),
+                ),
+                test_block(241, vec![], SemanticTerminatorKindV1::Return),
+            ],
+        );
+        let owner = admit_owner(
+            InertSemanticMirRequestV1::new_with_callables(
+                base.target(),
+                types,
+                vec![],
+                vec![],
+                vec![],
+                vec![root, helper],
+                vec![
+                    SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+                    SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+                ],
+                vec![SemanticFunctionIdV1::from_index(0)],
+            )
+            .unwrap(),
+        );
+        with_capture(owner, |owner| {
+            let view = owner.occurrences_v1().unwrap();
+            let rows = view.function(SemanticFunctionIdV1::from_index(1)).unwrap();
+            assert_eq!(rows.entry_definitions().len(), count as usize + 1);
+            for (index, row) in rows.entry_definitions().iter().enumerate() {
+                assert_eq!(row.ordinal(), index as u32);
+                assert_eq!(row.variable(), variable(index as u32 + 1));
+                assert_eq!(
+                    row.origin(),
+                    if index == 0 {
+                        EntryOrigin::Argument(0)
+                    } else {
+                        EntryOrigin::RustCallTupleField {
+                            argument: 1,
+                            field: fields[index - 1],
+                        }
+                    }
+                );
+            }
+            assert!(rows.events().is_empty());
+        });
+    }
+}
+
+#[test]
 fn sealed_capture_keeps_an_actual_eventless_function() {
     let source = ProductionSemanticMirOwnerV1::try_new(
         admitted_single_function_semantic(),

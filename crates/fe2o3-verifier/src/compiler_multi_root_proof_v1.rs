@@ -1251,6 +1251,14 @@ fn validate_correspondence_parameter_bindings(
 ) -> Result<(), CompilerMultiRootProofValidationErrorV1> {
     let mut expected_bindings = 0_usize;
     for (&semantic_function, binding) in functions {
+        if binding.semantic.abi().extern_abi()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+        {
+            return Err(correspondence_error(
+                root,
+                "parameter correspondence does not encode RustCall components",
+            ));
+        }
         let mut arguments = binding
             .semantic
             .locals()
@@ -1258,7 +1266,9 @@ fn validate_correspondence_parameter_bindings(
             .enumerate()
             .filter_map(|(local, declaration)| match declaration.role() {
                 SemanticLocalRoleV1::Argument(argument) => Some((argument, local)),
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
             })
             .collect::<Vec<_>>();
         arguments.sort_unstable();

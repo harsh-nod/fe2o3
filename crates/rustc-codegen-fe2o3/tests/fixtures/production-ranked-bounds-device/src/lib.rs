@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "rust_call")]
+mod rust_call;
+
 #[cfg(all(
     feature = "bf16_mfma_column_major_b",
     feature = "bf16_mfma_row_major_b"
@@ -94,6 +97,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "float_to_integer",
     feature = "wrapping_integer",
     feature = "launch_wrapping_integer",
+    feature = "rust_call",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",

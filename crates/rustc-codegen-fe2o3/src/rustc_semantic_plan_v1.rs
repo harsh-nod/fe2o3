@@ -1175,10 +1175,10 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
             }
             Rvalue::Aggregate(kind, operands) => {
                 match &**kind {
-                    AggregateKind::Array(_) | AggregateKind::Tuple | AggregateKind::Adt(..) => {}
-                    AggregateKind::Closure(..) => {
-                        return Err(reject("closure aggregate rvalue", site));
-                    }
+                    AggregateKind::Array(_)
+                    | AggregateKind::Tuple
+                    | AggregateKind::Adt(..)
+                    | AggregateKind::Closure(..) => {}
                     AggregateKind::CoroutineClosure(..) => {
                         return Err(reject("coroutine-closure aggregate rvalue", site));
                     }
@@ -1497,7 +1497,13 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 }
                 TyKind::UnsafeBinder(..) => return Err(reject("unsafe-binder type", site)),
                 TyKind::Dynamic(..) => return Err(reject("dynamic trait-object type", site)),
-                TyKind::Closure(..) => return Err(reject("closure type", site)),
+                TyKind::Closure(_, arguments) => {
+                    let captures = arguments.as_closure().upvar_tys();
+                    self.require_type_cardinality(captures.len())?;
+                    for capture in captures {
+                        self.queue_type(&mut pending, capture)?;
+                    }
+                }
                 TyKind::CoroutineClosure(..) => {
                     return Err(reject("coroutine-closure type", site));
                 }
@@ -2247,7 +2253,12 @@ fn build_function_abi_producers_v1<'tcx>(
             u32::try_from(index)
                 .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
         );
-        let source_abi = source_signature_v1(tcx, function.instance).abi;
+        let source_abi = source_signature_v1(tcx, function.instance)
+            .map_err(|detail| ProductionSemanticPreflightErrorV1::FunctionAbi {
+                function: function_id,
+                detail: detail.to_owned(),
+            })?
+            .abi;
         let (extern_abi, use_instance_abi) = match function.role {
             CollectedFunctionRole::KernelEntry => (ExternAbi::GpuKernel, false),
             CollectedFunctionRole::DeviceFfiExport => (ExternAbi::C { unwind: false }, false),
@@ -2314,7 +2325,12 @@ fn build_terminal_producers_v1<'tcx>(
         let terminal = u32::try_from(index)
             .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
         terminal_ids.insert(identity, terminal);
-        let source_abi = source_signature_v1(tcx, instance).abi;
+        let source_abi = source_signature_v1(tcx, instance)
+            .map_err(|detail| ProductionSemanticPreflightErrorV1::FunctionAbi {
+                function: SemanticFunctionIdV1::from_index(terminal),
+                detail: detail.to_owned(),
+            })?
+            .abi;
         let source_span = match instance.def {
             InstanceKind::Intrinsic(def_id) => tcx.def_span(def_id),
             _ => tcx.instance_mir(instance.def).span,
@@ -2351,14 +2367,47 @@ fn build_terminal_producers_v1<'tcx>(
     Ok((terminals.into_boxed_slice(), terminal_ids))
 }
 
-fn source_signature_v1<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> ty::FnSig<'tcx> {
-    tcx.normalize_erasing_regions(
-        TypingEnv::fully_monomorphized(),
+pub(crate) fn source_signature_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<ty::FnSig<'tcx>, &'static str> {
+    let env = TypingEnv::fully_monomorphized();
+    let signature = if tcx.def_kind(instance.def_id()) == rustc_hir::def::DefKind::Closure {
+        if !matches!(instance.def, InstanceKind::Item(_)) {
+            return Err("closure signature requires an ordinary closure body instance");
+        }
+        let closure_ty = instance.ty(tcx, env);
+        let TyKind::Closure(_, arguments) = closure_ty.kind() else {
+            return Err("closure body instance has no concrete environment type");
+        };
+        let closure = arguments.as_closure();
+        let kind = closure
+            .kind_ty()
+            .to_opt_closure_kind()
+            .ok_or("unresolved closure kind")?;
+        let signature = tcx.instantiate_bound_regions_with_erased(closure.sig());
+        if signature.abi != ExternAbi::RustCall
+            || signature.c_variadic
+            || !matches!(signature.inputs(), [tuple] if matches!(tuple.kind(), TyKind::Tuple(_)))
+        {
+            return Err("closure signature is not one nonvariadic RustCall argument tuple");
+        }
+        let receiver = tcx.closure_env_ty(closure_ty, kind, tcx.lifetimes.re_erased);
+        tcx.mk_fn_sig(
+            std::iter::once(receiver).chain(signature.inputs().iter().copied()),
+            signature.output(),
+            signature.c_variadic,
+            signature.safety,
+            signature.abi,
+        )
+    } else {
         tcx.instantiate_bound_regions_with_erased(
             tcx.fn_sig(instance.def_id())
                 .instantiate(tcx, instance.args),
-        ),
-    )
+        )
+    };
+    tcx.try_normalize_erasing_regions(env, signature)
+        .map_err(|_| "source ABI signature failed monomorphic normalization")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2372,7 +2421,12 @@ fn build_retained_fn_abi_producer_v1<'tcx>(
     use_instance_abi: bool,
 ) -> Result<RetainedSemanticFunctionAbiProducerV1<'tcx>, ProductionSemanticPreflightErrorV1> {
     let typing_env = TypingEnv::fully_monomorphized();
-    let source_signature = source_signature_v1(tcx, instance);
+    let source_signature = source_signature_v1(tcx, instance).map_err(|detail| {
+        ProductionSemanticPreflightErrorV1::FunctionAbi {
+            function,
+            detail: detail.to_owned(),
+        }
+    })?;
     let fn_abi = if use_instance_abi {
         let query = typing_env.as_query_input((instance, ty::List::empty()));
         tcx.fn_abi_of_instance(query)

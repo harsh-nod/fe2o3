@@ -234,6 +234,15 @@ fn construct_type_v1<'tcx>(
         TyKind::Never => SemanticTypeShapeV1::Never,
         TyKind::Tuple(fields) if fields.is_empty() => SemanticTypeShapeV1::Unit,
         TyKind::Tuple(fields) => SemanticTypeShapeV1::Tuple(context.aggregate(fields.iter())?),
+        TyKind::Closure(_, arguments) => {
+            let captures = arguments.as_closure().upvar_tys();
+            if !matches!(producer.layout.fields, FieldsShape::Arbitrary { .. })
+                || captures.len() != producer.layout.fields.count()
+            {
+                return Err(context.unsupported("non-aggregate closure field layout"));
+            }
+            SemanticTypeShapeV1::Aggregate(context.aggregate(captures.iter())?)
+        }
         TyKind::Adt(definition, arguments) if definition.is_struct() => {
             if definition.repr().pack.is_some() {
                 return Err(context.unsupported("packed struct layout"));
@@ -333,7 +342,6 @@ fn construct_type_v1<'tcx>(
         | TyKind::Foreign(..)
         | TyKind::UnsafeBinder(..)
         | TyKind::Dynamic(..)
-        | TyKind::Closure(..)
         | TyKind::CoroutineClosure(..)
         | TyKind::Coroutine(..)
         | TyKind::CoroutineWitness(..)
@@ -968,6 +976,22 @@ fn find_niche_in_type_v1<'tcx>(
     match ty.kind() {
         TyKind::Tuple(fields) => {
             for (field_index, field_ty) in fields.iter().enumerate() {
+                descend_niche_field_v1(
+                    context,
+                    field_ty,
+                    layout,
+                    field_index,
+                    base_offset,
+                    expected_offset,
+                    source_niche,
+                    path,
+                    found,
+                    depth,
+                )?;
+            }
+        }
+        TyKind::Closure(_, arguments) => {
+            for (field_index, field_ty) in arguments.as_closure().upvar_tys().iter().enumerate() {
                 descend_niche_field_v1(
                     context,
                     field_ty,

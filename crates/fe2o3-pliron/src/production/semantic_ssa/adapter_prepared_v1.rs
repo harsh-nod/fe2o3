@@ -253,6 +253,9 @@ impl PreparedSemanticSsaEntriesV1<'_> {
             };
             let origin = match declaration.role() {
                 SemanticLocalRoleV1::Argument(argument) => Some(EntryOrigin::Argument(argument)),
+                SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
+                    Some(EntryOrigin::RustCallTupleField { argument, field })
+                }
                 _ if is_implicit => Some(EntryOrigin::ImplicitCapability),
                 _ => None,
             };

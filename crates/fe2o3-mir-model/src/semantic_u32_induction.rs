@@ -1047,7 +1047,7 @@ fn prove_candidate_v1(
         || !is_exact_u32(types, bound_ty)
         || bound_ty != induction_ty
         || bound_decl.ty() != bound_ty
-        || !matches!(bound_decl.role(), SemanticLocalRoleV1::Argument(_))
+        || !bound_decl.role().is_entry_argument()
         || definition(inventory, bound)?.count != 0
         || local(inventory.address_or_projection_hazard.as_slice(), bound)?
         || local(inventory.direct_copy_alias.as_slice(), bound)?

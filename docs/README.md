@@ -24,6 +24,8 @@ documentation.
   dependency boundaries.
 - [Production pipeline convergence](production-pipeline-convergence-v1.md):
   the single production compiler route.
+- [RustCall argument correspondence](semantic-rust-call-v28.md): closure source
+  arguments, MIR entry locals, physical parameters, and the proof boundary.
 - [Pliron Wave 0 architecture](pliron-wave0-architecture.md): typed IR
   integration.
 - [Optimizing compiler Wave 1](general-optimizing-compiler-wave1.md): stage

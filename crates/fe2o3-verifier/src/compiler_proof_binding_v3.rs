@@ -1090,6 +1090,13 @@ fn validate_parameter_bindings_v4(
 ) -> Result<(), CompilerProofInputValidationErrorV3> {
     let mut expected_bindings = 0_usize;
     for (&function_index, semantic_function) in semantic_functions {
+        if semantic_function.abi().extern_abi()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
+        {
+            return Err(structural_v4(
+                "V4 parameter correspondence does not encode RustCall components",
+            ));
+        }
         let body = kernel_bodies
             .get(&function_index)
             .ok_or_else(|| structural_v4("corresponding KIR function body is absent"))?;
@@ -1099,7 +1106,9 @@ fn validate_parameter_bindings_v4(
             .enumerate()
             .filter_map(|(local, declaration)| match declaration.role() {
                 SemanticLocalRoleV1::Argument(argument) => Some((argument, local)),
-                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+                SemanticLocalRoleV1::Return
+                | SemanticLocalRoleV1::Temporary
+                | SemanticLocalRoleV1::RustCallTupleField { .. } => None,
             })
             .collect::<Vec<_>>();
         arguments.sort_unstable();
