@@ -442,3 +442,112 @@ fn actual_foreign_sealed_execution_and_full_input_bytes_cannot_substitute() {
     ));
     assert_eq!(budget.storage(), floor);
 }
+
+#[test]
+fn matching_execution_record_does_not_admit_a_valid_foreign_semantic_body() {
+    use fe2o3_kernel_analysis::CanonicalKirTransitionErrorV1;
+
+    // Admission is fixture setup. Both actual executions and all receipt checks
+    // below share this ledger; no whole-admission exact resource cap is claimed.
+    let input = admit(&Module::new("m"));
+    let foreign = admit(&Module::new("n"));
+    let (input_storage, foreign_storage) = (input.1, foreign.1);
+    let mut work = Work::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.charge_work(PRIOR).unwrap();
+    budget
+        .reserve_storage(PREFIX + input.1 + foreign.1)
+        .unwrap();
+    let checked = optimize_checked_canonical_kernel_ir_policy3_v1(&input.0, &mut budget).unwrap();
+    let checked_storage = checked.storage().retained_storage();
+    budget.reserve_storage(checked_storage).unwrap();
+    let other = optimize_checked_canonical_kernel_ir_policy3_v1(&foreign.0, &mut budget).unwrap();
+    let other_storage = other.storage().retained_storage();
+    budget.reserve_storage(other_storage).unwrap();
+    let wire =
+        encode_checked_canonical_policy3_execution_receipt_v1(&input.0, &checked, &mut budget)
+            .unwrap();
+    let wire_storage = wire.storage().retained_storage();
+    budget.reserve_storage(wire_storage).unwrap();
+    let foreign_wire =
+        encode_checked_canonical_policy3_execution_receipt_v1(&foreign.0, &other, &mut budget)
+            .unwrap();
+    let foreign_wire_storage = foreign_wire.storage().retained_storage();
+    budget.reserve_storage(foreign_wire_storage).unwrap();
+
+    // Prove the transplanted body comes from a valid independently checked
+    // receipt, not a malformed semantic codec fixture.
+    let genuine = decode_and_check_canonical_policy3_execution_receipt_v1(
+        &foreign.0,
+        &other,
+        foreign_wire.canonical_bytes(),
+        &mut budget,
+    )
+    .unwrap();
+    let genuine_storage = genuine.storage().retained_storage();
+    budget.reserve_storage(genuine_storage).unwrap();
+    assert!(std::ptr::eq(genuine.execution_owner(), &other));
+    drop(genuine);
+    budget.release_storage(genuine_storage).unwrap();
+
+    const HEADER: usize = CANONICAL_POLICY3_EXECUTION_RECEIPT_HEADER_V1;
+    assert_eq!(
+        wire.canonical_bytes().len(),
+        foreign_wire.canonical_bytes().len()
+    );
+    assert_eq!(
+        &wire.canonical_bytes()[..32],
+        &foreign_wire.canonical_bytes()[..32]
+    );
+    assert_ne!(
+        &wire.canonical_bytes()[HEADER..],
+        &foreign_wire.canonical_bytes()[HEADER..]
+    );
+    let length = wire.canonical_bytes().len();
+    budget
+        .reserve_storage(size_of::<Vec<u8>>() + length)
+        .unwrap();
+    let mut hybrid = Vec::new();
+    hybrid.try_reserve_exact(length).unwrap();
+    budget.reserve_storage(hybrid.capacity() - length).unwrap();
+    budget.charge_work(length).unwrap();
+    hybrid.extend_from_slice(&wire.canonical_bytes()[..HEADER]);
+    hybrid.extend_from_slice(&foreign_wire.canonical_bytes()[HEADER..]);
+    let hybrid_storage = size_of::<Vec<u8>>() + hybrid.capacity();
+    assert_eq!(&hybrid[..HEADER], &wire.canonical_bytes()[..HEADER]);
+    assert_eq!(
+        validate_header(&hybrid, &checked, &mut budget).unwrap(),
+        &foreign_wire.canonical_bytes()[HEADER..]
+    );
+    let floor = budget.storage();
+    let prefix = budget.work();
+    assert!(matches!(
+        decode_and_check_canonical_policy3_execution_receipt_v1(
+            &input.0,
+            &checked,
+            &hybrid,
+            &mut budget
+        ),
+        Err(E::Semantic(SemanticError::Transition(
+            CanonicalKirTransitionErrorV1::Rule("transition receipt endpoint or policy")
+        )))
+    ));
+    assert_eq!(budget.storage(), floor);
+    assert!(budget.work() > prefix);
+    assert_eq!(budget.failed_storage(), None);
+    drop(hybrid);
+    budget.release_storage(hybrid_storage).unwrap();
+    drop(foreign_wire);
+    budget.release_storage(foreign_wire_storage).unwrap();
+    drop(wire);
+    budget.release_storage(wire_storage).unwrap();
+    drop(other);
+    budget.release_storage(other_storage).unwrap();
+    drop(checked);
+    budget.release_storage(checked_storage).unwrap();
+    drop(foreign);
+    budget.release_storage(foreign_storage).unwrap();
+    drop(input);
+    budget.release_storage(input_storage).unwrap();
+    assert_eq!(budget.storage(), PREFIX);
+}

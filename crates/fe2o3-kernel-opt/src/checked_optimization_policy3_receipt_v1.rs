@@ -87,6 +87,39 @@ impl InertCanonicalPolicy3ExecutionReceiptV1 {
 /// Move-only, borrow-bound composition. The existing semantic receipt is
 /// independently rechecked against actual B/O, while the execution record is
 /// compared byte-for-byte against this sealed policy-3 owner's execution.
+///
+/// ```compile_fail
+/// use fe2o3_kernel_opt::CheckedCanonicalPolicy3ExecutionReceiptV1;
+/// fn duplicate(receipt: CheckedCanonicalPolicy3ExecutionReceiptV1<'_, '_>) {
+///     let _ = receipt.clone();
+/// }
+/// ```
+///
+/// Both owners remain borrowed independently; neither may die before the receipt.
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+///     VerifiedCanonicalKernelIrModuleV12 as Owner};
+/// use fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1 as CheckedOwner;
+/// use fe2o3_kernel_opt::{CheckedCanonicalPolicy3ExecutionReceiptV1 as Receipt,
+///     decode_and_check_canonical_policy3_execution_receipt_v1 as decode};
+/// fn escape_input<'checked>(input: Owner, checked: &'checked CheckedOwner,
+///     bytes: &[u8], budget: &mut Budget<'_>) -> Receipt<'static, 'checked> {
+///     decode(&input, checked, bytes, budget).unwrap()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+///     VerifiedCanonicalKernelIrModuleV12 as Owner};
+/// use fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1 as CheckedOwner;
+/// use fe2o3_kernel_opt::{CheckedCanonicalPolicy3ExecutionReceiptV1 as Receipt,
+///     decode_and_check_canonical_policy3_execution_receipt_v1 as decode};
+/// fn escape_execution<'input>(input: &'input Owner, checked: CheckedOwner,
+///     bytes: &[u8], budget: &mut Budget<'_>) -> Receipt<'input, 'static> {
+///     decode(input, &checked, bytes, budget).unwrap()
+/// }
+/// ```
 pub struct CheckedCanonicalPolicy3ExecutionReceiptV1<'input, 'checked> {
     checked: &'checked CheckedOwner,
     semantic: CheckedCanonicalOptimizationReceiptV1<'input, 'checked>,
@@ -293,6 +326,16 @@ fn validate_header<'a>(
 /// All allocations/cleanup use this same ledger; borrowed owners and input wire
 /// remain separately reserved. The semantic adapter owns its decoded row bytes,
 /// so coexistence with the full framed wire is explicitly charged twice.
+/// An admitted output and receipt bytes cannot replace sealed execution custody.
+///
+/// ```compile_fail
+/// use fe2o3_kernel_ir::{CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+///     VerifiedCanonicalKernelIrModuleV12 as Owner};
+/// use fe2o3_kernel_opt::decode_and_check_canonical_policy3_execution_receipt_v1 as decode;
+/// fn raw_output(input: &Owner, output: &Owner, bytes: &[u8], budget: &mut Budget<'_>) {
+///     let _ = decode(input, output, bytes, budget);
+/// }
+/// ```
 pub fn decode_and_check_canonical_policy3_execution_receipt_v1<'input, 'checked>(
     input: &'input Owner,
     checked: &'checked CheckedOwner,

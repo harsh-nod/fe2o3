@@ -89,6 +89,30 @@ impl<'input> KirNeutralOptimizationOutputPolicy3V1<'input> {
         self.try_check_and_finish_with_v1(budget, |_, _| Ok::<_, Infallible>(((), 0)))
             .map(|(owner, (), _)| owner)
     }
+    /// The owned callback result cannot retain the temporary checked view.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_pliron::KirNeutralOptimizationOutputPolicy3V1;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape_view(observed: KirNeutralOptimizationOutputPolicy3V1<'_>, budget: &mut Budget<'_>) {
+    ///     let _ = observed.try_check_and_finish_with_v1(budget, |checked, _| {
+    ///         Ok::<_, ()>((checked.output(), 0))
+    ///     });
+    /// }
+    /// ```
+    ///
+    /// Capturing the borrowed original input does not bypass that boundary.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_pliron::KirNeutralOptimizationOutputPolicy3V1;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape_input(observed: KirNeutralOptimizationOutputPolicy3V1<'_>, budget: &mut Budget<'_>) {
+    ///     let input = observed.input();
+    ///     let _ = observed.try_check_and_finish_with_v1(budget, |_, _| {
+    ///         Ok::<_, ()>((input, 0))
+    ///     });
+    /// }
+    /// ```
     pub fn try_check_and_finish_with_v1<T: 'static, E: 'static, F>(
         self,
         budget: &mut Budget<'_>,
