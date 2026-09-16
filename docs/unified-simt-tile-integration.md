@@ -156,12 +156,13 @@ semantic-operation V3 are independent namespaces, not one shared version. MIR
 intrinsics81-86, KIR operations32-37 and KIR role types9-12 are reserved;
 [MIR role types14-17](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5700545180)
 are separately allocated. Historical incompatible versions remain rejected.
-These decisions are not implemented codec admission or M0/M1 approval.
+The inert MIR V29 and canonical KIR V15/SO3 codecs now implement these allocated
+roles and operations. They do not provide production admission or M0/M1 approval.
 Private entry-receipt custody alone does not authorize logical-root selection,
 a new role, or a new accepted program.
 
-- #271/#272: implement and qualify the coordinated semantic-MIR and canonical-KIR
-  operation/type, verification and encoding contracts.
+- #271/#272/#275: qualify the composed inert semantic-MIR and canonical-KIR
+  contracts across all existing consumers; executable ownership remains closed.
 - #272: sealed producer ownership, logical-root selection, capability borrowing,
   epoch and convergence rules.
 - #271/#134/#272: immutable schedule representation, transformation/source lineage,
@@ -169,6 +170,36 @@ a new role, or a new accepted program.
 - #272/#134: scoped scratch policy and complete reduction-effect handling.
 - #275: consume exact released adapter/read dependencies and freeze their source,
   simulator, verifier, generated-host and target-specific acceptance commands.
+
+## Inert execution model
+
+`Type::Execution` and `OperationKind::Execution` retain context, workgroup,
+masked-u32 tile and lane-fragment roles in the existing `Module`. Exact V15 wire
+entry points and the registered SO3 family encode the six scope/load/parts
+operations. Frozen earlier bytes are unchanged; historical KIR13/14 remain
+rejected. Existing V12 ownership is not widened or relabeled.
+
+The metered verifier checks local signatures and geometry, recursive
+non-storability, one context issuance per kernel entry, exclusive context
+borrowing, affine consumption, exact scope-discard rosters and matching acyclic
+joins. It rejects cycles in capability-bearing functions, retained calls during
+an open scope, escaping roles and incomplete scope discharge. Ordinary functions
+retain their existing exact work budgets. Physical memory effects and compiler
+ordering are separate: only masked load reads global memory, but every execution
+operation remains ordered. ScopeEnd is not a barrier.
+
+This is structural verification of inert input, not authentication of Rust source
+or a checked schedule. Uniform participation, actual launch geometry, masked-read
+refinement, source-to-graph expansion/replay and final artifact/launch authority
+remain required. The existing simulator, Pliron, AMD lowering, compiler storage
+maps and runtime packing reject these roles and operations explicitly. Capability
+surface 37 reports `inert_execution_v15`; it does not add a V15 simulation profile.
+
+API compatibility: downstream exhaustive matches must handle the new enum
+variants. `SemanticOperationSchema::v1` is fallible so callers cannot construct a
+V1 execution schema; `Type::is_storable` is no longer a const function because it
+rejects execution roles nested beneath pointer/slice types. These changes do not
+alter the canonical encoding of valid existing operations.
 
 ## Displayed source contracts
 

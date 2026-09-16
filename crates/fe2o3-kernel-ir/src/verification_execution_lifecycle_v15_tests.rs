@@ -165,6 +165,36 @@ fn execution_v15_accepts_complete_consumption_discard_and_repeated_scopes() {
 }
 
 #[test]
+fn execution_v15_registered_checks_reject_operations_without_role_definitions() {
+    for operation in [
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), Type::INDEX),
+            OperationKind::Execution(Execution::ContextIssue),
+        ),
+        execution(
+            None,
+            Execution::ScopeEnd {
+                workgroup: ValueId(1),
+                discarded: vec![],
+            },
+        ),
+    ] {
+        assert!(
+            operation
+                .results
+                .iter()
+                .all(|result| !matches!(result.ty, Type::Execution(_)))
+        );
+        let candidate = module(vec![operation]);
+        assert_eq!(candidate.functions[0].signature.parameters[1], Type::INDEX);
+        rejects(
+            &candidate,
+            "registered checks must reject malformed execution even without lifecycle roles",
+        );
+    }
+}
+
+#[test]
 fn execution_v15_refuses_stale_foreign_missing_and_double_consumption() {
     let mut duplicate = fixture(4);
     operations(&mut duplicate).push(execution(
