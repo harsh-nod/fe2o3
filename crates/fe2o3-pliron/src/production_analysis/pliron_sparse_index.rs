@@ -123,11 +123,16 @@ impl SparseAffineIndexV1 {
     }
 
     pub fn maximum(&self, launch_extents: &[u64]) -> Option<u64> {
-        let invocation = launch_extents
-            .iter()
-            .map(|extent| extent.checked_sub(1))
-            .collect::<Option<Vec<_>>>()?;
-        self.evaluate(&invocation)
+        let mut value = self.constant;
+        for (dimension, coefficient) in self.coefficients.iter().copied().enumerate() {
+            // An unused axis need not have a finite extent. A used one must.
+            if coefficient == 0 {
+                continue;
+            }
+            let coordinate = launch_extents.get(dimension)?.checked_sub(1)?;
+            value = value.checked_add(coefficient.checked_mul(coordinate)?)?;
+        }
+        Some(value)
     }
 
     fn is_constant(&self) -> Option<u64> {
