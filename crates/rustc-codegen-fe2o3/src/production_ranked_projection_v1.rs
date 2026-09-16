@@ -2977,6 +2977,44 @@ fn derive_defined_callable_empty_effect_summaries_v1(
     })
 }
 
+fn derive_materialized_callable_effect_summaries_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<DefinedCallableEmptyEffectSummariesV1, ProductionRankedProjectionErrorV1> {
+    let semantic = source.semantic_ssa().source_semantic();
+    let mut summaries = derive_defined_callable_empty_effect_summaries_v1(
+        semantic.types(),
+        semantic.functions(),
+        semantic.callables(),
+    )?;
+    let helpers = source.empty_effect_helpers();
+    budget
+        .charge_work(helpers.scanned_function_count())
+        .map_err(ranked_projection_source_v1::resource)?;
+    for helper in helpers.iter() {
+        let decision = summaries
+            .decisions
+            .get_mut(helper.semantic_function().index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "materialized helper effect fact is outside its source owner",
+            ))?;
+        match decision {
+            // Complete empty effects do not establish a scalar return relation.
+            DefinedCallableEmptyEffectDecisionV1::Rejected => {
+                *decision = DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly;
+            }
+            DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
+            | DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar => {}
+            DefinedCallableEmptyEffectDecisionV1::Unknown => {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "materialized helper effect fact has an unfinished source summary",
+                ));
+            }
+        }
+    }
+    Ok(summaries)
+}
+
 /// Validates the complete source launch roster before executable materialization.
 pub(crate) fn source_launch_roster_for_ranked_inputs_v1(
     semantic_ssa: &ProductionSemanticSsaOwnerV1,
@@ -3025,11 +3063,7 @@ fn project_ranked_roots_v1(
         .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
     let semantic_owner = source.semantic_ssa().source_owner();
     let semantic = source.semantic_ssa().source_semantic();
-    let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
-        semantic.types(),
-        semantic.functions(),
-        semantic.callables(),
-    )?;
+    let callable_effects = derive_materialized_callable_effect_summaries_v1(source, budget)?;
     let source_launch_roster = source.source_launch();
     if root_inputs.is_empty()
         || root_inputs.len() != source_launch_roster.roots().len()

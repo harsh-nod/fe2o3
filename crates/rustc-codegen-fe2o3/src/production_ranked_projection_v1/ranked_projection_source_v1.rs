@@ -6,7 +6,8 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrModuleV12,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionPreRankedKirOwnerV1, ProductionSourceLaunchRosterV1, SemanticKirAssertOriginsV1,
+    ProductionEmptyEffectHelpersV1, ProductionPreRankedKirOwnerV1, ProductionSourceLaunchRosterV1,
+    SemanticKirAssertOriginsV1,
 };
 use fe2o3_pliron::ProductionSemanticSsaOwnerV1;
 
@@ -17,6 +18,7 @@ pub(super) struct RankedProjectionSourceV1<'s> {
     source_launch: &'s ProductionSourceLaunchRosterV1,
     executable: &'s VerifiedCanonicalKernelIrModuleV12,
     origins: SemanticKirAssertOriginsV1<'s>,
+    empty_effect_helpers: ProductionEmptyEffectHelpersV1<'s>,
     minimum_storage: usize,
 }
 
@@ -32,6 +34,7 @@ impl<'s> RankedProjectionSourceV1<'s> {
             source_launch: owner.source_launch(),
             executable: owner.executable(),
             origins: owner.assert_origins(),
+            empty_effect_helpers: owner.empty_effect_helpers(),
             minimum_storage,
         })
     }
@@ -50,6 +53,10 @@ impl<'s> RankedProjectionSourceV1<'s> {
 
     pub(super) const fn origins(&self) -> SemanticKirAssertOriginsV1<'s> {
         self.origins
+    }
+
+    pub(super) const fn empty_effect_helpers(&self) -> ProductionEmptyEffectHelpersV1<'s> {
+        self.empty_effect_helpers
     }
 
     pub(super) fn require_floor(&self, budget: &Budget<'_>) -> Result<(), Error> {

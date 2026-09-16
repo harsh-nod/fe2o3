@@ -66,6 +66,40 @@ pub struct ProductionPreRankedKirOwnerV1 {
     launch_roots: Box<[RetainedRankedLaunchRootV1]>,
 }
 
+/// Borrowed helper facts from one immutable materialization and its validated
+/// source/KIR correspondence. Construction requires every helper's combined
+/// interprocedural effects to be complete and pure, including compiler ordering.
+/// This does not establish determinism, termination, or value equivalence.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{ProductionEmptyEffectHelpersV1, ProductionPreRankedKirOwnerV1};
+/// fn forge(owner: &ProductionPreRankedKirOwnerV1) {
+///     let _ = ProductionEmptyEffectHelpersV1 { owner };
+/// }
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct ProductionEmptyEffectHelpersV1<'a> {
+    owner: &'a ProductionPreRankedKirOwnerV1,
+}
+
+impl<'a> ProductionEmptyEffectHelpersV1<'a> {
+    /// Work needed to scan the entire function roster, including root rows and
+    /// repeated shared-helper associations. The view allocates no payload.
+    pub fn scanned_function_count(self) -> usize {
+        self.owner.correspondence.lowered_functions().len()
+    }
+
+    /// Preserves root owner, semantic function and physical function identity.
+    /// Shared helpers can occur more than once, once for each owning root.
+    pub fn iter(self) -> impl Iterator<Item = &'a SemanticKirFunctionCorrespondenceV1> {
+        self.owner
+            .correspondence
+            .lowered_functions()
+            .iter()
+            .filter(|row| row.role() == SemanticKirFunctionRoleV1::InternalHelper)
+    }
+}
+
 impl ProductionPreRankedKirOwnerV1 {
     /// Materializes the retained SSA plans once, using the full source launch
     /// roster. No ranked verification receipt is accepted at this stage.
@@ -155,6 +189,11 @@ impl ProductionPreRankedKirOwnerV1 {
     /// Borrows the only retained executable graph and its canonical V12 bytes.
     pub const fn executable(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
         &self.executable
+    }
+
+    /// Borrows only facts established during this owner's exact materialization.
+    pub const fn empty_effect_helpers(&self) -> ProductionEmptyEffectHelpersV1<'_> {
+        ProductionEmptyEffectHelpersV1 { owner: self }
     }
 
     /// Returns the connected graph payload to reserve when continuing its ledger.

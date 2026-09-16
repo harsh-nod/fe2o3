@@ -21,14 +21,39 @@ const EXPORTS: [&str; 2] = ["zeta_entry", "alpha_entry"];
 // Both roots reach helper 0; root 1 additionally reaches helper 2. Function
 // ordinals are deliberately not the root ordinals and export order is not lexical.
 fn shared_helper_owner() -> ProductionSemanticMirOwnerV1 {
+    helper_owner_with_second_root_barrier(false)
+}
+
+fn helper_owner_with_second_root_barrier(barrier: bool) -> ProductionSemanticMirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let source = SemanticSourceProvenanceV1::unavailable();
     let mut functions = Vec::new();
     for (ordinal, tag, symbol, workgroup, binding, callee) in [
         (0_u32, 60_u8, None, [1, 1, 1], 0_u8, None),
-        (1_u32, 70_u8, Some(EXPORTS[0]), [64, 1, 1], 0xa1_u8, Some(2)),
-        (2_u32, 75_u8, None, [1, 1, 1], 0_u8, Some(0)),
-        (3_u32, 80_u8, Some(EXPORTS[1]), [4, 4, 4], 0x7a_u8, Some(0)),
+        (
+            1_u32,
+            70_u8,
+            Some(EXPORTS[0]),
+            [64, 1, 1],
+            0xa1_u8,
+            Some(if barrier { 0 } else { 2 }),
+        ),
+        (
+            2_u32,
+            75_u8,
+            None,
+            [1, 1, 1],
+            0_u8,
+            Some(if barrier { 4 } else { 0 }),
+        ),
+        (
+            3_u32,
+            80_u8,
+            Some(EXPORTS[1]),
+            [4, 4, 4],
+            0x7a_u8,
+            Some(if barrier { 2 } else { 0 }),
+        ),
     ] {
         let root = symbol.is_some();
         let abi = SemanticFunctionAbiV1::from_rustc(
@@ -124,20 +149,34 @@ fn shared_helper_owner() -> ProductionSemanticMirOwnerV1 {
             None => function,
         });
     }
-    let semantic = InertSemanticMirRequestV1::new(
+    let mut callables = (0..functions.len())
+        .map(|index| {
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index as u32))
+        })
+        .collect::<Vec<_>>();
+    if barrier {
+        callables.push(compiler_intrinsic_callable(
+            90,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+        ));
+    }
+    let semantic = InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
         vec![unit_type()],
         vec![],
         vec![],
         vec![],
         functions,
+        callables,
         vec![
             SemanticFunctionIdV1::from_index(1),
             SemanticFunctionIdV1::from_index(3),
         ],
     )
     .unwrap()
-    .admit(SemanticMirLimitsV1::default())
+    .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
     ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
         .unwrap()
@@ -146,11 +185,16 @@ fn shared_helper_owner() -> ProductionSemanticMirOwnerV1 {
 fn materialize_shared(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> ProductionPreRankedKirOwnerV1 {
-    let ssa = ProductionSemanticSsaOwnerV1::try_new(
-        shared_helper_owner(),
-        ProductionSemanticSsaLimitsV1::default(),
-    )
-    .unwrap();
+    try_materialize_shared(shared_helper_owner(), budget).unwrap()
+}
+
+fn try_materialize_shared(
+    semantic: ProductionSemanticMirOwnerV1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<ProductionPreRankedKirOwnerV1, fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1> {
+    let ssa =
+        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
+            .unwrap();
     let launch = ProductionSourceLaunchRosterV1::try_new(
         ssa.source_semantic(),
         &[
@@ -173,7 +217,26 @@ fn materialize_shared(
         ProductionSemanticKirLimitsV1::default(),
         budget,
     )
-    .unwrap()
+}
+
+#[test]
+fn pre_ranked_second_root_effectful_helper_cannot_acquire_empty_effect_facts() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
+    budget.reserve_storage(FLOOR).unwrap();
+    let error = try_materialize_shared(helper_owner_with_second_root_barrier(true), &mut budget)
+        .err()
+        .expect("an effect reachable only from the second root must reject the whole owner");
+    assert!(
+        matches!(
+            error,
+            fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Lowering(
+                ProductionSemanticKirErrorV1::HelperEffectsUnavailable { function: 2, .. }
+            )
+        ),
+        "{error}"
+    );
+    assert_eq!(budget.storage(), FLOOR);
 }
 
 fn ranked_root(
@@ -302,6 +365,27 @@ fn pre_ranked_shared_helpers_preserve_sparse_roots_layouts_and_connected_attachm
     let intermediate = function(one_callee(zeta));
     assert_eq!(one_callee(intermediate), one_callee(alpha));
     let shared = function(one_callee(alpha));
+    let facts = materialized.empty_effect_helpers();
+    assert_eq!(facts.scanned_function_count(), 5);
+    let mut helpers = facts
+        .iter()
+        .map(|row| {
+            (
+                row.correspondence_owner().index(),
+                row.semantic_function().index(),
+                row.kernel_ir_function().clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    helpers.sort();
+    assert_eq!(
+        helpers,
+        vec![
+            (1, 0, shared.id.clone()),
+            (1, 2, intermediate.id.clone()),
+            (3, 0, shared.id.clone()),
+        ]
+    );
     assert!(
         shared
             .body

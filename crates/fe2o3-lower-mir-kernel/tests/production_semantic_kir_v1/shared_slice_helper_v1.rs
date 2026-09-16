@@ -496,7 +496,7 @@ fn shared_slice_helper_subset_does_not_admit_mutable_or_unowned_pairs() {
             ),
             Err(ProductionSemanticKirErrorV1::Unsupported {
                 function: 1,
-                detail: "helper parameter is not an exact direct scalar or scalar carrier",
+                detail: "helper parameter is not an exact by-value scalar aggregate or shared slice",
                 ..
             })
         ));

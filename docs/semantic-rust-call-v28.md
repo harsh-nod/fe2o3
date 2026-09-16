@@ -68,6 +68,12 @@ transport retains its separate checks. Argument-row accounting covers adjusted
 ABI rows and physical parameters, including repeated call sites and shared
 helpers across roots, before materializing bodies.
 
+Ranked checks borrow complete empty-helper-effect facts from that same
+immutable materialization. Shared helpers retain every root/source/physical
+function association. This can establish that a helper has no memory or
+compiler-ordering effects, but it does not establish a deterministic scalar
+return relation. The existing scalar-value checks remain separate.
+
 ## Evidence boundary
 
 Legacy serialized V4/V5 proof correspondence does not encode the complete
@@ -82,3 +88,10 @@ Codec, SSA, lowering and ordinary-source simulator tests exercise different
 stages. Neither a model test nor a successful simulator comparison establishes
 protected proof execution, artifact publication, hardware execution, or full
 tutorial-kernel support. See the [verification model](verification-model.md).
+
+The `rocm-compile` CI lane includes
+`ordinary_source_rust_call_closures_match_rust_in_simulation`: a single ordinary
+Rust body with owned nested captures, multiple/empty/mixed-unit arguments,
+wrapping arithmetic, complete output checks and canaries for gfx942 and gfx950
+simulation targets. It needs the pinned compiler and rust-src; it does not
+require GPU execution or grant GPU evidence.

@@ -10325,6 +10325,10 @@ fn direct_scalar_helper_plan_v1(
             vec![(Vec::new(), argument.ty(), scalar)]
         } else {
             if mapped.source_ownership() != SemanticSourceArgumentOwnershipV1::ByValue
+                || matches!(
+                    types[argument.ty().index() as usize].shape(),
+                    SemanticTypeShapeV1::Pointer(_)
+                )
                 || !matches!(
                     argument.mode(),
                     SemanticAbiPassModeV1::Ignore
@@ -10339,7 +10343,16 @@ fn direct_scalar_helper_plan_v1(
                     "helper parameter is not an exact by-value scalar aggregate or shared slice",
                 ));
             }
-            lower_by_value_parameter_components_v1(types, function, argument)?
+            lower_by_value_parameter_components_v1(types, function, argument)
+                .map_err(|error| match error {
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        block,
+                        statement,
+                        detail,
+                        ..
+                    } => unsupported(function_id.index(), block, statement, detail),
+                    other => other,
+                })?
                 .into_iter()
                 .map(|(path, ty, kir, _, _)| (path, ty, kir))
                 .collect()
