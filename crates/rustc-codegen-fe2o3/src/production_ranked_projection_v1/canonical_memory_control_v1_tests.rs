@@ -1721,7 +1721,7 @@ mod identity_getter_shape_tests {
         )
     }
 
-    fn types() -> Vec<SemanticTypeDeclV1> {
+    fn types(discriminator: SemanticTypeIdV1) -> Vec<SemanticTypeDeclV1> {
         let mut types = assertion_types();
         let integer = SemanticBackendScalarV1::initialized(
             SemanticBackendPrimitiveV1::integer(false, 64, 8),
@@ -1848,7 +1848,7 @@ mod identity_getter_shape_tests {
                 )
                 .unwrap(),
                 SemanticTypeShapeV1::enum_type(
-                    A_U64,
+                    discriminator,
                     vec![
                         SemanticEnumVariantV1::new(
                             0,
@@ -1895,6 +1895,47 @@ mod identity_getter_shape_tests {
     }
 
     fn source_ssa(value: u32) -> ProductionSemanticSsaOwnerV1 {
+        source_ssa_mode(value, false)
+    }
+
+    pub(super) fn source_ssa_mode(
+        value: u32,
+        collected_modes: bool,
+    ) -> ProductionSemanticSsaOwnerV1 {
+        source_ssa_options(value, collected_modes, 1)
+    }
+
+    pub(super) fn source_ssa_options(
+        value: u32,
+        collected_modes: bool,
+        stores: usize,
+    ) -> ProductionSemanticSsaOwnerV1 {
+        let discriminator = if collected_modes {
+            SemanticTypeIdV1::from_index(14)
+        } else {
+            A_U64
+        };
+        let mut source_types = types(discriminator);
+        if collected_modes {
+            assert_eq!(source_types.len(), 14);
+            source_types.push(declaration(
+                244,
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(8),
+                    8,
+                    SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                        SemanticBackendPrimitiveV1::integer(true, 64, 8),
+                        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                    )),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: true,
+                    bits: 64,
+                }),
+            ));
+        }
         let call = |callee, arguments, destination, ty, target| {
             SemanticTerminatorKindV1::Call(
                 SemanticDirectCallV1::new_callable(
@@ -1924,7 +1965,7 @@ mod identity_getter_shape_tests {
             A_U32,
         )
         .unwrap();
-        let blocks = vec![
+        let mut blocks = vec![
             block(191, vec![], call(1, vec![], 2, WITNESS, 1)),
             block(
                 192,
@@ -1940,7 +1981,11 @@ mod identity_getter_shape_tests {
                     2,
                     vec![
                         SemanticOperandV1::Move(whole(3, RECEIVER)),
-                        SemanticOperandV1::Move(whole(2, WITNESS)),
+                        if collected_modes {
+                            typed_operand(2, WITNESS)
+                        } else {
+                            SemanticOperandV1::Move(whole(2, WITNESS))
+                        },
                     ],
                     4,
                     OPTION,
@@ -1951,11 +1996,15 @@ mod identity_getter_shape_tests {
                 193,
                 vec![typed_assignment(
                     5,
-                    A_U64,
+                    discriminator,
                     SemanticRvalueKindV1::Discriminant(whole(4, OPTION)),
                 )],
                 SemanticTerminatorKindV1::SwitchInt {
-                    discriminant: typed_operand(5, A_U64),
+                    discriminant: if collected_modes {
+                        SemanticOperandV1::Move(whole(5, discriminator))
+                    } else {
+                        typed_operand(5, discriminator)
+                    },
                     targets: SemanticSwitchTargetsV1::new(
                         vec![
                             SemanticSwitchTargetV1::new(
@@ -1978,7 +2027,11 @@ mod identity_getter_shape_tests {
                     typed_assignment(
                         6,
                         ELEMENT_REF,
-                        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(payload)),
+                        SemanticRvalueKindV1::Use(if collected_modes {
+                            SemanticOperandV1::Copy(payload)
+                        } else {
+                            SemanticOperandV1::Move(payload)
+                        }),
                     ),
                     statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                         destination,
@@ -1993,6 +2046,18 @@ mod identity_getter_shape_tests {
             block(195, vec![], SemanticTerminatorKindV1::Return),
             block(196, vec![], SemanticTerminatorKindV1::Unreachable),
         ];
+        assert!(stores == 1 || stores == 2);
+        if stores == 2 {
+            let mut statements = blocks[3].statements().to_vec();
+            statements.push(statements[1].clone());
+            blocks[3] = SemanticBasicBlockV1::new(
+                blocks[3].identity(),
+                blocks[3].source(),
+                statements,
+                blocks[3].terminator().clone(),
+            )
+            .unwrap();
+        }
         let root = assertion_root_with_access(
             vec![
                 (A_UNIT, SemanticLocalRoleV1::Return),
@@ -2000,7 +2065,7 @@ mod identity_getter_shape_tests {
                 (WITNESS, SemanticLocalRoleV1::Temporary),
                 (RECEIVER, SemanticLocalRoleV1::Temporary),
                 (OPTION, SemanticLocalRoleV1::Temporary),
-                (A_U64, SemanticLocalRoleV1::Temporary),
+                (discriminator, SemanticLocalRoleV1::Temporary),
                 (ELEMENT_REF, SemanticLocalRoleV1::Temporary),
             ],
             vec![SLICE],
@@ -2027,7 +2092,17 @@ mod identity_getter_shape_tests {
         .unwrap()
         .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ExclusiveOwner])
         .unwrap();
-        let root = ordinary_rebuild_v1(&root, abi, root.locals().to_vec(), root.blocks().to_vec());
+        let mut root =
+            ordinary_rebuild_v1(&root, abi, root.locals().to_vec(), root.blocks().to_vec());
+        if collected_modes {
+            let entry = root.kernel_entry().unwrap();
+            let changed = SemanticKernelEntryV1::new(
+                SemanticLinkSymbolV1::new(b"other_identity_entry".to_vec()).unwrap(),
+                SemanticKernelBindingIdentityV1::from_sha256(bytes(246)),
+                entry.source_contract(),
+            );
+            root = root.with_kernel_entry(changed);
+        }
         let intrinsic =
             |tag, inputs, output, operation| SemanticCallableDeclV1::CompilerIntrinsic {
                 binding: SemanticNonBodyCallableBindingV1::new(
@@ -2053,7 +2128,7 @@ mod identity_getter_shape_tests {
             };
         let admitted = InertSemanticMirRequestV1::new_with_callables(
             SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
-            types(),
+            source_types,
             vec![],
             vec![],
             vec![],
@@ -2105,6 +2180,53 @@ mod identity_getter_shape_tests {
         )
         .unwrap()
     }
+    pub(super) fn redefined_witness_source() -> ProductionSemanticSsaOwnerV1 {
+        let seed = source_ssa(53);
+        let semantic = seed.source_semantic();
+        let root = &semantic.functions()[0];
+        let mut blocks = root.blocks().to_vec();
+        let SemanticTerminatorKindV1::Call(call) = blocks[0].terminator().kind() else {
+            unreachable!()
+        };
+        let destination = call.destination().unwrap();
+        let first = SemanticDirectCallV1::new_callable(
+            call.callee(),
+            vec![],
+            Some(SemanticCallDestinationV1::new(
+                destination.place().clone(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 6),
+            )),
+            call.unwind(),
+        )
+        .unwrap();
+        let second = blocks[0].terminator().kind().clone();
+        blocks[0] = block(191, vec![], SemanticTerminatorKindV1::Call(first));
+        blocks.push(block(197, vec![], second));
+        let root = ordinary_rebuild_v1(root, root.abi().clone(), root.locals().to_vec(), blocks);
+        let admitted = InertSemanticMirRequestV1::new_with_callables(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+            semantic.types().to_vec(),
+            vec![],
+            vec![],
+            vec![],
+            vec![root],
+            semantic.callables().to_vec(),
+            vec![ROOT],
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(
+            ProductionSemanticMirOwnerV1::try_new(
+                admitted,
+                fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap()
+    }
+
     fn captured_source(source: &ProductionPreRankedKirOwnerV1) {
         use fe2o3_pliron::{
             ProductionSemanticSsaEventRoleV1 as Role,
@@ -2720,6 +2842,704 @@ mod identity_getter_shape_tests {
             budget.release_storage(source_bytes).unwrap();
             budget.release_storage(capture.retained_storage()).unwrap();
             assert_eq!(budget.storage(), PREFIX);
+        }
+    }
+}
+
+mod identity_getter_completed_d_tests {
+    use super::*;
+    use fe2o3_lower_mir_kernel::{
+        ProductionCanonicalMemoryAnalysisCandidateV1 as Candidate,
+        ProductionScopedCanonicalStoreAnalysisV1 as Analysis,
+    };
+
+    fn with_fixture(
+        value: u32,
+        collected_modes: bool,
+        profile: Profile,
+        body: impl FnOnce(
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &mut CanonicalMemoryProjectedRootV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        with_fixture_stores(value, collected_modes, profile, 1, body)
+    }
+
+    fn with_fixture_stores(
+        value: u32,
+        collected_modes: bool,
+        profile: Profile,
+        stores: usize,
+        body: impl FnOnce(
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &mut CanonicalMemoryProjectedRootV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        let ssa = identity_getter_shape_tests::source_ssa_options(value, collected_modes, stores);
+        with_admitted_fixture(ssa, collected_modes, profile, body)
+    }
+
+    fn with_admitted_fixture(
+        mut ssa: ProductionSemanticSsaOwnerV1,
+        collected_modes: bool,
+        profile: Profile,
+        body: impl FnOnce(
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &mut CanonicalMemoryProjectedRootV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+        budget.reserve_storage(PREFIX).unwrap();
+        let capture = ssa
+            .try_capture_occurrences_with_budget_v1(&mut budget)
+            .unwrap();
+        budget.reserve_storage(capture.retained_storage()).unwrap();
+        let inputs = [ranked_root_input_1d(
+            if collected_modes {
+                "other_identity_entry"
+            } else {
+                A_NAME
+            },
+            if collected_modes { 246 } else { 247 },
+            64,
+        )];
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
+        let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+            ssa,
+            launch,
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )
+        .unwrap();
+        let source_bytes = source.executable_storage().retained_storage()
+            + source.assert_origin_storage().payload_storage();
+        budget.reserve_storage(source_bytes).unwrap();
+        let source_floor = budget.storage();
+        let result;
+        {
+            let bound =
+                dialect_amdgcn::bind_production_target_v1(source.executable().module(), profile)
+                    .unwrap();
+            let (input, storage) =
+                Owner::from_module_ref_with_verification_budget_v12(bound.module(), &mut budget)
+                    .unwrap();
+            let input_bytes = storage.retained_storage();
+            budget.reserve_storage(input_bytes).unwrap();
+            let observed =
+                fe2o3_pliron::optimize_native_neutral_kernel_ir_policy3_v1(&input, &mut budget)
+                    .unwrap();
+            budget
+                .reserve_storage(observed.storage().retained_storage())
+                .unwrap();
+            let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
+            let output_bytes = checked.storage().retained_storage();
+            budget.reserve_storage(output_bytes).unwrap();
+            let coordinate_bytes;
+            {
+                let (coordinates, storage) =
+                    dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                        source.executable(),
+                        &input,
+                        profile,
+                        &mut budget,
+                    )
+                    .unwrap();
+                coordinate_bytes = storage.retained_storage();
+                budget.reserve_storage(coordinate_bytes).unwrap();
+                let (view, storage) =
+                    fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                        &source,
+                        &coordinates,
+                        &checked,
+                        &mut budget,
+                    )
+                    .unwrap();
+                let view_bytes = storage.retained_storage();
+                budget.reserve_storage(view_bytes).unwrap();
+                assert!(std::ptr::eq(view.output(), checked.owner()));
+                let projection = RankedProjectionSourceV1::from_legacy(&source).unwrap();
+                let references =
+                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+                let floor = budget.storage();
+                result = with_ranked_root_preparation_v1(
+                    &projection,
+                    &inputs,
+                    &references,
+                    |effects, partition| {
+                        checked_output_session_v1::with_checked_output_assertions_view_budget_v1(
+                            &view,
+                            &mut budget,
+                            |session| {
+                                session.with_canonical_memory_scope_v1(|session| {
+                            let source_root = projection.source_launch().roots()[0];
+                            let selection = projection.semantic_ssa().source_semantic()
+                                .select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
+                            let mut root = {
+                                let mut facts = session.for_source(source_root.selected_root(), selection.body());
+                                project_canonical_memory_root_v1(
+                                    projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                    &partition[0], &mut facts,
+                                )?
+                            };
+                            session.with_output_occurrences_v1(|view, budget| {
+                                body(view, &mut root, budget).map_err(|error|
+                                    ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                                        canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Output(error),
+                                    ))
+                            })
+                        })
+                            },
+                        )
+                    },
+                );
+                assert_eq!(budget.storage(), floor);
+                drop(view);
+                budget.release_storage(view_bytes).unwrap();
+            }
+            budget.release_storage(coordinate_bytes).unwrap();
+            drop(checked);
+            budget.release_storage(output_bytes).unwrap();
+            drop(input);
+            budget.release_storage(input_bytes).unwrap();
+        }
+        assert_eq!(budget.storage(), source_floor);
+        drop(source);
+        budget.release_storage(source_bytes).unwrap();
+        budget.release_storage(capture.retained_storage()).unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+        result
+    }
+
+    fn candidate(root: &CanonicalMemoryProjectedRootV1) -> Candidate<'_> {
+        Candidate {
+            selected_root: root.selected_root,
+            selected_function: root.selected_function,
+            lowering: &root.lowering,
+            access_sources: &root.access_sources,
+            executable_effect_sources: &root.executable_effect_sources,
+            control: root.control.candidate(),
+        }
+    }
+
+    fn complete(
+        view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+        root: &CanonicalMemoryProjectedRootV1,
+        budget: &mut Budget<'_>,
+        body: impl FnOnce(
+            &Analysis<'_, '_, '_>,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionSourceOutputErrorV1> {
+        let candidates = [candidate(root)];
+        view.with_conditional_memory_control_coverage_v1(&candidates, budget, |control, budget| {
+            view.with_canonical_store_analysis_v1(
+                &candidates,
+                control,
+                budget,
+                |analyses, budget| {
+                    assert_eq!(analyses.len(), 1);
+                    body(&analyses[0], budget)
+                },
+            )
+        })
+    }
+
+    #[test]
+    fn actual_identity_getter_completes_nonempty_d_for_both_profiles_and_discriminator_modes() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for collected_modes in [false, true] {
+                for value in [17, 29] {
+                    let mut completed = false;
+                    with_fixture(value, collected_modes, profile, |view, root, budget| {
+                        let floor = budget.storage();
+                        assert_eq!(root.access_sources.len(), 1);
+                        assert!(root.executable_effect_sources.is_empty());
+                        let source = &root.access_sources[0];
+                        assert_eq!(source.semantic_block(), 3);
+                        assert_eq!(source.semantic_statement(), Some(1));
+                        assert_eq!(source.semantic_access_ordinal(), 0);
+                        complete(view, root, budget, |analysis, budget| {
+                            completed = true;
+                            assert!(std::ptr::eq(analysis.output(), view.output()));
+                            assert_eq!(analysis.selected_root(), ROOT);
+                            assert_eq!(analysis.selected_function(), ROOT);
+                            assert_eq!(analysis.access_count(), 1);
+                            let access = analysis.access(0, budget)?.unwrap();
+                            assert!(access.store_value().is_some());
+                            let coordinate = access.operation();
+                            let operation = &analysis.output().module().functions
+                                [coordinate.block.function.0 as usize]
+                                .body
+                                .as_ref()
+                                .unwrap()
+                                .blocks[coordinate.block.block as usize]
+                                .operations[coordinate.operation as usize];
+                            assert!(matches!(
+                                operation.kind,
+                                fe2o3_kernel_ir::OperationKind::Store { .. }
+                            ));
+                            assert!(analysis.access(1, budget)?.is_none());
+                            Ok(())
+                        })?;
+                        assert_eq!(budget.storage(), floor);
+                        Ok(())
+                    })
+                    .unwrap();
+                    assert!(completed);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_identity_d_rejects_foreign_witness_extent_missing_call_and_default_claims() {
+        use fe2o3_lower_mir_kernel::ProductionProjectionArgumentComponentV1 as Component;
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for case in 0..6 {
+                with_fixture(23, true, profile, |view, root, budget| {
+                    let claims = root.control.candidate_mut();
+                    match case {
+                        0 => {
+                            claims
+                                .arguments
+                                .iter_mut()
+                                .find(|row| row.source_local.index() == 2)
+                                .unwrap()
+                                .source_local = SemanticLocalIdV1::from_index(4)
+                        }
+                        1 => {
+                            claims
+                                .arguments
+                                .iter_mut()
+                                .find(|row| row.component == Component::SliceLength)
+                                .unwrap()
+                                .source_local = SemanticLocalIdV1::from_index(3)
+                        }
+                        2 => claims.arguments.retain(|row| row.source_local.index() != 2),
+                        3 => {
+                            claims
+                                .blocks
+                                .iter_mut()
+                                .find(|row| row.source_block.index() == 2)
+                                .unwrap()
+                                .source_block = SemanticBlockIdV1::from_index(5)
+                        }
+                        4 => {
+                            claims
+                                .arguments
+                                .iter_mut()
+                                .find(|row| row.source_local.index() == 2)
+                                .unwrap()
+                                .component = Component::SliceLength
+                        }
+                        5 => {
+                            let duplicate = *claims
+                                .arguments
+                                .iter()
+                                .find(|row| row.source_local.index() == 2)
+                                .unwrap();
+                            claims.arguments.push(duplicate);
+                        }
+                        _ => unreachable!(),
+                    }
+                    let floor = budget.storage();
+                    let mut reached = false;
+                    let result = complete(view, root, budget, |_, _| {
+                        reached = true;
+                        Ok(())
+                    });
+                    assert!(
+                        matches!(result, Err(ProductionSourceOutputErrorV1::Invalid(_))),
+                        "case {case}: {result:?}"
+                    );
+                    assert!(!reached);
+                    assert_eq!(budget.storage(), floor);
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_identity_stores_have_distinct_source_and_output_occurrences() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture_stores(43, true, profile, 2, |view, root, budget| {
+                let floor = budget.storage();
+                assert_eq!(root.access_sources.len(), 2);
+                assert_eq!(
+                    root.access_sources
+                        .iter()
+                        .map(|row| (
+                            row.semantic_block(),
+                            row.semantic_statement(),
+                            row.semantic_access_ordinal()
+                        ))
+                        .collect::<Vec<_>>(),
+                    vec![(3, Some(1), 0), (3, Some(2), 0)]
+                );
+                complete(view, root, budget, |analysis, budget| {
+                    assert_eq!(analysis.access_count(), 2);
+                    let first = analysis.access(0, budget)?.unwrap();
+                    let second = analysis.access(1, budget)?.unwrap();
+                    assert!(first.store_value().is_some() && second.store_value().is_some());
+                    assert_ne!(first.operation(), second.operation());
+                    assert!(analysis.access(2, budget)?.is_none());
+                    Ok(())
+                })?;
+                assert_eq!(budget.storage(), floor);
+                let second = root.access_sources[1];
+                root.access_sources[1] =
+                    fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1::new(
+                        second.semantic_block(),
+                        Some(1),
+                        0,
+                        second.ranked_block(),
+                        second.ranked_operation(),
+                    );
+                let mut completed = false;
+                assert!(
+                    complete(view, root, budget, |_, _| {
+                        completed = true;
+                        Ok(())
+                    })
+                    .is_err()
+                );
+                assert!(!completed);
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    // This component adapter supplies no checked control or output authority.
+    // It only retains the legacy dynamic source-projection behavior and meters
+    // its optional inert recorder on the already live test ledger.
+    struct LegacyFacts<'a, 'w>(&'a mut Budget<'w>);
+    impl ProjectedAssertionFactsV1 for LegacyFacts<'_, '_> {
+        fn charge_private_array_work(
+            &mut self,
+            amount: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            self.0.charge_work(amount).map_err(|error| {
+                ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(error),
+                )
+            })
+        }
+        fn reserve_checked_control_storage_v1(
+            &mut self,
+            bytes: usize,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            self.0.reserve_storage(bytes).map_err(|error| {
+                ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(error),
+                )
+            })
+        }
+        fn private_array_access(
+            &mut self,
+            _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+            _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            Ok(false)
+        }
+        fn private_array_constant_index(
+            &mut self,
+            _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+            _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+            Ok(None)
+        }
+        fn is_materialized_block(
+            &mut self,
+            _: usize,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            Ok(true)
+        }
+        fn condition(
+            &mut self,
+            _: usize,
+            _: bool,
+            _: SemanticBlockIdV1,
+        ) -> Result<
+            canonical_assertion_facts_v1::ProjectedAssertionConditionV1,
+            ProductionRankedProjectionErrorV1,
+        > {
+            Ok(canonical_assertion_facts_v1::ProjectedAssertionConditionV1::Dynamic)
+        }
+    }
+
+    #[test]
+    fn legacy_expression_recorder_remains_observational_and_disabled_facts_cannot_retain_identity_store()
+     {
+        with_fixture(47, false, Profile::Gfx942, |view, _, budget| {
+            let floor = budget.storage();
+            {
+                let projection = RankedProjectionSourceV1::from_legacy(view.source()).unwrap();
+                let inputs = [ranked_root_input_1d(A_NAME, 247, 64)];
+                let references =
+                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+                with_ranked_root_preparation_v1(
+                    &projection,
+                    &inputs,
+                    &references,
+                    |effects, partition| {
+                        let root = projection.source_launch().roots()[0];
+                        let semantic = projection.semantic_ssa().source_semantic();
+                        let selection = semantic
+                            .select_kernel_body_for_root_v1(root.selected_root())
+                            .unwrap();
+                        let function = &semantic.functions()[selection.body().index() as usize];
+                        let mut facts = LegacyFacts(budget);
+                        assert!(!facts.checked_control_enabled_v1());
+                        let legacy = prepare_projected_ranked_geometry_v1(
+                            projection.semantic_ssa(),
+                            effects,
+                            selection,
+                            &inputs[0],
+                            root,
+                            &partition[0],
+                            &mut facts,
+                            ProjectedGlobalWriteValuesV1::Expression,
+                            None,
+                        )?;
+                        let mut recorder =
+                            canonical_memory_control_v1::CanonicalMemoryControlRecorderV1::new(
+                                &mut facts,
+                            )?;
+                        let recorded = prepare_projected_ranked_geometry_v1(
+                            projection.semantic_ssa(),
+                            effects,
+                            selection,
+                            &inputs[0],
+                            root,
+                            &partition[0],
+                            &mut facts,
+                            ProjectedGlobalWriteValuesV1::Expression,
+                            Some(&mut recorder),
+                        )?;
+                        assert_eq!(
+                            format_ranked_cfg(A_NAME, &legacy.blocks)?,
+                            format_ranked_cfg(A_NAME, &recorded.blocks)?
+                        );
+                        assert_eq!(legacy.sources, recorded.sources);
+                        assert_eq!(
+                            legacy.executable_effect_sources,
+                            recorded.executable_effect_sources
+                        );
+                        assert_eq!(legacy.argument_count, recorded.argument_count);
+                        assert!(legacy.incomplete.is_none() && recorded.incomplete.is_none());
+                        let identity = recorder.identity_slice(
+                            function,
+                            semantic.callables(),
+                            &recorded.intrinsic,
+                            &[],
+                            &mut facts,
+                        )?;
+                        let before = facts.0.work();
+                        let error = retain_canonical_identity_slice_v1(
+                            function,
+                            &recorded.intrinsic.local_contracts.checked_references,
+                            &identity,
+                            &mut [],
+                            &mut facts,
+                        )
+                        .unwrap_err();
+                        assert!(matches!(
+                            error,
+                            ProductionRankedProjectionErrorV1::Incomplete(
+                                "canonical identity retention requires checked output facts"
+                            )
+                        ));
+                        assert_eq!(facts.0.work() - before, 2);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            }
+            // All source-domain projections and recorder Vecs are now dropped.
+            budget.release_storage(budget.storage() - floor).unwrap();
+            assert_eq!(budget.storage(), floor);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn exact_identity_d_rejects_wrong_source_store_site_and_ordinal() {
+        for case in 0..3 {
+            with_fixture(31, false, Profile::Gfx942, |view, root, budget| {
+                let source = &root.access_sources[0];
+                let changed = fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1::new(
+                    if case == 0 {
+                        4
+                    } else {
+                        source.semantic_block()
+                    },
+                    if case == 1 {
+                        Some(0)
+                    } else {
+                        source.semantic_statement()
+                    },
+                    if case == 2 {
+                        1
+                    } else {
+                        source.semantic_access_ordinal()
+                    },
+                    source.ranked_block(),
+                    source.ranked_operation(),
+                );
+                root.access_sources[0] = changed;
+                let floor = budget.storage();
+                let mut reached = false;
+                assert!(
+                    complete(view, root, budget, |_, _| {
+                        reached = true;
+                        Ok(())
+                    })
+                    .is_err()
+                );
+                assert!(!reached);
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn completed_identity_d_preserves_balanced_callback_errors_panics_and_reentry() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(37, true, profile, |view, root, budget| {
+                let floor = budget.storage();
+                for panic in [false, true] {
+                    let before = budget.work();
+                    let mut entered = false;
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        complete(view, root, budget, |analysis, budget| {
+                            entered = true;
+                            assert_eq!(analysis.access_count(), 1);
+                            assert!(analysis.access(0, budget)?.is_some());
+                            if panic {
+                                panic!("identity D callback");
+                            }
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "identity D callback",
+                            ))
+                        })
+                    }));
+                    assert!(entered);
+                    assert_eq!(result.is_err(), panic);
+                    match result {
+                        Ok(result) => assert!(matches!(
+                            result,
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "identity D callback"
+                            ))
+                        )),
+                        Err(payload) => {
+                            let message = payload
+                                .downcast_ref::<&str>()
+                                .copied()
+                                .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+                            assert_eq!(message, Some("identity D callback"));
+                        }
+                    }
+                    assert_eq!(budget.storage(), floor);
+                    assert!(budget.work() > before);
+                }
+                complete(view, root, budget, |analysis, budget| {
+                    assert!(analysis.access(0, budget)?.is_some());
+                    Ok(())
+                })?;
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn fresh_admitted_redefined_witness_cannot_enter_completed_d() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            let ssa = identity_getter_shape_tests::redefined_witness_source();
+            let calls = ssa.source_semantic().functions()[0]
+                .blocks()
+                .iter()
+                .filter(|block| {
+                    matches!(block.terminator().kind(), SemanticTerminatorKindV1::Call(call)
+                    if call.callee().index() == 1)
+                })
+                .count();
+            assert_eq!(calls, 2);
+            let mut reached = false;
+            let result = with_admitted_fixture(ssa, false, profile, |view, root, budget| {
+                complete(view, root, budget, |_, _| {
+                    reached = true;
+                    Ok(())
+                })
+            });
+            assert!(
+                result.is_err(),
+                "fresh source producer redefinition must remain closed"
+            );
+            assert!(!reached);
+        }
+    }
+
+    #[test]
+    fn actual_identity_d_denial_restores_original_floor_without_resetting_ledger() {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        for late in [false, true] {
+            let mut observed = false;
+            let result = with_fixture(41, true, Profile::Gfx942, |view, root, budget| {
+                let floor = budget.storage();
+                if late {
+                    let result = complete(view, root, budget, |analysis, budget| {
+                        assert_eq!(analysis.access_count(), 1);
+                        assert!(budget.storage() > floor);
+                        budget.charge_work(LIMIT - budget.work()).unwrap();
+                        let denial = budget.charge_work(1).unwrap_err();
+                        assert!(matches!(denial, Resource::Work(_)));
+                        observed = true;
+                        Err(ProductionSourceOutputErrorV1::Resource(denial))
+                    });
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSourceOutputErrorV1::Resource(Resource::Work(_)))
+                    ));
+                    assert_eq!(budget.storage(), floor);
+                    result
+                } else {
+                    // Entry charges 6, then scope charges 1 before reserving its
+                    // header. Leave no storage: denial precedes any new allocation.
+                    let held = STORAGE_LIMIT - floor;
+                    budget.reserve_storage(held).unwrap();
+                    let before = budget.work();
+                    let result = complete(view, root, budget, |_, _| {
+                        panic!("storage denial reached D")
+                    });
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSourceOutputErrorV1::Resource(Resource::Storage(
+                            _
+                        )))
+                    ));
+                    assert_eq!(budget.work() - before, 7);
+                    assert_eq!(budget.storage(), floor + held);
+                    budget.release_storage(held).unwrap();
+                    observed = true;
+                    Ok(())
+                }
+            });
+            assert!(observed);
+            assert_eq!(result.is_err(), late);
         }
     }
 }

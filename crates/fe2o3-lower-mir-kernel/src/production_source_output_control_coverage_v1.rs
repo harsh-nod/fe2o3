@@ -72,6 +72,9 @@ struct SourceOutputProjectionInvocationV1 {
     symbol: u32,
     first_use: usize,
     end_use: usize,
+    // This first identity-getter increment supplies D only, not the later
+    // physical/full-ranked payload-address substitution.
+    identity_getter: bool,
 }
 
 enum SourceOutputAddressLeafV1<'scope> {
@@ -1783,6 +1786,7 @@ fn source_output_control_predicate_v1(
 fn source_output_control_segments_v1(
     view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
     candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    identity: Option<&SourceOutputIdentityGetterV1>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<Vec<SourceOutputProjectionSegmentV1>, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
@@ -1813,6 +1817,22 @@ fn source_output_control_segments_v1(
             source,
             budget,
         )?;
+        if identity.is_some_and(|identity| identity.source.fallback == Some(source)) {
+            budget.charge_work(2).map_err(Error::Resource)?;
+            if candidate
+                .control
+                .blocks
+                .get(claimed)
+                .is_some_and(|row| row.source_block == source)
+            {
+                return Err(Error::Invalid(
+                    "identity impossible default acquired a projected segment",
+                ));
+            }
+            // The independent identity edge check below validates the complete
+            // typed default occurrence and its actual N/O empty Unreachable.
+            continue;
+        }
         if matches!(
             disposition,
             ProductionSourceOutputBlockV1::Materialized {
@@ -2248,7 +2268,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 + std::mem::size_of::<ProductionConditionalMemoryControlCoverageV1<'_>>();
             budget.reserve_storage(header).map_err(Error::Resource)?;
             let mut identities = Vec::new();
-            let mut arguments = Vec::new();
+            let mut arguments: Vec<SourceOutputProjectionArgumentV1> = Vec::new();
             let mut literal_uses = Vec::new();
             let mut invocation_sources = Vec::new();
             let mut invocation_roots = Vec::new();
@@ -2276,6 +2296,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 )?;
                 let first = arguments.len();
                 let mut invocation_index = None;
+                let mut identity = None;
                 for claim in &candidate.control.arguments {
                     budget.charge_work(2).map_err(Error::Resource)?;
                     let invocation =
@@ -2299,16 +2320,73 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                             invocation_index = Some(ordinal);
                             ordinal
                         };
-                        let row = source_output_control_invocation_v1(
-                            self,
-                            candidate,
-                            &invocation_sources[ordinal],
-                            ordinal,
-                            *claim,
-                            &mut literal_uses,
-                            &inventory,
-                            budget,
-                        )?;
+                        // The existing invocation entry charge covers component
+                        // validation and this fixed-size type dispatch.
+                        budget.charge_work(4).map_err(Error::Resource)?;
+                        if claim.component != ProductionProjectionArgumentComponentV1::Scalar {
+                            return Err(Error::Invalid(
+                                "invocation source component is not scalar",
+                            ));
+                        }
+                        let source = self.source.semantic_ssa().source_semantic();
+                        let aggregate_source = matches!(
+                            source.functions()[candidate.selected_function.index() as usize]
+                                .locals()
+                                .get(claim.source_local.index() as usize)
+                                .and_then(|local| source.types().get(local.ty().index() as usize))
+                                .map(SemanticTypeDeclV1::shape),
+                            Some(SemanticTypeShapeV1::Aggregate(_))
+                        );
+                        let row = if !aggregate_source {
+                            if identity.is_some() {
+                                return Err(Error::Invalid(
+                                    "identity getter cannot mix raw invocation anchors",
+                                ));
+                            }
+                            source_output_control_invocation_v1(
+                                self,
+                                candidate,
+                                &invocation_sources[ordinal],
+                                ordinal,
+                                *claim,
+                                &mut literal_uses,
+                                &inventory,
+                                budget,
+                            )?
+                        } else {
+                            budget
+                                .charge_work(arguments.len() - first)
+                                .map_err(Error::Resource)?;
+                            if identity.is_some()
+                                || arguments[first..].iter().any(|row| {
+                                    matches!(
+                                        row.origin,
+                                        SourceOutputProjectionLeafOriginV1::Invocation(_)
+                                    )
+                                })
+                            {
+                                return Err(Error::Invalid(
+                                    "identity getter invocation anchor is not unique",
+                                ));
+                            }
+                            budget
+                                .reserve_storage(std::mem::size_of::<
+                                    Option<SourceOutputIdentityGetterV1>,
+                                >())
+                                .map_err(Error::Resource)?;
+                            let (row, checked) = source_output_identity_getter_v1(
+                                self,
+                                candidate,
+                                &invocation_sources[ordinal],
+                                ordinal,
+                                *claim,
+                                &mut literal_uses,
+                                &inventory,
+                                budget,
+                            )?;
+                            identity = Some(checked);
+                            row
+                        };
                         if let SourceOutputProjectionLeafOriginV1::Invocation(anchor) = row.origin {
                             assert_origin_push_v1(
                                 &mut invocation_roots,
@@ -2358,7 +2436,12 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                     }
                 }
                 source_output_global_scratch_scope_v1(budget, |budget| {
-                    let segments = source_output_control_segments_v1(self, candidate, budget)?;
+                    let segments = source_output_control_segments_v1(
+                        self,
+                        candidate,
+                        identity.as_ref(),
+                        budget,
+                    )?;
                     source_output_control_calls_and_accesses_v1(
                         self,
                         candidate,
@@ -2405,6 +2488,22 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                         },
                     };
                     for segment in &segments {
+                        if let Some(identity) = &identity
+                            && segment.source == identity.source.switch
+                        {
+                            source_output_identity_edges_v1(
+                                self,
+                                candidate,
+                                &segments,
+                                *segment,
+                                identity,
+                                &invocation_sources[invocation_index
+                                    .ok_or(Error::Invalid("identity source index absent"))?],
+                                &inventory,
+                                context.inner.budget,
+                            )?;
+                            continue;
+                        }
                         source_output_control_segment_edges_v1(
                             self,
                             candidate,
@@ -2414,8 +2513,40 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                             &mut context,
                         )?;
                     }
+                    if let Some(identity) = &identity {
+                        source_output_identity_stores_v1(
+                            self,
+                            candidate,
+                            identity,
+                            &inventory,
+                            context.inner.budget,
+                        )?;
+                    }
                     Ok(())
                 })?;
+                if let Some(identity) = identity {
+                    let bytes = identity
+                        .source
+                        .stores
+                        .capacity()
+                        .checked_mul(std::mem::size_of::<SourceOutputIdentityStoreV1>())
+                        .and_then(|n| {
+                            identity
+                                .source
+                                .some_region
+                                .capacity()
+                                .checked_mul(std::mem::size_of::<bool>())
+                                .and_then(|m| n.checked_add(m))
+                        })
+                        .and_then(|n| {
+                            n.checked_add(
+                                std::mem::size_of::<Option<SourceOutputIdentityGetterV1>>(),
+                            )
+                        })
+                        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+                    drop(identity);
+                    budget.release_storage(bytes).map_err(Error::Resource)?;
+                }
                 assert_origin_push_v1(
                     &mut identities,
                     SourceOutputControlCandidateIdentityV1 {
@@ -2735,6 +2866,11 @@ fn source_output_control_leaf_rows_v1<'a>(
             })
         }
         SourceOutputProjectionLeafOriginV1::Invocation(invocation) => {
+            if invocation.identity_getter {
+                return Err(Error::Invalid(
+                    "identity getter address join is not implemented",
+                ));
+            }
             SourceOutputAddressLeafV1::Invocation(row, invocation)
         }
     }))
@@ -3798,10 +3934,6 @@ fn source_output_control_invocation_v1(
     use fe2o3_kernel_ir::{
         CanonicalKirDefinitionCoordinateV1 as Def, CanonicalKirUseCoordinateV1 as Use,
     };
-    budget.charge_work(4).map_err(Error::Resource)?;
-    if claim.component != ProductionProjectionArgumentComponentV1::Scalar {
-        return Err(Error::Invalid("invocation source component is not scalar"));
-    }
     let symbol = source_output_invocation_symbol_v1(view, candidate, index.canonical, budget)?;
     let captured = source_output_invocation_capture_v1(view.source, index.function, budget)?;
     let function =
@@ -4001,7 +4133,2018 @@ fn source_output_control_invocation_v1(
                 symbol,
                 first_use,
                 end_use: uses.len(),
+                identity_getter: false,
             },
         ),
     })
+}
+
+struct SourceOutputIdentityStoreV1 {
+    site: (u32, u32),
+    operand: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    seen: bool,
+}
+
+struct SourceOutputIdentitySourceV1 {
+    anchor: SourceOutputInvocationSourceAnchorV1,
+    slice: SemanticLocalIdV1,
+    discriminator: SemanticLocalIdV1,
+    discriminator_site: (u32, u32),
+    switch: SemanticBlockIdV1,
+    some: SemanticBlockIdV1,
+    none: SemanticBlockIdV1,
+    some_ordinal: u32,
+    fallback: Option<SemanticBlockIdV1>,
+    stores: Vec<SourceOutputIdentityStoreV1>,
+    some_region: Vec<bool>,
+}
+
+struct SourceOutputIdentityGetterV1 {
+    source: SourceOutputIdentitySourceV1,
+    original_compare: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    original_pointer: ValueId,
+    output_compare: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    output_condition: ValueId,
+    output_index: ValueId,
+    output_slice: ValueId,
+    ranked_index: ProductionRankedValueV1,
+    ranked_extent: ProductionRankedValueV1,
+    source_argument: u32,
+}
+
+fn source_output_identity_event_v1<'a>(
+    index: &SourceOutputInvocationSourceIndexV1,
+    captured: &'a fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    key: SourceOutputInvocationEventKeyV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<&'a fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1, ProductionSourceOutputErrorV1>
+{
+    use ProductionSourceOutputErrorV1 as Error;
+    let found = assert_origin_find_v1(&index.events, budget, |row, budget| {
+        budget.charge_work(7)?;
+        Ok(row.0.cmp(&key))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("identity source event absent"))?;
+    budget.charge_work(5).map_err(Error::Resource)?;
+    let event = captured
+        .events()
+        .get(index.events[found].1)
+        .ok_or(Error::Invalid("identity source event ordinal differs"))?;
+    if !event.is_reachable()
+        || !event.is_promoted()
+        || source_output_invocation_event_key_v1(event) != Some(key)
+    {
+        return Err(Error::Invalid(
+            "identity source event is not exact promoted occurrence",
+        ));
+    }
+    Ok(event)
+}
+
+fn source_output_identity_defined_v1(
+    index: &SourceOutputInvocationSourceIndexV1,
+    captured: &fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    site: (u32, u32),
+    local: SemanticLocalIdV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SsaValueV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let event =
+        source_output_identity_event_v1(index, captured, (0, site.0, site.1, 2, 0, 2, 0), budget)?;
+    match (event.event(), event.resolved()) {
+        (
+            fe2o3_mir_model::SsaEventV1::Define(original),
+            Some(SsaResolvedEventV1::Define {
+                variable,
+                value: value @ SsaValueV1::Definition(_),
+            }),
+        ) if original == variable && variable.get() == local.index() => Ok(value),
+        _ => Err(Error::Invalid("identity source definition differs")),
+    }
+}
+
+fn source_output_identity_direct_definition_v1(
+    index: &SourceOutputInvocationSourceIndexV1,
+    value: SsaValueV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputInvocationDefinitionV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(1).map_err(Error::Resource)?;
+    if !matches!(value, SsaValueV1::Definition(_)) {
+        return Err(Error::Invalid(
+            "identity source merge transport is unsupported",
+        ));
+    }
+    let found = assert_origin_find_v1(&index.definitions, budget, |row, budget| {
+        budget.charge_work(4)?;
+        Ok(row.0.cmp(&value))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("identity source definition absent"))?;
+    Ok(index.definitions[found].1)
+}
+
+fn source_output_identity_plain_place_v1(
+    operand: &SemanticOperandV1,
+) -> Option<&fe2o3_mir_model::semantic_mir_v1::SemanticPlaceV1> {
+    match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
+            if place.projections().is_empty() =>
+        {
+            Some(place)
+        }
+        _ => None,
+    }
+}
+
+fn source_output_identity_source_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    claim: ProductionProjectionArgumentCandidateV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputIdentitySourceV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
+        SemanticMutabilityV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
+        SemanticProjectionKindV1,
+    };
+    use fe2o3_pliron::{
+        ProductionSemanticSsaEventRoleV1 as Role, ProductionSemanticSsaOccurrenceSiteV1 as Site,
+        ProductionSemanticSsaOperandRoleV1 as Operand,
+    };
+    budget.charge_work(4).map_err(Error::Resource)?;
+    if index.source != std::ptr::from_ref(view.source).cast() {
+        return Err(Error::Invalid("identity captured owner differs"));
+    }
+    let semantic = view.source.semantic_ssa().source_semantic();
+    let function = semantic
+        .functions()
+        .get(index.function.index() as usize)
+        .ok_or(Error::Invalid("identity source function absent"))?;
+    let captured = source_output_invocation_capture_v1(view.source, index.function, budget)?;
+    let mut getter = None;
+    for (block, source) in function.blocks().iter().enumerate() {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        let SemanticTerminatorKindV1::Call(call) = source.terminator().kind() else {
+            continue;
+        };
+        if let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                    disjoint_slice,
+                    index_witness,
+                    element,
+                    raw_index,
+                },
+            ..
+        }) = semantic.callables().get(call.callee().index() as usize)
+            && getter
+                .replace((
+                    block,
+                    call,
+                    *disjoint_slice,
+                    *index_witness,
+                    *element,
+                    *raw_index,
+                ))
+                .is_some()
+        {
+            return Err(Error::Invalid(
+                "identity getter source occurrence is not unique",
+            ));
+        }
+    }
+    let (getter_block, call, slice_type, witness_type, element, raw_type) =
+        getter.ok_or(Error::Invalid("identity getter source occurrence absent"))?;
+    budget
+        .charge_work(
+            call.arguments()
+                .len()
+                .checked_add(16)
+                .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+        )
+        .map_err(Error::Resource)?;
+    let [receiver_operand, witness_operand] = call.arguments() else {
+        return Err(Error::Invalid("identity getter arguments differ"));
+    };
+    let receiver = source_output_identity_plain_place_v1(receiver_operand)
+        .ok_or(Error::Invalid("identity receiver is not plain reference"))?;
+    let witness = source_output_identity_plain_place_v1(witness_operand)
+        .ok_or(Error::Invalid("identity witness is not plain typed value"))?;
+    if witness.local() != claim.source_local
+        || witness.ty() != witness_type
+        || !matches!(
+            semantic
+                .types()
+                .get(raw_type.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 64
+            }))
+        )
+        || !matches!(
+            lower_scalar_type(semantic.types(), element).map_err(Error::SourceReplay)?,
+            Type::Scalar(_)
+        )
+    {
+        return Err(Error::Invalid(
+            "identity getter witness or scalar element type differs",
+        ));
+    }
+    let Some(SemanticTypeShapeV1::Pointer(receiver_type)) = semantic
+        .types()
+        .get(receiver.ty().index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return Err(Error::Invalid("identity receiver reference type absent"));
+    };
+    if receiver_type.kind() != SemanticPointerKindV1::Reference
+        || receiver_type.mutability() != SemanticMutabilityV1::Mutable
+        || receiver_type.metadata() != SemanticPointerMetadataV1::None
+        || receiver_type.pointee() != slice_type
+    {
+        return Err(Error::Invalid(
+            "identity receiver is not the mutable wrapper reference",
+        ));
+    }
+    let getter_block = u32::try_from(getter_block)
+        .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+    let witness_value = source_output_invocation_use_v1(
+        index,
+        &captured,
+        (1, getter_block, 0, 3, 1, 0, 0),
+        witness.local(),
+        budget,
+    )?;
+    let definition = source_output_identity_direct_definition_v1(index, witness_value, budget)?;
+    let (producer, producer_call) = source_output_invocation_call_v1(
+        function,
+        index,
+        &captured,
+        witness.local(),
+        witness_value,
+        definition,
+        budget,
+    )?;
+    budget
+        .charge_work(
+            producer_call
+                .arguments()
+                .len()
+                .checked_add(5)
+                .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+        )
+        .map_err(Error::Resource)?;
+    if !producer_call.arguments().is_empty()
+        || producer_call
+            .destination()
+            .is_none_or(|to| to.place().ty() != witness_type)
+        || !matches!(semantic.callables().get(producer_call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, raw_index }, ..
+            }) if *index_witness == witness_type && *raw_index == raw_type)
+    {
+        return Err(Error::Invalid("identity witness producer differs"));
+    }
+    let receiver_value = source_output_invocation_use_v1(
+        index,
+        &captured,
+        (1, getter_block, 0, 3, 0, 0, 0),
+        receiver.local(),
+        budget,
+    )?;
+    let SourceOutputInvocationDefinitionV1::Event(receiver_definition) =
+        source_output_identity_direct_definition_v1(index, receiver_value, budget)?
+    else {
+        return Err(Error::Invalid(
+            "identity receiver has no direct Borrow definition",
+        ));
+    };
+    let Site::Statement {
+        block: receiver_block,
+        statement: receiver_statement,
+    } = captured.events()[receiver_definition].site()
+    else {
+        return Err(Error::Invalid("identity receiver Borrow statement absent"));
+    };
+    let SemanticStatementKindV1::Assign(borrow) = function.blocks()[receiver_block.get() as usize]
+        .statements()[receiver_statement as usize]
+        .kind()
+    else {
+        return Err(Error::Invalid(
+            "identity receiver definition is not assignment",
+        ));
+    };
+    let SemanticRvalueKindV1::Borrow {
+        kind: SemanticBorrowKindV1::Mutable,
+        place: slice,
+    } = borrow.value().kind()
+    else {
+        return Err(Error::Invalid(
+            "identity receiver definition is not mutable Borrow",
+        ));
+    };
+    budget.charge_work(9).map_err(Error::Resource)?;
+    if borrow.destination().local() != receiver.local()
+        || !borrow.destination().projections().is_empty()
+        || borrow.destination().ty() != receiver.ty()
+        || borrow.value().result_type() != receiver.ty()
+        || !slice.projections().is_empty()
+        || slice.ty() != slice_type
+        || !matches!(
+            function
+                .locals()
+                .get(slice.local().index() as usize)
+                .map(|local| local.role()),
+            Some(SemanticLocalRoleV1::Argument(_))
+        )
+    {
+        return Err(Error::Invalid("identity receiver Borrow formal differs"));
+    }
+    source_output_invocation_statement_span_v1(
+        view,
+        index,
+        receiver_block.get(),
+        receiver_statement,
+        budget,
+    )?;
+    let slice_value = source_output_invocation_use_v1(
+        index,
+        &captured,
+        (0, receiver_block.get(), receiver_statement, 1, 0, 0, 0),
+        slice.local(),
+        budget,
+    )?;
+    let plan = view
+        .source
+        .semantic_ssa()
+        .plan_for_function(index.function)
+        .ok_or(Error::Invalid("identity source plan absent"))?
+        .plan();
+    let mut formal = None;
+    for row in plan.entry_definitions() {
+        budget.charge_work(3).map_err(Error::Resource)?;
+        if row.variable().get() == slice.local().index() && formal.replace(row.value()).is_some() {
+            return Err(Error::Invalid("identity formal SSA entry duplicated"));
+        }
+    }
+    if formal != Some(slice_value) {
+        return Err(Error::Invalid(
+            "identity Borrow does not use the source formal definition",
+        ));
+    }
+    let destination = call
+        .destination()
+        .ok_or(Error::Invalid("identity getter destination absent"))?;
+    let option = destination.place().local();
+    let mut option_definition = None;
+    for (ordinal, row) in captured.edge_definitions().iter().enumerate() {
+        budget.charge_work(5).map_err(Error::Resource)?;
+        if row.edge().source().get() == getter_block
+            && row.variable().get() == option.index()
+            && option_definition.replace((ordinal, row.value())).is_some()
+        {
+            return Err(Error::Invalid("identity Option edge definition duplicated"));
+        }
+    }
+    let (ordinal, Some(option_value @ SsaValueV1::Definition(_))) =
+        option_definition.ok_or(Error::Invalid("identity Option edge definition absent"))?
+    else {
+        return Err(Error::Invalid("identity Option edge value is not direct"));
+    };
+    let (get, checked_call) = source_output_invocation_call_v1(
+        function,
+        index,
+        &captured,
+        option,
+        option_value,
+        SourceOutputInvocationDefinitionV1::Edge(ordinal),
+        budget,
+    )?;
+    if !std::ptr::eq(checked_call, call) || get.source().get() != getter_block {
+        return Err(Error::Invalid(
+            "identity getter CallReturn occurrence differs",
+        ));
+    }
+    let mut discriminator = None;
+    let mut payload = None;
+    for (block, source) in function.blocks().iter().enumerate() {
+        budget.charge_work(1).map_err(Error::Resource)?;
+        for (statement, row) in source.statements().iter().enumerate() {
+            budget.charge_work(6).map_err(Error::Resource)?;
+            let SemanticStatementKindV1::Assign(assignment) = row.kind() else {
+                continue;
+            };
+            let site = (
+                u32::try_from(block)
+                    .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+                u32::try_from(statement)
+                    .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+            );
+            if let SemanticRvalueKindV1::Discriminant(place) = assignment.value().kind()
+                && place.local() == option
+            {
+                if !place.projections().is_empty()
+                    || place.ty() != destination.place().ty()
+                    || !assignment.destination().projections().is_empty()
+                    || discriminator
+                        .replace((site, assignment.destination().local()))
+                        .is_some()
+                {
+                    return Err(Error::Invalid("identity Option discriminator is ambiguous"));
+                }
+            }
+            if let SemanticRvalueKindV1::Use(
+                SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
+            ) = assignment.value().kind()
+                && place.local() == option
+            {
+                if !matches!(place.projections(), [variant, field]
+                    if variant.kind() == SemanticProjectionKindV1::Downcast(1)
+                    && field.kind() == SemanticProjectionKindV1::Field(0))
+                    || !assignment.destination().projections().is_empty()
+                    || assignment.destination().ty() != place.ty()
+                    || assignment.value().result_type() != place.ty()
+                    || payload
+                        .replace((site, assignment.destination().local()))
+                        .is_some()
+                {
+                    return Err(Error::Invalid(
+                        "identity Option payload is not unique Some.0",
+                    ));
+                }
+            }
+        }
+    }
+    let (discriminator_site, discriminator) =
+        discriminator.ok_or(Error::Invalid("identity discriminant absent"))?;
+    let (payload_site, payload) = payload.ok_or(Error::Invalid("identity Some payload absent"))?;
+    let discriminator_value = source_output_identity_defined_v1(
+        index,
+        &captured,
+        discriminator_site,
+        discriminator,
+        budget,
+    )?;
+    let payload_value =
+        source_output_identity_defined_v1(index, &captured, payload_site, payload, budget)?;
+    if source_output_invocation_use_v1(
+        index,
+        &captured,
+        (0, discriminator_site.0, discriminator_site.1, 1, 0, 0, 0),
+        option,
+        budget,
+    )? != option_value
+        || source_output_invocation_use_v1(
+            index,
+            &captured,
+            (0, payload_site.0, payload_site.1, 0, 0, 0, 0),
+            option,
+            budget,
+        )? != option_value
+    {
+        return Err(Error::Invalid("identity Option own source uses differ"));
+    }
+    source_output_invocation_statement_span_v1(
+        view,
+        index,
+        payload_site.0,
+        payload_site.1,
+        budget,
+    )?;
+    let mut switch = None;
+    for (block, source) in function.blocks().iter().enumerate() {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = source.terminator().kind()
+        else {
+            continue;
+        };
+        let Some(place) = source_output_identity_plain_place_v1(discriminant) else {
+            continue;
+        };
+        if place.local() != discriminator {
+            continue;
+        }
+        if switch
+            .replace((
+                block,
+                targets,
+                matches!(discriminant, SemanticOperandV1::Move(_)),
+            ))
+            .is_some()
+        {
+            return Err(Error::Invalid(
+                "identity Option switch occurrence duplicated",
+            ));
+        }
+    }
+    let (switch, targets, switch_move) =
+        switch.ok_or(Error::Invalid("identity Option switch absent"))?;
+    let switch =
+        u32::try_from(switch).map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+    // Switch discriminants have their own source operand role, not CallArgument.
+    let mut switch_use = None;
+    for event in captured.events() {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        if event.site()
+            == (Site::Terminator {
+                block: SsaBlockIdV1::new(switch),
+            })
+            && event.operand() == Operand::SwitchDiscriminant
+            && event.role() == Role::BaseUse
+            && matches!(event.resolved(), Some(SsaResolvedEventV1::Use { variable, .. }) if variable.get() == discriminator.index())
+        {
+            if !event.is_reachable()
+                || !event.is_promoted()
+                || switch_use.replace(event.resolved()).is_some()
+            {
+                return Err(Error::Invalid("identity switch source use duplicated"));
+            }
+        }
+    }
+    if !matches!(switch_use, Some(Some(SsaResolvedEventV1::Use { value, .. })) if value == discriminator_value)
+    {
+        return Err(Error::Invalid(
+            "identity switch source discriminator differs",
+        ));
+    }
+    budget
+        .charge_work(
+            targets
+                .values()
+                .len()
+                .checked_add(7)
+                .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?,
+        )
+        .map_err(Error::Resource)?;
+    let (none, some, some_ordinal, fallback) = match targets.values() {
+        [zero] if zero.value() == 0 => {
+            (zero.edge().target(), targets.otherwise().target(), 1, None)
+        }
+        [one] if one.value() == 1 => (targets.otherwise().target(), one.edge().target(), 0, None),
+        [zero, one] if zero.value() == 0 && one.value() == 1 => (
+            zero.edge().target(),
+            one.edge().target(),
+            1,
+            Some(targets.otherwise().target()),
+        ),
+        _ => {
+            return Err(Error::Invalid(
+                "identity switch is not exact zero/one Option selection",
+            ));
+        }
+    };
+    if none == some || fallback.is_some_and(|block| block == some || block == none) {
+        return Err(Error::Invalid(
+            "identity Option successors are not distinct",
+        ));
+    }
+    if let Some(fallback) = fallback {
+        let block = function
+            .blocks()
+            .get(fallback.index() as usize)
+            .ok_or(Error::Invalid("identity default block absent"))?;
+        if !block.statements().is_empty()
+            || !matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Unreachable
+            )
+        {
+            return Err(Error::Invalid("identity default is not empty Unreachable"));
+        }
+    }
+    let mut result = SourceOutputIdentitySourceV1 {
+        anchor: SourceOutputInvocationSourceAnchorV1 {
+            get,
+            producer,
+            raw: option_value,
+            witness: witness_value,
+        },
+        slice: slice.local(),
+        discriminator,
+        discriminator_site,
+        switch: SemanticBlockIdV1::from_index(switch),
+        some,
+        none,
+        some_ordinal,
+        fallback,
+        stores: Vec::new(),
+        some_region: Vec::new(),
+    };
+    source_output_identity_some_region_v1(function, index, &mut result, budget)?;
+    if !result
+        .some_region
+        .get(payload_site.0 as usize)
+        .copied()
+        .unwrap_or(false)
+    {
+        return Err(Error::Invalid(
+            "identity payload definition is outside exact Some region",
+        ));
+    }
+    for (block, source) in function.blocks().iter().enumerate() {
+        budget.charge_work(1).map_err(Error::Resource)?;
+        for (statement, row) in source.statements().iter().enumerate() {
+            budget.charge_work(4).map_err(Error::Resource)?;
+            let (destination, operand) = match row.kind() {
+                SemanticStatementKindV1::Assign(assignment) => {
+                    (assignment.destination(), Operand::Destination)
+                }
+                SemanticStatementKindV1::Store(store) => {
+                    (store.destination(), Operand::StoreDestination)
+                }
+                _ => continue,
+            };
+            if destination.local() != payload || destination.projections().is_empty() {
+                continue;
+            }
+            if !result.some_region[block]
+                || !matches!(destination.projections(), [projection]
+                if projection.kind() == SemanticProjectionKindV1::Dereference)
+                || destination.ty() != element
+            {
+                return Err(Error::Invalid(
+                    "identity own Store is outside Some or has extra projections",
+                ));
+            }
+            assert_origin_push_v1(
+                &mut result.stores,
+                SourceOutputIdentityStoreV1 {
+                    site: (block as u32, statement as u32),
+                    operand,
+                    seen: false,
+                },
+                budget,
+            )
+            .map_err(Error::SourceOrigin)?;
+        }
+    }
+    if result.stores.is_empty() {
+        return Err(Error::Invalid("identity Some has no own source Store"));
+    }
+    let mut kills = [false; 3];
+    for event in captured.events() {
+        budget.charge_work(13).map_err(Error::Resource)?;
+        let variable = event.event().variable().get();
+        if ![
+            receiver.local().index(),
+            witness.local().index(),
+            option.index(),
+            payload.index(),
+            discriminator.index(),
+        ]
+        .contains(&variable)
+        {
+            continue;
+        }
+        if !event.is_reachable() || !event.is_promoted() {
+            return Err(Error::Invalid(
+                "identity source anchor has a nonpromoted occurrence",
+            ));
+        }
+        if event.role() == Role::MoveKill {
+            let expected = [
+                (
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(getter_block),
+                    },
+                    Operand::CallArgument(0),
+                    receiver.local(),
+                    receiver_value,
+                    matches!(receiver_operand, SemanticOperandV1::Move(_)),
+                ),
+                (
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(getter_block),
+                    },
+                    Operand::CallArgument(1),
+                    witness.local(),
+                    witness_value,
+                    matches!(witness_operand, SemanticOperandV1::Move(_)),
+                ),
+                (
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(switch),
+                    },
+                    Operand::SwitchDiscriminant,
+                    discriminator,
+                    discriminator_value,
+                    switch_move,
+                ),
+            ];
+            let found = expected
+                .iter()
+                .position(|row| {
+                    row.0 == event.site()
+                        && row.1 == event.operand()
+                        && row.2.index() == variable
+                        && row.4
+                })
+                .ok_or(Error::Invalid(
+                    "identity source anchor has an unrelated Move kill",
+                ))?;
+            if kills[found]
+                || !matches!(event.resolved(), Some(SsaResolvedEventV1::Kill { previous: Some(value), .. }) if value == expected[found].3)
+            {
+                return Err(Error::Invalid(
+                    "identity Move does not consume the exact source value",
+                ));
+            }
+            kills[found] = true;
+            continue;
+        }
+        if variable == payload.index() && event.role() == Role::BaseUse {
+            let Site::Statement { block, statement } = event.site() else {
+                return Err(Error::Invalid(
+                    "identity payload escapes through a terminator",
+                ));
+            };
+            let key = (block.get(), statement);
+            let found = assert_origin_find_v1(&result.stores, budget, |row, budget| {
+                budget.charge_work(2)?;
+                Ok(row.site.cmp(&key))
+            })
+            .map_err(Error::SourceOrigin)?
+            .ok_or(Error::Invalid("identity payload escapes its own Stores"))?;
+            let row = &mut result.stores[found];
+            if row.seen
+                || row.operand != event.operand()
+                || !matches!(event.resolved(), Some(SsaResolvedEventV1::Use { value, .. }) if value == payload_value)
+            {
+                return Err(Error::Invalid("identity Store source BaseUse differs"));
+            }
+            row.seen = true;
+            continue;
+        }
+        if event.role() == Role::BaseUse {
+            let expected = [
+                (
+                    receiver.local(),
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(getter_block),
+                    },
+                    Operand::CallArgument(0),
+                    receiver_value,
+                ),
+                (
+                    witness.local(),
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(getter_block),
+                    },
+                    Operand::CallArgument(1),
+                    witness_value,
+                ),
+                (
+                    option,
+                    Site::Statement {
+                        block: SsaBlockIdV1::new(discriminator_site.0),
+                        statement: discriminator_site.1,
+                    },
+                    Operand::RvaluePlace,
+                    option_value,
+                ),
+                (
+                    option,
+                    Site::Statement {
+                        block: SsaBlockIdV1::new(payload_site.0),
+                        statement: payload_site.1,
+                    },
+                    Operand::RvalueOperand(0),
+                    option_value,
+                ),
+                (
+                    discriminator,
+                    Site::Terminator {
+                        block: SsaBlockIdV1::new(switch),
+                    },
+                    Operand::SwitchDiscriminant,
+                    discriminator_value,
+                ),
+            ];
+            if !expected.iter().any(|row| row.0.index() == variable && row.1 == event.site()
+                && row.2 == event.operand()
+                && matches!(event.resolved(), Some(SsaResolvedEventV1::Use { value, .. }) if value == row.3))
+            { return Err(Error::Invalid("identity source value has an unrelated use")); }
+        } else if event.role() == Role::DestinationDefine {
+            let expected = [
+                (
+                    receiver.local(),
+                    (receiver_block.get(), receiver_statement),
+                    receiver_value,
+                ),
+                (payload, payload_site, payload_value),
+                (discriminator, discriminator_site, discriminator_value),
+            ];
+            if !expected.iter().any(|row| row.0.index() == variable
+                && event.site() == (Site::Statement { block: SsaBlockIdV1::new(row.1.0), statement: row.1.1 })
+                && matches!(event.resolved(), Some(SsaResolvedEventV1::Define { value, .. }) if value == row.2))
+            { return Err(Error::Invalid("identity source value is redefined")); }
+        } else {
+            return Err(Error::Invalid(
+                "identity source value has unsupported lifetime or projection occurrence",
+            ));
+        }
+    }
+    if kills
+        != [
+            matches!(receiver_operand, SemanticOperandV1::Move(_)),
+            matches!(witness_operand, SemanticOperandV1::Move(_)),
+            switch_move,
+        ]
+    {
+        return Err(Error::Invalid(
+            "identity source Move occurrences are incomplete",
+        ));
+    }
+    for row in &result.stores {
+        budget.charge_work(1).map_err(Error::Resource)?;
+        if !row.seen {
+            return Err(Error::Invalid("identity Store captured occurrence absent"));
+        }
+    }
+    Ok(result)
+}
+
+fn source_output_identity_some_region_v1(
+    function: &SemanticFunctionDeclV1,
+    index: &SourceOutputInvocationSourceIndexV1,
+    source: &mut SourceOutputIdentitySourceV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    for _ in function.blocks() {
+        assert_origin_push_v1(&mut source.some_region, false, budget)
+            .map_err(Error::SourceOrigin)?;
+    }
+    let mut target = source.some;
+    let mut expected = fe2o3_mir_model::SsaEdgeIdV1::new(
+        SsaBlockIdV1::new(source.switch.index()),
+        source.some_ordinal,
+    );
+    loop {
+        budget.charge_work(9).map_err(Error::Resource)?;
+        let found = assert_origin_find_v1(&index.incoming, budget, |row, budget| {
+            budget.charge_work(1)?;
+            Ok(row.0.0.cmp(&target.index()))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("identity Some incoming edge absent"))?;
+        let multiple = found
+            .checked_sub(1)
+            .and_then(|i| index.incoming.get(i))
+            .is_some_and(|row| row.0.0 == target.index())
+            || index
+                .incoming
+                .get(found + 1)
+                .is_some_and(|row| row.0.0 == target.index());
+        if multiple {
+            if target == source.some {
+                return Err(Error::Invalid(
+                    "identity Some has multiple source predecessors",
+                ));
+            }
+            break;
+        }
+        if index.incoming[found].0.1 != expected || target == function.entry() {
+            return Err(Error::Invalid("identity Some predecessor differs"));
+        }
+        let seen = source
+            .some_region
+            .get_mut(target.index() as usize)
+            .ok_or(Error::Invalid("identity Some block absent"))?;
+        if *seen {
+            return Err(Error::Invalid("identity Some forwarding cycle"));
+        }
+        *seen = true;
+        match function.blocks()[target.index() as usize]
+            .terminator()
+            .kind()
+        {
+            SemanticTerminatorKindV1::Return => break,
+            SemanticTerminatorKindV1::Goto(edge) => {
+                expected = fe2o3_mir_model::SsaEdgeIdV1::new(SsaBlockIdV1::new(target.index()), 0);
+                target = edge.target();
+            }
+            _ => {
+                return Err(Error::Invalid(
+                    "identity Some region requires direct acyclic continuation",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn source_output_identity_span_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    block: u32,
+    statement: Option<u32>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (
+        fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,
+        std::ops::Range<usize>,
+    ),
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    let (physical, first, count) = if let Some(statement) = statement {
+        let key = (block, statement);
+        let found = assert_origin_find_v1(&index.statements, budget, |row, budget| {
+            budget.charge_work(2)?;
+            Ok(row.0.cmp(&key))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("identity original statement span absent"))?;
+        let span =
+            view.source.correspondence.statement_operation_spans()[index.statements[found].1];
+        (
+            span.kernel_ir_block(),
+            span.first_operation_ordinal(),
+            span.operation_count(),
+        )
+    } else {
+        let found = assert_origin_find_v1(&index.terminators, budget, |row, budget| {
+            budget.charge_work(1)?;
+            Ok(row.0.cmp(&block))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("identity original terminator span absent"))?;
+        let span =
+            view.source.correspondence.terminator_operation_spans()[index.terminators[found].1];
+        (
+            span.kernel_ir_block(),
+            span.first_operation_ordinal(),
+            span.operation_count(),
+        )
+    };
+    let found = assert_origin_find_v1(&index.blocks, budget, |row, budget| {
+        budget.charge_work(1)?;
+        Ok(row.0.cmp(&physical))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("identity original span block absent"))?;
+    budget.charge_work(3).map_err(Error::Resource)?;
+    let end = (first as usize)
+        .checked_add(count as usize)
+        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+    Ok((
+        fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1 {
+            function: index.canonical,
+            block: index.blocks[found].1,
+        },
+        first as usize..end,
+    ))
+}
+
+fn source_output_identity_normal_return_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    edge: fe2o3_mir_model::SsaEdgeIdV1,
+    original: fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(10).map_err(Error::Resource)?;
+    let function = &view.source.semantic_ssa().source_semantic().functions()
+        [candidate.selected_function.index() as usize];
+    let SemanticTerminatorKindV1::Call(call) = function.blocks()[edge.source().get() as usize]
+        .terminator()
+        .kind()
+    else {
+        return Err(Error::Invalid(
+            "identity normal source boundary is not Call",
+        ));
+    };
+    let destination = call
+        .destination()
+        .ok_or(Error::Invalid("identity normal source destination absent"))?;
+    let ProductionSourceOutputBlockV1::Materialized {
+        original: target, ..
+    } = view.block(
+        candidate.selected_root,
+        candidate.selected_function,
+        destination.edge().target(),
+        budget,
+    )?
+    else {
+        return Err(Error::Invalid(
+            "identity normal source continuation was not materialized",
+        ));
+    };
+    let body = view.source.executable().module().functions[original.function.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("identity original body absent"))?;
+    let target_block = body
+        .blocks
+        .get(target.block as usize)
+        .ok_or(Error::Invalid("identity original normal target absent"))?;
+    let Some(Terminator::Branch {
+        target: actual,
+        arguments,
+    }) = &body.blocks[original.block as usize].terminator
+    else {
+        return Err(Error::Invalid(
+            "identity original normal continuation is not Branch",
+        ));
+    };
+    let plan = view
+        .source
+        .semantic_ssa()
+        .plan_for_function(candidate.selected_function)
+        .ok_or(Error::Invalid("identity normal source plan absent"))?
+        .plan();
+    if target.function != original.function
+        || *actual != target_block.id
+        || !arguments.is_empty()
+        || !target_block.parameters.is_empty()
+        || plan
+            .edge_arguments(edge)
+            .is_none_or(|arguments| !arguments.is_empty())
+        || plan
+            .transport_variables(SsaBlockIdV1::new(destination.edge().target().index()))
+            .is_none_or(|variables| !variables.is_empty())
+    {
+        return Err(Error::Invalid(
+            "identity Option components require unsupported merge transport",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn source_output_identity_getter_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    index: &SourceOutputInvocationSourceIndexV1,
+    source_index: usize,
+    claim: ProductionProjectionArgumentCandidateV1,
+    uses: &mut Vec<SourceOutputProjectionLiteralUseV1>,
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (
+        SourceOutputProjectionArgumentV1,
+        SourceOutputIdentityGetterV1,
+    ),
+    ProductionSourceOutputErrorV1,
+> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::{
+        CanonicalKirDefinitionCoordinateV1 as Def, CanonicalKirOperationCoordinateV1 as Op,
+        CanonicalKirUseCoordinateV1 as Use,
+    };
+    budget.charge_work(5).map_err(Error::Resource)?;
+    if claim.component != ProductionProjectionArgumentComponentV1::Scalar {
+        return Err(Error::Invalid("identity invocation claim is not scalar"));
+    }
+    let source = source_output_identity_source_v1(view, index, claim, budget)?;
+    let symbol = source_output_invocation_symbol_v1(view, candidate, index.canonical, budget)?;
+    let mut extent_claim = None;
+    for other in &candidate.control.arguments {
+        budget.charge_work(4).map_err(Error::Resource)?;
+        if other.component == ProductionProjectionArgumentComponentV1::SliceLength
+            && other.source_local == source.slice
+            && extent_claim.replace(*other).is_some()
+        {
+            return Err(Error::Invalid("identity extent claim duplicated"));
+        }
+    }
+    let extent_claim = extent_claim.ok_or(Error::Invalid("identity exact extent claim absent"))?;
+    let extent = source_output_control_argument_v1(
+        view,
+        candidate,
+        index.canonical,
+        extent_claim,
+        uses,
+        inventory,
+        budget,
+    )?;
+    let SourceOutputProjectionLeafOriginV1::Formal(formal) = extent.origin else {
+        return Err(Error::Invalid(
+            "identity extent is not an actual source Slice formal",
+        ));
+    };
+    let Def::FunctionArgument { function, argument } = formal.original else {
+        return Err(Error::Invalid("identity original Slice parameter absent"));
+    };
+    if function != index.canonical {
+        return Err(Error::Invalid("identity original Slice function differs"));
+    }
+    let body = view.source.executable().module().functions[index.canonical.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("identity original body absent"))?;
+    let slice = *body
+        .parameters
+        .get(argument as usize)
+        .ok_or(Error::Invalid("identity original Slice value absent"))?;
+    let semantic_function =
+        &view.source.semantic_ssa().source_semantic().functions()[index.function.index() as usize];
+    let SemanticLocalRoleV1::Argument(source_argument) =
+        semantic_function.locals()[source.slice.index() as usize].role()
+    else {
+        return Err(Error::Invalid("identity allocation is not a source formal"));
+    };
+    let (producer_block, producer_span) = source_output_identity_span_v1(
+        view,
+        index,
+        source.anchor.producer.source().get(),
+        None,
+        budget,
+    )?;
+    source_output_identity_normal_return_v1(
+        view,
+        candidate,
+        source.anchor.producer,
+        producer_block,
+        budget,
+    )?;
+    let [producer] = body.blocks[producer_block.block as usize]
+        .operations
+        .get(producer_span.clone())
+        .ok_or(Error::Invalid(
+            "identity original producer span outside block",
+        ))?
+    else {
+        return Err(Error::Invalid(
+            "identity original producer is not one intrinsic",
+        ));
+    };
+    budget.charge_work(8).map_err(Error::Resource)?;
+    if producer.results.len() != 1
+        || producer.results[0].ty != Type::INDEX
+        || !matches!(&producer.kind, OperationKind::Intrinsic(intrinsic) if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d())
+    {
+        return Err(Error::Invalid(
+            "identity original producer is not GlobalX INDEX",
+        ));
+    }
+    let original_index = producer.results[0].id;
+    let original = Def::Result {
+        operation: Op {
+            block: producer_block,
+            operation: producer_span.start as u32,
+        },
+        result: 0,
+    };
+    let (getter_block, getter_span) = source_output_identity_span_v1(
+        view,
+        index,
+        source.anchor.get.source().get(),
+        None,
+        budget,
+    )?;
+    source_output_identity_normal_return_v1(
+        view,
+        candidate,
+        source.anchor.get,
+        getter_block,
+        budget,
+    )?;
+    let [length, compare, data, gep] = body.blocks[getter_block.block as usize]
+        .operations
+        .get(getter_span.clone())
+        .ok_or(Error::Invalid(
+            "identity original getter span outside block",
+        ))?
+    else {
+        return Err(Error::Invalid(
+            "identity original getter is not the exact four-operation recipe",
+        ));
+    };
+    budget.charge_work(24).map_err(Error::Resource)?;
+    if [length, compare, data, gep]
+        .iter()
+        .any(|operation| operation.results.len() != 1)
+        || length.results[0].ty != Type::INDEX
+        || compare.results[0].ty != Type::BOOL
+        || !matches!(length.kind, OperationKind::SliceLength { slice: actual } if actual == slice)
+        || !matches!(compare.kind, OperationKind::Compare { predicate: ComparePredicate::LessThan, lhs, rhs }
+            if lhs == original_index && rhs == length.results[0].id)
+        || !matches!(data.kind, OperationKind::SliceData { slice: actual } if actual == slice)
+        || !matches!(gep.kind, OperationKind::GetElementPointer { base, offset }
+            if base == data.results[0].id && offset == original_index)
+        || data.results[0].ty != gep.results[0].ty
+        || !matches!(&gep.results[0].ty, Type::Pointer(pointer)
+            if matches!(pointer.pointee.as_ref(), Type::Scalar(_))
+                && pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global)
+    {
+        return Err(Error::Invalid("identity original getter components differ"));
+    }
+    let original_compare = Op {
+        block: getter_block,
+        operation: getter_span.start as u32 + 1,
+    };
+    let coordinate = Use::OperationOperand {
+        operation: original_compare,
+        operand: 0,
+    };
+    let found = assert_origin_find_v1(
+        &view.checked_control_rows.compare_uses,
+        budget,
+        |row, budget| {
+            budget.charge_work(1)?;
+            Ok(row.input.coordinate.cmp(&coordinate))
+        },
+    )
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("identity checked Compare use absent"))?;
+    let mapped = source_output_control_literal_row_v1(
+        view.checked_control_rows.compare_uses[found],
+        coordinate,
+        original_index,
+        budget,
+    )?;
+    if source_output_control_use_identity_v1(inventory, mapped.coordinate, budget)? != mapped {
+        return Err(Error::Invalid("identity actual Compare occurrence differs"));
+    }
+    let Use::OperationOperand {
+        operation: output_compare,
+        operand: 0,
+    } = mapped.coordinate
+    else {
+        return Err(Error::Invalid("identity output Compare operand differs"));
+    };
+    let function = inventory
+        .functions()
+        .get(index.canonical.0 as usize)
+        .ok_or(Error::Invalid("identity output function absent"))?;
+    let operation =
+        source_output_address_operation_v1(inventory, function, output_compare, budget)?;
+    budget.charge_work(8).map_err(Error::Resource)?;
+    let OperationKind::Compare {
+        predicate: ComparePredicate::LessThan,
+        lhs,
+        rhs,
+    } = operation.operation.kind
+    else {
+        return Err(Error::Invalid(
+            "identity output condition is not exact less-than",
+        ));
+    };
+    if operation.operation.results.len() != 1
+        || operation.operation.results[0].ty != Type::BOOL
+        || lhs != mapped.value
+    {
+        return Err(Error::Invalid(
+            "identity output Compare result or input differs",
+        ));
+    }
+    let output_condition = operation.operation.results[0].id;
+    let (output, output_index) =
+        source_output_invocation_output_root_v1(inventory, index.canonical, lhs, budget)?;
+    if output_index != lhs {
+        return Err(Error::Invalid(
+            "identity output index is not a direct GlobalX definition",
+        ));
+    }
+    let definition = inventory
+        .definition_for_value(index.canonical, rhs, budget)
+        .map_err(Error::Inventory)?
+        .ok_or(Error::Invalid("identity output extent definition absent"))?;
+    let Def::Result {
+        operation: length_op,
+        result: 0,
+    } = definition.coordinate
+    else {
+        return Err(Error::Invalid(
+            "identity output extent is not direct SliceLength",
+        ));
+    };
+    let length = source_output_address_operation_v1(inventory, function, length_op, budget)?;
+    budget.charge_work(5).map_err(Error::Resource)?;
+    if definition.ty != &Type::INDEX
+        || length.operation.results.len() != 1
+        || length.operation.results[0].id != rhs
+        || !matches!(length.operation.kind, OperationKind::SliceLength { slice } if slice == formal.output_value)
+    {
+        return Err(Error::Invalid(
+            "identity output extent differs from exact source Slice",
+        ));
+    }
+    let first_use = uses.len();
+    assert_origin_push_v1(
+        uses,
+        SourceOutputProjectionLiteralUseV1 {
+            guard: source.switch,
+            input: view.checked_control_rows.compare_uses[found].input,
+            output: mapped,
+        },
+        budget,
+    )
+    .map_err(Error::SourceOrigin)?;
+    let row = SourceOutputProjectionArgumentV1 {
+        ranked_value: claim.ranked_value,
+        source_local: claim.source_local,
+        component: claim.component,
+        scalar: source_output_address_u64_v1(),
+        origin: SourceOutputProjectionLeafOriginV1::Invocation(
+            SourceOutputProjectionInvocationV1 {
+                source_index,
+                source: source.anchor,
+                original,
+                output,
+                symbol,
+                first_use,
+                end_use: uses.len(),
+                identity_getter: true,
+            },
+        ),
+    };
+    Ok((
+        row,
+        SourceOutputIdentityGetterV1 {
+            source,
+            original_compare,
+            original_pointer: gep.results[0].id,
+            output_compare,
+            output_condition,
+            output_index,
+            output_slice: formal.output_value,
+            ranked_index: claim.ranked_value,
+            ranked_extent: extent_claim.ranked_value,
+            source_argument,
+        },
+    ))
+}
+
+fn source_output_identity_selection_v1(
+    terminator: &Terminator,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(ValueId, u32, u32, Option<u32>), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(5).map_err(Error::Resource)?;
+    match terminator {
+        Terminator::ConditionalBranch {
+            condition,
+            then_arguments,
+            else_arguments,
+            ..
+        } if then_arguments.is_empty() && else_arguments.is_empty() => Ok((*condition, 0, 1, None)),
+        Terminator::Switch {
+            selector,
+            cases,
+            default_arguments,
+            ..
+        } => {
+            budget.charge_work(cases.len()).map_err(Error::Resource)?;
+            if !default_arguments.is_empty() || cases.iter().any(|case| !case.arguments.is_empty())
+            {
+                return Err(Error::Invalid(
+                    "identity switch has physical component transport",
+                ));
+            }
+            match cases.as_slice() {
+                [zero] if zero.value == 0 => Ok((*selector, 1, 0, None)),
+                [one] if one.value == 1 => Ok((*selector, 0, 1, None)),
+                [zero, one] if zero.value == 0 && one.value == 1 => Ok((*selector, 1, 0, Some(2))),
+                _ => Err(Error::Invalid(
+                    "identity actual switch is not exact zero/one",
+                )),
+            }
+        }
+        _ => Err(Error::Invalid(
+            "identity actual Option selection is unsupported",
+        )),
+    }
+}
+
+// Fixed-size predicate, prepaid by the original/output selector checks. The
+// source type is mandatory: representable 0/1 alone is not a type association.
+fn source_output_identity_zero_extension_v1(
+    operation: &fe2o3_kernel_ir::Operation,
+    expected: &Type,
+    input: ValueId,
+    output: ValueId,
+) -> bool {
+    operation.results.len() == 1
+        && operation.results[0].id == output
+        && &operation.results[0].ty == expected
+        && matches!(
+            expected,
+            Type::Scalar(
+                ScalarType::I8
+                    | ScalarType::I16
+                    | ScalarType::I32
+                    | ScalarType::I64
+                    | ScalarType::U8
+                    | ScalarType::U16
+                    | ScalarType::U32
+                    | ScalarType::U64
+            )
+        )
+        && matches!(&operation.kind, OperationKind::Cast { kind: CastKind::ZeroExtend, value, to }
+            if *value == input && to == expected)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn source_output_identity_edges_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    segments: &[SourceOutputProjectionSegmentV1],
+    segment: SourceOutputProjectionSegmentV1,
+    identity: &SourceOutputIdentityGetterV1,
+    index: &SourceOutputInvocationSourceIndexV1,
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_analysis::CanonicalKirEdgePlacementV1 as Placement;
+    use fe2o3_kernel_ir::{
+        CanonicalKirDefinitionCoordinateV1 as Def, CanonicalKirEdgeCoordinateV1 as Edge,
+        CanonicalKirOperationCoordinateV1 as Op, CanonicalKirUseCoordinateV1 as Use,
+    };
+    budget.charge_work(8).map_err(Error::Resource)?;
+    let source = &identity.source;
+    let tail = &candidate.lowering.kernel().blocks()[segment.claim.tail as usize];
+    let ProductionRankedTerminatorV1::IndexLessThan {
+        lhs,
+        rhs,
+        true_block,
+        false_block,
+    } = tail.terminator()
+    else {
+        return Err(Error::Invalid(
+            "identity ranked Some condition is not the exact less-than",
+        ));
+    };
+    if *lhs != identity.ranked_index
+        || *rhs != identity.ranked_extent
+        || segment.claim.end != segment.claim.tail + 1
+    {
+        return Err(Error::Invalid(
+            "identity ranked Some condition operands differ",
+        ));
+    }
+    let before = view.source.executable().module().functions[index.canonical.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("identity original control body absent"))?;
+    let after = view.output().module().functions[index.canonical.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("identity output control body absent"))?;
+    let (selector, input_some, input_none, input_default) = source_output_identity_selection_v1(
+        before.blocks[segment.original.block as usize]
+            .terminator
+            .as_ref()
+            .ok_or(Error::Invalid("identity original selector absent"))?,
+        budget,
+    )?;
+    let output_block = segment.placement.output;
+    let (output_selector, output_some, output_none, output_default) =
+        source_output_identity_selection_v1(
+            after.blocks[output_block.block as usize]
+                .terminator
+                .as_ref()
+                .ok_or(Error::Invalid("identity output selector absent"))?,
+            budget,
+        )?;
+    if source.fallback.is_some() != input_default.is_some() {
+        return Err(Error::Invalid(
+            "identity source default occurrence differs from N",
+        ));
+    }
+    let (discriminator_block, discriminator_span) = source_output_identity_span_v1(
+        view,
+        index,
+        source.discriminator_site.0,
+        Some(source.discriminator_site.1),
+        budget,
+    )?;
+    let operations = before.blocks[discriminator_block.block as usize]
+        .operations
+        .get(discriminator_span.clone())
+        .ok_or(Error::Invalid("identity original discriminant span absent"))?;
+    let present = before.blocks[identity.original_compare.block.block as usize].operations
+        [identity.original_compare.operation as usize]
+        .results[0]
+        .id;
+    let semantic = view.source.semantic_ssa().source_semantic();
+    let function = &semantic.functions()[candidate.selected_function.index() as usize];
+    let discriminator_type = lower_scalar_type(
+        semantic.types(),
+        function.locals()[source.discriminator.index() as usize].ty(),
+    )
+    .map_err(Error::SourceReplay)?;
+    budget.charge_work(10).map_err(Error::Resource)?;
+    let input_definition = match operations {
+        [] if discriminator_type == Type::BOOL && selector == present => Def::Result {
+            operation: identity.original_compare,
+            result: 0,
+        },
+        [operation]
+            if source_output_identity_zero_extension_v1(
+                operation,
+                &discriminator_type,
+                present,
+                selector,
+            ) =>
+        {
+            Def::Result {
+                operation: Op {
+                    block: discriminator_block,
+                    operation: discriminator_span.start as u32,
+                },
+                result: 0,
+            }
+        }
+        _ => {
+            return Err(Error::Invalid(
+                "identity original discriminant is not the getter BOOL transport",
+            ));
+        }
+    };
+    let use_coordinate = Use::TerminatorOperand {
+        block: segment.original,
+        operand: 0,
+    };
+    let found = assert_origin_find_v1(&view.checked_control_rows.uses, budget, |row, budget| {
+        budget.charge_work(1)?;
+        Ok(row.input.coordinate.cmp(&use_coordinate))
+    })
+    .map_err(Error::SourceOrigin)?
+    .ok_or(Error::Invalid("identity checked selector use absent"))?;
+    let use_row = view.checked_control_rows.uses[found];
+    let mapped = use_row
+        .output
+        .ok_or(Error::Invalid("identity checked selector use omitted"))?;
+    budget.charge_work(8).map_err(Error::Resource)?;
+    if use_row.input.value != selector
+        || use_row.input.definition != input_definition
+        || mapped.coordinate
+            != (Use::TerminatorOperand {
+                block: output_block,
+                operand: 0,
+            })
+        || mapped.value != output_selector
+        || source_output_control_use_identity_v1(inventory, mapped.coordinate, budget)? != mapped
+    {
+        return Err(Error::Invalid("identity selector own occurrence differs"));
+    }
+    let function = inventory
+        .functions()
+        .get(index.canonical.0 as usize)
+        .ok_or(Error::Invalid("identity output control inventory absent"))?;
+    let definition = inventory
+        .definition_for_value(index.canonical, output_selector, budget)
+        .map_err(Error::Inventory)?
+        .ok_or(Error::Invalid("identity output selector definition absent"))?;
+    budget.charge_work(4).map_err(Error::Resource)?;
+    if output_selector == identity.output_condition {
+        if definition.ty != &Type::BOOL
+            || definition.coordinate
+                != (Def::Result {
+                    operation: identity.output_compare,
+                    result: 0,
+                })
+        {
+            return Err(Error::Invalid("identity output Boolean selector differs"));
+        }
+    } else {
+        let Def::Result {
+            operation,
+            result: 0,
+        } = definition.coordinate
+        else {
+            return Err(Error::Invalid(
+                "identity output selector requires unsupported merge transport",
+            ));
+        };
+        let operation = source_output_address_operation_v1(inventory, function, operation, budget)?;
+        budget.charge_work(7).map_err(Error::Resource)?;
+        if definition.ty != &discriminator_type
+            || !source_output_identity_zero_extension_v1(
+                operation.operation,
+                &discriminator_type,
+                identity.output_condition,
+                output_selector,
+            )
+        {
+            return Err(Error::Invalid(
+                "identity output selector is not exact BOOL zero extension",
+            ));
+        }
+    }
+    for (input_ordinal, output_ordinal, target, ranked) in [
+        (input_some, output_some, source.some, *true_block),
+        (input_none, output_none, source.none, *false_block),
+    ] {
+        let edge = source_output_control_edge_v1(
+            &view.checked_control_rows,
+            Edge {
+                source: segment.original,
+                successor: input_ordinal,
+            },
+            budget,
+        )?;
+        let ProductionSourceOutputBlockV1::Materialized {
+            original: expected, ..
+        } = view.block(
+            candidate.selected_root,
+            candidate.selected_function,
+            target,
+            budget,
+        )?
+        else {
+            return Err(Error::Invalid(
+                "identity source successor is not materialized",
+            ));
+        };
+        budget.charge_work(6).map_err(Error::Resource)?;
+        if edge.input.target != expected
+            || !edge.checked.executable
+            || !matches!(edge.checked.placement, Placement::Retained(_))
+            || edge.output.as_ref().is_none_or(|actual| {
+                actual.coordinate
+                    != (Edge {
+                        source: output_block,
+                        successor: output_ordinal,
+                    })
+            })
+        {
+            return Err(Error::Invalid(
+                "identity Some/None edge polarity or occurrence differs",
+            ));
+        }
+        source_output_control_argument_rows_v1(&view.checked_control_rows, edge, budget)?;
+        source_output_control_target_v1(view, candidate, segments, edge, ranked, budget)?;
+    }
+    if let Some(input_default) = input_default {
+        let fallback = source
+            .fallback
+            .ok_or(Error::Invalid("identity source default absent"))?;
+        let ProductionSourceOutputBlockV1::Materialized { original, .. } = view.block(
+            candidate.selected_root,
+            candidate.selected_function,
+            fallback,
+            budget,
+        )?
+        else {
+            return Err(Error::Invalid(
+                "identity original default is not materialized",
+            ));
+        };
+        let edge = source_output_control_edge_v1(
+            &view.checked_control_rows,
+            Edge {
+                source: segment.original,
+                successor: input_default,
+            },
+            budget,
+        )?;
+        source_output_control_argument_rows_v1(&view.checked_control_rows, edge, budget)?;
+        budget.charge_work(8).map_err(Error::Resource)?;
+        let block = &before.blocks[original.block as usize];
+        if original.function != index.canonical
+            || edge.input.target != original
+            || !block.operations.is_empty()
+            || !block.parameters.is_empty()
+            || !matches!(block.terminator, Some(Terminator::Unreachable))
+        {
+            return Err(Error::Invalid(
+                "identity original default is not exact empty Unreachable",
+            ));
+        }
+        match (output_default, &edge.output, edge.checked.placement) {
+            (Some(ordinal), Some(actual), Placement::Retained(_))
+                if actual.coordinate
+                    == (Edge {
+                        source: output_block,
+                        successor: ordinal,
+                    }) =>
+            {
+                let block = after
+                    .blocks
+                    .get(actual.target.block as usize)
+                    .ok_or(Error::Invalid("identity output default absent"))?;
+                if actual.target.function != index.canonical
+                    || !block.operations.is_empty()
+                    || !block.parameters.is_empty()
+                    || !matches!(block.terminator, Some(Terminator::Unreachable))
+                {
+                    return Err(Error::Invalid(
+                        "identity output default has effects or changed terminal",
+                    ));
+                }
+            }
+            (None, None, Placement::Omitted) if !edge.checked.executable => {}
+            _ => return Err(Error::Invalid("identity default disposition differs")),
+        }
+    } else if output_default.is_some() {
+        return Err(Error::Invalid("identity output added an unbound default"));
+    }
+    Ok(())
+}
+
+fn source_output_identity_stores_v1(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+    candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+    identity: &SourceOutputIdentityGetterV1,
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Def;
+    budget.charge_work(5).map_err(Error::Resource)?;
+    if candidate.access_sources.len() != identity.source.stores.len() {
+        return Err(Error::Invalid(
+            "identity own Store roster differs from memory projection",
+        ));
+    }
+    let function = inventory
+        .functions()
+        .get(identity.original_compare.block.function.0 as usize)
+        .ok_or(Error::Invalid("identity Store output function absent"))?;
+    let before = view.source.executable().module().functions[function.coordinate.0 as usize]
+        .body
+        .as_ref()
+        .ok_or(Error::Invalid("identity Store original body absent"))?;
+    for access in candidate.access_sources {
+        budget.charge_work(10).map_err(Error::Resource)?;
+        let statement = access
+            .semantic_statement
+            .ok_or(Error::Invalid("identity Store is a terminator access"))?;
+        let key = (access.semantic_block, statement);
+        let found = assert_origin_find_v1(&identity.source.stores, budget, |row, budget| {
+            budget.charge_work(2)?;
+            Ok(row.site.cmp(&key))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid(
+            "identity projected Store has no exact source occurrence",
+        ))?;
+        if !identity.source.stores[found].seen || access.semantic_access_ordinal != 0 {
+            return Err(Error::Invalid("identity projected Store ordinal differs"));
+        }
+        let operation = candidate
+            .lowering
+            .kernel()
+            .blocks()
+            .get(access.ranked_block as usize)
+            .and_then(|block| block.operations().get(access.ranked_operation as usize))
+            .ok_or(Error::Invalid("identity projected Store operation absent"))?;
+        if !matches!(operation, ProductionRankedOperationV1::Access { kind: dialect_kernel::AccessKindAttr::Write, indices, .. }
+            if indices.as_slice() == [identity.ranked_index])
+        {
+            return Err(Error::Invalid("identity projected Store index differs"));
+        }
+        let ProductionSourceOutputGlobalAccessV1::Retained {
+            original,
+            operation,
+            source_argument,
+            pointer,
+            value: Some(_),
+            result: None,
+            executable: true,
+            ..
+        } = view.global_access(
+            candidate.selected_root,
+            candidate.selected_function,
+            access.semantic_block,
+            Some(statement),
+            0,
+            budget,
+        )?
+        else {
+            return Err(Error::Invalid(
+                "identity own Store is not an exact retained Global effect",
+            ));
+        };
+        if original.block.function != function.coordinate
+            || operation.block.function != function.coordinate
+            || source_argument != identity.source_argument
+        {
+            return Err(Error::Invalid(
+                "identity Store source allocation or function differs",
+            ));
+        }
+        let original = before
+            .blocks
+            .get(original.block.block as usize)
+            .and_then(|block| block.operations.get(original.operation as usize))
+            .ok_or(Error::Invalid("identity original Store absent"))?;
+        if !matches!(original.kind, OperationKind::Store { pointer, .. } if pointer == identity.original_pointer)
+        {
+            return Err(Error::Invalid(
+                "identity original Store does not use its getter pointer",
+            ));
+        }
+        let actual = source_output_control_use_identity_v1(inventory, pointer.coordinate, budget)?;
+        if actual.definition != pointer.definition {
+            return Err(Error::Invalid(
+                "identity output Store pointer occurrence differs",
+            ));
+        }
+        let Def::Result {
+            operation: gep_op,
+            result: 0,
+        } = actual.definition
+        else {
+            return Err(Error::Invalid(
+                "identity output pointer requires unsupported merge transport",
+            ));
+        };
+        let gep = source_output_address_operation_v1(inventory, function, gep_op, budget)?;
+        budget.charge_work(8).map_err(Error::Resource)?;
+        let OperationKind::GetElementPointer { base, offset } = gep.operation.kind else {
+            return Err(Error::Invalid(
+                "identity output Store does not use direct getter GEP",
+            ));
+        };
+        if offset != identity.output_index
+            || gep.operation.results.len() != 1
+            || gep.operation.results[0].id != actual.value
+            || !matches!(&gep.operation.results[0].ty, Type::Pointer(pointer)
+                if pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global
+                    && matches!(pointer.pointee.as_ref(), Type::Scalar(_)))
+        {
+            return Err(Error::Invalid(
+                "identity output GEP index or pointer type differs",
+            ));
+        }
+        let definition = inventory
+            .definition_for_value(function.coordinate, base, budget)
+            .map_err(Error::Inventory)?
+            .ok_or(Error::Invalid(
+                "identity output SliceData definition absent",
+            ))?;
+        let Def::Result {
+            operation: data_op,
+            result: 0,
+        } = definition.coordinate
+        else {
+            return Err(Error::Invalid(
+                "identity output SliceData requires unsupported merge transport",
+            ));
+        };
+        let data = source_output_address_operation_v1(inventory, function, data_op, budget)?;
+        budget.charge_work(5).map_err(Error::Resource)?;
+        if definition.ty != &gep.operation.results[0].ty
+            || data.operation.results.len() != 1
+            || data.operation.results[0].id != base
+            || !matches!(data.operation.kind, OperationKind::SliceData { slice } if slice == identity.output_slice)
+        {
+            return Err(Error::Invalid(
+                "identity output Store uses a different Slice allocation",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod identity_getter_discriminator_components_v1 {
+    use super::*;
+
+    fn cast(kind: CastKind, ty: Type) -> fe2o3_kernel_ir::Operation {
+        fe2o3_kernel_ir::Operation::effect_free(
+            fe2o3_kernel_ir::ValueDef::new(ValueId(9), ty.clone()),
+            OperationKind::Cast {
+                kind,
+                value: ValueId(7),
+                to: ty,
+            },
+        )
+    }
+
+    #[test]
+    fn exact_boolean_discriminator_transport_is_typed_not_generic_integer_casting() {
+        for scalar in [
+            ScalarType::I8,
+            ScalarType::I16,
+            ScalarType::I32,
+            ScalarType::I64,
+            ScalarType::U8,
+            ScalarType::U16,
+            ScalarType::U32,
+            ScalarType::U64,
+        ] {
+            let ty = Type::Scalar(scalar);
+            let original = cast(CastKind::ZeroExtend, ty.clone());
+            assert!(source_output_identity_zero_extension_v1(
+                &original,
+                &ty,
+                ValueId(7),
+                ValueId(9)
+            ));
+            for kind in [CastKind::SignExtend, CastKind::Truncate, CastKind::Bitcast] {
+                assert!(!source_output_identity_zero_extension_v1(
+                    &cast(kind, ty.clone()),
+                    &ty,
+                    ValueId(7),
+                    ValueId(9)
+                ));
+            }
+            assert!(!source_output_identity_zero_extension_v1(
+                &original,
+                &ty,
+                ValueId(8),
+                ValueId(9)
+            ));
+            assert!(!source_output_identity_zero_extension_v1(
+                &original,
+                &ty,
+                ValueId(7),
+                ValueId(10)
+            ));
+            let other = if scalar == ScalarType::U64 {
+                Type::Scalar(ScalarType::I64)
+            } else {
+                Type::Scalar(ScalarType::U64)
+            };
+            assert!(!source_output_identity_zero_extension_v1(
+                &original,
+                &other,
+                ValueId(7),
+                ValueId(9)
+            ));
+            let mut changed = original.clone();
+            changed.results[0].ty = other;
+            assert!(!source_output_identity_zero_extension_v1(
+                &changed,
+                &ty,
+                ValueId(7),
+                ValueId(9)
+            ));
+            changed = original.clone();
+            changed.results.push(changed.results[0].clone());
+            assert!(!source_output_identity_zero_extension_v1(
+                &changed,
+                &ty,
+                ValueId(7),
+                ValueId(9)
+            ));
+        }
+        for ty in [
+            Type::BOOL,
+            Type::INDEX,
+            Type::Scalar(ScalarType::F32),
+            Type::Scalar(ScalarType::F64),
+        ] {
+            assert!(!source_output_identity_zero_extension_v1(
+                &cast(CastKind::ZeroExtend, ty.clone()),
+                &ty,
+                ValueId(7),
+                ValueId(9)
+            ));
+        }
+    }
+
+    #[test]
+    fn zero_one_selection_preserves_occurrence_polarity_and_rejects_unknown_values() {
+        use fe2o3_kernel_ir::{
+            CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+            CanonicalKernelIrWorkBudgetV1 as Work, SwitchCase,
+        };
+        let branch = |values: &[u64]| Terminator::Switch {
+            selector: ValueId(7),
+            cases: values
+                .iter()
+                .enumerate()
+                .map(|(ordinal, value)| SwitchCase {
+                    value: *value,
+                    target: BlockId(ordinal as u32 + 10),
+                    arguments: vec![],
+                })
+                .collect(),
+            default_target: BlockId(20),
+            default_arguments: vec![],
+        };
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 0);
+        assert_eq!(
+            source_output_identity_selection_v1(&branch(&[0, 1]), &mut budget).unwrap(),
+            (ValueId(7), 1, 0, Some(2))
+        );
+        assert_eq!(
+            source_output_identity_selection_v1(&branch(&[1]), &mut budget).unwrap(),
+            (ValueId(7), 0, 1, None)
+        );
+        assert_eq!(
+            source_output_identity_selection_v1(&branch(&[0]), &mut budget).unwrap(),
+            (ValueId(7), 1, 0, None)
+        );
+        for values in [&[1, 0][..], &[0, 2], &[2], &[]] {
+            assert!(source_output_identity_selection_v1(&branch(values), &mut budget).is_err());
+        }
+        let mut transported = branch(&[0, 1]);
+        if let Terminator::Switch {
+            default_arguments, ..
+        } = &mut transported
+        {
+            default_arguments.push(ValueId(8));
+        }
+        assert!(source_output_identity_selection_v1(&transported, &mut budget).is_err());
+        assert_eq!(budget.storage(), 0);
+    }
 }

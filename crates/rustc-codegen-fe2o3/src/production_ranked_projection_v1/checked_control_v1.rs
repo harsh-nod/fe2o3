@@ -18,6 +18,12 @@ enum Control {
         extent: ProductionRankedValueV1,
     },
     Split(usize, usize),
+    IdentityOption {
+        some: usize,
+        none: usize,
+        index: ProductionRankedValueV1,
+        extent: ProductionRankedValueV1,
+    },
     Return,
     Trap,
 }
@@ -234,6 +240,49 @@ fn prepare_inner(
     facts: &mut impl ProjectedAssertionFactsV1,
     recorded_calls: bool,
 ) -> Result<Option<CheckedControlFrameV1>, ProductionRankedProjectionErrorV1> {
+    prepare_inner_with_identity_v1(
+        types,
+        function,
+        callables,
+        bounds_checks,
+        facts,
+        recorded_calls,
+        None,
+    )
+}
+
+pub(super) fn prepare_with_identity_slice_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    bounds_checks: &[ProjectedBoundsCheckV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
+    identity: Option<&canonical_memory_control_v1::CanonicalIdentitySliceV1>,
+) -> Result<Option<CheckedControlFrameV1>, ProductionRankedProjectionErrorV1> {
+    if identity.is_none() {
+        return prepare_with_recorded_calls_v1(types, function, callables, bounds_checks, facts);
+    }
+    prepare_inner_with_identity_v1(
+        types,
+        function,
+        callables,
+        bounds_checks,
+        facts,
+        true,
+        identity,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_inner_with_identity_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    bounds_checks: &[ProjectedBoundsCheckV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
+    recorded_calls: bool,
+    identity: Option<&canonical_memory_control_v1::CanonicalIdentitySliceV1>,
+) -> Result<Option<CheckedControlFrameV1>, ProductionRankedProjectionErrorV1> {
     if !facts.checked_control_enabled_v1() {
         return Ok(None);
     }
@@ -272,7 +321,7 @@ fn prepare_inner(
     }
     // No whole-block omission is needed when every source block is executable.
     // Keep the existing all-live grammar and ranked CFG preparation unchanged.
-    if !partial {
+    if !partial && identity.is_none() {
         for (index, source) in function.blocks().iter().enumerate() {
             facts.charge_private_array_work(2)?;
             let SemanticTerminatorKindV1::Assert {
@@ -302,6 +351,48 @@ fn prepare_inner(
     for (index, row) in blocks.iter_mut().enumerate() {
         facts.charge_private_array_work(6)?;
         let source = &function.blocks()[index];
+        if let Some(identity) = identity {
+            facts.charge_private_array_work(5)?;
+            if identity.fallback == Some(index) {
+                if !switch_fallback_is_empty_unreachable_v1(function, index) {
+                    return Err(invalid(
+                        "identity default changed during checked preparation",
+                    ));
+                }
+                continue;
+            }
+            if index == identity.producer || index == identity.getter {
+                let SemanticTerminatorKindV1::Call(call) = source.terminator().kind() else {
+                    return Err(invalid("identity intrinsic boundary changed"));
+                };
+                let destination = call
+                    .destination()
+                    .ok_or_else(|| invalid("identity normal continuation absent"))?;
+                if !live(row.coverage)
+                    || destination.edge().role() != SemanticEdgeRoleV1::CallReturn
+                    || !matches!(call.unwind(), SemanticUnwindActionV1::Unreachable)
+                {
+                    return Err(invalid(
+                        "identity intrinsic continuation is not live normal control",
+                    ));
+                }
+                row.control =
+                    Control::ConditionalCallReturn(target(function, destination.edge().target())?);
+                continue;
+            }
+            if index == identity.switch {
+                if !live(row.coverage) {
+                    return Err(invalid("identity Option selector is not live"));
+                }
+                row.control = Control::IdentityOption {
+                    some: identity.some,
+                    none: identity.none,
+                    index: identity.index,
+                    extent: identity.extent,
+                };
+                continue;
+            }
+        }
         admitted_shape_with_recorded_calls(
             source.terminator().kind(),
             types,
@@ -469,15 +560,26 @@ fn prepare_inner(
             Control::Branch(next)
             | Control::ConditionalCallReturn(next)
             | Control::BoundsAssert { next, .. } => reach(&mut blocks, &mut pending, next, facts)?,
-            Control::Split(first, second) => {
+            Control::Split(first, second)
+            | Control::IdentityOption {
+                some: first,
+                none: second,
+                ..
+            } => {
                 reach(&mut blocks, &mut pending, first, facts)?;
                 reach(&mut blocks, &mut pending, second, facts)?;
             }
             Control::Return | Control::Trap => {}
         }
     }
-    for row in &blocks {
+    for (index, row) in blocks.iter().enumerate() {
         facts.charge_private_array_work(2)?;
+        if identity.is_some_and(|identity| identity.fallback == Some(index)) {
+            if row.reached {
+                return Err(invalid("identity impossible default became reachable"));
+            }
+            continue;
+        }
         if row.reached != live(row.coverage) {
             return Err(invalid(
                 "checked source reachability and sealed block disposition disagree",
@@ -562,6 +664,33 @@ impl CheckedControlFrameV1 {
                 // recorder retains the source Call, and D must check it before
                 // a completed analysis escapes. No progress is inferred here.
                 Control::ConditionalCallReturn(next) => ProjectedCfgTerminatorV1::Branch(next),
+                Control::IdentityOption { some, none, index, extent } => {
+                    facts.charge_private_array_work(4)?;
+                    facts.reserve_checked_control_storage_v1(
+                        std::mem::size_of::<Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>>()
+                            + std::mem::size_of::<(ProductionRankedValueV1, ProductionRankedValueV1)>(),
+                    )?;
+                    let mut comparisons = Vec::new();
+                    comparisons.try_reserve_exact(1).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                            canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(
+                                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation,
+                            ),
+                        )
+                    })?;
+                    let extra = comparisons.capacity().checked_sub(1).ok_or_else(arithmetic)?;
+                    if extra != 0 {
+                        facts.reserve_checked_control_storage_v1(
+                            extra.checked_mul(std::mem::size_of::<(ProductionRankedValueV1, ProductionRankedValueV1)>())
+                                .ok_or_else(arithmetic)?,
+                        )?;
+                    }
+                    comparisons.push((index, extent));
+                    ProjectedCfgTerminatorV1::Predicate {
+                        predicate: GuardPredicateV1 { comparisons },
+                        true_block: some, false_block: none,
+                    }
+                }
                 Control::BoundsAssert {
                     next,
                     index,

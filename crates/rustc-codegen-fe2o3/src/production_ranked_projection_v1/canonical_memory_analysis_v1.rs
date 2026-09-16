@@ -409,9 +409,96 @@ fn with_prepared_canonical_memory_source_session_v1<T>(
 }
 
 // Canonical graph-memory analysis keeps each Rust assertion at its source
-// boundary. Only an ordinary access already matched to that invariant source
-// guard loses its redundant access-local predicate expansion. This changes no
-// actual O operation and leaves the legacy expression projection untouched.
+// boundary. The recorder-only identity path keeps its exact source Some edge;
+// D independently checks both control and the Store's own pointer before any
+// completion. This never changes the legacy expression projection or actual O.
+fn retain_canonical_identity_slice_v1(
+    function: &SemanticFunctionDeclV1,
+    references: &CheckedReferencesV1,
+    identity: &canonical_memory_control_v1::CanonicalIdentitySliceV1,
+    blocks: &mut [ProjectedSemanticBlockV1],
+    facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let invalid = ProductionRankedProjectionErrorV1::Incomplete;
+    facts.charge_private_array_work(2)?;
+    if !facts.checked_control_enabled_v1() {
+        return Err(invalid(
+            "canonical identity retention requires checked output facts",
+        ));
+    }
+    let mut count = 0usize;
+    for (block_index, block) in blocks.iter_mut().enumerate() {
+        facts.charge_private_array_work(1)?;
+        for item in &mut block.items {
+            facts.charge_private_array_work(2)?;
+            let ProjectedBlockItemV1::Guarded(access) = item else {
+                continue;
+            };
+            facts.charge_private_array_work(18)?;
+            let site = access
+                .semantic_site
+                .ok_or(invalid("identity access source site absent"))?;
+            let statement = site
+                .statement
+                .and_then(|statement| {
+                    function
+                        .blocks()
+                        .get(site.block)
+                        .and_then(|block| block.statements().get(statement))
+                })
+                .ok_or(invalid("identity access source statement absent"))?;
+            let place = match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => assignment.destination(),
+                SemanticStatementKindV1::Store(store) => store.destination(),
+                _ => return Err(invalid("identity access is not a source Store")),
+            };
+            if site.block != block_index
+                || access.access != AccessKindAttr::Write
+                || access.memory_space != MemorySpaceAttr::Global
+                || access.view != identity.view
+                || access.indices.as_slice() != [identity.index]
+                || access.comparisons.as_slice() != [(identity.index, identity.extent)]
+                || access.checked_success.is_some()
+                || !matches!(place.projections(), [projection]
+                    if projection.kind() == SemanticProjectionKindV1::Dereference)
+                || checked_reference_origin(place, block_index, references)?
+                    != Some(CheckedReferenceSourceV1::GuardedAccess(0))
+            {
+                return Err(invalid(
+                    "identity Store differs from its checked Some reference",
+                ));
+            }
+            let operation = ProductionRankedOperationV1::Access {
+                kind: access.access,
+                view: ProductionRankedValueV1::Local(access.view),
+                indices: std::mem::take(&mut access.indices),
+            };
+            let source = ProjectedEffectSourceV1 {
+                private_array_role: None,
+                access: access.access,
+                memory_space: access.memory_space,
+                source: access.source,
+                semantic_site: Some(site),
+            };
+            *item = ProjectedBlockItemV1::Effect {
+                operation,
+                source: Some(source),
+            };
+            count = count.checked_add(1).ok_or_else(|| {
+                ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                    canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                    ),
+                )
+            })?;
+        }
+    }
+    if count == 0 {
+        return Err(invalid("identity getter has no own source Store"));
+    }
+    Ok(())
+}
+
 fn retain_canonical_source_bounds_v1(
     checks: &mut [ProjectedBoundsCheckV1],
     blocks: &mut [ProjectedSemanticBlockV1],

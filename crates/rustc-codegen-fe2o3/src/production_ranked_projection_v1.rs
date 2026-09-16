@@ -3551,6 +3551,23 @@ fn prepare_projected_ranked_geometry_with_source_custody_v1(
         &intrinsic.option_predicates,
         &intrinsic.direct_switch_predicates,
     )?;
+    let identity_slice = if !intrinsic.guarded_accesses.is_empty()
+        && matches!(
+            write_values,
+            ProjectedGlobalWriteValuesV1::CanonicalSourceUse
+        )
+        && let Some(recorder) = recorder.as_deref_mut()
+    {
+        Some(recorder.identity_slice(
+            function,
+            semantic.callables(),
+            &intrinsic,
+            &bounds_checks.checks,
+            assertion_facts,
+        )?)
+    } else {
+        None
+    };
     // Full Expression recording is observational; only the existing memory
     // projection may use retained-call control preparation.
     let checked_control = if recorder.is_some()
@@ -3558,12 +3575,13 @@ fn prepare_projected_ranked_geometry_with_source_custody_v1(
             write_values,
             ProjectedGlobalWriteValuesV1::CanonicalSourceUse
         ) {
-        checked_control_v1::prepare_with_recorded_calls_v1(
+        checked_control_v1::prepare_with_identity_slice_v1(
             semantic.types(),
             function,
             semantic.callables(),
             &bounds_checks.checks,
             assertion_facts,
+            identity_slice.as_ref(),
         )?
     } else {
         checked_control_v1::prepare_with_bounds(
@@ -3833,6 +3851,15 @@ fn prepare_projected_ranked_geometry_with_source_custody_v1(
         write_values,
         ProjectedGlobalWriteValuesV1::CanonicalSourceUse
     ) {
+        if let Some(identity) = &identity_slice {
+            retain_canonical_identity_slice_v1(
+                function,
+                &intrinsic.local_contracts.checked_references,
+                identity,
+                &mut projected_blocks,
+                assertion_facts,
+            )?;
+        }
         retain_canonical_source_bounds_v1(
             &mut bounds_checks.checks,
             &mut projected_blocks,
