@@ -16,6 +16,7 @@ mod catalog_transport;
 mod control;
 mod control_index;
 mod index;
+mod integer_identities;
 mod payload;
 #[path = "canonical_kir_transition_receipt_v1.rs"]
 mod receipt;

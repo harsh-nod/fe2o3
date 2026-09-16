@@ -55,6 +55,7 @@ impl State<'_, '_, '_, '_> {
                     continue;
                 }
                 changed |= self.select_alias(ordinal, budget)?;
+                changed |= self.integer_identity_alias(ordinal, budget)?;
                 changed |= self.scalar_facts(ordinal, budget)?;
             }
             // Candidate pairs are obligations, not union premises. Only an

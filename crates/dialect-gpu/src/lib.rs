@@ -28,6 +28,8 @@ use pliron::{
 mod registration;
 
 pub mod cse_v1;
+pub mod dominance_cse_v1;
+pub mod integer_identity_v1;
 pub mod optimization_v1;
 pub mod switch_v3;
 pub mod vector_v12;
