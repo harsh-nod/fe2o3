@@ -9417,6 +9417,60 @@ const fn pipeline_event_kind_v1(event: SemanticWorkgroupPipelineEventV1) -> Pipe
     }
 }
 
+fn write_pipeline_scalar_rejection_v1(
+    enabled: bool,
+    writer: &mut impl std::io::Write,
+    local: usize,
+    use_block: usize,
+    use_statement: usize,
+    definitions_capped: u8,
+) {
+    if !enabled {
+        return;
+    }
+    // The existing inventory saturates at 255; no definitions are recounted here.
+    let _ = writeln!(
+        writer,
+        "PIPELINE_SCALAR_REJECTION_V1 local={local} use_block={use_block} use_statement={use_statement} definitions_capped={definitions_capped}",
+    );
+}
+
+fn trace_pipeline_scalar_rejection_v1(
+    local: usize,
+    use_block: usize,
+    use_statement: usize,
+    definitions_capped: u8,
+) {
+    if std::env::var_os("FE2O3_TRACE_RANKED_CUSTODY_V1").is_none() {
+        return;
+    }
+    write_pipeline_scalar_rejection_v1(
+        true,
+        &mut std::io::stderr().lock(),
+        local,
+        use_block,
+        use_statement,
+        definitions_capped,
+    );
+}
+
+fn pipeline_scalar_multiple_definitions_v1(
+    local: usize,
+    use_site: ScalarAssignmentSiteV1,
+    definitions_capped: u8,
+    observe: impl FnOnce(usize, usize, usize, u8),
+) -> ProductionRankedProjectionErrorV1 {
+    observe(
+        local,
+        use_site.block,
+        use_site.statement,
+        definitions_capped,
+    );
+    ProductionRankedProjectionErrorV1::Incomplete(
+        "a pipeline scalar temporary has multiple definitions",
+    )
+}
+
 struct PipelineScalarProjectorV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
@@ -9566,9 +9620,12 @@ impl PipelineScalarProjectorV1<'_> {
                 return self.argument(origin as usize);
             }
             Some(1) => {}
-            Some(_) => {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a pipeline scalar temporary has multiple definitions",
+            Some(definitions_capped) => {
+                return Err(pipeline_scalar_multiple_definitions_v1(
+                    local,
+                    use_site,
+                    definitions_capped,
+                    trace_pipeline_scalar_rejection_v1,
                 ));
             }
             None => {
@@ -23963,6 +24020,163 @@ mod cold_compile_error_tests;
 #[cfg(test)]
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
+
+    #[test]
+    fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {
+        let fixed_bytes =
+            b"PIPELINE_SCALAR_REJECTION_V1 local= use_block= use_statement= definitions_capped=\n"
+                .len();
+        let bound = fixed_bytes + 3 * usize::BITS as usize + 3;
+        for (local, block, statement, count, expected) in [
+            (
+                7,
+                12,
+                3,
+                2,
+                "PIPELINE_SCALAR_REJECTION_V1 local=7 use_block=12 use_statement=3 definitions_capped=2\n".to_owned(),
+            ),
+            (
+                0,
+                0,
+                0,
+                0,
+                "PIPELINE_SCALAR_REJECTION_V1 local=0 use_block=0 use_statement=0 definitions_capped=0\n".to_owned(),
+            ),
+            (
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                u8::MAX,
+                format!("PIPELINE_SCALAR_REJECTION_V1 local={} use_block={} use_statement={} definitions_capped=255\n", usize::MAX, usize::MAX, usize::MAX),
+            ),
+        ] {
+            let mut output = Vec::new();
+            write_pipeline_scalar_rejection_v1(true, &mut output, local, block, statement, count);
+            assert_eq!(output, expected.as_bytes());
+            assert!(output.is_ascii());
+            assert_eq!(output.iter().filter(|&&byte| byte == b'\n').count(), 1);
+            assert!(output.len() <= bound);
+        }
+    }
+
+    #[test]
+    fn pipeline_scalar_rejection_trace_disabled_never_touches_writer() {
+        struct UntouchedWriter;
+        impl std::io::Write for UntouchedWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                panic!("disabled trace wrote to its sink");
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("disabled trace flushed its sink");
+            }
+        }
+        write_pipeline_scalar_rejection_v1(
+            false,
+            &mut UntouchedWriter,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            u8::MAX,
+        );
+    }
+
+    #[test]
+    fn pipeline_scalar_rejection_trace_observes_once_and_preserves_refusal() {
+        let mut calls = 0;
+        let mut output = Vec::new();
+        let error = pipeline_scalar_multiple_definitions_v1(
+            7,
+            ScalarAssignmentSiteV1 {
+                block: 12,
+                statement: 3,
+            },
+            2,
+            |local, block, statement, count| {
+                calls += 1;
+                assert_eq!((local, block, statement, count), (7, 12, 3, 2));
+                write_pipeline_scalar_rejection_v1(
+                    true,
+                    &mut output,
+                    local,
+                    block,
+                    statement,
+                    count,
+                );
+            },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(output, b"PIPELINE_SCALAR_REJECTION_V1 local=7 use_block=12 use_statement=3 definitions_capped=2\n");
+        assert!(matches!(
+            error,
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar temporary has multiple definitions"
+            )
+        ));
+    }
+
+    #[test]
+    fn pipeline_scalar_rejection_trace_write_failures_preserve_refusal() {
+        struct FailingWriter {
+            remaining: usize,
+            output: Vec<u8>,
+            failures: usize,
+        }
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.remaining == 0 {
+                    self.failures += 1;
+                    return Err(std::io::Error::other("injected trace write failure"));
+                }
+                let count = self.remaining.min(bytes.len());
+                self.output.extend_from_slice(&bytes[..count]);
+                self.remaining -= count;
+                Ok(count)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("trace must not flush its sink");
+            }
+        }
+        let expected = b"PIPELINE_SCALAR_REJECTION_V1 local=7 use_block=12 use_statement=3 definitions_capped=255\n";
+        for capacity in [0, 11] {
+            let mut writer = FailingWriter {
+                remaining: capacity,
+                output: Vec::new(),
+                failures: 0,
+            };
+            let mut calls = 0;
+            let error = pipeline_scalar_multiple_definitions_v1(
+                7,
+                ScalarAssignmentSiteV1 {
+                    block: 12,
+                    statement: 3,
+                },
+                u8::MAX,
+                |local, block, statement, count| {
+                    calls += 1;
+                    assert_eq!((local, block, statement, count), (7, 12, 3, 255));
+                    write_pipeline_scalar_rejection_v1(
+                        true,
+                        &mut writer,
+                        local,
+                        block,
+                        statement,
+                        count,
+                    );
+                },
+            );
+            assert_eq!(calls, 1);
+            assert_eq!(writer.output, expected[..capacity]);
+            assert_eq!(writer.failures, 1);
+            assert!(matches!(
+                error,
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar temporary has multiple definitions"
+                )
+            ));
+        }
+    }
 
     // Isolated CFG tests retain synthetic facts; full-entry tests below use
     // genuine materialized owners and the production assertion query.
