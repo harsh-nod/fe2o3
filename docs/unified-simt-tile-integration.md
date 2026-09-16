@@ -176,7 +176,7 @@ a new role, or a new accepted program.
 ## Inert execution model
 
 `Type::Execution` and `OperationKind::Execution` retain context, workgroup,
-masked-u32 tile and lane-fragment roles in the existing `Module`. Exact V15 wire
+masked-u32 tile and lane-fragment roles in the existing `Module`. V15 wire
 entry points and the registered SO3 family encode the six scope/load/parts
 operations. Frozen earlier bytes are unchanged; historical KIR13/14 remain
 rejected. Existing V12 ownership is not widened or relabeled.
