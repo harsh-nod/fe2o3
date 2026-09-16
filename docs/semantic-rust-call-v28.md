@@ -151,8 +151,8 @@ Coverage distinguishes four cases:
 Shared-slice helpers still expose one slice parameter despite LLVM's `Pair`
 transport. Authenticated pointer/slice wrappers retain their typed marker fields
 and carrier containment. Pointees and active enum/union variants are not inferred
-from entry types. Root/helper ABI restrictions are unchanged, including exact
-root Cast/Indirect aggregate transport and exact helper transport checks.
+from entry types. Root ABI restrictions are unchanged, including exact
+Cast/Indirect aggregate transport. Helpers use the shared checked transport rules.
 Function-level ABI checks run even when the adjusted argument roster is empty.
 
 ## Shared-slice captures
@@ -275,7 +275,8 @@ retain their existing support; source-selected kernel entry handling is separate
 Authority-free debug bundles retain helper variables as well as kernel variables.
 Source and typed-storage maps share the production function index. V3/V5/V6
 decoding checks consistent, injective function associations and exact whole-value
-parameter slots, value identities, generations and representations. A component
+parameter slots, value identities and generations, plus representation-category
+compatibility; `OpaqueFlattened` remains opaque. A component
 slice does not become a whole aggregate variable: unavailable aggregate storage
 stays explicit. These joins do not independently prove the absolute source meaning
 of a coherently replaced helper map; they grant no compiler or execution authority.
