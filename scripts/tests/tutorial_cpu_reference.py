@@ -442,7 +442,8 @@ class AdapterComponents(unittest.TestCase):
                           self.root, "exit", time.monotonic() + 5, phases)
 
     def run_orchestration_double(self, mutate_source: bool = False, interval: str | None = None,
-                                 config_change: tuple[str, str] | None = None) -> tuple[dict, list[list[str]]]:
+                                 config_change: tuple[str, str] | None = None,
+                                 host: str = "x86_64-unknown-linux-gnu") -> tuple[dict, list[list[str]]]:
         # Every tool response here is a protocol double, never compiler evidence.
         def write(relative: str, value: str = "fixture") -> Path:
             path = self.root / relative
@@ -498,8 +499,9 @@ class AdapterComponents(unittest.TestCase):
             if label.startswith("locate-"):
                 return (str(toolpaths[label[7:]]) + "\n").encode()
             if label == "rustc-version":
-                return b"rustc fixture\nhost: x86_64-unknown-linux-gnu\n"
+                return f"rustc fixture\nhost: {host}\n".encode()
             if label in {"driver-metadata", "suite-metadata"}:
+                self.assertEqual(argv[argv.index("--filter-platform") + 1], host)
                 if label == "suite-metadata" and interval not in {None, "baseline"}:
                     changed = {"source": app_source, "manifest": app_manifest, "lock": self.root / "Cargo.lock",
                                "tutorial": tutorial_manifest, "validator": validator_path,
@@ -509,7 +511,19 @@ class AdapterComponents(unittest.TestCase):
                         stream.write("\n# metadata interval mutation\n")
                 return json.dumps(driver_metadata if label == "driver-metadata" else metadata).encode()
             if label == "driver-build":
-                binary = output / "build/driver"
+                self.assertEqual(argv, [str(toolpaths["cargo"]), "build", "--locked", "--offline",
+                                        "-p", "cargo-fe2o3", "--bin", "cargo-fe2o3", "--target", host,
+                                        "--message-format=json"])
+                for name in ("RUSTC", "CARGO_BUILD_RUSTC"):
+                    self.assertEqual(env[name], str(toolpaths["rustc"]))
+                for name in ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER",
+                             "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"):
+                    self.assertEqual(env[name], "")
+                self.assertEqual(env["CARGO_BUILD_JOBS"], "1")
+                self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+                self.assertEqual(env["CARGO_TARGET_DIR"], str(output / "build"))
+                binary = output / "build" / host / "debug/cargo-fe2o3"
+                binary.parent.mkdir(parents=True)
                 binary.write_bytes(b"unexecuted driver double")
                 binary.chmod(0o700)
                 self.assertEqual(env["FE2O3_HIP_SYS_DISABLE"], "1")
@@ -582,6 +596,24 @@ class AdapterComponents(unittest.TestCase):
         self.assertTrue(observation["inputsUnchanged"])
         self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
         self.assertEqual(len(commands), 7)
+
+    def test_bootstrap_target_is_exact_discovered_host_with_nested_driver_artifact(self) -> None:
+        for host in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
+            with self.subTest(host=host):
+                observation, commands = self.run_orchestration_double(host=host)
+                bootstrap = [command for command in commands if "build" in command]
+                self.assertEqual(len(bootstrap), 1)
+                self.assertEqual(bootstrap[0].count("--target"), 1)
+                self.assertEqual(bootstrap[0][bootstrap[0].index("--target") + 1], host)
+                managed = commands[-1]
+                self.assertEqual(managed[1], "test")
+                self.assertIn("--lib", managed)
+                self.assertNotIn("--target", managed)
+                self.assertEqual(observation["plan"]["host"], host)
+                self.assertEqual(observation["plan"]["declaredCommand"]["timeoutSeconds"], 1200)
+                self.assertEqual(observation["outcome"], "passed")
+                self.assertTrue(observation["inputsUnchanged"])
+                self.assertTrue(all(observation[key] is False for key in adapter.NO_AUTHORITY))
 
     def test_postflight_drift_does_not_erase_failed_test_or_process_history(self) -> None:
         observation, _ = self.run_orchestration_double(True)
@@ -729,10 +761,12 @@ class BatchComponents(unittest.TestCase):
                 self.assertEqual(argv[argv.index("--manifest-path") + 1], str(self.apps[index][0]))
             elif label == "driver-build":
                 self.assertEqual(argv, [str(self.tools["cargo"]), "build", "--locked", "--offline", "-p",
-                                       "cargo-fe2o3", "--bin", "cargo-fe2o3", "--message-format=json"])
+                                       "cargo-fe2o3", "--bin", "cargo-fe2o3", "--target",
+                                       "x86_64-unknown-linux-gnu", "--message-format=json"])
                 self.assertEqual(env["RUSTC"], str(self.tools["rustc"]))
                 self.assertEqual(env["RUSTC_WORKSPACE_WRAPPER"], "")
-                binary = Path(env["CARGO_TARGET_DIR"]) / "driver-component"
+                binary = Path(env["CARGO_TARGET_DIR"]) / "x86_64-unknown-linux-gnu/debug/cargo-fe2o3"
+                binary.parent.mkdir(parents=True)
                 binary.write_bytes(b"unexecuted driver component")
                 binary.chmod(0o700)
                 data = (json.dumps({"reason": "compiler-artifact", "package_id": "driver",

@@ -20,7 +20,7 @@ hardware, publication or launch authority follows from these observations.
 
 ## Verification And Remaining Work
 
-- The final helper and test bodies passed 44 component tests, including 20 new
+- The batch helper and test bodies passed 44 component tests, including 20 new
   batch tests. Cargo, driver and harness execution in these orchestration tests
   is doubled; this is not a real managed batch result.
 - The parent CPU WIP passed the CLI unit target: 397 passed and 5 ignored. Its
@@ -32,8 +32,11 @@ hardware, publication or launch authority follows from these observations.
   artifact; neither pilot is accepted tutorial evidence.
 - A real managed batch run, successful standalone observer run, compiler and
   simulator corpus qualification, and applicable hardware checks remain open.
-- The explicit bootstrap-host experiment is not included. No profile, job,
-  deadline, parser or verification-gate exception was introduced.
+- The explicit bootstrap-host experiment is included: the shared driver
+  bootstrap uses the exact discovered host target. All 45 protocol components
+  passed locally; real managed qualification and any speedup remain unproven.
+  Managed suite commands, profiles, jobs, deadlines and parser/verification
+  gates are unchanged.
 - The approved Verus runtime qualification remains deferred, not passed.
 
 All issue 271 milestone acceptance boxes remain open. This branch is shared

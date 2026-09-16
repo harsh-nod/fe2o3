@@ -590,7 +590,7 @@ def bootstrap_driver(root: Path, env: dict[str, str], output: Path, target_dir: 
                           "RUSTC_WORKSPACE_WRAPPER": "", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER": "",
                           "FE2O3_HIP_SYS_DISABLE": "1"})
     data = child([str(tools["cargo"]), "build", "--locked", "--offline", "-p", "cargo-fe2o3",
-                  "--bin", "cargo-fe2o3", "--message-format=json"], root, bootstrap_env,
+                  "--bin", "cargo-fe2o3", "--target", plan["host"], "--message-format=json"], root, bootstrap_env,
                  output, "driver-build", deadline, phases)
     require_child_success(phases, "driver bootstrap")
     artifacts = []
