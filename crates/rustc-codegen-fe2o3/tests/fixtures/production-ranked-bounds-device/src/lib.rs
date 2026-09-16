@@ -76,15 +76,9 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(feature = "dynamic_local_array")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn dynamic_local_array(
-    a: u32,
-    b: u32,
-    c: u32,
-    selector: usize,
-    mut output: DisjointSlice<u32>,
-) {
+pub fn dynamic_local_array(a: u32, b: u32, c: u32, selector: u64, mut output: DisjointSlice<u32>) {
     let values = [a, b, c];
-    let selected = values[selector];
+    let selected = values[selector as usize];
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = selected;
     }

@@ -294,16 +294,20 @@ impl SemanticFunctionLoweringV1<'_> {
                     "dynamic local array selection is empty or too large",
                 )
             })?;
-        enforce_limit(
-            ProductionSemanticKirResourceV1::Operations,
-            self.emitted_operations.saturating_add(extra),
-            self.max_operations,
-        )?;
-        enforce_limit(
-            ProductionSemanticKirResourceV1::Operations,
-            operations.len().saturating_add(extra),
-            MAX_BLOCK_OPERATIONS_V1,
-        )?;
+        for (before, limit) in [
+            (self.emitted_operations, self.max_operations),
+            (operations.len(), MAX_BLOCK_OPERATIONS_V1),
+        ] {
+            let actual =
+                before
+                    .checked_add(extra)
+                    .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Operations,
+                        actual: usize::MAX,
+                        limit,
+                    })?;
+            enforce_limit(ProductionSemanticKirResourceV1::Operations, actual, limit)?;
+        }
         operations.try_reserve(extra).map_err(|_| {
             ProductionSemanticKirErrorV1::AllocationFailure {
                 resource: ProductionSemanticKirResourceV1::Operations,

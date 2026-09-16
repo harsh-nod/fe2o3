@@ -3,6 +3,46 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateRvalueV1,
 };
 
+#[test]
+fn dynamic_local_array_emission_rejects_empty_and_overflowing_budgets_before_mutation() {
+    let fixture = Fixture::new();
+    let mut lowering = fixture.lowering();
+    let mut operations = vec![];
+    fill_array(&mut lowering, &mut operations);
+    let Some(SemanticValueBindingV1::Aggregate(fields)) = lowering.locals[1].clone() else {
+        unreachable!();
+    };
+    lowering.max_operations = usize::MAX;
+    lowering.emitted_operations = usize::MAX;
+    let before = (
+        operations.len(),
+        lowering.next_value,
+        lowering.emitted_operations,
+    );
+    for fields in [fields.as_slice(), &[]] {
+        assert!(
+            lowering
+                .emit_local_array_selection_v1(
+                    &mut operations,
+                    ValueId(10_000),
+                    &Type::Scalar(ScalarType::U64),
+                    fields,
+                    &Type::Scalar(ScalarType::U32),
+                    0,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            (
+                operations.len(),
+                lowering.next_value,
+                lowering.emitted_operations
+            ),
+            before
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DynamicGuardCase {
     Argument,
