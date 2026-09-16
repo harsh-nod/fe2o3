@@ -3724,10 +3724,15 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
         ("aggregate_pointer", "contains a pointer or reference"),
         ("aggregate_drop", "Drop requiring drop glue"),
     ] {
+        let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
+        assert!(
+            matches!(std::fs::symlink_metadata(&bundle_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+            "{feature} output path was not initially absent"
+        );
         let result = output(
             simulation_export_command_for_feature(
                 "gfx942",
-                &target.path().join(format!("{feature}-v4.fe2sim")),
+                &bundle_path,
                 &target.path().join(format!("{feature}-target")),
                 Some(4),
                 feature,
@@ -3738,6 +3743,10 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             !result.status.success() && result.stderr.contains(typed_reason),
             "{feature} did not fail at the typed ABI boundary:\n{}",
             result.stderr
+        );
+        assert!(
+            matches!(std::fs::symlink_metadata(&bundle_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+            "{feature} left an output artifact after rejection"
         );
     }
 }
