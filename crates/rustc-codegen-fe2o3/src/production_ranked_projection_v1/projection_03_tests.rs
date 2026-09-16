@@ -135,11 +135,8 @@
             SemanticTypeLayoutV1::aggregate(
                 Some(16),
                 8,
-                SemanticAggregateLayoutV1::new(
-                    vec![0, 8],
-                    vec![SemanticPaddingV1::new(9, 7).unwrap()],
-                )
-                .unwrap(),
+                SemanticAggregateLayoutV1::new(vec![0, 8], vec![SemanticPaddingV1::new(9, 7).unwrap()])
+                    .unwrap(),
             )
             .unwrap(),
             SemanticTypeShapeV1::Tuple(
@@ -410,8 +407,7 @@
         SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(3),
             vec![
-                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE)
-                    .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE).unwrap(),
             ],
             SCALAR_TYPE,
         )
@@ -436,18 +432,15 @@
         let length_local = SemanticLocalIdV1::from_index(5);
         let place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
         let operand = |local| SemanticOperandV1::Copy(place(local));
-        let index_definition =
-            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                place(index_local),
-                SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
-            )));
-        let slice =
-            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], ARRAY_TYPE).unwrap();
-        let length_definition =
-            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                place(length_local),
-                SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Length(slice)),
-            )));
+        let index_definition = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            place(index_local),
+            SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
+        )));
+        let slice = SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], ARRAY_TYPE).unwrap();
+        let length_definition = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            place(length_local),
+            SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Length(slice)),
+        )));
         let comparison = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
             place(condition_local),
             SemanticRvalueV1::new(
@@ -685,23 +678,20 @@
         let length_local = SemanticLocalIdV1::from_index(5);
         let place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
         let operand = |local| SemanticOperandV1::Copy(place(local));
-        let index_definition =
-            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                place(index_local),
-                SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
-            )));
-        let slice =
-            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], ARRAY_TYPE).unwrap();
+        let index_definition = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            place(index_local),
+            SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
+        )));
+        let slice = SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], ARRAY_TYPE).unwrap();
         let length_value = if options.length_from_slice {
             SemanticRvalueKindV1::Length(slice)
         } else {
             SemanticRvalueKindV1::Use(constant(4))
         };
-        let length_definition =
-            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                place(length_local),
-                SemanticRvalueV1::new(SCALAR_TYPE, length_value),
-            )));
+        let length_definition = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            place(length_local),
+            SemanticRvalueV1::new(SCALAR_TYPE, length_value),
+        )));
         let (left, right) = if options.swap_comparison_operands {
             (operand(length_local), operand(index_local))
         } else {
@@ -957,15 +947,23 @@
     }
 
     fn synthetic_local_contracts(function: &SemanticFunctionDeclV1) -> ProjectionLocalContractsV1 {
+        synthetic_local_contracts_with_types(function, &projection_types())
+    }
+
+    fn synthetic_local_contracts_with_types(
+        function: &SemanticFunctionDeclV1,
+        types: &[SemanticTypeDeclV1],
+    ) -> ProjectionLocalContractsV1 {
         ProjectionLocalContractsV1 {
+            immutable_locals: immutable_local_array_candidates_v1(
+                function,
+                &assertion_definition_inventory(function).unwrap(),
+            ),
             checked_references: CheckedReferencesV1 {
                 origins: vec![None; function.locals().len()],
                 option_dominance: SemanticOptionDominanceV1::analyze(function, &[]).unwrap(),
-                enum_payload_dominance: SemanticEnumPayloadDominanceV1::analyze(
-                    function,
-                    &projection_types(),
-                )
-                .unwrap(),
+                enum_payload_dominance: SemanticEnumPayloadDominanceV1::analyze(function, types)
+                    .unwrap(),
             },
             allocations: (0..function.locals().len())
                 .map(|local| {
@@ -1051,8 +1049,7 @@
         Vec<ProjectedAccessSourceV1>,
         String,
     ) {
-        let function =
-            projection_function(vec![block(29, vec![], SemanticTerminatorKindV1::Return)]);
+        let function = projection_function(vec![block(29, vec![], SemanticTerminatorKindV1::Return)]);
         let (blocks, sources, _) = build_ranked_cfg(
             &projection_types(),
             &function,
