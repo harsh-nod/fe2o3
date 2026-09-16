@@ -179,11 +179,23 @@ still rejects loads, stores, barriers and capability effects. Kernel-root
 aggregate arguments and helper results remain pointer-free. Context issuance,
 borrowed output captures and workgroup/epoch transport are separate work.
 
-The ordinary-source indexing negative currently stops earlier at MIR preflight:
-rustc emits an unsupported `FakeForPtrMetadata` rvalue. It checks that named
-refusal, source location, reachable helper chain and absence of a bundle. Separate
-admitted-MIR lowerer tests exercise the unchanged helper memory-effect gate.
-Neither test establishes support for reading through captured slices.
+The importer normalizes rustc's adjacent metadata-only temporary for immutable
+`u32` slice indexing: `FakeForPtrMetadata(*slice)` followed by `PtrMetadata` on
+that exact temporary. A bounded whole-body check requires one definition and
+one executable use, including unreachable blocks. Both preflight and construction
+derive the relation from their own unchanged MIR. Other uses, types, places or
+separated statements reject; real raw pointers receive no exemption.
+
+The producer becomes a semantic `Nop`, and the consumer uses the existing
+`PointerMetadata` operation on the original shared reference. Statement/source
+positions and local/debug types are retained; no raw pointer value is created.
+Production-constructor tests check the exact normalized operations, source slots
+and local types. Wrapped indexing in the kernel body still rejects at the
+ranked bounds/access join: metadata normalization does not provide an aggregate
+slice allocation/view relation. Reading in a retained helper stops at the
+unchanged complete helper-effect gate, with a declaration location and no bundle.
+Both source refusals remain tested. This normalization supplies neither the
+missing read relations nor functional proof.
 
 The same scoped constructor is used by production correspondence validation.
 Complete representation checking precedes consumer callbacks. Temporary indices

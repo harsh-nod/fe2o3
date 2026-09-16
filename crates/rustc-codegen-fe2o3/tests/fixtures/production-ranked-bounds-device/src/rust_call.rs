@@ -57,6 +57,15 @@ pub fn rust_call(
         captured_len(moved)
     };
     let n = f();
+    #[cfg(feature = "rust_call_slice_index")]
+    let n = {
+        let token = SliceToken(input, ((), ()));
+        if (lhs as usize) < token.0.len() {
+            n ^ token.0[lhs as usize]
+        } else {
+            n
+        }
+    };
     if let Some(value) = pair.get_mut(thread::index_1d()) {
         *value = p;
     }

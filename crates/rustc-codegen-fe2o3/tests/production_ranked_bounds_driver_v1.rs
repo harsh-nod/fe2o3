@@ -1027,6 +1027,8 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
             (0, 1, u32::MAX, 65),
             (7, 11, 13, 129),
             (u32::MAX, 29, 11, 3),
+            (u32::MAX, 0, 2, 1),
+            (3, 64, 7, 65),
         ] {
             let expected = [
                 (seed ^ lhs).wrapping_sub(rhs).wrapping_add(lhs),
@@ -1049,7 +1051,13 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                         "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
                     }));
                 }
-                let input_bytes = seed.to_le_bytes().repeat(input_length);
+                let input_values = (0..input_length)
+                    .map(|index| seed.wrapping_add((index as u32).wrapping_mul(0x9e37_79b9)))
+                    .collect::<Vec<_>>();
+                let input_bytes = input_values
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
                 arguments.push(json!({
                     "kind": "buffer", "element": "u32", "access": "read_only",
                     "alignment": 4, "bytes": format!("0x{}", hex(&input_bytes)),
