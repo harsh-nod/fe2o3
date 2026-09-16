@@ -346,13 +346,22 @@ fn malformed_payload_width_and_result_shape_are_refused_before_rewrite() {
             let operand = fixture.binary.deref(context).get_operand(1);
             let constant =
                 Operation::get_op::<ConstantOp>(operand.defining_op().unwrap(), context).unwrap();
-            constant.set_attr_gpu_constant_value(
-                context,
-                Box::new(IntegerAttr::new(
-                    IntegerType::get(context, 32, Signedness::Unsigned),
-                    APInt::zero(bw(256)),
-                )),
-            );
+            let malformed = Box::new(IntegerAttr::new(
+                IntegerType::get(context, 32, Signedness::Unsigned),
+                APInt::zero(bw(256)),
+            ));
+            let operation = constant.get_operation();
+            let attribute_name = {
+                let operation = operation.deref(context);
+                assert_eq!(operation.attributes.0.len(), 1);
+                operation.attributes.0.iter().next().unwrap().0.clone()
+            };
+            // Corrupt raw IR after construction; the checked setter rejects it.
+            operation
+                .deref_mut(context)
+                .attributes
+                .0
+                .insert(attribute_name, malformed);
         }
         assert!(verify_op(&fixture.function, context).is_err());
         let mut ledger = Ledger::new();
