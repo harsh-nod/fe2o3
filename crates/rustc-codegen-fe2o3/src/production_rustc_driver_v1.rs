@@ -66,6 +66,8 @@ fn transaction_in_active_session_v1<'tcx>(
         .map_err(|error| {
             format!("production extraction target authentication failed before monomorphization: {error}")
         })?;
+    let context_producers = crate::collector::capture_context_producers_v1(tcx)
+        .map_err(|error| format!("production context producer capture failed: {error}"))?;
     let partitions = tcx.collect_and_partition_mono_items(());
     let kernel_count = crate::collector::count_kernels_in_cgus(tcx, partitions.codegen_units);
     if kernel_count == 0 {
@@ -83,6 +85,7 @@ fn transaction_in_active_session_v1<'tcx>(
         partitions.codegen_units,
         false,
         target,
+        context_producers,
     )
     .map_err(|error| format!("production extraction collection failed: {error}"))?;
     let crate_name = tcx.crate_name(LOCAL_CRATE);

@@ -1,6 +1,7 @@
 #![feature(proc_macro_tracked_env)]
 
 mod control_flow_v1;
+mod kernel_context_entry_v1;
 
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
@@ -914,7 +915,7 @@ fn validate_assembly_options_and_effects_v1(
 fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macro2::TokenStream> {
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if options.mode == KernelMode::Typed {
-        validate_typed_kernel_profile_v1(&input, &options)?;
+        kernel_context_entry_v1::validate_typed_profile_v1(&input, &options)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
@@ -1072,7 +1073,8 @@ fn expand_kernel_with_imports(
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if options.mode == KernelMode::Typed {
-        validate_general_typed_signature_shape_v1(&input, &options)?;
+        let physical = kernel_context_entry_v1::physical_signature_v1(&input, &options)?;
+        validate_general_typed_signature_shape_v1(&physical, &options)?;
         return expand_general_typed_kernel_with_imports(
             input,
             options,
@@ -1108,6 +1110,8 @@ fn expand_device_kernel_with_imports(
     }
     validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
     validate_kernel_signature(&input)?;
+
+    let context_entry = kernel_context_entry_v1::ContextEntryV1::take(&mut input, &options)?;
 
     let original_ident = input.sig.ident.clone();
     let original_name = original_ident.to_string();
@@ -1147,6 +1151,19 @@ fn expand_device_kernel_with_imports(
         .cloned()
         .unwrap_or_else(|| quote!(__fe2o3_kernel_device));
     let fallback_device_import = device_path.is_none().then_some(device_import);
+    let context_expansion = context_entry
+        .map(|entry| {
+            entry.expand(
+                &mut input,
+                device_path,
+                &internal_ident,
+                &format_ident!("__fe2o3_kernel_body_{original_name}"),
+                &type_marker_ident,
+                &function_pointer,
+                false,
+            )
+        })
+        .transpose()?;
     input.sig.ident = internal_ident.clone();
 
     let registration_type = quote!((u64, u16, u16, &'static str, &'static str, #function_pointer));
@@ -1230,6 +1247,8 @@ fn expand_device_kernel_with_imports(
     );
 
     Ok(quote! {
+        #context_expansion
+
         #[doc(hidden)]
         #[allow(non_snake_case)]
         #[unsafe(no_mangle)]
@@ -1294,6 +1313,8 @@ fn expand_general_typed_kernel_with_imports(
     }
     validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     validate_kernel_signature(&input)?;
+
+    let context_entry = kernel_context_entry_v1::ContextEntryV1::take(&mut input, &options)?;
 
     let original_ident = input.sig.ident.clone();
     let original_name = original_ident.to_string();
@@ -1381,7 +1402,22 @@ fn expand_general_typed_kernel_with_imports(
             syn::FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
         })
         .collect::<Vec<_>>();
-    let helper_input = if returns_kernel_result {
+    let context_expansion = context_entry
+        .map(|entry| {
+            entry.expand(
+                &mut input,
+                device_path,
+                &internal_ident,
+                &body_ident,
+                &type_marker_ident,
+                &function_pointer,
+                returns_kernel_result,
+            )
+        })
+        .transpose()?;
+    let helper_input = if context_expansion.is_some() {
+        None
+    } else if returns_kernel_result {
         let mut helper = input.clone();
         helper.vis = Visibility::Inherited;
         helper.sig.ident = body_ident.clone();
@@ -1544,6 +1580,8 @@ fn expand_general_typed_kernel_with_imports(
     });
 
     Ok(quote! {
+        #context_expansion
+
         #[doc(hidden)]
         #[allow(non_snake_case)]
         #helper_input

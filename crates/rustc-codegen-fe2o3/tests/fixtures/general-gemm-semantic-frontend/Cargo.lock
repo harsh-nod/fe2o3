@@ -158,11 +158,19 @@ name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifacts",
+ "fe2o3-rustc-front",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
  "reserved-fe2o3-symbols",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fe2o3-rustc-front"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]

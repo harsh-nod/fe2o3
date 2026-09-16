@@ -2,11 +2,22 @@
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn staged_generative_providers_reject_without_export_authority() {
     const REASON: &str = "reserved capability type has no authenticated production owner";
+    const ENTRY_REASON: &str = "raw rustc MIR preflight rejected reviewed terminal without production expansion: KernelContextIssue";
     let target = ScratchTarget::new();
     let build_dir = target.path().join("provider-target");
     let mut failures = Vec::new();
     for (feature, expected) in [
         ("provider_context", REASON),
+        ("provider_context_entry", ENTRY_REASON),
+        ("provider_context_entry_result", ENTRY_REASON),
+        (
+            "provider_context_helper_issue",
+            "issuance outside a declared physical root",
+        ),
+        (
+            "provider_context_unregistered_issue",
+            "issuance outside a declared physical root",
+        ),
         ("provider_context_alias", REASON),
         ("provider_context_nested", REASON),
         ("provider_context_reference", REASON),
@@ -92,4 +103,5 @@ fn staged_generative_providers_reject_without_export_authority() {
         );
         assert!(control.is_file());
     }
+    check_kernel_context_source_protocol();
 }

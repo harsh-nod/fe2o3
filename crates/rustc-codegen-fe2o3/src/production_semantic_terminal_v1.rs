@@ -1145,6 +1145,7 @@ mod tests {
     fn every_unimplemented_terminal_is_retained_as_an_explicit_rejection() {
         for item in [
             TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::KernelContextIssue,
             TrustedDeviceItem::ExecutionWorkgroupCapability,
             TrustedDeviceItem::ExecutionWorkgroupCurrent,
             TrustedDeviceItem::MaskedTile1D,

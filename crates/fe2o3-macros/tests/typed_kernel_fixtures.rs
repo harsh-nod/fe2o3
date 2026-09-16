@@ -60,6 +60,37 @@ fn generated_arguments_retain_source_borrows() {
 }
 
 #[test]
+fn kernel_context_entry_authenticates_the_user_spelled_type() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../../target"))
+        .join("kernel-context-entry-test");
+    for (bin, diagnostic) in [
+        ("context_entry", None),
+        ("context_alias", None),
+        ("context_hidden_brand", Some("mismatched types")),
+        (
+            "context_hidden_static",
+            Some("lifetime may not live long enough"),
+        ),
+        ("context_lookalike", Some("mismatched types")),
+        ("context_never", Some("mismatched types")),
+    ] {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        match diagnostic {
+            None => assert!(output.status.success(), "{bin}:\n{stderr}"),
+            Some(expected) => assert!(
+                !output.status.success() && stderr.contains(expected),
+                "{bin} did not reject with {expected:?}:\n{stderr}"
+            ),
+        }
+    }
+}
+
+#[test]
 fn generated_global_mut_arguments_reject_forgery_and_substitution() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
