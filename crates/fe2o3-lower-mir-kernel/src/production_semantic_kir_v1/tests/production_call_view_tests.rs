@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_call_transport_tests.rs"]
+mod transport_tests;
+
 #[test]
 fn call_result_store_substitution_rejects_even_when_kir_types_still_verify() {
     for result in [ArgumentCallResult::Retained, ArgumentCallResult::Projected] {

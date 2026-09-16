@@ -7913,7 +7913,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         correspondence.parameter_component_bindings.len(),
         correspondence.ignored_parameter_bindings.len(),
         correspondence.call_returns.len(),
-        argument_product_v1(expected_functions.len(), 3)?,
+        argument_product_v1(expected_functions.len(), 4)?,
     ])?)?;
     let call_targets = CallTargetIndexV1::new(module, &expected_functions, &mut argument_budget)?;
     for expected_function in &expected_functions {
