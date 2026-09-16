@@ -695,28 +695,6 @@ impl ProjectedSemanticBlockV1 {
             ProjectedBlockItemV1::Effect { .. } => false,
         })
     }
-
-    fn requires_invocation_index(&self) -> bool {
-        self.items.iter().any(|item| match item {
-            ProjectedBlockItemV1::Effect {
-                operation:
-                    ProductionRankedOperationV1::AtomicAccess { .. }
-                    | ProductionRankedOperationV1::AtomicValueAccess { .. },
-                ..
-            } => false,
-            ProjectedBlockItemV1::Effect {
-                source: Some(source),
-                ..
-            } => source.memory_space != MemorySpaceAttr::Private,
-            ProjectedBlockItemV1::Guarded(access) => {
-                access.memory_space != MemorySpaceAttr::Private
-            }
-            ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
-            ProjectedBlockItemV1::Pipeline(_) => false,
-            ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
-            ProjectedBlockItemV1::Effect { source: None, .. } => false,
-        })
-    }
 }
 
 /// Exact typed-root input for one ranked projection. Construction remains
@@ -3517,18 +3495,10 @@ fn project_and_verify_ranked_root_v1(
             "a kernel without a statically ranked indexed memory access",
         ));
     }
-    if projected_blocks
-        .iter()
-        .any(ProjectedSemanticBlockV1::requires_invocation_index)
-        && !entry_operations.iter().any(|operation| {
-            matches!(
-                operation,
-                ProductionRankedOperationV1::InvocationIndex { .. }
-            )
-        })
-    {
+    // The launch layout defines the domain even when source never reads a coordinate.
+    if entry_operations.first() != Some(&ranked_execution_layout_v1(source_root.layout())) {
         incomplete.get_or_insert(ProductionRankedProjectionErrorV1::Incomplete(
-            "a concurrent memory effect before exact invocation-index projection is available",
+            "ranked execution domain differs from the authenticated source launch",
         ));
     }
     let (blocks, sources, executable_effect_sources) = build_ranked_cfg(
