@@ -73,6 +73,16 @@ use fe2o3_device::sync::syncthreads;
 ))]
 use fe2o3_device::{Blocked, Index1D};
 use fe2o3_device::{DisjointSlice, kernel, thread};
+
+#[cfg(feature = "dynamic_local_array")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn dynamic_local_array(a: u32, b: u32, c: u32, selector: u64, mut output: DisjointSlice<u32>) {
+    let values = [a, b, c];
+    let selected = values[selector as usize];
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = selected;
+    }
+}
 #[cfg(any(
     feature = "workgroup_reduce_u32",
     feature = "workgroup_reduce_i32",
@@ -98,6 +108,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "wrapping_integer",
     feature = "launch_wrapping_integer",
     feature = "rust_call",
+    feature = "dynamic_local_array",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",

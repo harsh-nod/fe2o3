@@ -341,8 +341,7 @@
         ] {
             let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
             let launch =
-                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
-                    .unwrap();
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
             let source_contract =
                 SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
             let function =
@@ -355,8 +354,7 @@
             let source_launch = LaunchContract::new(
                 rank,
                 BlockSize::Exact(
-                    fe2o3_artifacts::Dimensions::new(workgroup[0], workgroup[1], workgroup[2])
-                        .unwrap(),
+                    fe2o3_artifacts::Dimensions::new(workgroup[0], workgroup[1], workgroup[2]).unwrap(),
                 ),
                 fe2o3_artifacts::Dimensions::new(max_grid[0], max_grid[1], max_grid[2]).unwrap(),
                 0,
@@ -387,15 +385,13 @@
         let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
         let launch =
             SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
-        let source_contract =
-            SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
-        let function =
-            projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)])
-                .with_kernel_entry(SemanticKernelEntryV1::new(
-                    SemanticLinkSymbolV1::new(b"typed_kernel".to_vec()).unwrap(),
-                    SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
-                    source_contract,
-                ));
+        let source_contract = SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
+        let function = projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)])
+            .with_kernel_entry(SemanticKernelEntryV1::new(
+                SemanticLinkSymbolV1::new(b"typed_kernel".to_vec()).unwrap(),
+                SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
+                source_contract,
+            ));
         let finite = LaunchContract::new(
             1,
             BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
@@ -482,8 +478,7 @@
         let nested_index = SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(3),
             vec![
-                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, ARRAY_TYPE)
-                    .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, ARRAY_TYPE).unwrap(),
                 SemanticProjectionV1::new(
                     SemanticProjectionKindV1::ConstantIndex {
                         offset: 0,
@@ -595,8 +590,7 @@
         let place = SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(1),
             vec![
-                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE)
-                    .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE).unwrap(),
             ],
             SCALAR_TYPE,
         )
@@ -940,7 +934,7 @@
             audit_statements(vec![statement(SemanticStatementKindV1::Deinitialize(
                 dynamic,
             ))]),
-            "a dynamic array index before exact static-extent guard projection",
+            "a dynamic array index requires an immutable local scalar array",
         );
     }
 
@@ -991,9 +985,11 @@
                 ..
             }
         ));
-        assert!(call_error.to_string().contains(
-            "a call terminator before exact callable memory-effect summaries are available",
-        ));
+        assert!(
+            call_error.to_string().contains(
+                "a call terminator before exact callable memory-effect summaries are available",
+            )
+        );
 
         let edge = SemanticControlFlowEdgeV1::new(
             SemanticEdgeRoleV1::DropReturn,
