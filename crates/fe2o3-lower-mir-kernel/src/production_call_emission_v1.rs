@@ -238,10 +238,11 @@ impl SemanticFunctionLoweringV1<'_> {
                 resource: ProductionSemanticKirResourceV1::AnalysisStorage,
             })?;
         let mut flattened = None;
-        for (projection, expected) in signature
+        for (parameter, (projection, expected)) in signature
             .call_arguments
             .iter()
-            .zip(&signature.parameter_types)
+            .zip(signature.parameter_types)
+            .enumerate()
         {
             let source = source_bindings
                 .get(projection.source_argument as usize)
@@ -301,8 +302,18 @@ impl SemanticFunctionLoweringV1<'_> {
                         .ok_or_else(|| failure("defined call aggregate component is missing"))?
                 }
             };
-            if &actual != expected {
-                return Err(failure("defined call argument type changed"));
+            if actual != expected {
+                return Err(ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+                    function: self.semantic_function.index(),
+                    callee: callee.index(),
+                    block: block.index(),
+                    parameter,
+                    source_argument: projection.source_argument,
+                    tuple_field: projection.tuple_field,
+                    component: projection.component,
+                    expected,
+                    actual,
+                });
             }
             arguments.push(value);
         }

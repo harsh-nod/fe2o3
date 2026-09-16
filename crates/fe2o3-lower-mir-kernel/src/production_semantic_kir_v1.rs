@@ -832,6 +832,27 @@ pub enum ProductionSemanticKirErrorV1 {
         /// Stable rejection reason.
         detail: &'static str,
     },
+    /// A defined call's lowered argument differs from its exact physical signature.
+    DefinedCallArgumentTypeMismatch {
+        /// Calling semantic function index.
+        function: u32,
+        /// Called semantic function index.
+        callee: u32,
+        /// Calling semantic block index; the call is its terminator.
+        block: u32,
+        /// Zero-based flattened physical parameter ordinal.
+        parameter: usize,
+        /// Zero-based logical source argument ordinal.
+        source_argument: u32,
+        /// Outer RustCall tuple field, when expanded.
+        tuple_field: Option<u32>,
+        /// Flattened component within the selected source binding, when expanded.
+        component: Option<usize>,
+        /// Exact physical parameter type from the verified helper signature.
+        expected: Type,
+        /// Actual lowered argument type; retained without an additional clone.
+        actual: Type,
+    },
     /// An exact fixed-array index is outside its declared extent.
     FixedArrayIndexOutOfBounds {
         /// Source semantic function index, including non-entry helper bodies.
@@ -981,6 +1002,20 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 formatter,
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block:?}, statement {statement:?}: {detail}",
             ),
+            Self::DefinedCallArgumentTypeMismatch {
+                function,
+                callee,
+                block,
+                parameter,
+                source_argument,
+                tuple_field,
+                component,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement None: defined call argument type changed; callee {callee}, physical parameter {parameter}, source argument {source_argument}, tuple field {tuple_field:?}, component {component:?}: expected {expected:?}, actual {actual:?}",
+            ),
             Self::FixedArrayIndexOutOfBounds {
                 function,
                 block,
@@ -1124,6 +1159,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
+            | Self::DefinedCallArgumentTypeMismatch { .. }
             | Self::FixedArrayIndexOutOfBounds { .. }
             | Self::HelperEffectsUnavailable { .. }
             | Self::MissingLocalDefinition { .. }
@@ -25698,6 +25734,46 @@ mod resource_tests {
     include!("production_semantic_kir_v1/wrapping_arithmetic_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
+
+    #[test]
+    fn defined_call_type_diagnostic_retains_flattened_source_coordinates() {
+        let error = ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+            function: 3,
+            callee: 11,
+            block: 175,
+            parameter: 5,
+            source_argument: 2,
+            tuple_field: Some(1),
+            component: Some(3),
+            expected: Type::Scalar(ScalarType::U64),
+            actual: Type::INDEX,
+        };
+        assert_eq!(
+            error.to_string(),
+            "semantic-to-Kernel-IR lowering rejected function 3, block 175, statement None: defined call argument type changed; callee 11, physical parameter 5, source argument 2, tuple field Some(1), component Some(3): expected Scalar(U64), actual Scalar(Index)",
+        );
+        assert!(std::error::Error::source(&error).is_none());
+    }
+
+    #[test]
+    fn defined_call_type_diagnostic_distinguishes_unexpanded_arguments() {
+        let error = ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+            function: 6,
+            callee: 2,
+            block: 299,
+            parameter: 0,
+            source_argument: 0,
+            tuple_field: None,
+            component: None,
+            expected: Type::F32,
+            actual: Type::Scalar(ScalarType::U32),
+        };
+        assert_eq!(
+            error.to_string(),
+            "semantic-to-Kernel-IR lowering rejected function 6, block 299, statement None: defined call argument type changed; callee 2, physical parameter 0, source argument 0, tuple field None, component None: expected Scalar(F32), actual Scalar(U32)",
+        );
+        assert!(std::error::Error::source(&error).is_none());
+    }
 
     #[test]
     fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {
