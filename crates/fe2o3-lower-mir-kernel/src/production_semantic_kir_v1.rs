@@ -84,11 +84,14 @@ include!("production_private_array_records_v1.rs");
 include!("production_private_array_emission_v1.rs");
 include!("production_private_array_relation_v1.rs");
 include!("production_private_array_consumers_v1.rs");
+include!("production_argument_shapes_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
 const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
 const DEFAULT_MAX_OPERATIONS_V1: usize = 1_048_576;
+const DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1: usize = 16 * 1024 * 1024;
+const DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1: usize = 16 * 1024 * 1024;
 
 /// Independent work limits for semantic-MIR-to-Kernel-IR lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +100,8 @@ pub struct ProductionSemanticKirLimitsV1 {
     max_blocks: usize,
     max_statements: usize,
     max_operations: usize,
+    max_argument_correspondence_work: usize,
+    max_argument_correspondence_storage: usize,
 }
 
 impl ProductionSemanticKirLimitsV1 {
@@ -122,7 +127,21 @@ impl ProductionSemanticKirLimitsV1 {
             max_blocks,
             max_statements,
             max_operations,
+            max_argument_correspondence_work: DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1,
+            max_argument_correspondence_storage: DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1,
         }
+    }
+
+    /// Bounds cumulative entry-argument replay work and peak logical scratch
+    /// bytes, independently of emitted operations and legacy argument rows.
+    pub const fn with_argument_correspondence_limits(
+        mut self,
+        max_work: usize,
+        max_storage_bytes: usize,
+    ) -> Self {
+        self.max_argument_correspondence_work = max_work;
+        self.max_argument_correspondence_storage = max_storage_bytes;
+        self
     }
 }
 
@@ -599,15 +618,9 @@ impl SemanticKirCorrespondenceV1 {
         semantic_owner: &ProductionSemanticSsaOwnerV1,
         module: &Module,
         expected_roots: &[SemanticFunctionIdV1],
-        max_blocks: usize,
+        limits: ProductionSemanticKirLimitsV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        validate_semantic_kir_correspondence(
-            semantic_owner,
-            module,
-            expected_roots,
-            max_blocks,
-            self,
-        )
+        validate_semantic_kir_correspondence(semantic_owner, module, expected_roots, limits, self)
     }
 }
 
@@ -774,6 +787,8 @@ pub enum ProductionSemanticKirErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
     /// Assertion-origin emission, sealing, query, or resource rejection.
     AssertOrigin(SemanticKirAssertOriginErrorV1),
+    /// Exact entry-argument replay exhausted its independent resource budget.
+    ArgumentCorrespondenceResource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     /// A bounded lowering resource exceeded its limit.
     ResourceLimit {
         /// Resource that exceeded its limit.
@@ -924,6 +939,9 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => write!(formatter, "exact semantic owner failed: {error}"),
             Self::SemanticSsa(error) => write!(formatter, "semantic SSA custody failed: {error}"),
             Self::AssertOrigin(error) => error.fmt(formatter),
+            Self::ArgumentCorrespondenceResource(error) => {
+                write!(formatter, "entry-argument correspondence: {error}")
+            }
             Self::ResourceLimit {
                 resource,
                 actual,
@@ -1079,6 +1097,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::AssertOrigin(error) => Some(error),
+            Self::ArgumentCorrespondenceResource(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
             Self::CanonicalKernelIrV8(error) => Some(error),
             Self::CanonicalKernelIrV9(error) => Some(error),
@@ -7736,7 +7755,7 @@ fn validate_semantic_kir_correspondence(
     owner: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     expected_roots: &[SemanticFunctionIdV1],
-    max_blocks: usize,
+    limits: ProductionSemanticKirLimitsV1,
     correspondence: &SemanticKirCorrespondenceV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     owner
@@ -7746,7 +7765,7 @@ fn validate_semantic_kir_correspondence(
         owner,
         module,
         expected_roots,
-        max_blocks,
+        limits,
         correspondence,
     )
 }
@@ -7755,7 +7774,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     owner: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     expected_roots: &[SemanticFunctionIdV1],
-    max_blocks: usize,
+    limits: ProductionSemanticKirLimitsV1,
     correspondence: &SemanticKirCorrespondenceV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
@@ -7792,7 +7811,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     let mut expected_entries = Vec::with_capacity(module.kernels.len());
     let mut expected_helpers = Vec::new();
     let mut retained_correspondence = BTreeSet::new();
-    let mut closure_budget = ReachableClosureBudgetV1::new(max_blocks);
+    let mut closure_budget = ReachableClosureBudgetV1::new(limits.max_blocks);
     for (kernel, expected_root_id) in module.kernels.iter().zip(expected_roots) {
         let root_id = semantic_roots_by_symbol
             .get(kernel.id.as_str())
@@ -7868,6 +7887,19 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     let mut parameter_offset = 0_usize;
     let mut parameter_component_offset = 0_usize;
     let mut ignored_parameter_offset = 0_usize;
+    let mut argument_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        limits.max_argument_correspondence_work,
+    );
+    let mut argument_budget = ArgumentBudgetV1::new(
+        &mut argument_work,
+        limits.max_argument_correspondence_storage,
+    );
+    argument_budget.charge_work(argument_sum_v1(&[
+        correspondence.parameter_bindings.len(),
+        correspondence.parameter_component_bindings.len(),
+        correspondence.ignored_parameter_bindings.len(),
+        argument_product_v1(expected_functions.len(), 3)?,
+    ])?)?;
     for expected_function in &expected_functions {
         let correspondence_owner = match expected_function.role {
             SemanticKirFunctionRoleV1::KernelEntry => semantic_roots_by_symbol
@@ -8001,26 +8033,29 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
             &synthetic,
             runtime_assert_rule,
-        ) || !validate_parameter_correspondence_v1(
-            correspondence_owner,
-            expected_function.semantic_function,
-            semantic_function,
-            target_body,
-            correspondence
-                .parameter_bindings
-                .get(parameter_offset..parameter_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            correspondence
-                .parameter_component_bindings
-                .get(parameter_component_offset..parameter_component_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            correspondence
-                .ignored_parameter_bindings
-                .get(ignored_parameter_offset..ignored_parameter_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
         ) {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
+        validate_parameter_correspondence_v1(
+            semantic,
+            expected_function,
+            target,
+            ArgumentTraceV1 {
+                direct: correspondence
+                    .parameter_bindings
+                    .get(parameter_offset..parameter_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                components: correspondence
+                    .parameter_component_bindings
+                    .get(parameter_component_offset..parameter_component_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                ignored: correspondence
+                    .ignored_parameter_bindings
+                    .get(ignored_parameter_offset..ignored_parameter_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            },
+            &mut argument_budget,
+        )?;
         block_offset = block_end;
         statement_offset = statement_end;
         terminator_offset = terminator_end;
@@ -8041,144 +8076,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
     Ok(())
 }
 
-fn validate_parameter_correspondence_v1(
-    correspondence_owner: SemanticFunctionIdV1,
-    semantic_function: SemanticFunctionIdV1,
-    function: &SemanticFunctionDeclV1,
-    target: &FunctionBody,
-    bindings: &[SemanticKirParameterBindingV1],
-    component_bindings: &[SemanticKirParameterComponentBindingV1],
-    ignored_bindings: &[SemanticKirIgnoredParameterBindingV1],
-) -> bool {
-    let semantic_argument_count = function
-        .locals()
-        .iter()
-        .filter(|declaration| declaration.role().is_entry_argument())
-        .count();
-    if bindings.len().checked_add(component_bindings.len()) != Some(target.parameters.len()) {
-        return false;
-    }
-    let direct_ok = bindings.iter().all(|binding| {
-        let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
-            return false;
-        };
-        function
-            .locals()
-            .get(local)
-            .is_some_and(|declaration| declaration.role().is_entry_argument())
-            && binding.correspondence_owner == correspondence_owner
-            && binding.semantic_function == semantic_function
-            && target.parameters.contains(&binding.kernel_ir_value)
-    });
-    let components_ok = component_bindings.iter().all(|binding| {
-        let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
-            return false;
-        };
-        function
-            .locals()
-            .get(local)
-            .is_some_and(|declaration| declaration.role().is_entry_argument())
-            && binding.correspondence_owner == correspondence_owner
-            && binding.semantic_function == semantic_function
-            && !binding.projection.is_empty()
-            && target.parameters.contains(&binding.kernel_ir_value)
-    });
-    let ignored_ok = ignored_bindings.iter().all(|binding| {
-        let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
-            return false;
-        };
-        let Some(declaration) = function.locals().get(local) else {
-            return false;
-        };
-        let abi = function.abi();
-        let exact_ignored = |value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiArgumentV1| {
-            value.ty() == declaration.ty()
-                && value.value().adjusted().is_none()
-                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
-        };
-        let argument_ignored = match declaration.role() {
-            SemanticLocalRoleV1::Argument(argument)
-                if abi.extern_abi()
-                    == fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::RustCall
-                    && argument == abi.fixed_count() =>
-            {
-                abi.source_input_types().get(argument as usize) == Some(&declaration.ty())
-                    && abi
-                        .adjusted_arguments()
-                        .iter()
-                        .filter(|value| {
-                            matches!(
-                                value.role(),
-                                SemanticAbiArgumentRoleV1::RustCallTupleField(_)
-                            )
-                        })
-                        .all(|value| {
-                            value.value().adjusted().is_none()
-                                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
-                        })
-            }
-            SemanticLocalRoleV1::Argument(argument) => {
-                abi.source_input_types().get(argument as usize) == Some(&declaration.ty())
-                    && abi
-                        .adjusted_arguments()
-                        .get(argument as usize)
-                        .is_some_and(exact_ignored)
-            }
-            SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
-                argument == abi.fixed_count()
-                    && (abi.fixed_count() as usize)
-                        .checked_add(field as usize)
-                        .and_then(|index| abi.adjusted_arguments().get(index))
-                        .is_some_and(|value| {
-                            value.role() == SemanticAbiArgumentRoleV1::RustCallTupleField(field)
-                                && exact_ignored(value)
-                        })
-            }
-            SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => false,
-        };
-        binding.correspondence_owner == correspondence_owner
-            && binding.semantic_function == semantic_function
-            && binding.semantic_type == declaration.ty()
-            && argument_ignored
-    });
-    let mut represented = BTreeSet::new();
-    represented.extend(bindings.iter().map(|binding| binding.semantic_local));
-    represented.extend(
-        component_bindings
-            .iter()
-            .map(|binding| binding.semantic_local),
-    );
-    represented.extend(
-        ignored_bindings
-            .iter()
-            .map(|binding| binding.semantic_local),
-    );
-    let ignored_locals = ignored_bindings
-        .iter()
-        .map(|binding| binding.semantic_local)
-        .collect::<BTreeSet<_>>();
-    let ignored_are_unique_and_disjoint = ignored_locals.len() == ignored_bindings.len()
-        && bindings
-            .iter()
-            .all(|binding| !ignored_locals.contains(&binding.semantic_local))
-        && component_bindings
-            .iter()
-            .all(|binding| !ignored_locals.contains(&binding.semantic_local));
-    let mut values = BTreeSet::new();
-    values.extend(bindings.iter().map(|binding| binding.kernel_ir_value));
-    values.extend(
-        component_bindings
-            .iter()
-            .map(|binding| binding.kernel_ir_value),
-    );
-    direct_ok
-        && components_ok
-        && ignored_ok
-        && ignored_are_unique_and_disjoint
-        && represented.len() == semantic_argument_count
-        && values.len() == target.parameters.len()
-        && target.parameters.iter().all(|value| values.contains(value))
-}
+include!("production_argument_correspondence_v1.rs");
 
 fn validate_operation_correspondence_layout(
     expected: &[ExpectedSemanticKirBlockCoverageV1],
@@ -10296,67 +10194,9 @@ fn direct_scalar_helper_plan_v1(
         )
     })?;
     for mapped in arguments.adjusted_arguments() {
-        let argument = mapped.abi();
         let local = mapped.local().index() as usize;
-        if argument.value().adjusted().is_some() || argument.value().pointee_override().is_some() {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper parameter has an adjusted ABI type",
-            ));
-        }
-        let shared_slice = mapped.tuple_field().is_none()
-            && shared_slice_helper_parameter_v1(
-                types,
-                function,
-                mapped.source_argument(),
-                argument.ty(),
-            );
-        let components = if shared_slice {
-            vec![(
-                Vec::new(),
-                argument.ty(),
-                lower_parameter_type(types, &[], argument.ty())?,
-            )]
-        } else if matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
-            && let Ok(scalar) = lower_scalar_type(types, argument.ty())
-        {
-            vec![(Vec::new(), argument.ty(), scalar)]
-        } else {
-            if mapped.source_ownership() != SemanticSourceArgumentOwnershipV1::ByValue
-                || matches!(
-                    types[argument.ty().index() as usize].shape(),
-                    SemanticTypeShapeV1::Pointer(_)
-                )
-                || !matches!(
-                    argument.mode(),
-                    SemanticAbiPassModeV1::Ignore
-                        | SemanticAbiPassModeV1::Direct(_)
-                        | SemanticAbiPassModeV1::Pair { .. }
-                )
-            {
-                return Err(unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "helper parameter is not an exact by-value scalar aggregate or shared slice",
-                ));
-            }
-            lower_by_value_parameter_components_v1(types, function, argument)
-                .map_err(|error| match error {
-                    ProductionSemanticKirErrorV1::Unsupported {
-                        block,
-                        statement,
-                        detail,
-                        ..
-                    } => unsupported(function_id.index(), block, statement, detail),
-                    other => other,
-                })?
-                .into_iter()
-                .map(|(path, ty, kir, _, _)| (path, ty, kir))
-                .collect()
-        };
+        let (shared_slice, components) =
+            helper_parameter_shape_v1(types, function, function_id, mapped)?;
         closure_budget.charge_parameter_expansion(
             logical_argument_rows_v1(function),
             parameter_types.len(),
@@ -11385,7 +11225,7 @@ fn lower_module_with_assert_origins_v1(
         parameter_component_bindings: parameter_component_bindings.into_boxed_slice(),
         ignored_parameter_bindings: ignored_parameter_bindings.into_boxed_slice(),
     };
-    correspondence.validate_layout_against(owner, &merged, semantic.roots(), limits.max_blocks)?;
+    correspondence.validate_layout_against(owner, &merged, semantic.roots(), limits)?;
     Ok((merged, correspondence))
 }
 
@@ -11582,15 +11422,8 @@ fn lower_single_root_module(
         )
     })?;
     for (argument, local, ty) in &entry_parameters {
-        let direct = lower_kernel_parameter_type(
-            semantic.types(),
-            semantic.callables(),
-            body,
-            *argument,
-            *ty,
-        );
-        let direct_error = match direct {
-            Ok(parameter_ty) => {
+        let components = match kernel_parameter_shape_v1(semantic, body, *argument, *ty)? {
+            KernelParameterShapeV1::Direct(parameter_ty) => {
                 closure_budget.charge_parameter_expansion(
                     logical_argument_rows_v1(body),
                     entry_parameter_types.len(),
@@ -11614,30 +11447,8 @@ fn lower_single_root_module(
                 });
                 continue;
             }
-            Err(error) => error,
+            KernelParameterShapeV1::Components(components) => components,
         };
-
-        let declaration = semantic
-            .types()
-            .get(ty.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
-        if !matches!(
-            declaration.shape(),
-            SemanticTypeShapeV1::Unit
-                | SemanticTypeShapeV1::Array { .. }
-                | SemanticTypeShapeV1::Tuple(_)
-                | SemanticTypeShapeV1::Aggregate(_)
-        ) || body
-            .abi()
-            .source_argument_ownership()
-            .get(*argument as usize)
-            != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-        {
-            return Err(direct_error);
-        }
-
-        let components =
-            lower_by_value_kernel_parameter_components_v1(semantic.types(), body, *argument, *ty)?;
         closure_budget.charge_parameter_expansion(
             logical_argument_rows_v1(body),
             entry_parameter_types.len(),
@@ -12041,12 +11852,7 @@ fn lower_single_root_module(
         ignored_parameter_bindings: ignored_parameter_bindings.into_boxed_slice(),
     };
     if validate_correspondence {
-        correspondence.validate_layout_against(
-            owner,
-            &module,
-            &[selected_root],
-            limits.max_blocks,
-        )?;
+        correspondence.validate_layout_against(owner, &module, &[selected_root], limits)?;
     }
     Ok((module, correspondence, private_payload))
 }
@@ -23407,7 +23213,7 @@ fn lower_parameter_type(
             let address_space = lower_address_space(pointer.address_space())?;
             match pointer.metadata() {
                 SemanticPointerMetadataV1::None => Ok(Type::pointer(
-                    lower_memory_element_type(types, pointer.pointee())?,
+                    lower_parameter_memory_element_v1(types, pointer.pointee())?,
                     address_space,
                     access,
                 )),
@@ -23427,7 +23233,7 @@ fn lower_parameter_type(
                         ));
                     };
                     Ok(Type::slice(
-                        lower_scalar_type(types, *element)?,
+                        lower_parameter_scalar_v1(types, *element)?,
                         address_space,
                         access,
                     ))
@@ -23454,10 +23260,7 @@ fn lower_memory_element_type(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
-    if let Ok(scalar) = lower_scalar_type(types, ty) {
-        return Ok(scalar);
-    }
-    transparent_scalar_storage_type(types, ty).ok_or_else(|| {
+    memory_element_type_v1(types, ty).ok_or_else(|| {
         ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
             semantic_type: ty.index(),
             shape: types
@@ -23466,6 +23269,18 @@ fn lower_memory_element_type(
                 .unwrap_or_else(|| "<missing>".to_owned()),
         }
     })
+}
+
+fn memory_element_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> Option<Type> {
+    if matches!(
+        types
+            .get(ty.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+    ) {
+        return lower_scalar_type(types, ty).ok();
+    }
+    transparent_scalar_storage_type(types, ty)
 }
 
 fn lower_dynamic_lds_element_type_v1(
@@ -23587,8 +23402,13 @@ fn transparent_scalar_storage_type(
         if !visited.insert(current) || visited.len() > MAX_SSA_VALUE_COMPONENTS_V1 {
             return None;
         }
-        if let Ok(scalar) = lower_scalar_type(types, current) {
-            return Some(scalar);
+        if matches!(
+            types
+                .get(current.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+        ) {
+            return lower_scalar_type(types, current).ok();
         }
         let declaration = types.get(current.index() as usize)?;
         let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
@@ -24193,7 +24013,7 @@ fn authenticated_disjoint_slice_parameter(
     }
 
     Some(Type::slice(
-        lower_scalar_type(types, element).ok()?,
+        lower_parameter_scalar_v1(types, element).ok()?,
         AddressSpace::Global,
         access,
     ))
@@ -24271,7 +24091,7 @@ fn authenticated_global_mut_pointer_parameter(
 
     let pointer = physical_pointer?;
     Some(Type::pointer(
-        lower_scalar_type(types, pointer.pointee()).ok()?,
+        lower_parameter_scalar_v1(types, pointer.pointee()).ok()?,
         AddressSpace::Global,
         AccessMode::ReadWrite,
     ))
@@ -26194,6 +26014,9 @@ mod resource_tests {
     }
     mod correspondence_replay_core_tests {
         include!("production_semantic_kir_v1/tests/production_correspondence_replay_core_tests.rs");
+    }
+    mod argument_correspondence_tests {
+        include!("production_semantic_kir_v1/tests/production_argument_correspondence_tests.rs");
     }
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");

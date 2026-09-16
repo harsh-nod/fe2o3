@@ -74,6 +74,48 @@ function association. This can establish that a helper has no memory or
 compiler-ordering effects, but it does not establish a deterministic scalar
 return relation. The existing scalar-value checks remain separate.
 
+## Exact live parameter checks
+
+Materialization replays its parameter trace against the admitted logical
+argument map and the actual KIR signature. Entry and helper emission share
+their ABI representation selection with this check. It covers ordinary
+arguments too, not just RustCall:
+
+- Each physical parameter has exactly one function-qualified binding, at the
+  correct ABI slot and with the expected KIR type.
+- Aggregate bindings have the exact local projection and semantic leaf type.
+  Packed RustCall prepends the outer field; expanded locals do not.
+- Direct bindings are indexed by their value identity, not by trace order.
+  A shared slice is one KIR parameter even though LLVM uses two carrier words.
+- Each wholly ignored entry local has exactly one correctly typed ignored
+  binding, disjoint from physical bindings. An expanded empty source tuple
+  has no invented local or physical parameter.
+- Every root association is checked when roots share one physical helper.
+
+For `(receiver, ((u32, (), u32), (), u32))`, the packed tuple's first two
+physical fields have local paths `Field(0), Field(0)` and
+`Field(0), Field(2)`. Substituting the ignored middle field, a same-typed
+neighbor's parameter value, or the enclosing aggregate type is rejected.
+
+`ProductionSemanticKirLimitsV1::with_argument_correspondence_limits` configures
+independent cumulative work and peak logical scratch-byte limits. They do not
+replace the existing argument-row or emitted-operation limits. Both defaults
+are 16 Mi units/bytes. The checker prepays logical-map construction, a bounded
+32-bit radix index, field comparisons, and conservative scratch/work allowances
+for the existing 256-node ABI-shape derivation. Shared-root checks accumulate
+work in one validation ledger. An allocation-free capped sizing pass keeps
+small aggregates from consuming a maximum-size argument's allowance.
+Function-local scratch is released on success
+and ordinary error returns; no unwind or allocator/RSS guarantee is implied.
+The pre-ranked canonical ledger remains a separate accounting scope.
+
+This validates the **existing sparse emission trace**. It does not yet expose
+a complete typed record for every nested zero-sized field, nor a serialized
+entry/call/debug relation. For example, a packed partly ignored tuple has
+physical field bindings but no separate ignored-local binding for its unit
+field. Completing that relation remains required before proof replay can use
+it. No new executable graph or correspondence wire version is introduced.
+
 ## Evidence boundary
 
 Legacy serialized V4/V5 proof correspondence does not encode the complete
