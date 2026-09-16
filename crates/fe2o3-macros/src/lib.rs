@@ -1156,9 +1156,11 @@ fn expand_device_kernel_with_imports(
             entry.expand(
                 &mut input,
                 device_path,
-                &internal_ident,
-                &format_ident!("__fe2o3_kernel_body_{original_name}"),
-                &type_marker_ident,
+                kernel_context_entry_v1::ContextEntryItems {
+                    physical_root: &internal_ident,
+                    logical_helper: &format_ident!("__fe2o3_kernel_body_{original_name}"),
+                    nominal_marker: &type_marker_ident,
+                },
                 &function_pointer,
                 false,
             )
@@ -1407,9 +1409,11 @@ fn expand_general_typed_kernel_with_imports(
             entry.expand(
                 &mut input,
                 device_path,
-                &internal_ident,
-                &body_ident,
-                &type_marker_ident,
+                kernel_context_entry_v1::ContextEntryItems {
+                    physical_root: &internal_ident,
+                    logical_helper: &body_ident,
+                    nominal_marker: &type_marker_ident,
+                },
                 &function_pointer,
                 returns_kernel_result,
             )

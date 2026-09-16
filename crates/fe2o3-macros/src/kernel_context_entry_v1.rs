@@ -20,6 +20,12 @@ pub(super) struct ContextEntryV1 {
     source_type: TypePath,
 }
 
+pub(super) struct ContextEntryItems<'a> {
+    pub physical_root: &'a syn::Ident,
+    pub logical_helper: &'a syn::Ident,
+    pub nominal_marker: &'a syn::Ident,
+}
+
 pub(super) fn validate_typed_profile_v1(
     input: &ItemFn,
     options: &KernelOptions,
@@ -141,12 +147,15 @@ impl ContextEntryV1 {
         self,
         physical: &mut ItemFn,
         device_path: Option<&TokenStream>,
-        root: &syn::Ident,
-        helper: &syn::Ident,
-        marker: &syn::Ident,
+        items: ContextEntryItems<'_>,
         function_pointer: &TokenStream,
         discard_kernel_result: bool,
     ) -> syn::Result<TokenStream> {
+        let ContextEntryItems {
+            physical_root: root,
+            logical_helper: helper,
+            nominal_marker: marker,
+        } = items;
         let device = device_path.ok_or_else(|| {
             syn::Error::new_spanned(
                 &physical.sig,
@@ -166,7 +175,7 @@ impl ContextEntryV1 {
         let FnArg::Typed(context) = &mut logical.sig.inputs[0] else {
             unreachable!("validated logical context argument")
         };
-        context.ty = Box::new(parse_quote!(#device::KernelContext<'_, #marker>));
+        *context.ty = parse_quote!(#device::KernelContext<'_, #marker>);
         let mut argument_names = Vec::new();
         for (ordinal, argument) in physical.sig.inputs.iter_mut().enumerate() {
             let FnArg::Typed(argument) = argument else {
