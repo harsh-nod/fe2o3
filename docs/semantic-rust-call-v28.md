@@ -98,7 +98,8 @@ physical fields have local paths `Field(0), Field(0)` and
 neighbor's parameter value, or the enclosing aggregate type is rejected.
 
 `ProductionSemanticKirLimitsV1::with_argument_correspondence_limits` configures
-independent cumulative work and peak logical scratch-byte limits. They do not
+independently bounded construction and validation phases, each with cumulative
+work and peak logical payload-byte limits. They do not
 replace the existing argument-row or emitted-operation limits. Both defaults
 are 16 Mi units/bytes. The checker prepays logical-map construction, a bounded
 32-bit radix index, field comparisons, and conservative scratch/work allowances
@@ -107,6 +108,11 @@ work in one validation ledger. An allocation-free capped sizing pass keeps
 small aggregates from consuming a maximum-size argument's allowance.
 Function-local scratch is released on success
 and ordinary error returns; no unwind or allocator/RSS guarantee is implied.
+Construction includes call-anchor reserves, simultaneous old/new merge backing,
+sorting scratch and retained payload. Validation includes retained anchors and
+shared borrowed target indices while function-local scratch is live. Fallible
+Vec growth and quota denial return errors; final Box compaction retains the
+standard library's process-level allocation-failure policy.
 The pre-ranked canonical ledger remains a separate accounting scope.
 
 ## Complete typed entry view
@@ -163,10 +169,56 @@ cap remains 256 nodes per adjusted shape, including zero nodes. Atomic carrier
 metadata uses a separately charged explicit stack rather than unbounded recursion.
 
 This is complete **entry identity for the currently admitted representations**,
-not current SSA provenance or ownership authority. Call-site/result correspondence,
-debug consumers and serialized/FULL/finalizer integration still need to consume
+not current SSA provenance or ownership authority. Debug consumers and
+serialized/FULL/finalizer integration still need to consume
 the shared relation. No new executable graph, proof authority, or correspondence
 wire version is introduced by this view.
+
+## Live helper calls and results
+
+Both production owners expose
+`with_checked_call_v1(root, caller, block, budget, callback)`. The scope resolves
+the actual source call, caller KIR operation, root-qualified helper association,
+complete callee entry view and all callee returns. Ordinary and RustCall helpers
+use the same path. `physical(slot)` pairs a caller operand with the callee's
+parameter; their ValueIds belong to different functions and are never equated.
+Repeated caller ValueIds do not collapse distinct argument occurrences.
+`visit_arguments` retains each original source operand alongside the callee's
+typed source/local paths, including ignored and nested zero components.
+
+The lowerer captures flat call/return anchors while emitting existing KIR.
+Production validation requires exact coverage, unique owner/function/block keys,
+source and physical signatures, the defined helper target, the Call ordinal and
+its destination boundaries. An unprojected local has no address preparation;
+a retained scalar local has an exact private Store; a projected destination has
+an address prepared before operand evaluation and an exact result Store afterward.
+These stores are unguarded, nonvolatile and use the admitted alignment.
+An ignored result has no invented KIR value. Scalar returns either preserve the
+actual value or use the single permitted INDEX-to-U64 bitcast.
+
+The view borrows edge definitions and arguments from the original semantic SSA
+plan. For an applicable scalar result, the existing component-emission loop
+captures its physical continuation slot and optional transport bitcast. Source
+SSA ordinals are not physical slots: earlier locals can have several components
+or no components. A result used through dominance need not appear in the
+immediate successor's parameters. Absence of an edge slot does not mean the
+result was discarded. Each returned record remains in its own function's value
+namespace.
+
+The checker uses one borrowed module target index and one function-local value
+and block index; it does not rescan all functions or all blocks for every call.
+Construction caches qualified sort keys once. Query scratch stays charged until
+its owner drops, with metered lookups and repeated visits; callbacks cannot retain
+checked references outside the scope. Immutable owner payload is excluded from
+the query budget, unlike the retained-anchor charge during production validation.
+
+These checks establish the live structural correspondence, not independent
+functional equivalence. Full owner lowering replay still authenticates source
+operand evaluation, prepared-address provenance, current return-local values
+and the source-variable association of physical edge slots. Coordinated changes
+to graph and anchors must pass that replay, not merely agree with each other.
+The existing V4/V5 refusal gates remain in place: this adds no serialized proof
+relation, new capability version, protected proof result or launch authority.
 
 ## Evidence boundary
 

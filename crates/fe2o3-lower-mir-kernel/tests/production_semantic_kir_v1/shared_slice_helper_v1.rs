@@ -508,6 +508,29 @@ fn shared_slice_helper_calls_retain_actual_phi_carriers_and_multiplicity() {
         assert_eq!(*target, second.id);
         assert_eq!(arguments[ordinal], phi);
     }
+    let root = SemanticFunctionIdV1::from_index(0);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+    let mut budget =
+        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 100_000);
+    for (block, argument) in calls {
+        lowered.with_checked_call_v1(root, root, SemanticBlockIdV1::from_index(block.id.0), &mut budget, |view| {
+            let physical = view.physical(0)?.unwrap();
+            assert_eq!(physical.caller_value(), argument);
+            assert_eq!(physical.parameter().ty(), &expected);
+            let mut saved = None;
+            view.visit_returns(|site| { saved = Some(site); Ok(()) })?;
+            view.visit_arguments(|node| {
+                assert_eq!(node.parameter().source_argument(), 0);
+                Ok(())
+            })?;
+            let site = saved.unwrap();
+            let cast = site.conversion().expect("slice length return uses INDEX -> U64");
+            assert!(matches!(cast.kind, OperationKind::Cast { kind: fe2o3_kernel_ir::CastKind::Bitcast, value, .. } if Some(value) == site.input()));
+            assert_eq!(physical.parameter().ty(), &expected);
+            Ok(())
+        }).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
 }
 
 #[test]

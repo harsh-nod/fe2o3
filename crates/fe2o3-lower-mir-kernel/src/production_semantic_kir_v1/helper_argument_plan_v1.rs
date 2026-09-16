@@ -199,52 +199,10 @@ fn direct_scalar_helper_plan_v1(
         parameter_local_bindings.push(binding);
     }
 
-    let return_locals = function
-        .locals()
-        .iter()
-        .enumerate()
-        .filter(|(_, local)| local.role() == SemanticLocalRoleV1::Return)
-        .collect::<Vec<_>>();
-    let [(_, return_declaration)] = return_locals.as_slice() else {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper must have one return local",
-        ));
-    };
-    if return_declaration.ty() != abi.source_output_type()
-        || abi.return_value().ty() != abi.source_output_type()
-        || abi.return_value().adjusted().is_some()
-    {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper return ABI type changed",
-        ));
-    }
-    let result_types = match abi.return_value().mode() {
-        SemanticAbiPassModeV1::Ignore
-            if types[abi.source_output_type().index() as usize]
-                .layout()
-                .size_bytes()
-                == Some(0) =>
-        {
-            Vec::new()
-        }
-        SemanticAbiPassModeV1::Direct(_) => {
-            vec![lower_scalar_type(types, abi.source_output_type())?]
-        }
-        _ => {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper return is not one ignored zero-sized value or one direct scalar",
-            ));
-        }
-    };
+    let result_types = helper_result_shape_v1(types, function, function_id)?
+        .1
+        .into_iter()
+        .collect();
     Ok(LoweredFunctionPlanV1 {
         correspondence_owner,
         semantic_function: function_id,

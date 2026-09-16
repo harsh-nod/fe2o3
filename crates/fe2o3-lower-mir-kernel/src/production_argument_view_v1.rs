@@ -123,6 +123,7 @@ struct AdjustedArgumentShapeV1 {
     atomic: bool,
 }
 
+#[derive(Clone, Copy)]
 struct ArgumentViewDataV1<'a> {
     semantic: &'a AdmittedInertSemanticMirV1,
     instance: &'a SemanticKirFunctionCorrespondenceV1,

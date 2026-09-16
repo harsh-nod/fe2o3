@@ -130,6 +130,8 @@ impl Fixture {
             ProductionSemanticSsaLimitsV1::default(),
         )
         .unwrap();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
         SemanticFunctionLoweringV1::new_interprocedural(
             &self.types,
             &[],
@@ -154,6 +156,7 @@ impl Fixture {
             64,
             PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 64)),
             None,
+            CallReturnBufferV1::for_function(&self.function, &mut budget).unwrap(),
         )
         .unwrap()
     }

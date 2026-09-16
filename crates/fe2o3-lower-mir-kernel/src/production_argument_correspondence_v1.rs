@@ -40,12 +40,16 @@ struct IndexedArgumentTraceV1<'a> {
 // independent of the standard library's sorting implementation. The caller
 // prepays 96 units per row; recursion is bounded by the u32 identity width.
 fn sort_argument_trace_v1(rows: &mut [IndexedArgumentTraceV1<'_>], bit: u32) {
+    sort_correspondence_keys_v1(rows, bit, &|row| u64::from(row.trace.value().0));
+}
+
+fn sort_correspondence_keys_v1<T>(rows: &mut [T], bit: u32, key: &impl Fn(&T) -> u64) {
     if rows.len() < 2 {
         return;
     }
     let (mut left, mut right) = (0, rows.len());
     while left < right {
-        if rows[left].trace.value().0 & (1 << bit) == 0 {
+        if key(&rows[left]) & (1_u64 << bit) == 0 {
             left += 1;
         } else {
             right -= 1;
@@ -54,8 +58,8 @@ fn sort_argument_trace_v1(rows: &mut [IndexedArgumentTraceV1<'_>], bit: u32) {
     }
     if bit != 0 {
         let (low, high) = rows.split_at_mut(left);
-        sort_argument_trace_v1(low, bit - 1);
-        sort_argument_trace_v1(high, bit - 1);
+        sort_correspondence_keys_v1(low, bit - 1, key);
+        sort_correspondence_keys_v1(high, bit - 1, key);
     }
 }
 
