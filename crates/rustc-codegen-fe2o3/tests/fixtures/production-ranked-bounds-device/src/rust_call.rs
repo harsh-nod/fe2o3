@@ -29,6 +29,7 @@ pub fn rust_call(
     mut empty: DisjointSlice<u32>,
     mut zst: DisjointSlice<u32>,
     input: &[u32],
+    other: &[u32],
     mut length: DisjointSlice<u32>,
 ) {
     // Moving the whole non-Copy capture requires an owned FnOnce receiver.
@@ -59,12 +60,23 @@ pub fn rust_call(
     let n = f();
     #[cfg(feature = "rust_call_slice_index")]
     let n = {
-        let token = SliceToken(input, ((), ()));
-        if (lhs as usize) < token.0.len() {
-            n ^ token.0[lhs as usize]
-        } else {
-            n
+        let nested = (
+            SliceToken(input, ((), ())),
+            ((), SliceToken(other, ((), ()))),
+        );
+        let i = lhs as usize;
+        let j = rhs as usize;
+        let mut value = n;
+        if i < input.len() {
+            value = value.wrapping_add(input[i]);
         }
+        if i < nested.0.0.len() {
+            value = value.wrapping_add(nested.0.0[i].wrapping_mul(3));
+        }
+        if j < (nested.1.1).0.len() {
+            value = value.wrapping_add((nested.1.1).0[j].wrapping_mul(5));
+        }
+        value
     };
     if let Some(value) = pair.get_mut(thread::index_1d()) {
         *value = p;

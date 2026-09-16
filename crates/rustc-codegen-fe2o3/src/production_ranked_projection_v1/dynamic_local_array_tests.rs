@@ -419,7 +419,7 @@ fn dynamic_local_array_access_is_guarded_private_and_readonly() {
                 &contracts,
                 &[],
                 &mut guarded,
-                &mut vec![None; function.locals().len()],
+                &mut ProjectedViewsV1::new(function.locals().len(), None),
                 &mut operations,
                 &mut sources,
                 &mut 10,

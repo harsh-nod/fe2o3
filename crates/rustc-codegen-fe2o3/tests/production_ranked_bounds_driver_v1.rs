@@ -1019,16 +1019,17 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
             "ordinary tuple-result Call must survive optimization"
         );
         assert_shared_slice_call_chain_v1(&module);
-        let typed_bundle_path = assert_shared_slice_source_v1(architecture, &target);
-        for (seed, lhs, rhs, input_length) in [
-            (13_u32, 29_u32, 11_u32, 3_usize),
-            (0, 0, 0, 0),
-            (u32::MAX, 1, 2, 1),
-            (0, 1, u32::MAX, 65),
-            (7, 11, 13, 129),
-            (u32::MAX, 29, 11, 3),
-            (u32::MAX, 0, 2, 1),
-            (3, 64, 7, 65),
+        let (typed_bundle_path, indexed_bundle_path) =
+            assert_shared_slice_source_v1(architecture, &target);
+        for (seed, lhs, rhs, input_length, other_length) in [
+            (13_u32, 0_u32, 1_u32, 3_usize, 5_usize),
+            (0, 0, 0, 0, 0),
+            (u32::MAX, 1, 0, 1, 4),
+            (0, 64, 2, 65, 1),
+            (7, 2, 64, 3, 65),
+            (u32::MAX, u32::MAX, 11, 3, 129),
+            (u32::MAX, 0, u32::MAX, 1, 1),
+            (3, 64, 7, 65, 8),
         ] {
             let expected = [
                 (seed ^ lhs).wrapping_sub(rhs).wrapping_add(lhs),
@@ -1058,9 +1059,22 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                     .iter()
                     .flat_map(|value| value.to_le_bytes())
                     .collect::<Vec<_>>();
+                let other_values = (0..other_length)
+                    .map(|index| {
+                        (seed ^ 0xf00d_1234).wrapping_add((index as u32).wrapping_mul(0x85eb_ca6b))
+                    })
+                    .collect::<Vec<_>>();
+                let other_bytes = other_values
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
                 arguments.push(json!({
                     "kind": "buffer", "element": "u32", "access": "read_only",
                     "alignment": 4, "bytes": format!("0x{}", hex(&input_bytes)),
+                }));
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_only",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&other_bytes)),
                 }));
                 arguments.push(json!({
                     "kind": "buffer", "element": "u32", "access": "read_write",
@@ -1076,35 +1090,59 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                     .unwrap(),
                 )
                 .unwrap();
-                let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(
-                    &typed_bundle_path,
-                    &request_path,
-                )
-                .unwrap();
-                let execution = admitted
-                    .input()
-                    .module
-                    .simulate(
-                        &admitted.input().request,
-                        admitted.input().simulation_target(),
-                        admitted.input().simulation_limits,
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
-                    });
-                assert_eq!(execution.invocations_executed(), grid as u64);
-                assert_eq!(execution.buffer(6).unwrap().bytes(), input_bytes);
-                let mut expected_length = (input_length as u32).to_le_bytes().repeat(grid);
-                expected_length.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
-                assert_eq!(execution.buffer(7).unwrap().bytes(), expected_length);
-                for (index, value) in expected.into_iter().enumerate() {
-                    let mut expected_bytes = value.to_le_bytes().repeat(grid);
-                    expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                for (path, indexed) in [(&typed_bundle_path, false), (&indexed_bundle_path, true)] {
+                    let admitted =
+                        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(path, &request_path)
+                            .unwrap();
+                    let execution = admitted
+                        .input()
+                        .module
+                        .simulate(
+                            &admitted.input().request,
+                            admitted.input().simulation_target(),
+                            admitted.input().simulation_limits,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
+                        });
+                    assert_eq!(execution.invocations_executed(), grid as u64);
+                    assert_eq!(execution.buffer(6).unwrap().bytes(), input_bytes);
+                    assert_eq!(execution.buffer(7).unwrap().bytes(), other_bytes);
+                    let n = if indexed {
+                        (input_length as u32)
+                            .wrapping_add(
+                                input_values
+                                    .get(lhs as usize)
+                                    .copied()
+                                    .unwrap_or(0)
+                                    .wrapping_mul(4),
+                            )
+                            .wrapping_add(
+                                other_values
+                                    .get(rhs as usize)
+                                    .copied()
+                                    .unwrap_or(0)
+                                    .wrapping_mul(5),
+                            )
+                    } else {
+                        input_length as u32
+                    };
+                    let mut expected_length = n.to_le_bytes().repeat(grid);
+                    expected_length.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
                     assert_eq!(
-                        execution.buffer(index + 3).unwrap().bytes(),
-                        expected_bytes,
-                        "{architecture} {seed:#x} {lhs:#x} {rhs:#x} output {index}",
+                        execution.buffer(8).unwrap().bytes(),
+                        expected_length,
+                        "{architecture} indexed={indexed} {seed:#x} {lhs:#x} {rhs:#x}"
                     );
+                    for (index, value) in expected.into_iter().enumerate() {
+                        let mut expected_bytes = value.to_le_bytes().repeat(grid);
+                        expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                        assert_eq!(
+                            execution.buffer(index + 3).unwrap().bytes(),
+                            expected_bytes,
+                            "{architecture} {seed:#x} {lhs:#x} {rhs:#x} output {index}",
+                        );
+                    }
                 }
             }
         }

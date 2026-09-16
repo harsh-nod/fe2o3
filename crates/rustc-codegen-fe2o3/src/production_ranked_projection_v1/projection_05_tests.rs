@@ -622,7 +622,7 @@
         .unwrap();
         assert_eq!(
             access_kinds(&operations),
-            vec![AccessKindAttr::AtomicReadModifyWrite, AccessKindAttr::Read,]
+            vec![AccessKindAttr::Read, AccessKindAttr::AtomicReadModifyWrite]
         );
         assert_eq!(sources.len(), 2);
         assert!(operations.iter().any(|operation| matches!(

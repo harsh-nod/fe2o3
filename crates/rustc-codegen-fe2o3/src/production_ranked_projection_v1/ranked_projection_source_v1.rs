@@ -14,6 +14,7 @@ use fe2o3_pliron::ProductionSemanticSsaOwnerV1;
 use super::{CanonicalAssertionErrorV1, ProductionRankedProjectionErrorV1 as Error};
 
 pub(super) struct RankedProjectionSourceV1<'s> {
+    owner: &'s ProductionPreRankedKirOwnerV1,
     semantic_ssa: &'s ProductionSemanticSsaOwnerV1,
     source_launch: &'s ProductionSourceLaunchRosterV1,
     executable: &'s VerifiedCanonicalKernelIrModuleV12,
@@ -30,6 +31,7 @@ impl<'s> RankedProjectionSourceV1<'s> {
             .checked_add(owner.assert_origin_storage().payload_storage())
             .ok_or_else(|| resource(Resource::Arithmetic))?;
         Ok(Self {
+            owner,
             semantic_ssa: owner.semantic_ssa(),
             source_launch: owner.source_launch(),
             executable: owner.executable(),
@@ -41,6 +43,10 @@ impl<'s> RankedProjectionSourceV1<'s> {
 
     pub(super) const fn semantic_ssa(&self) -> &'s ProductionSemanticSsaOwnerV1 {
         self.semantic_ssa
+    }
+
+    pub(super) const fn owner(&self) -> &'s ProductionPreRankedKirOwnerV1 {
+        self.owner
     }
 
     pub(super) const fn source_launch(&self) -> &'s ProductionSourceLaunchRosterV1 {

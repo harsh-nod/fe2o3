@@ -1,4 +1,30 @@
     #[test]
+    fn assignment_and_atomic_result_stores_follow_operand_reads() {
+        let assignment = SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            ranked_place(0),
+            SemanticRvalueV1::new(
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(ranked_place(1))),
+            ),
+        ));
+        let (operations, sources, _) = audit_statements(vec![statement(assignment)]).unwrap();
+        assert_eq!(access_kinds(&operations), vec![AccessKindAttr::Read, AccessKindAttr::Write]);
+        assert_eq!(sources.len(), 2);
+        let atomic = SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
+            ranked_place(2),
+            ranked_place(0),
+            SemanticOperandV1::Copy(ranked_place(1)),
+            SemanticAtomicRmwOpV1::Add,
+            atomic_access(),
+        ));
+        let (operations, sources, _) = audit_statements(vec![statement(atomic)]).unwrap();
+        assert_eq!(access_kinds(&operations), vec![
+            AccessKindAttr::Read, AccessKindAttr::AtomicReadModifyWrite, AccessKindAttr::Write,
+        ]);
+        assert_eq!(sources.len(), 3);
+    }
+
+    #[test]
     fn regular_and_atomic_stores_project_destination_and_value_footprints() {
         for atomic in [None, Some(atomic_access())] {
             let (operations, sources, _) = audit_statements(vec![statement(
@@ -13,12 +39,12 @@
             assert_eq!(
                 access_kinds(&operations),
                 vec![
+                    AccessKindAttr::Read,
                     if atomic.is_some() {
                         AccessKindAttr::AtomicWrite
                     } else {
                         AccessKindAttr::Write
                     },
-                    AccessKindAttr::Read,
                 ]
             );
             assert_eq!(sources.len(), 2);
@@ -48,7 +74,7 @@
         let mut operations = Vec::new();
         let mut sources = Vec::new();
         let mut guarded_sites = Vec::new();
-        let mut projected_views = vec![None; function.locals().len()];
+        let mut projected_views = ProjectedViewsV1::new(function.locals().len(), None);
         let mut next_value = 0;
         let mut ranked_ir = String::new();
         let local_contracts = synthetic_local_contracts(&function);

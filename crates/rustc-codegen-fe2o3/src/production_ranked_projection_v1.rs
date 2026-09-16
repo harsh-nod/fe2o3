@@ -8,6 +8,8 @@ mod aggregate_value_projection_v2;
 mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
 mod ranked_projection_source_v1;
+mod slice_projection_v1;
+use slice_projection_v1::ProjectedViewsV1;
 
 use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
@@ -596,11 +598,13 @@ struct ProjectionLocalContractsV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProjectedBoundsExtentSourceV1 {
     Slice(SemanticLocalIdV1),
+    CanonicalSlice,
     FixedArray(u64),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedBoundsCheckV1 {
+    assertion_block: Option<u32>,
     access_block: usize,
     extent_source: ProjectedBoundsExtentSourceV1,
     index_local: SemanticLocalIdV1,
@@ -3265,7 +3269,7 @@ fn project_and_verify_ranked_root_v1(
         Some(values)
     };
     let mut incomplete = None;
-    let mut projected_views = vec![None; function.locals().len()];
+    let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts));
     let mut discarded_ir = String::new();
     let intrinsic = project_intrinsic_contracts(
         semantic.callables(),
@@ -3307,6 +3311,14 @@ fn project_and_verify_ranked_root_v1(
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let source_start = local_sources.len();
             let guarded_start = guarded_sites.len();
+            projected_views.begin_site(
+                ProjectedSemanticAccessSiteV1 {
+                    block: block_index,
+                    statement: Some(statement_index),
+                },
+                source_start,
+                guarded_start,
+            );
             retain_incomplete(
                 project_statement_accesses(
                     semantic.types(),
@@ -3337,6 +3349,14 @@ fn project_and_verify_ranked_root_v1(
         }
         let source_start = local_sources.len();
         let guarded_start = guarded_sites.len();
+        projected_views.begin_site(
+            ProjectedSemanticAccessSiteV1 {
+                block: block_index,
+                statement: None,
+            },
+            source_start,
+            guarded_start,
+        );
         retain_incomplete(
             project_terminator_accesses(
                 semantic.callables(),
@@ -3511,6 +3531,7 @@ fn project_and_verify_ranked_root_v1(
         }
         projected_blocks.push(projected);
     }
+    let slice_queries = projected_views.finish();
     if bounds_checks.checks.iter().any(|check| {
         check.must_authorize_access
             && projected_blocks
@@ -3565,6 +3586,7 @@ fn project_and_verify_ranked_root_v1(
         &sources,
     )?;
     let access_sources = production_access_sources(&blocks, &sources)?;
+    slice_queries.validate(&blocks, &access_sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
         .allocations
@@ -4381,6 +4403,30 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     }
 }
 
+fn retained_ranked_access_source_v1(
+    memory_space: MemorySpaceAttr,
+    operation: &ProductionRankedOperationV1,
+) -> bool {
+    if memory_space == MemorySpaceAttr::Private
+        && matches!(
+            operation,
+            ProductionRankedOperationV1::Access { .. }
+                | ProductionRankedOperationV1::PredicatedAccess { .. }
+        )
+    {
+        return false;
+    }
+    matches!(
+        operation,
+        ProductionRankedOperationV1::Access { .. }
+            | ProductionRankedOperationV1::PredicatedAccess { .. }
+            | ProductionRankedOperationV1::ValueAccess { .. }
+            | ProductionRankedOperationV1::AtomicAccess { .. }
+            | ProductionRankedOperationV1::AtomicValueAccess { .. }
+            | ProductionRankedOperationV1::AllocationEffect { .. }
+    )
+}
+
 fn production_access_sources(
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
@@ -4402,24 +4448,7 @@ fn production_access_sources(
         // Ordinary private-local accesses remain in the ranked graph so that
         // bounds and initialization checks see them. They are not observable
         // memory effects and the executable KIR may promote them to SSA.
-        if source.memory_space == MemorySpaceAttr::Private
-            && matches!(
-                operation,
-                ProductionRankedOperationV1::Access { .. }
-                    | ProductionRankedOperationV1::PredicatedAccess { .. }
-            )
-        {
-            continue;
-        }
-        if !matches!(
-            operation,
-            ProductionRankedOperationV1::Access { .. }
-                | ProductionRankedOperationV1::PredicatedAccess { .. }
-                | ProductionRankedOperationV1::ValueAccess { .. }
-                | ProductionRankedOperationV1::AtomicAccess { .. }
-                | ProductionRankedOperationV1::AtomicValueAccess { .. }
-                | ProductionRankedOperationV1::AllocationEffect { .. }
-        ) {
+        if !retained_ranked_access_source_v1(source.memory_space, operation) {
             continue;
         }
         let site = source
@@ -4496,7 +4525,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
     #[derive(Clone, Copy, Default)]
     struct LocalDefinitionV1 {
         count: u32,
-        length_source: Option<SemanticLocalIdV1>,
+        length_source: Option<ProjectedBoundsExtentSourceV1>,
     }
 
     #[derive(Clone, Copy)]
@@ -4526,11 +4555,28 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 ))?;
             definition.count = definition.count.saturating_add(1);
             definition.length_source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Length(place) => Some(place.local()),
+                SemanticRvalueKindV1::Length(place) => Some(
+                    if place.projections().iter().any(|projection| {
+                        matches!(projection.kind(), SemanticProjectionKindV1::Field(_))
+                    }) {
+                        ProjectedBoundsExtentSourceV1::CanonicalSlice
+                    } else {
+                        ProjectedBoundsExtentSourceV1::Slice(place.local())
+                    },
+                ),
                 SemanticRvalueKindV1::Unary {
                     operation: SemanticUnaryOpV1::PointerMetadata,
                     operand,
-                } => simple_operand_local(operand),
+                } => match operand {
+                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                        Some(if place.projections().is_empty() {
+                            ProjectedBoundsExtentSourceV1::Slice(place.local())
+                        } else {
+                            ProjectedBoundsExtentSourceV1::CanonicalSlice
+                        })
+                    }
+                    SemanticOperandV1::Constant(_) => None,
+                },
                 _ => None,
             };
         }
@@ -4657,6 +4703,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                         )
                     })?;
                     checks.push(ProjectedBoundsCheckV1 {
+                        assertion_block: Some(block_index as u32),
                         access_block,
                         extent_source: ProjectedBoundsExtentSourceV1::FixedArray(extent_value),
                         index_local,
@@ -4765,7 +4812,7 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 "a Rust bounds check whose condition, index, or length is not stable",
             ));
         }
-        let slice_local = length_definition.length_source.ok_or(
+        let extent_source = length_definition.length_source.ok_or(
             ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds-check length not derived from one exact slice",
             ),
@@ -4814,12 +4861,21 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             *slot = Some(value);
             Ok(value)
         };
-        let prior_extent = *slice_extents.get(slice_local.index() as usize).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "a Rust bounds-check slice outside the semantic local table",
-            ),
-        )?;
-        if prior_extent.is_some() {
+        let slice_local = match extent_source {
+            ProjectedBoundsExtentSourceV1::Slice(local) => Some(local),
+            ProjectedBoundsExtentSourceV1::CanonicalSlice => None,
+            ProjectedBoundsExtentSourceV1::FixedArray(_) => unreachable!(),
+        };
+        let prior_extent = if let Some(local) = slice_local {
+            *slice_extents.get(local.index() as usize).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a Rust bounds-check slice outside the semantic local table",
+                ),
+            )?
+        } else {
+            None
+        };
+        if let Some(slice_local) = slice_local.filter(|_| prior_extent.is_some()) {
             let slice_definition = definitions.get(slice_local.index() as usize).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a Rust bounds-check slice outside the semantic local table",
@@ -4840,7 +4896,9 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             extent
         } else {
             let extent = unknown_for(length_local)?;
-            slice_extents[slice_local.index() as usize] = Some(extent);
+            if let Some(slice_local) = slice_local {
+                slice_extents[slice_local.index() as usize] = Some(extent);
+            }
             extent
         };
         checks.try_reserve(1).map_err(|_| {
@@ -4849,8 +4907,9 @@ fn project_rust_bounds_checks_with_ordinary_v1(
             )
         })?;
         checks.push(ProjectedBoundsCheckV1 {
+            assertion_block: must_authorize_access.then_some(block_index as u32),
             access_block,
-            extent_source: ProjectedBoundsExtentSourceV1::Slice(slice_local),
+            extent_source,
             index_local,
             index,
             extent,
@@ -22101,7 +22160,7 @@ fn project_statement_accesses(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -22110,6 +22169,23 @@ fn project_statement_accesses(
     let source = statement.source();
     match statement.kind() {
         SemanticStatementKindV1::Assign(assignment) => {
+            project_rvalue_reads(
+                types,
+                function,
+                block_index,
+                bounds_checks,
+                assignment.value().kind(),
+                source,
+                constants,
+                local_contracts,
+                guarded_accesses,
+                guarded_sites,
+                projected_views,
+                operations,
+                sources,
+                next_value,
+                ranked_ir,
+            )?;
             project_place_access(
                 types,
                 function,
@@ -22128,13 +22204,15 @@ fn project_statement_accesses(
                 sources,
                 next_value,
                 ranked_ir,
-            )?;
-            project_rvalue_reads(
+            )
+        }
+        SemanticStatementKindV1::Store(store) => {
+            project_operand_read(
                 types,
                 function,
                 block_index,
                 bounds_checks,
-                assignment.value().kind(),
+                store.value(),
                 source,
                 constants,
                 local_contracts,
@@ -22145,9 +22223,7 @@ fn project_statement_accesses(
                 sources,
                 next_value,
                 ranked_ir,
-            )
-        }
-        SemanticStatementKindV1::Store(store) => {
+            )?;
             project_place_access_with_atomic(
                 types,
                 function,
@@ -22171,34 +22247,15 @@ fn project_statement_accesses(
                 sources,
                 next_value,
                 ranked_ir,
-            )?;
+            )
+        }
+        SemanticStatementKindV1::AtomicRmw(atomic) => {
             project_operand_read(
                 types,
                 function,
                 block_index,
                 bounds_checks,
-                store.value(),
-                source,
-                constants,
-                local_contracts,
-                guarded_accesses,
-                guarded_sites,
-                projected_views,
-                operations,
-                sources,
-                next_value,
-                ranked_ir,
-            )
-        }
-        SemanticStatementKindV1::AtomicRmw(atomic) => {
-            project_place_access(
-                types,
-                function,
-                block_index,
-                bounds_checks,
-                atomic.destination(),
-                AccessKindAttr::Write,
-                PlaceAccessRequirementV1::IfMemory,
+                atomic.value(),
                 source,
                 constants,
                 local_contracts,
@@ -22228,12 +22285,14 @@ fn project_statement_accesses(
                 next_value,
                 ranked_ir,
             )?;
-            project_operand_read(
+            project_place_access(
                 types,
                 function,
                 block_index,
                 bounds_checks,
-                atomic.value(),
+                atomic.destination(),
+                AccessKindAttr::Write,
+                PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
                 local_contracts,
@@ -22383,7 +22442,7 @@ fn project_atomic_address(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -22425,7 +22484,7 @@ fn project_terminator_accesses(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -22549,7 +22608,7 @@ fn project_direct_call_accesses(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -22688,7 +22747,7 @@ fn project_tail_call_accesses(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -22961,7 +23020,7 @@ fn project_rvalue_reads(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -23249,7 +23308,7 @@ fn project_operand_read(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -23329,7 +23388,7 @@ fn project_place_access(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -23372,7 +23431,7 @@ fn project_place_access_with_atomic(
     local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
-    projected_views: &mut [Option<ProjectedViewV1>],
+    projected_views: &mut ProjectedViewsV1<'_>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     sources: &mut Vec<ProjectedAccessSourceV1>,
     next_value: &mut u32,
@@ -23435,6 +23494,7 @@ fn project_place_access_with_atomic(
     let mut comparisons = Vec::new();
     let mut crosses_memory_boundary = false;
     let mut dereferenced_memory_space = None;
+    let mut canonical_slice = None;
     for projection in place.projections() {
         match projection.kind() {
             SemanticProjectionKindV1::Dereference => {
@@ -23495,12 +23555,58 @@ fn project_place_access_with_atomic(
                         }
                     }
                     Some(SemanticTypeShapeV1::Slice { .. }) => {
-                        let check = projected_bounds_check(
-                            bounds_checks,
-                            block_index,
-                            ProjectedBoundsExtentSourceV1::Slice(place.local()),
-                            index,
+                        let mut candidates = bounds_checks.iter().copied().filter(|check| {
+                            check.access_block == block_index
+                                && check.index_local == index
+                                && !matches!(
+                                    check.extent_source,
+                                    ProjectedBoundsExtentSourceV1::FixedArray(_)
+                                )
+                        });
+                        let candidate = candidates.next().ok_or(
+                            ProductionRankedProjectionErrorV1::Incomplete(
+                                "a dynamic slice access without its exact Rust bounds-check predecessor",
+                            ),
                         )?;
+                        if candidates.next().is_some() {
+                            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                                "multiple Rust bounds checks authorize one dynamic slice access",
+                            ));
+                        }
+                        let needs_canonical = candidate.extent_source
+                            == ProjectedBoundsExtentSourceV1::CanonicalSlice
+                            || place.projections().iter().any(|projection| {
+                                matches!(projection.kind(), SemanticProjectionKindV1::Field(_))
+                            })
+                            || local_contracts
+                                .allocations
+                                .get(place.local().index() as usize)
+                                .is_none_or(Option::is_none);
+                        let check = if needs_canonical {
+                            if access != AccessKindAttr::Read
+                                || atomic.is_some()
+                                || !shape.is_empty()
+                                || canonical_slice.is_some()
+                            {
+                                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                    "canonical slice projection requires one ordinary scalar read",
+                                ));
+                            }
+                            canonical_slice = Some(projected_views.slice_input(
+                                candidate,
+                                sources,
+                                guarded_sites,
+                                operations,
+                            )?);
+                            candidate
+                        } else {
+                            projected_bounds_check(
+                                bounds_checks,
+                                block_index,
+                                ProjectedBoundsExtentSourceV1::Slice(place.local()),
+                                index,
+                            )?
+                        };
                         shape.push(DYNAMIC_EXTENT);
                         dynamic_extents.push(check.extent);
                         indices.push(ProjectedIndexV1::Dynamic(check.index));
@@ -23601,45 +23707,79 @@ fn project_place_access_with_atomic(
             "workgroup memory before exact semantic CFG projection is available",
         ));
     }
-    let allocation_contract = match memory_space {
-        MemorySpaceAttr::Global => local_contracts
-            .allocations
-            .get(place.local().index() as usize)
-            .copied()
-            .flatten()
-            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "an indexed global allocation lacks authenticated Rust pointer provenance",
-            ))?,
-        MemorySpaceAttr::Private => {
-            let identity = u64::from(place.local().index()).checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "a private allocation identity overflowed",
-                ),
-            )?;
-            let identity = PRIVATE_ALLOCATION_ORIGIN_TAG_V1
-                .checked_add(identity)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a private allocation identity overflowed",
-                ))?;
-            AllocationContractV1 {
-                allocation_origin: identity,
-                noalias_class: identity,
-                writable: true,
-                singleton_object: false,
-            }
+    let allocation_contract = if let Some((input, _)) = &canonical_slice {
+        if memory_space != MemorySpaceAttr::Global || input.element_width != element_width {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "canonical slice read type or address space changed",
+            ));
         }
-        MemorySpaceAttr::Workgroup => unreachable!(),
+        let allocation_origin = u64::from(input.source_argument) + 1;
+        let established = input.direct_local.and_then(|local| {
+            local_contracts
+                .allocations
+                .get(local.index() as usize)
+                .copied()
+                .flatten()
+        });
+        if established.is_some_and(|contract| contract.allocation_origin != allocation_origin) {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "canonical slice input disagrees with its source allocation",
+            ));
+        }
+        AllocationContractV1 {
+            allocation_origin,
+            noalias_class: established.map_or(0, |contract| contract.noalias_class),
+            writable: false,
+            singleton_object: false,
+        }
+    } else {
+        match memory_space {
+            MemorySpaceAttr::Global => local_contracts
+                .allocations
+                .get(place.local().index() as usize)
+                .copied()
+                .flatten()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "an indexed global allocation lacks authenticated Rust pointer provenance",
+                ))?,
+            MemorySpaceAttr::Private => {
+                let identity = u64::from(place.local().index()).checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a private allocation identity overflowed",
+                    ),
+                )?;
+                let identity = PRIVATE_ALLOCATION_ORIGIN_TAG_V1
+                    .checked_add(identity)
+                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a private allocation identity overflowed",
+                    ))?;
+                AllocationContractV1 {
+                    allocation_origin: identity,
+                    noalias_class: identity,
+                    writable: true,
+                    singleton_object: false,
+                }
+            }
+            MemorySpaceAttr::Workgroup => unreachable!(),
+        }
     };
     if access.writes_memory() && !allocation_contract.writable {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a write is rooted in a read-only Rust allocation",
         ));
     }
-    let view_slot = projected_views
-        .get_mut(place.local().index() as usize)
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "an indexed place outside the ranked view table",
-        ))?;
+    // A wrapper local may contain several same-typed slices. The checked
+    // per-access view does not inherit that local's legacy cache entry.
+    let mut fresh_view = None;
+    let view_slot = if canonical_slice.is_some() {
+        &mut fresh_view
+    } else {
+        projected_views
+            .get_mut(place.local().index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "an indexed place outside the ranked view table",
+            ))?
+    };
     let view_id = if let Some(view) = view_slot {
         if view.element_width != element_width
             || view.writable != allocation_contract.writable
@@ -23691,6 +23831,9 @@ fn project_place_access_with_atomic(
         });
         view_id
     };
+    if let Some((_, ordinal)) = canonical_slice {
+        projected_views.retain_query(ordinal, view_id)?;
+    }
     let mut ranked_indices = Vec::with_capacity(indices.len());
     for value in indices {
         match value {
