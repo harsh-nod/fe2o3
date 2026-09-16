@@ -580,7 +580,7 @@
             SCALAR_TYPE,
         )
         .unwrap();
-        project_address_formation(&types, &function, &dereferenced_offset, &contracts).unwrap();
+        project_address_formation(&types, &function, 0, &dereferenced_offset, &contracts).unwrap();
     }
 
     #[test]

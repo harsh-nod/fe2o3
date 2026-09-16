@@ -224,19 +224,21 @@ fn assert_literal_boundary(
 
 #[test]
 fn numeric_report_literal_exact_and_one_under() {
-    // S=22, internal=15, charged graph work=17; four numeric findings.
-    // Work: 3S+17+3*1048577 +4*768+4*17+1024 = 3149978.
+    // No less-than candidates: facts=words=0, waves=1.
+    // S=22, internal=13, charged graph work=14; four numeric findings.
+    // Work: 3S+14+3*1048577 +4*768+4*17+1024 = 3149975.
     // Retained=max(4*256, 2*17+320)=1024.
-    // Temporary=15+22+48+34+128=247; peak=1271.
-    assert_literal_boundary(literal_census(17), 3_149_978, 1_024, 1_271);
+    // Temporary=13+22+48+34+128=245; peak=1269.
+    assert_literal_boundary(literal_census(17), 3_149_975, 1_024, 1_269);
 }
 
 #[test]
 fn singleton_report_literal_exact_and_one_under() {
-    // S=1029, internal=15, graph=17.
-    // Work: 3S+17+3*1048577+4*768+4096+1024 = 3157027.
-    // Retained=max(1024,2048+320)=2368; temporary=3268.
-    assert_literal_boundary(literal_census(1_024), 3_157_027, 2_368, 5_636);
+    // No less-than candidates: facts=words=0, waves=1.
+    // S=1029, internal=13, graph=14.
+    // Work: 3S+14+3*1048577+4*768+4096+1024 = 3157024.
+    // Retained=max(1024,2048+320)=2368; temporary=3266.
+    assert_literal_boundary(literal_census(1_024), 3_157_024, 2_368, 5_634);
 }
 
 #[test]

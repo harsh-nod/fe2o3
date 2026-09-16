@@ -59,6 +59,8 @@ use crate::rustc_semantic_plan_v1::{
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
+include!("production_importer_v1/read_only_allocation_v30.rs");
+
 const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
@@ -1682,6 +1684,19 @@ fn terminal_operation_v1<'tcx>(
                     role,
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                 },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly
+        | ProductionTerminalExpansionV1::ReadOnlyAllocationLen
+        | ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr) => {
+            import_read_only_allocation_v30(
+                tcx,
+                expansion,
+                rust_inputs,
+                rust_output,
+                inputs,
+                output,
+                types,
             )
         }
         ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice
@@ -4106,6 +4121,9 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
         ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
+        ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly => 122,
+        ProductionTerminalExpansionV1::ReadOnlyAllocationLen => 123,
+        ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr => 124,
         ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d => 59,
         ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => 60,
         ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent => 61,

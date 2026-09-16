@@ -25,6 +25,7 @@ mod resource_upper_bound_tests {
             ownership_contracts: 0,
             effect_refinement_contracts: 0,
             index_lt_branch_candidates: 0,
+            memory_bounds_guard_candidates: 0,
             semantic_definitions: 0,
             semantic_refinement_contracts: 0,
             native_switch_verification_work: 0,

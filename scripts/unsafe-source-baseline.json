@@ -371,6 +371,9 @@
     "block": 14,
     "function": 1
   },
+  "crates/fe2o3-device/src/read_only_allocation.rs": {
+    "block": 3
+  },
   "crates/fe2o3-device/src/sync.rs": {
     "block": 4,
     "function": 11
@@ -551,6 +554,10 @@
     "block": 2,
     "function": 2,
     "trait": 1
+  },
+  "crates/fe2o3-host/src/generated_kfd_atomic_slice_v1.rs": {
+    "block": 1,
+    "function": 1
   },
   "crates/fe2o3-host/src/generated_kfd_invocation.rs": {
     "impl": 1

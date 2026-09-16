@@ -108,6 +108,15 @@ fn parse_type_record(reader: &mut Reader<'_>) -> Result<SourceTypeRecordV1, Deco
         DescriptorKind::SharedSlice => SourceTypeDescriptorV1::shared_slice(element),
         DescriptorKind::DisjointSlice => SourceTypeDescriptorV1::disjoint_slice(element),
         DescriptorKind::GlobalMutPointer => SourceTypeDescriptorV1::global_mut_pointer(element),
+        DescriptorKind::SharedAtomicSliceU32 => {
+            if element != ScalarTypeV1::U32 {
+                return Err(crate::ValidationError::InvalidArgument(
+                    "atomic slice element must be nominal AtomicU32 storage",
+                )
+                .into());
+            }
+            SourceTypeDescriptorV1::shared_atomic_slice_u32()
+        }
     };
     Ok(SourceTypeRecordV1::from_wire(identity, descriptor)?)
 }
@@ -135,6 +144,7 @@ fn parse_layout_record(reader: &mut Reader<'_>) -> Result<DeviceLayoutRecordV1, 
         DescriptorKind::SharedSlice => DeviceLayoutDescriptorV1::shared_slice(element),
         DescriptorKind::DisjointSlice => DeviceLayoutDescriptorV1::disjoint_slice(element),
         DescriptorKind::GlobalMutPointer => DeviceLayoutDescriptorV1::global_mut_pointer(element),
+        DescriptorKind::SharedAtomicSliceU32 => DeviceLayoutDescriptorV1::shared_atomic_slice_u32(),
     };
     if descriptor != expected {
         return Err(crate::ValidationError::InvalidArgument(
@@ -344,6 +354,7 @@ fn parse_descriptor_kind(tag: u8) -> Result<DescriptorKind, DecodeError> {
         2 => Ok(DescriptorKind::SharedSlice),
         3 => Ok(DescriptorKind::DisjointSlice),
         4 => Ok(DescriptorKind::GlobalMutPointer),
+        5 => Ok(DescriptorKind::SharedAtomicSliceU32),
         _ => Err(DecodeError::UnknownTag {
             kind: "type descriptor",
             tag: u16::from(tag),
@@ -413,6 +424,7 @@ fn parse_alias(tag: u8) -> Result<AliasSemantics, DecodeError> {
         1 => Ok(AliasSemantics::Value),
         2 => Ok(AliasSemantics::SharedReadOnly),
         3 => Ok(AliasSemantics::Exclusive),
+        4 => Ok(AliasSemantics::SharedAtomic),
         _ => Err(DecodeError::UnknownTag {
             kind: "alias semantics",
             tag: u16::from(tag),

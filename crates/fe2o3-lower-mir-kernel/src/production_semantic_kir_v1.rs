@@ -32,23 +32,24 @@ use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
     SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
-    SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
-    SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
-    SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
-    SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
-    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
-    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
-    SemanticProjectionV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1,
+    SemanticAtomicScopeV1, SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
+    SemanticBackendScalarV1, SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1,
+    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1,
+    SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1,
+    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
+    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
+    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticProjectionV1,
+    SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
+    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
@@ -6222,6 +6223,8 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let ranked = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let public_effect_counts = public_effect_counts_by_call_v1(&kir, &semantic_sites, &mut budget)?;
+    let mut conditional_reads = BTreeMap::new();
     if let Some(location) = kir.unmodeled_memory_effects.first().copied() {
         return Err(
             ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect { location },
@@ -6508,6 +6511,34 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
         }
         if first_logical_use {
+            let operation = kir.operations.get(&consumer.location).copied().ok_or(
+                ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                    location: consumer.location,
+                },
+            )?;
+            if let Some(witness) = authenticate_conditional_total_read_v1(
+                semantic,
+                semantic_function,
+                site,
+                logical_site,
+                *consumer,
+                operation,
+                public_effect_counts
+                    .get(&(site.block, site.statement))
+                    .copied()
+                    .unwrap_or(0),
+            ) {
+                let key = witness
+                    .key()
+                    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+                if conditional_reads.insert(key, witness).is_some() {
+                    return Err(
+                        ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                            location: consumer.location,
+                        },
+                    );
+                }
+            }
             effect_locations.push((
                 logical_site,
                 consumer.location,
@@ -6549,7 +6580,13 @@ fn validate_mir_pliron_translation_with_semantic_v1(
             });
         }
     }
-    validate_effect_control_flow_v1(body, lowering.kernel(), &effect_locations, &mut budget)?;
+    validate_effect_control_flow_v1(
+        body,
+        lowering.kernel(),
+        &effect_locations,
+        &conditional_reads,
+        &mut budget,
+    )?;
 
     let kir_synchronization = kir_synchronization_contracts_v1(body)?;
     let ranked_synchronization = ranked_synchronization_contracts_v1(lowering.kernel())?;
@@ -6807,6 +6844,8 @@ struct NormalizedEffectFlowV1 {
     next_effects: BTreeSet<(SemanticAccessSiteV1, SemanticAccessSiteV1)>,
 }
 
+include!("production_semantic_kir_v1/conditional_read_flow_v1.rs");
+
 fn validate_effect_control_flow_v1(
     body: &FunctionBody,
     ranked: &fe2o3_pliron::ProductionRankedKernelV1,
@@ -6816,6 +6855,7 @@ fn validate_effect_control_flow_v1(
         u32,
         (u32, u32),
     )],
+    conditional_reads: &BTreeMap<(u32, u64), AuthenticatedConditionalReadV1>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Result<(), ProductionMirPlironTranslationErrorV1> {
     let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
@@ -6883,10 +6923,22 @@ fn validate_effect_control_flow_v1(
         .first()
         .map(|block| block.id.0)
         .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
-    let kir_flow = effect_flow_signature_v1(kir_entry, &kir_events, &kir_successors, budget)
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let ranked_flow = effect_flow_signature_v1(0, &ranked_events, &ranked_successors, budget)
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let kir_flow = effect_flow_signature_v1(
+        kir_entry,
+        &kir_events,
+        &kir_successors,
+        conditional_reads,
+        budget,
+    )
+    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let ranked_flow = effect_flow_signature_v1(
+        0,
+        &ranked_events,
+        &ranked_successors,
+        &BTreeMap::new(),
+        budget,
+    )
+    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     if kir_flow == ranked_flow {
         return Ok(());
     }
@@ -6927,19 +6979,26 @@ fn effect_flow_signature_v1(
     entry: u32,
     events: &BTreeMap<u32, Vec<(u64, SemanticAccessSiteV1)>>,
     successors: &BTreeMap<u32, Vec<u32>>,
+    conditional_reads: &BTreeMap<(u32, u64), AuthenticatedConditionalReadV1>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<NormalizedEffectFlowV1> {
     if !successors.contains_key(&entry) {
         return None;
     }
-    let entry_effects = first_reachable_effects_v1(entry, None, events, successors, budget)?;
+    let entry_effects =
+        first_reachable_effects_v1(entry, None, events, successors, conditional_reads, budget)?;
     let mut next_effects = BTreeSet::new();
     for (&block, block_events) in events {
         for &(operation, site) in block_events {
             budget.charge()?;
-            for next in
-                first_reachable_effects_v1(block, Some(operation), events, successors, budget)?
-            {
+            for next in first_reachable_effects_v1(
+                block,
+                Some(operation),
+                events,
+                successors,
+                conditional_reads,
+                budget,
+            )? {
                 budget.charge()?;
                 next_effects.insert((site, next));
             }
@@ -6956,17 +7015,21 @@ fn first_reachable_effects_v1(
     after_operation: Option<u64>,
     events: &BTreeMap<u32, Vec<(u64, SemanticAccessSiteV1)>>,
     successors: &BTreeMap<u32, Vec<u32>>,
+    conditional_reads: &BTreeMap<(u32, u64), AuthenticatedConditionalReadV1>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<BTreeSet<SemanticAccessSiteV1>> {
     budget.charge()?;
-    if let Some((_, site)) = events.get(&block).and_then(|events| {
-        events
-            .iter()
-            .find(|(operation, _)| after_operation.is_none_or(|after| *operation > after))
-    }) {
-        return Some(BTreeSet::from([*site]));
-    }
     let mut found = BTreeSet::new();
+    if !append_effect_prefix_v1(
+        block,
+        after_operation,
+        events,
+        conditional_reads,
+        &mut found,
+        budget,
+    )? {
+        return Some(found);
+    }
     let mut visited = BTreeSet::new();
     let mut pending = VecDeque::new();
     pending.extend(successors.get(&block)?.iter().copied());
@@ -6975,8 +7038,7 @@ fn first_reachable_effects_v1(
         if !visited.insert(current) {
             continue;
         }
-        if let Some((_, site)) = events.get(&current).and_then(|events| events.first()) {
-            found.insert(*site);
+        if !append_effect_prefix_v1(current, None, events, conditional_reads, &mut found, budget)? {
             continue;
         }
         pending.extend(successors.get(&current)?.iter().copied());
@@ -7543,7 +7605,7 @@ fn guarded_accesses_have_structural_bounds_result(
             continue;
         }
         if let Some((_predicate, index, slice)) =
-            guarded_load_bound_subject(operation, &definitions)
+            guarded_load_bound_subject(operation, &definitions, &mut budget)
         {
             return Err(ProductionMemoryDischargeFailureV1::guarded_bound(
                 location,
@@ -7583,7 +7645,9 @@ fn guarded_load_has_structural_bound(
     definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
     budget: &mut GuardedAddressProofBudgetV1,
 ) -> bool {
-    let Some((predicate, index, slice)) = guarded_load_bound_subject(operation, definitions) else {
+    let Some((predicate, index, slice)) =
+        guarded_load_bound_subject(operation, definitions, budget)
+    else {
         return false;
     };
     let mut visiting = BTreeSet::new();
@@ -7603,6 +7667,7 @@ fn guarded_load_has_structural_bound(
 fn guarded_load_bound_subject(
     operation: &Operation,
     definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
+    budget: &mut GuardedAddressProofBudgetV1,
 ) -> Option<(ValueId, ValueId, ValueId)> {
     let (pointer, predicate) = match &operation.kind {
         OperationKind::GuardedLoad {
@@ -7618,11 +7683,7 @@ fn guarded_load_bound_subject(
     else {
         return None;
     };
-    let Some(OperationKind::SliceData { slice }) =
-        operation_definition(definitions, *base).map(|operation| &operation.kind)
-    else {
-        return None;
-    };
+    let slice = read_only_allocation_bound_slice_v1(*base, definitions, budget)?;
     let Some(OperationKind::Select {
         condition,
         true_value: index,
@@ -7639,7 +7700,7 @@ fn guarded_load_bound_subject(
     {
         return None;
     }
-    Some((predicate, *index, *slice))
+    Some((predicate, *index, slice))
 }
 
 fn operation_definition<'module>(
@@ -11786,6 +11847,8 @@ include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
+include!("production_semantic_kir_v1/atomic_load_store_v1.rs");
+include!("production_semantic_kir_v1/read_only_allocation_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     fixed_array_analysis: Option<FixedArrayGuardAnalysisV1<'a>>,
@@ -12781,6 +12844,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 result
             }
+            SemanticStatementKindV1::Store(store) if store.atomic().is_some() => {
+                let (atomic, _) = self.prepare_atomic_load_store_v1(
+                    block,
+                    statement,
+                    store.destination(),
+                    Some(store.value()),
+                    store.volatility(),
+                    store.atomic().expect("guard requires atomic"),
+                    operations,
+                )?;
+                self.emit_results(operations, Vec::new(), OperationKind::Atomic(atomic))?;
+                Ok(())
+            }
             SemanticStatementKindV1::Store(store) if store.atomic().is_none() => {
                 let value = self.lower_operand(block, statement, store.value(), operations)?;
                 self.assign_place(
@@ -13138,7 +13214,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 if place.projections().iter().any(|projection| {
                     matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
-                }) {
+                }) || self.is_direct_slice_constant_index_v1(place)
+                {
                     self.lower_indexed_place_address(block, statement, place, operations)
                 } else {
                     let binding = self.resolve_place(block, statement, place, operations)?;
@@ -13624,6 +13701,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         ty: input_ty,
                     });
                 }
+                if pointer_access_restriction_v1(*kind, &input_ty, &target) {
+                    return self.emit(
+                        operations,
+                        target.clone(),
+                        OperationKind::Cast {
+                            kind: CastKind::RestrictPointerAccess,
+                            value: input,
+                            to: target,
+                        },
+                    );
+                }
                 let Some(path) = lower_cast_path(*kind, &input_ty, &target) else {
                     return Err(unsupported(
                         0,
@@ -13654,6 +13742,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .0;
                 }
                 Ok(result)
+            }
+            SemanticRvalueKindV1::Load(load) if load.atomic().is_some() => {
+                let (atomic, pointee) = self.prepare_atomic_load_store_v1(
+                    block,
+                    statement,
+                    load.source(),
+                    None,
+                    load.volatility(),
+                    load.atomic().expect("guard requires atomic"),
+                    operations,
+                )?;
+                if lower_memory_element_type(self.types, result_type)? != pointee {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic atomic load result type differs from its pointee",
+                    ));
+                }
+                self.emit(operations, pointee, OperationKind::Atomic(atomic))
             }
             SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
                 if self.retained_array_slot_v1(load.source().local()).is_some() {
@@ -13836,7 +13944,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .map(|place| place.local().index() as usize);
                 let binding = if place.projections().iter().any(|projection| {
                     matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
-                }) {
+                }) || self.is_direct_slice_constant_index_v1(place)
+                {
                     self.lower_indexed_place_address(block, statement, place, operations)?
                 } else {
                     self.resolve_place(block, statement, place, operations)?
@@ -16249,6 +16358,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Type::Scalar(ScalarType::U8),
                 SemanticMfmaStorageLayoutV1::RowMajor,
             )?,
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+                slice,
+                view,
+                element,
+            } => self.lower_disjoint_slice_into_read_only_v1(
+                block, call, operations, *slice, *view, *element,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { view } => {
+                self.lower_read_only_allocation_len_v1(block, call, operations, *view)?
+            }
+            SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { view, element } => {
+                self.lower_read_only_allocation_load_or_v1(
+                    block, call, operations, *view, *element,
+                )?
+            }
             SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
                 result,
                 view,
@@ -21050,11 +21174,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn is_direct_mutable_slice_index_v1(&self, place: &SemanticPlaceV1) -> bool {
+        self.is_direct_slice_index_v1(place, true)
+    }
+
+    fn is_direct_slice_constant_index_v1(&self, place: &SemanticPlaceV1) -> bool {
+        place.projections().last().is_some_and(|projection| {
+            matches!(
+                projection.kind(),
+                SemanticProjectionKindV1::ConstantIndex {
+                    from_end: false,
+                    ..
+                }
+            )
+        }) && self.is_direct_slice_index_v1(place, false)
+    }
+
+    fn is_direct_slice_index_v1(&self, place: &SemanticPlaceV1, require_write: bool) -> bool {
         let [dereference, index] = place.projections() else {
             return false;
         };
         if dereference.kind() != SemanticProjectionKindV1::Dereference
-            || !matches!(index.kind(), SemanticProjectionKindV1::Index(_))
+            || !matches!(
+                index.kind(),
+                SemanticProjectionKindV1::Index(_)
+                    | SemanticProjectionKindV1::ConstantIndex {
+                        from_end: false,
+                        ..
+                    }
+            )
         {
             return false;
         }
@@ -21069,7 +21216,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             return false;
         };
         if pointer.kind() != SemanticPointerKindV1::Reference
-            || pointer.mutability() != SemanticMutabilityV1::Mutable
+            || (require_write && pointer.mutability() != SemanticMutabilityV1::Mutable)
             || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
             || pointer.pointer_width_bits() != 64
             || pointer.pointee() != dereference.result_type()
@@ -21089,7 +21236,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         matches!(
             self.locals.get(place.local().index() as usize).and_then(Option::as_ref),
             Some(SemanticValueBindingV1::Value { ty: Type::Slice(slice), .. })
-                if slice.access == AccessMode::ReadWrite
+                if (slice.access == AccessMode::ReadWrite
+                    || (!require_write && slice.access == AccessMode::ReadOnly))
                     && Some(slice.address_space) == lower_address_space(pointer.address_space()).ok()
         )
     }
@@ -21271,12 +21419,58 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     offset, from_end, ..
                 } => {
                     let SemanticValueBindingV1::Aggregate(fields) = &binding else {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            statement,
-                            "constant index does not select a by-value aggregate",
-                        ));
+                        if from_end {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "from-end constant slice indexing is not supported",
+                            ));
+                        }
+                        let (slice, slice_ty) = binding.value().map_err(|detail| {
+                            unsupported(0, Some(block.index()), statement, detail)
+                        })?;
+                        let Type::Slice(slice_type) = slice_ty else {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "constant index does not select an aggregate or slice",
+                            ));
+                        };
+                        let index = self
+                            .emit(
+                                operations,
+                                Type::INDEX,
+                                OperationKind::Constant(Constant::Index(offset)),
+                            )?
+                            .value()
+                            .expect("emitted constant slice index")
+                            .0;
+                        let pointer_ty = Type::pointer(
+                            (*slice_type.element).clone(),
+                            slice_type.address_space,
+                            slice_type.access,
+                        );
+                        let base = self
+                            .emit(
+                                operations,
+                                pointer_ty.clone(),
+                                OperationKind::SliceData { slice },
+                            )?
+                            .value()
+                            .expect("emitted slice data")
+                            .0;
+                        binding = self.emit(
+                            operations,
+                            pointer_ty,
+                            OperationKind::GetElementPointer {
+                                base,
+                                offset: index,
+                            },
+                        )?;
+                        current_type = projection.result_type();
+                        continue;
                     };
                     let Some(SemanticTypeShapeV1::Array { length, .. }) = self
                         .types
@@ -23071,16 +23265,21 @@ fn unsupported_rvalue_detail(value: &SemanticRvalueKindV1) -> &'static str {
     }
 }
 
+include!("production_semantic_kir_v1/atomic_slice_parameter_v1.rs");
+
 fn lower_parameter_type(
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
+    if let Some(slice) = lower_shared_atomic_slice_parameter_v1(types, ty) {
+        return Ok(slice);
+    }
     let shape = types
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
         .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?
         .shape();
-    if let Some((element, _, access)) = disjoint_slice_descriptor(callables, ty) {
+    if let Some((element, _, access)) = disjoint_slice_descriptor(types, callables, ty) {
         return Ok(Type::slice(
             lower_scalar_type(types, element)?,
             AddressSpace::Global,
@@ -23797,7 +23996,7 @@ fn authenticated_disjoint_slice_parameter(
     argument: u32,
     ty: SemanticTypeIdV1,
 ) -> Option<Type> {
-    let (element, raw_index, access) = disjoint_slice_descriptor(callables, ty)?;
+    let (element, raw_index, access) = disjoint_slice_descriptor(types, callables, ty)?;
     let argument = usize::try_from(argument).ok()?;
     let abi = function.abi();
     if abi.source_input_types().get(argument) != Some(&ty)
@@ -25054,12 +25253,28 @@ fn lower_scalar_kind(scalar: SemanticScalarTypeV1) -> Result<Type, ProductionSem
 }
 
 fn disjoint_slice_descriptor(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Option<(SemanticTypeIdV1, SemanticTypeIdV1, AccessMode)> {
     let mut descriptor = None;
     for callable in callables {
         let candidate = match callable {
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+                        slice,
+                        view,
+                        element,
+                    },
+                ..
+            } if *slice == ty => {
+                let (actual_element, length) = read_only_allocation_fields_v1(types, *view)?;
+                if actual_element != *element {
+                    return None;
+                }
+                Some((*element, length, AccessMode::ReadWrite))
+            }
             SemanticCallableDeclV1::CompilerIntrinsic {
                 operation:
                     SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
@@ -25879,6 +26094,10 @@ mod resource_tests {
         include!("production_semantic_kir_v1/dynamic_local_array_tests.rs");
     }
     include!("production_semantic_kir_v1/resource_01_tests.rs");
+    include!("production_semantic_kir_v1/atomic_slice_translation_v1_tests.rs");
+    include!("production_semantic_kir_v1/guarded_effect_flow_v1_tests.rs");
+    include!("production_semantic_kir_v1/conditional_total_read_replay_v1_tests.rs");
+    include!("production_semantic_kir_v1/read_only_allocation_v1_tests.rs");
     mod private_array_resource_tests {
         include!("production_semantic_kir_v1/tests/production_private_array_resource_tests.rs");
     }
@@ -30329,6 +30548,14 @@ mod resource_tests {
         effects: Vec<ProductionRankedOperationV1>,
         allocation_origin: u64,
     ) -> ProductionRankedKernelLoweringInputV1 {
+        ranked_correlation_input_with_coherence_v1(effects, allocation_origin, &[])
+    }
+
+    fn ranked_correlation_input_with_coherence_v1(
+        effects: Vec<ProductionRankedOperationV1>,
+        allocation_origin: u64,
+        coherent_allocations: &[u64],
+    ) -> ProductionRankedKernelLoweringInputV1 {
         let view = ProductionRankedValueIdV1::new(0);
         let index = ProductionRankedValueIdV1::new(1);
         let has_atomic = effects.iter().any(|operation| {
@@ -30388,7 +30615,7 @@ mod resource_tests {
             compile_ranked_kernel_for_gfx942_lowering_v1(
                 construction,
                 ProductionSessionLimitsV1::default(),
-                [],
+                coherent_allocations.iter().copied(),
             )
         } else {
             compile_ranked_kernel_for_lowering_v1(

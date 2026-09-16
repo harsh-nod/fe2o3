@@ -550,6 +550,7 @@
             &[Some(effect)],
             &vec![None; function.locals().len()],
             &mut arguments,
+            &mut vec![None; function.locals().len()],
             &mut next_argument,
             &mut operations,
             &mut next_value,

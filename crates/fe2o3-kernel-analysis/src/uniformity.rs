@@ -492,8 +492,25 @@ impl<'a> Analyzer<'a> {
                 }
             }
         }
+        let can_refine_control =
+            !malformed && !malformed_values && !malformed_edges && !control_flow_malformed;
         let mut effective_successors = effective_successors(body, &known_integer_values);
-        if !malformed && !malformed_values && !malformed_edges && !control_flow_malformed {
+        if can_refine_control {
+            // Verified KIR provides SSA dominance (also checked by target lowering).
+            // These exact checked BOOL results were proved false, not merely uniform.
+            // Retain every unproved branch, including real overflow/trap edges.
+            for block in &body.blocks {
+                if let Some(Terminator::ConditionalBranch {
+                    condition,
+                    else_target,
+                    ..
+                }) = &block.terminator
+                    && proven_no_overflow.contains(condition)
+                    && value_types.get(condition) == Some(&Type::BOOL)
+                {
+                    effective_successors.insert(block.id, BTreeSet::from([*else_target]));
+                }
+            }
             contextual_control::refine_successors(
                 body,
                 &incoming,
@@ -1549,14 +1566,26 @@ fn prove_unsigned_checked_arithmetic(
                 else {
                     return None;
                 };
-                (operation.results.len() == 2).then_some((
-                    block.id,
-                    operator,
-                    lhs,
-                    rhs,
-                    operation.results[0].ty.clone(),
-                    operation.results[1].id,
-                ))
+                let [result, overflow] = operation.results.as_slice() else {
+                    return None;
+                };
+                if !matches!(
+                    result.ty,
+                    Type::Scalar(
+                        ScalarType::U8
+                            | ScalarType::U16
+                            | ScalarType::U32
+                            | ScalarType::U64
+                            | ScalarType::U128
+                            | ScalarType::Index
+                    )
+                ) || overflow.ty != Type::BOOL
+                    || analysis.value_types.get(&lhs) != Some(&result.ty)
+                    || analysis.value_types.get(&rhs) != Some(&result.ty)
+                {
+                    return None;
+                }
+                Some((block.id, operator, lhs, rhs, result.ty.clone(), overflow.id))
             })
         })
         .collect::<Vec<_>>();
@@ -1663,6 +1692,16 @@ impl<'a> UnsignedRangeAnalysis<'a> {
     }
 
     fn edge_is_exclusive(&self, source: BlockId, target: BlockId) -> bool {
+        // The function entry also has an implicit invocation predecessor.
+        if source == target
+            || self
+                .body
+                .blocks
+                .first()
+                .is_some_and(|entry| entry.id == target)
+        {
+            return false;
+        }
         self.incoming
             .get(&target)
             .is_some_and(|edges| matches!(edges.as_slice(), [edge] if edge.source == source))
@@ -2265,6 +2304,10 @@ impl<'a> UnsignedRangeAnalysis<'a> {
             .intersect(type_range);
         let guards = self.guards.clone();
         for guard in guards {
+            // A future branch or a previous loop visit cannot constrain this use.
+            if guard.block == query_block || !self.dominates(guard.block, query_block) {
+                continue;
+            }
             let then_dominates =
                 guard.then_edge_is_exclusive && self.dominates(guard.then_target, query_block);
             let else_dominates =

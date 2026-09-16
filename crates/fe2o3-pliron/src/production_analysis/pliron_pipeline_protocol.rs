@@ -569,6 +569,7 @@ fn pipeline_protocol_inventory_census_v1(
     let mut allocation_effects = 0_usize;
     let mut effect_refinement_contracts = 0_usize;
     let mut index_lt_branch_candidates = 0_usize;
+    let mut memory_bounds_guard_candidates = 0_usize;
     for site in inventory.operations() {
         let raw = site.pointer().deref(context);
         let operand_arity = raw.get_num_operands();
@@ -592,6 +593,14 @@ fn pipeline_protocol_inventory_census_v1(
                 .downcast_ref::<IndexLessThanBranchArgsOp>()
                 .is_some(),
         );
+        memory_bounds_guard_candidates += usize::from(
+            operation
+                .downcast_ref::<dialect_kernel::IndexLessThanBranchOp>()
+                .is_some()
+                || operation
+                    .downcast_ref::<IndexLessThanBranchArgsOp>()
+                    .is_some(),
+        );
     }
     let block_arguments = inventory
         .blocks()
@@ -613,6 +622,7 @@ fn pipeline_protocol_inventory_census_v1(
         allocation_effects,
         effect_refinement_contracts,
         index_lt_branch_candidates,
+        memory_bounds_guard_candidates,
         ..ProductionAnalysisInputCensusV1::default()
     })
 }
@@ -656,6 +666,10 @@ struct AccessSiteV1 {
 
 #[derive(Clone)]
 struct CanonicalEpochLoopV1 {
+    entry: usize,
+    body_start: usize,
+    latch: usize,
+    exit: usize,
     prologue: Vec<usize>,
     header: usize,
     body: Vec<usize>,
@@ -664,6 +678,7 @@ struct CanonicalEpochLoopV1 {
     inductions: HashMap<usize, Value>,
     header_induction: Value,
     bound: Value,
+    finite_inner_loops: Vec<FiniteInnerLoopSummaryV1>,
 }
 
 struct EpochLoopDiscoveryV1 {
@@ -671,6 +686,7 @@ struct EpochLoopDiscoveryV1 {
     dominators: Vec<HashSet<usize>>,
     cfg_successors: Vec<Vec<usize>>,
 }
+include!("pliron_pipeline_protocol/finite_epoch_protocol_v1.rs");
 
 include!("pliron_pipeline_protocol/concrete_cfg_v1.rs");
 include!("pliron_pipeline_protocol/concrete_index_facts_v1.rs");
@@ -795,6 +811,34 @@ fn verify_one_pipeline(
             "the runtime loop bound is not proved workgroup-uniform"
         };
         return Err(invalid(pipeline, None, detail));
+    }
+    if schedule.len() == 10
+        && schedule
+            .iter()
+            .all(|event| summary.body_members.contains(&event.site.block()))
+        && index_constant(context, summary.bound).is_some()
+    {
+        return verify_finite_two_phase_pipeline_v1(
+            context,
+            control.inventory,
+            discovery,
+            pipeline,
+            buffers,
+            distance,
+            schedule,
+            accesses,
+            summary,
+            uniform_roots,
+            uniformity_visit_limit,
+            equivalence_resources,
+        );
+    }
+    if !summary.finite_inner_loops.is_empty() {
+        return Err(invalid(
+            pipeline,
+            None,
+            "nested finite loops require an exact two-phase closed epoch schedule",
+        ));
     }
     let (staged_writes, consuming_reads, access_refinement_proven) = verify_dynamic_schedule(
         context,
@@ -1260,3 +1304,7 @@ include!("pliron_pipeline_protocol/concrete_cfg_v1_tests.rs");
 #[cfg(test)]
 #[path = "pliron_pipeline_protocol/concrete_index_facts_v1_tests.rs"]
 mod concrete_index_facts_v1_tests;
+
+#[cfg(test)]
+#[path = "pliron_pipeline_protocol/finite_epoch_protocol_v1_tests.rs"]
+mod finite_epoch_protocol_v1_tests;

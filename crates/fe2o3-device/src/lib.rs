@@ -33,6 +33,7 @@ pub mod lds;
 pub mod math;
 pub mod memory;
 pub mod mx;
+pub mod read_only_allocation;
 pub mod simd;
 pub mod sync;
 pub mod tensor;
@@ -88,6 +89,7 @@ pub use lds::{
 pub use math::DeviceMath as Math;
 pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
 pub use mx::{MxScaleConversionError, MxScaleE8M0, MxScaleE8M0x4};
+pub use read_only_allocation::{ReadOnlyAllocation, ReadOnlyAllocationElement};
 pub use simd::{GpuSimd, GpuSimdElement, GpuSimdLaneCount, ValidGpuSimdLaneCount};
 pub use sync::{
     AmdBarrierTarget, BarrierInitializationError, BarrierPending, BarrierReady,

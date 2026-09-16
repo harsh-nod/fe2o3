@@ -174,6 +174,8 @@ pub enum RustSourceTypeShapeV1 {
     SharedSlice {
         element: RustScalarElementTypeV1,
     },
+    /// A genuine shared core `AtomicU32` slice, never an ordinary read slice.
+    SharedAtomicSliceU32,
     DisjointSlice {
         element: RustScalarElementTypeV1,
         index_space: RustDisjointIndexSpaceV1,
@@ -190,6 +192,10 @@ impl RustSourceTypeShapeV1 {
 
     pub const fn shared_slice(element: RustScalarElementTypeV1) -> Self {
         Self::SharedSlice { element }
+    }
+
+    pub const fn shared_atomic_slice_u32() -> Self {
+        Self::SharedAtomicSliceU32
     }
 
     pub const fn disjoint_slice(
@@ -210,6 +216,7 @@ impl RustSourceTypeShapeV1 {
         match self {
             Self::Scalar { scalar } => scalar,
             Self::SharedSlice { element } | Self::DisjointSlice { element, .. } => element,
+            Self::SharedAtomicSliceU32 => RustScalarElementTypeV1::U32,
             Self::GlobalMutPointer { pointee } => pointee,
         }
     }
@@ -623,6 +630,9 @@ fn validate_source_semantics(
             unreachable!("scalar source types return before slice validation")
         }
         RustSourceTypeShapeV1::SharedSlice { element } => (element, RustPointerMutabilityV1::Const),
+        RustSourceTypeShapeV1::SharedAtomicSliceU32 => {
+            (RustScalarElementTypeV1::U32, RustPointerMutabilityV1::Const)
+        }
         RustSourceTypeShapeV1::DisjointSlice { element, .. } => {
             (element, RustPointerMutabilityV1::Mut)
         }
@@ -760,6 +770,7 @@ fn encode_source_type(source_type: RustSourceTypeShapeV1) -> Vec<u8> {
             writer.u8(4);
             writer.u8(scalar_tag(pointee));
         }
+        RustSourceTypeShapeV1::SharedAtomicSliceU32 => writer.u8(5),
     }
     writer.finish()
 }

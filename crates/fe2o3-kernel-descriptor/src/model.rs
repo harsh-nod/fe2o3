@@ -254,6 +254,7 @@ pub(crate) enum DescriptorKind {
     SharedSlice,
     DisjointSlice,
     GlobalMutPointer,
+    SharedAtomicSliceU32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -274,6 +275,14 @@ impl SourceTypeDescriptorV1 {
         Self {
             kind: DescriptorKind::SharedSlice,
             element,
+        }
+    }
+
+    /// A nominal shared slice of core AtomicU32, never an ordinary readonly slice.
+    pub const fn shared_atomic_slice_u32() -> Self {
+        Self {
+            kind: DescriptorKind::SharedAtomicSliceU32,
+            element: ScalarTypeV1::U32,
         }
     }
 
@@ -301,6 +310,10 @@ impl SourceTypeDescriptorV1 {
 
     pub const fn is_shared_slice(&self) -> bool {
         matches!(self.kind, DescriptorKind::SharedSlice)
+    }
+
+    pub const fn is_shared_atomic_slice_u32(&self) -> bool {
+        matches!(self.kind, DescriptorKind::SharedAtomicSliceU32)
     }
 
     pub const fn is_disjoint_slice(&self) -> bool {
@@ -336,6 +349,10 @@ impl DeviceLayoutDescriptorV1 {
 
     pub const fn shared_slice(element: ScalarTypeV1) -> Self {
         Self::slice(DescriptorKind::SharedSlice, element)
+    }
+
+    pub const fn shared_atomic_slice_u32() -> Self {
+        Self::slice(DescriptorKind::SharedAtomicSliceU32, ScalarTypeV1::U32)
     }
 
     pub const fn disjoint_slice(element: ScalarTypeV1) -> Self {
@@ -481,6 +498,7 @@ pub enum AliasSemantics {
     Value,
     SharedReadOnly,
     Exclusive,
+    SharedAtomic,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -595,6 +613,30 @@ impl LogicalArgumentV1 {
             OwnershipSemantics::SharedBorrow,
             AccessMode::ReadOnly,
             AliasSemantics::SharedReadOnly,
+            pointer_offset,
+        )
+    }
+
+    pub fn shared_atomic_slice_u32(
+        source_index: u16,
+        name: ValidName,
+        source_type: &SourceTypeRecordV1,
+        device_layout: &DeviceLayoutRecordV1,
+        pointer_offset: u32,
+    ) -> Result<Self, ValidationError> {
+        require_matching_descriptors(
+            source_type,
+            device_layout,
+            DescriptorKind::SharedAtomicSliceU32,
+        )?;
+        Self::slice(
+            source_index,
+            name,
+            source_type.identity,
+            device_layout.identity,
+            OwnershipSemantics::SharedBorrow,
+            AccessMode::ReadWrite,
+            AliasSemantics::SharedAtomic,
             pointer_offset,
         )
     }
@@ -1339,6 +1381,7 @@ fn validate_argument_against_records(
         DescriptorKind::SharedSlice => {
             DeviceLayoutDescriptorV1::shared_slice(source_type.descriptor.element)
         }
+        DescriptorKind::SharedAtomicSliceU32 => DeviceLayoutDescriptorV1::shared_atomic_slice_u32(),
         DescriptorKind::DisjointSlice => {
             DeviceLayoutDescriptorV1::disjoint_slice(source_type.descriptor.element)
         }
@@ -1357,6 +1400,7 @@ fn validate_argument_against_records(
             validate_scalar_argument(argument, source_type.descriptor.element)
         }
         DescriptorKind::SharedSlice => validate_shared_slice_argument(argument),
+        DescriptorKind::SharedAtomicSliceU32 => validate_shared_atomic_slice_argument(argument),
         DescriptorKind::DisjointSlice => validate_disjoint_slice_argument(argument),
         DescriptorKind::GlobalMutPointer => validate_global_mut_pointer_argument(argument),
     }
@@ -1391,6 +1435,20 @@ fn validate_shared_slice_argument(argument: &LogicalArgumentV1) -> Result<(), Va
     {
         return Err(ValidationError::InvalidArgument(
             "shared slice must be a shared read-only borrow",
+        ));
+    }
+    validate_slice_components(argument)
+}
+
+fn validate_shared_atomic_slice_argument(
+    argument: &LogicalArgumentV1,
+) -> Result<(), ValidationError> {
+    if argument.ownership != OwnershipSemantics::SharedBorrow
+        || argument.access != AccessMode::ReadWrite
+        || argument.alias != AliasSemantics::SharedAtomic
+    {
+        return Err(ValidationError::InvalidArgument(
+            "atomic slice requires shared read-write atomic semantics",
         ));
     }
     validate_slice_components(argument)

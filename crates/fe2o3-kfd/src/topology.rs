@@ -12,6 +12,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "topology_gfx950_xcp.rs"]
+mod gfx950_xcp;
+
 /// Kernel-owned topology tree used by the first Linux KFD profile.
 pub const DEFAULT_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology";
 pub const DEFAULT_BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
@@ -335,6 +339,16 @@ impl PartitionProfile {
     }
 }
 
+/// Contract used to correlate a KFD node with its DRM/PCI observations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderIdentityCorrelationV1 {
+    SameDeviceUid,
+    /// Exact engineering SPX/XCP0 mapping through the driver's parent render.
+    /// The KFD XCD and PCI board UIDs are different identity domains.
+    #[cfg(feature = "engineering-gfx950")]
+    Gfx950EngineeringXcp0ViaParentRenderV1,
+}
+
 /// DRM and PCI evidence correlated with one KFD GPU observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenderNodeObservation {
@@ -344,6 +358,10 @@ pub struct RenderNodeObservation {
     pci_address: PciAddress,
     pci_revision: u8,
     unique_id: u64,
+    kfd_unique_id: u64,
+    identity_correlation: RenderIdentityCorrelationV1,
+    #[cfg(feature = "engineering-gfx950")]
+    xcp_sysfs_identity: Option<gfx950_xcp::XcpSysfsIdentity>,
     partition: PartitionProfile,
 }
 
@@ -368,8 +386,17 @@ impl RenderNodeObservation {
         self.pci_revision
     }
 
+    /// PCI board identity; not necessarily the KFD partition/XCD identity.
     pub const fn unique_id(&self) -> u64 {
         self.unique_id
+    }
+
+    pub const fn kfd_unique_id(&self) -> u64 {
+        self.kfd_unique_id
+    }
+
+    pub const fn identity_correlation(&self) -> RenderIdentityCorrelationV1 {
+        self.identity_correlation
     }
 
     pub const fn partition(&self) -> PartitionProfile {
@@ -2296,6 +2323,7 @@ fn correlate_render_node(
     gpu: &GpuTopologyNode,
     paths: &DiscoveryPaths<'_>,
     sysfs_devices_root: &Path,
+    identity_correlation: RenderIdentityCorrelationV1,
 ) -> Result<RenderNodeObservation, TopologyError> {
     let link = paths
         .device_character_root
@@ -2355,7 +2383,9 @@ fn correlate_render_node(
     }
 
     let unique_id = read_hex_scalar(&pci_path.join("unique_id"), false, None)?;
-    if unique_id != gpu.unique_id {
+    if identity_correlation == RenderIdentityCorrelationV1::SameDeviceUid
+        && unique_id != gpu.unique_id
+    {
         return Err(mismatch(gpu.node_id, "unique_id", gpu.unique_id, unique_id));
     }
     let vendor_id = read_hex_scalar(&pci_path.join("vendor"), true, Some(4))?;
@@ -2381,6 +2411,13 @@ fn correlate_render_node(
         compute: read_compute_partition(&pci_path.join("current_compute_partition"))?,
         memory: read_memory_partition(&pci_path.join("current_memory_partition"))?,
     };
+    #[cfg(feature = "engineering-gfx950")]
+    let xcp_sysfs_identity = match identity_correlation {
+        RenderIdentityCorrelationV1::SameDeviceUid => None,
+        RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1 => Some(
+            gfx950_xcp::observe_parent(gpu, &render_path, &pci_path, unique_id, partition)?,
+        ),
+    };
     if ensure_directory(&pci_path)? != pci_identity
         || ensure_directory(&render_path)? != render_identity
     {
@@ -2394,6 +2431,10 @@ fn correlate_render_node(
         pci_address,
         pci_revision: pci_revision as u8,
         unique_id,
+        kfd_unique_id: gpu.unique_id,
+        identity_correlation,
+        #[cfg(feature = "engineering-gfx950")]
+        xcp_sysfs_identity,
         partition,
     })
 }
@@ -2406,12 +2447,23 @@ fn discover_host_topology_for_target(
     let boot_id = read_boot_id(paths.boot_id)?;
     let kernel_release = read_kernel_release(paths.os_release)?;
     let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
+    let identity_correlation =
+        select_render_identity_correlation(target, &kernel_release, &amdgpu_module);
     ensure_directory(paths.device_character_root)?;
     ensure_directory(paths.sysfs_devices_root)?;
     let sysfs_devices_root = canonicalize(paths.sysfs_devices_root)?;
     let mut render_nodes = Vec::with_capacity(topology.gpu_nodes.len());
     for gpu in &topology.gpu_nodes {
-        render_nodes.push(correlate_render_node(gpu, paths, &sysfs_devices_root)?);
+        render_nodes.push(correlate_render_node(
+            gpu,
+            paths,
+            &sysfs_devices_root,
+            identity_correlation,
+        )?);
+    }
+    #[cfg(feature = "engineering-gfx950")]
+    if identity_correlation == RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1 {
+        gfx950_xcp::validate_inventory(&render_nodes)?;
     }
     let generation_after = read_scalar(&paths.topology_root.join("generation_id"))?;
     if generation_after != topology.provenance.generation {
@@ -2442,6 +2494,25 @@ fn discover_host_topology_for_target(
         amdgpu_module,
         render_nodes,
     })
+}
+
+fn select_render_identity_correlation(
+    target: GfxTarget,
+    kernel: &KernelRelease,
+    module: &AmdgpuModuleObservation,
+) -> RenderIdentityCorrelationV1 {
+    #[cfg(feature = "engineering-gfx950")]
+    if target == GfxTarget::Gfx950
+        && crate::device::gfx950_mi350_2_platform_matches(
+            kernel.as_str(),
+            module.version(),
+            module.srcversion(),
+        )
+    {
+        return RenderIdentityCorrelationV1::Gfx950EngineeringXcp0ViaParentRenderV1;
+    }
+    let _ = (target, kernel, module);
+    RenderIdentityCorrelationV1::SameDeviceUid
 }
 
 #[cfg(test)]
@@ -2843,6 +2914,7 @@ mod tests {
                 &self.gpu,
                 &self.paths(),
                 &canonicalize(&self.devices_root).unwrap(),
+                RenderIdentityCorrelationV1::SameDeviceUid,
             )
         }
     }
@@ -2851,6 +2923,11 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.base).unwrap();
         }
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    mod gfx950_xcp_tests {
+        include!("topology_gfx950_xcp_tests.rs");
     }
 
     #[cfg(feature = "engineering-gfx950")]

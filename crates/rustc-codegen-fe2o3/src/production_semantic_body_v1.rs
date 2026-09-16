@@ -19,13 +19,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
-    SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
-    SemanticMonomorphizationIdentityV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticProjectionKindV1, SemanticProjectionV1, SemanticRvalueKindV1, SemanticRvalueV1,
-    SemanticScalarValueV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
-    SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1,
-    SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1,
-    SemanticUncheckedBinaryRvalueV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticMemoryLoadV1, SemanticMemoryStoreV1, SemanticMirErrorV1, SemanticMirLimitsV1,
+    SemanticMirResourceV1, SemanticMonomorphizationIdentityV1, SemanticMutabilityV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticProjectionV1,
+    SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarValueV1, SemanticSourceProvenanceV1,
+    SemanticStatementKindV1, SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1,
+    SemanticTerminatorKindV1, SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUncheckedBinaryRvalueV1, SemanticUnwindActionV1,
+    SemanticVolatilityV1,
 };
 use rustc_hir::Mutability;
 use rustc_middle::mir::interpret::GlobalAlloc;
@@ -1368,13 +1369,6 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         else {
             return Err(table("normalized intrinsic table"));
         };
-        if args.len() != 2 {
-            return Err(unsupported(
-                "normalized atomic intrinsic with unexpected call arity",
-                block,
-                None,
-            ));
-        }
         let Some(target) = *target else {
             return Err(unsupported(
                 "normalized atomic intrinsic without a return edge",
@@ -1394,15 +1388,23 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             .charge(SemanticMirResourceV1::CallArguments, args.len())?;
         let resolved = resolve_direct_call_v1(self.tcx, self.instance, self.body, func)
             .map_err(|construct| unsupported(construct, block, None))?;
-        let classification = crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved)
-            .map_err(|error| {
-                unsupported(
-                    format!("unsupported rustc compiler intrinsic: {error}"),
-                    block,
-                    None,
-                )
-            })?
-            .ok_or_else(|| table("normalized intrinsic table"))?;
+        let classification =
+            crate::production_rustc_intrinsic_v1::classify_call(self.tcx, resolved, args)
+                .map_err(|error| {
+                    unsupported(
+                        format!("unsupported rustc compiler intrinsic: {error}"),
+                        block,
+                        None,
+                    )
+                })?
+                .ok_or_else(|| table("normalized intrinsic table"))?;
+        if args.len() != classification.source_call_arity {
+            return Err(unsupported(
+                "normalized atomic intrinsic with unexpected call arity",
+                block,
+                None,
+            ));
+        }
         let index = usize::try_from(raw_block).map_err(|_| table("normalized intrinsic table"))?;
         let recipe = self
             .normalized_intrinsics_by_raw
@@ -1455,26 +1457,50 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 None,
             )
         })?;
-        let value_type = normalize_type_v1(
-            self.tcx,
-            self.instance,
-            args[1].node.ty(&self.body.local_decls, self.tcx),
-        )
-        .map_err(|_| {
-            unsupported(
-                "normalized atomic value type failed monomorphic normalization",
-                block,
-                None,
+        let load = matches!(
+            recipe.operation,
+            ProductionRustcIntrinsicOperationV1::AtomicLoad { .. }
+        );
+        let store = matches!(
+            recipe.operation,
+            ProductionRustcIntrinsicOperationV1::AtomicStore { .. }
+        );
+        let value_type = if load {
+            None
+        } else {
+            Some(
+                normalize_type_v1(
+                    self.tcx,
+                    self.instance,
+                    args[1].node.ty(&self.body.local_decls, self.tcx),
+                )
+                .map_err(|_| {
+                    unsupported(
+                        "normalized atomic value type failed monomorphic normalization",
+                        block,
+                        None,
+                    )
+                })?,
             )
-        })?;
-        let TyKind::RawPtr(pointee, Mutability::Mut) = *address_type.kind() else {
+        };
+        let TyKind::RawPtr(pointee, mutability) = *address_type.kind() else {
             return Err(unsupported(
-                "normalized atomic address is not a mutable raw pointer",
+                "normalized atomic address is not a raw pointer",
                 block,
                 None,
             ));
         };
-        if pointee != expected || value_type != expected || destination_type != expected {
+        let expected_mutability = if load {
+            Mutability::Not
+        } else {
+            Mutability::Mut
+        };
+        let expected_destination = if store { self.tcx.types.unit } else { expected };
+        if pointee != expected
+            || mutability != expected_mutability
+            || value_type.is_some_and(|value| value != expected)
+            || destination_type != expected_destination
+        {
             return Err(unsupported(
                 "normalized atomic address, value, and destination types do not agree",
                 block,
@@ -1507,22 +1533,49 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             element_type,
         )?);
         let address = SemanticPlaceV1::new(address_base.local(), projections, element_type)?;
-        let destination = self.construct_place(*destination, block, None)?;
-        let value = self.construct_operand(&args[1].node, block, None)?;
-        let (operation, access) = recipe
-            .operation
-            .atomic_rmw()
-            .ok_or_else(|| table("normalized atomic intrinsic operation"))?;
+        let statement = match recipe.operation {
+            ProductionRustcIntrinsicOperationV1::AtomicLoad { access } => {
+                let destination = self.construct_place(*destination, block, None)?;
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    destination,
+                    SemanticRvalueV1::new(
+                        element_type,
+                        SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                            address,
+                            SemanticVolatilityV1::NonVolatile,
+                            Some(access),
+                        )),
+                    ),
+                ))
+            }
+            ProductionRustcIntrinsicOperationV1::AtomicStore { access } => {
+                let value = self.construct_operand(&args[1].node, block, None)?;
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    address,
+                    value,
+                    SemanticVolatilityV1::NonVolatile,
+                    Some(access),
+                ))
+            }
+            ProductionRustcIntrinsicOperationV1::AtomicRmw { operation, access } => {
+                let destination = self.construct_place(*destination, block, None)?;
+                let value = self.construct_operand(&args[1].node, block, None)?;
+                SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
+                    destination,
+                    address,
+                    value,
+                    operation,
+                    access,
+                ))
+            }
+            ProductionRustcIntrinsicOperationV1::FabsF32 => {
+                return Err(table("normalized atomic intrinsic operation"));
+            }
+        };
 
         self.consumed_normalized_intrinsics[index] = true;
         Ok((
-            SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
-                destination,
-                address,
-                value,
-                operation,
-                access,
-            )),
+            statement,
             SemanticTerminatorKindV1::Goto(self.edge(SemanticEdgeRoleV1::Goto, target.index())?),
         ))
     }
@@ -1605,9 +1658,11 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     min_length,
                     from_end,
                 } => {
-                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..) | TyKind::Slice(..))
+                        || (from_end && matches!(derived.ty.kind(), TyKind::Slice(..)))
+                    {
                         return Err(unsupported(
-                            "ConstantIndex projection on a non-array place",
+                            "ConstantIndex requires an array or a from-start slice index",
                             block,
                             statement,
                         ));
@@ -2272,6 +2327,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
         | ProductionTerminalExpansionV1::RustcFabsF32
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen
+        | ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly
+        | ProductionTerminalExpansionV1::ReadOnlyAllocationLen
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
@@ -2286,6 +2343,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
+        | ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum

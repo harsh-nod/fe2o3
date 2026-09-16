@@ -245,11 +245,11 @@ mod ownership_resource_tests {
     }
 
     #[test]
-    fn ownership_empty_does_not_skip_primary_race_storage_admission() {
+    fn ownership_empty_long_name_does_not_inflate_numeric_race_diagnostics() {
         const FINDING_ROWS: usize = 4_096;
         let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
-        // A concurrent launch's possible fallback findings exceed the ceiling,
-        // independently of earlier analyses' retained storage estimates.
+        // This name used to be charged once per possible race finding even
+        // though the analysis now retains only bounded numeric value names.
         let name = "n".repeat(limits.max_peak_storage() / FINDING_ROWS + 1);
         let context = &mut Context::new();
         let function = read_function(context, &name, 64, 0);
@@ -276,18 +276,57 @@ mod ownership_resource_tests {
             .get_operation()
             .insert_at_front(function.get_entry_block(context), context);
         assert_eq!(census(context, &function).operations, 68);
-        let result = require_production_pliron_checks_before_lowering_v2(context, &function);
+        let concurrent = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("unrelated function text is not retained once per numeric race finding");
+        assert!(concurrent.is_clean());
+        assert!(concurrent.race().is_clean());
+        assert!(concurrent.ownership().is_clean());
+        assert!(concurrent.preservation().is_exact_identity());
+        assert_eq!(concurrent.preservation().certificates().len(), 9);
+        assert!(!concurrent.grants_compiler_refinement_authority());
+        assert!(!concurrent.grants_artifact_or_launch_authority());
+    }
+
+    #[test]
+    fn ownership_empty_does_not_skip_primary_race_storage_admission() {
+        const READS: usize = 64;
+        const INVOCATIONS: u64 = 16_384;
+        let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
+        let context = &mut Context::new();
+        let function = read_function(context, "ownership_empty_actual_race_budget", READS, 0);
+        let singleton = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("the singleton fixture must pass every earlier stage");
+        assert!(singleton.is_clean());
+        InvocationIndexOp::new(context, 0, INVOCATIONS)
+            .get_operation()
+            .insert_at_front(function.get_entry_block(context), context);
+        let input = census(context, &function);
+        assert_eq!(input.ownership_contracts, 0);
+        assert_eq!(input.ranked_accesses, READS);
+        assert_eq!(input.allocation_effects, 0);
+        assert_eq!(input.operations, READS + 4);
+        // One million possible effect instances need at least 136 address-state
+        // units each at rank8. This genuine shape exceeds the unchanged ceiling.
+        let instances = READS * usize::try_from(INVOCATIONS).unwrap();
+        assert_eq!(instances, crate::MAX_PLIRON_RACE_EFFECT_INSTANCES_V1);
+        assert!(
+            instances * (dialect_kernel::MAX_RANKED_MEMORY_RANK * 9 + 64)
+                > limits.max_peak_storage()
+        );
+        let Err(error) = require_production_pliron_checks_before_lowering_v2(context, &function)
+        else {
+            panic!("empty ownership bypassed the primary race storage admission")
+        };
         assert!(
             matches!(
-                &result,
-                Err(ProductionPlironPreloweringErrorV2::ResourceLimit {
+                error,
+                ProductionPlironPreloweringErrorV2::ResourceLimit {
                     phase: Phase::RaceFreedom,
                     producing_pass: None,
                     resource: "peak storage upper bound",
-                }),
+                }
             ),
-            "long no-contract fixture (name bytes={}, reads=64): {result:?}",
-            name.len(),
+            "unexpected primary gate: {error:?}"
         );
     }
 

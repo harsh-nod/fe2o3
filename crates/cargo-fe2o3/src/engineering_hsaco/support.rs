@@ -59,6 +59,8 @@ struct Provider {
 
 #[derive(Serialize)]
 struct FixedOptions {
+    mir_normalization: &'static str,
+    extraction_rustflags: String,
     optimization: &'static str,
     strip_debug: bool,
     verify_each: bool,
@@ -146,6 +148,8 @@ pub(super) fn canonical_manifest(
         },
         providers,
         options: FixedOptions {
+            mir_normalization: options.mir_normalization.name(),
+            extraction_rustflags: extraction_rustflags(options.profile, options.mir_normalization),
             optimization: "O2",
             strip_debug: true,
             verify_each: true,

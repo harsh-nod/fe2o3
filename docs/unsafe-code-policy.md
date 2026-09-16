@@ -143,6 +143,38 @@ This review changes only the inventory to six blocks/five unsafe functions in
 `engineering_gfx950_ordered_batch.rs`. The library, doctest and inventory
 commands above remain required; no runtime behavior is changed.
 
+## Consuming Read-Only Allocations
+
+The earlier V29 `fe2o3-host/src/generated_kfd_atomic_slice_v1.rs` wrapper has
+one reviewed unsafe function and one unsafe block. Its private writeback
+callback reconstructs only the original `AtomicU32` slice under the retained
+exclusive host lease. The completion caller validates every buffer's access
+and exact byte length before any writeback, and the callback invocation checks
+the length again. Decoded `u32` values are applied with atomic stores; atomic
+object representations are not copied. This inventory correction adds no
+coherence proof or dispatch authority: the protected atomic path still rejects
+an invocation without its runtime memory-contract join.
+
+`fe2o3-device/src/read_only_allocation.rs` adds three reviewed unsafe blocks.
+The implementation block performs a pointer offset and value read only after
+checking `index < len`. Alignment, initialization, extent, and allocation
+lifetime come from the consumed `DisjointSlice` constructor contract; the
+sealed element set is `u16` and `f32`. The local view cannot construct another
+allocation or expose mutable/raw access. Device compilation additionally
+requires an exact-root, whole-kernel no-write/escape audit: a consuming Rust
+call in one invocation alone cannot exclude writes by another invocation.
+Optimized MIR may spell that exact trusted constructor operand as `Copy` of
+the original exclusive argument; the compiler still consumes its custody and
+rejects later source reuse. This does not authorize owning-copy assignments.
+The existing exclusive host lease and conservative read-write descriptor are
+retained.
+
+The other two blocks are host-only test constructors. One exclusively borrows
+a live array; the other uses an aligned dangling pointer for an empty extent
+and verifies total fallback behavior without any memory read. These tests and
+the unsafe inventory do not prove GPU coherence, tensor publication, or launch
+authority. No generic unsafe allowance is added for the new source API.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

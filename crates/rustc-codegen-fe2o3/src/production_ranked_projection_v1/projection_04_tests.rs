@@ -109,6 +109,8 @@
             view,
             indices: vec![ProductionRankedValueV1::Local(invocation)],
             checked_success: None,
+            failure: GuardedAccessFailureV1::Trap,
+            atomic: None,
             comparisons: vec![(
                 ProductionRankedValueV1::Local(invocation),
                 ProductionRankedValueV1::Argument(0),
@@ -158,10 +160,13 @@
         assert_eq!(projected.checks.len(), 1);
         assert_eq!(projected.checks[0].access_block, 1);
         assert_eq!(
+            projected.checks[0].index_identity,
+            ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4))
+        );
+        assert_eq!(
             projected.checks[0].extent_source,
             ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(1))
         );
-        assert_eq!(projected.checks[0].index_local.index(), 4);
         assert_eq!(
             projected.checks[0].index,
             ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0))
@@ -296,7 +301,7 @@
                 &projected.checks,
                 1,
                 ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(3)),
-                SemanticLocalIdV1::from_index(4),
+                ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4)),
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a dynamic slice access without its exact Rust bounds-check predecessor"
@@ -335,10 +340,13 @@
             assert_eq!(projected.checks.len(), 1);
             assert_eq!(projected.checks[0].access_block, 1);
             assert_eq!(
+                projected.checks[0].index_identity,
+                ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(4))
+            );
+            assert_eq!(
                 projected.checks[0].extent_source,
                 ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(1))
             );
-            assert_eq!(projected.checks[0].index_local.index(), 4);
             assert!(!projected.checks[0].must_authorize_access);
             assert_eq!(operations.len(), 2);
             assert_eq!(next_value, 2);
@@ -497,6 +505,8 @@
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
+                failure: GuardedAccessFailureV1::Trap,
+                atomic: None,
                 comparisons: vec![(
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),
@@ -616,6 +626,8 @@
             view,
             indices: vec![ProductionRankedValueV1::Local(shifted)],
             checked_success: None,
+            failure: GuardedAccessFailureV1::Trap,
+            atomic: None,
             comparisons: vec![
                 (
                     ProductionRankedValueV1::Local(invocation),

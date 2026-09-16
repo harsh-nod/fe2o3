@@ -309,7 +309,7 @@ fn dynamic_local_array_ranked_guard_retains_exact_literal_and_kind() {
         &checks.checks,
         1,
         ProjectedBoundsExtentSourceV1::FixedArray(4),
-        SemanticLocalIdV1::from_index(2),
+        ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(2)),
     )
     .unwrap();
     assert!(check.must_authorize_access);
@@ -325,8 +325,13 @@ fn dynamic_local_array_ranked_guard_retains_exact_literal_and_kind() {
         ProjectedBoundsExtentSourceV1::Slice(SemanticLocalIdV1::from_index(1)),
     ] {
         assert!(
-            projected_bounds_check(&checks.checks, 1, source, SemanticLocalIdV1::from_index(2))
-                .is_err()
+            projected_bounds_check(
+                &checks.checks,
+                1,
+                source,
+                ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(2))
+            )
+            .is_err()
         );
     }
     let duplicated = vec![check, check];
@@ -335,7 +340,7 @@ fn dynamic_local_array_ranked_guard_retains_exact_literal_and_kind() {
             &duplicated,
             1,
             check.extent_source,
-            SemanticLocalIdV1::from_index(2)
+            ProjectedBoundsIndexIdentityV1::Local(SemanticLocalIdV1::from_index(2))
         )
         .is_err()
     );

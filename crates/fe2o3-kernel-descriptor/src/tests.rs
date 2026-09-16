@@ -1,3 +1,5 @@
+include!("atomic_slice_tests.rs");
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use fe2o3_amd_target::AmdTargetId;
@@ -932,12 +934,14 @@ fn v1_represents_only_closed_typed_memory_kinds() {
         SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U64),
         SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::U64),
         SourceTypeDescriptorV1::global_mut_pointer(ScalarTypeV1::U64),
+        SourceTypeDescriptorV1::shared_atomic_slice_u32(),
     ];
-    assert_eq!(supported_kinds.len(), 4);
+    assert_eq!(supported_kinds.len(), 5);
     assert!(supported_kinds[0].is_scalar());
     assert!(supported_kinds[1].is_shared_slice());
     assert!(supported_kinds[2].is_disjoint_slice());
     assert!(supported_kinds[3].is_global_mut_pointer());
+    assert!(supported_kinds[4].is_shared_atomic_slice_u32());
 }
 
 #[test]

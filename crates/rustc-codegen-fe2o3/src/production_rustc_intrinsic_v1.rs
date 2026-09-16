@@ -8,9 +8,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use rustc_abi::ExternAbi;
 use rustc_hir::{Mutability, Safety};
+use rustc_middle::mir::Operand;
 use rustc_middle::ty::{
     self, ConstKind, FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, TyKind, UintTy,
 };
+use rustc_span::Spanned;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AtomicRmwIntrinsicShapeV1 {
@@ -31,6 +33,12 @@ pub(crate) enum ProductionRustcIntrinsicOperationV1 {
         access: SemanticAtomicAccessV1,
     },
     FabsF32,
+    AtomicLoad {
+        access: SemanticAtomicAccessV1,
+    },
+    AtomicStore {
+        access: SemanticAtomicAccessV1,
+    },
 }
 
 impl ProductionRustcIntrinsicOperationV1 {
@@ -38,6 +46,8 @@ impl ProductionRustcIntrinsicOperationV1 {
         match self {
             Self::AtomicRmw { .. } => 0,
             Self::FabsF32 => 1,
+            Self::AtomicLoad { .. } => 2,
+            Self::AtomicStore { .. } => 3,
         }
     }
 
@@ -46,7 +56,23 @@ impl ProductionRustcIntrinsicOperationV1 {
     ) -> Option<(SemanticAtomicRmwOpV1, SemanticAtomicAccessV1)> {
         match self {
             Self::AtomicRmw { operation, access } => Some((operation, access)),
+            Self::FabsF32 | Self::AtomicLoad { .. } | Self::AtomicStore { .. } => None,
+        }
+    }
+
+    pub(crate) const fn atomic_access(self) -> Option<SemanticAtomicAccessV1> {
+        match self {
+            Self::AtomicRmw { access, .. }
+            | Self::AtomicLoad { access }
+            | Self::AtomicStore { access } => Some(access),
             Self::FabsF32 => None,
+        }
+    }
+
+    pub(crate) const fn call_arity(self) -> usize {
+        match self {
+            Self::AtomicLoad { .. } | Self::FabsF32 => 1,
+            Self::AtomicRmw { .. } | Self::AtomicStore { .. } => 2,
         }
     }
 }
@@ -55,6 +81,7 @@ impl ProductionRustcIntrinsicOperationV1 {
 pub(crate) struct ProductionRustcIntrinsicClassificationV1<'tcx> {
     pub(crate) operation: ProductionRustcIntrinsicOperationV1,
     pub(crate) element_type: Ty<'tcx>,
+    pub(crate) source_call_arity: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +101,8 @@ pub(crate) enum ProductionRustcIntrinsicErrorV1 {
     FabsResultType,
     OrderingArgument,
     UnsupportedOrdering,
+    WrapperSignature,
+    WrapperBody,
 }
 
 impl fmt::Display for ProductionRustcIntrinsicErrorV1 {
@@ -96,8 +125,111 @@ impl fmt::Display for ProductionRustcIntrinsicErrorV1 {
             Self::FabsResultType => "fabs intrinsic whose result is not its f32 type argument",
             Self::OrderingArgument => "atomic intrinsic without a concrete ordering argument",
             Self::UnsupportedOrdering => "atomic intrinsic with an unsupported ordering value",
+            Self::WrapperSignature => "reviewed core atomic wrapper has an unexpected signature",
+            Self::WrapperBody => "reviewed core atomic wrapper has an unexpected MIR effect graph",
         })
     }
+}
+
+include!("production_rustc_intrinsic_v1/atomic_wrapper_body_v1.rs");
+include!("production_rustc_intrinsic_v1/branch_hint_origin_v1.rs");
+
+/// Normalizes reviewed effectful core wrappers only when their ordering is an
+/// exact constant. This is not pure-call admission: the resulting recipe emits
+/// an atomic effect and commits the wrapper's compiler-owned MIR definition.
+pub(crate) fn classify_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    arguments: &[Spanned<Operand<'tcx>>],
+) -> Result<Option<ProductionRustcIntrinsicClassificationV1<'tcx>>, ProductionRustcIntrinsicErrorV1>
+{
+    if let Some(intrinsic) = classify(tcx, instance)? {
+        if arguments.len() != intrinsic.operation.call_arity() {
+            return Err(ProductionRustcIntrinsicErrorV1::GenericArity);
+        }
+        return Ok(Some(intrinsic));
+    }
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || !is_reviewed_core_function_v1(tcx, instance)
+        || !tcx.is_mir_available(instance.def_id())
+    {
+        return Ok(None);
+    }
+    let load = match tcx.def_path_str(instance.def_id()).as_str() {
+        "core::sync::atomic::atomic_load" => true,
+        "core::sync::atomic::atomic_store" => false,
+        _ => return Ok(None),
+    };
+    let [element] = instance.args.as_slice() else {
+        return Err(ProductionRustcIntrinsicErrorV1::GenericArity);
+    };
+    let element_type = element
+        .as_type()
+        .ok_or(ProductionRustcIntrinsicErrorV1::ElementTypeArgument)?;
+    if !supported_atomic_integer_v1(element_type) {
+        return Err(ProductionRustcIntrinsicErrorV1::UnsupportedIntegerType);
+    }
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let arity = if load { 2 } else { 3 };
+    if signature.safety != Safety::Unsafe
+        || signature.abi != ExternAbi::Rust
+        || signature.c_variadic
+        || signature.inputs().len() != arity
+        || arguments.len() != arity
+        || signature.output() != if load { element_type } else { tcx.types.unit }
+        || !matches!(signature.inputs()[0].kind(), TyKind::RawPtr(pointee, mutability)
+            if *pointee == element_type && *mutability == if load { Mutability::Not } else { Mutability::Mut })
+        || (!load && signature.inputs()[1] != element_type)
+    {
+        return Err(ProductionRustcIntrinsicErrorV1::WrapperSignature);
+    }
+    let ordering_ty = signature.inputs()[arity - 1];
+    let TyKind::Adt(ordering_definition, ordering_arguments) = ordering_ty.kind() else {
+        return Err(ProductionRustcIntrinsicErrorV1::WrapperSignature);
+    };
+    if ordering_definition.did().krate != instance.def_id().krate
+        || tcx
+            .def_path(ordering_definition.did())
+            .to_string_no_crate_verbose()
+            != "::sync::atomic::Ordering"
+        || !ordering_definition.is_enum()
+        || !ordering_arguments.is_empty()
+    {
+        return Err(ProductionRustcIntrinsicErrorV1::WrapperSignature);
+    }
+    let Operand::Constant(constant) = &arguments[arity - 1].node else {
+        return Err(ProductionRustcIntrinsicErrorV1::OrderingArgument);
+    };
+    if constant.const_.ty() != ordering_ty {
+        return Err(ProductionRustcIntrinsicErrorV1::OrderingArgument);
+    }
+    let value = constant
+        .const_
+        .try_eval_scalar_int(tcx, ty::TypingEnv::fully_monomorphized())
+        .ok_or(ProductionRustcIntrinsicErrorV1::OrderingArgument)?;
+    let discriminant = u64::try_from(value.to_bits(value.size()))
+        .map_err(|_| ProductionRustcIntrinsicErrorV1::OrderingArgument)?;
+    let ordering = atomic_ordering_from_discriminant_v1(discriminant)
+        .ok_or(ProductionRustcIntrinsicErrorV1::UnsupportedOrdering)?;
+    if !load_store_ordering_supported_v1(load, ordering) {
+        return Err(ProductionRustcIntrinsicErrorV1::UnsupportedOrdering);
+    }
+    if !reviewed_atomic_wrapper_body_v1(tcx, instance, load, element_type) {
+        return Err(ProductionRustcIntrinsicErrorV1::WrapperBody);
+    }
+    let access = SemanticAtomicAccessV1::new(ordering, SemanticAtomicScopeV1::System);
+    Ok(Some(ProductionRustcIntrinsicClassificationV1 {
+        operation: if load {
+            ProductionRustcIntrinsicOperationV1::AtomicLoad { access }
+        } else {
+            ProductionRustcIntrinsicOperationV1::AtomicStore { access }
+        },
+        element_type,
+        source_call_arity: arity,
+    }))
 }
 
 /// Classifies only exact rustc compiler-generated intrinsic instances.
@@ -140,6 +272,38 @@ pub(crate) fn classify<'tcx>(
         return Ok(Some(ProductionRustcIntrinsicClassificationV1 {
             operation: ProductionRustcIntrinsicOperationV1::FabsF32,
             element_type,
+            source_call_arity: 1,
+        }));
+    }
+    if matches!(intrinsic.name.as_str(), "atomic_load" | "atomic_store") {
+        let [element, ordering] = instance.args.as_slice() else {
+            return Err(ProductionRustcIntrinsicErrorV1::GenericArity);
+        };
+        let element_type = element
+            .as_type()
+            .ok_or(ProductionRustcIntrinsicErrorV1::ElementTypeArgument)?;
+        if !supported_atomic_integer_v1(element_type) {
+            return Err(ProductionRustcIntrinsicErrorV1::UnsupportedIntegerType);
+        }
+        let ordering = ordering
+            .as_const()
+            .and_then(|value| fieldless_enum_discriminant_v1(tcx, value))
+            .ok_or(ProductionRustcIntrinsicErrorV1::OrderingArgument)?;
+        let ordering = atomic_ordering_from_discriminant_v1(ordering)
+            .ok_or(ProductionRustcIntrinsicErrorV1::UnsupportedOrdering)?;
+        let load = intrinsic.name.as_str() == "atomic_load";
+        if !load_store_ordering_supported_v1(load, ordering) {
+            return Err(ProductionRustcIntrinsicErrorV1::UnsupportedOrdering);
+        }
+        let access = SemanticAtomicAccessV1::new(ordering, SemanticAtomicScopeV1::System);
+        return Ok(Some(ProductionRustcIntrinsicClassificationV1 {
+            operation: if load {
+                ProductionRustcIntrinsicOperationV1::AtomicLoad { access }
+            } else {
+                ProductionRustcIntrinsicOperationV1::AtomicStore { access }
+            },
+            element_type,
+            source_call_arity: if load { 1 } else { 2 },
         }));
     }
     let rule = atomic_rmw_intrinsic_rule_v1(intrinsic.name.as_str())
@@ -180,6 +344,7 @@ pub(crate) fn classify<'tcx>(
             access: SemanticAtomicAccessV1::new(ordering, SemanticAtomicScopeV1::System),
         },
         element_type,
+        source_call_arity: 2,
     }))
 }
 
@@ -284,7 +449,9 @@ fn reviewed_core_atomic_wrapper_shape_v1(path: &str) -> Option<AtomicRmwIntrinsi
         | "core::sync::atomic::atomic_max"
         | "core::sync::atomic::atomic_min"
         | "core::sync::atomic::atomic_umax"
-        | "core::sync::atomic::atomic_umin" => Some(AtomicRmwIntrinsicShapeV1::OneType),
+        | "core::sync::atomic::atomic_umin"
+        | "core::sync::atomic::atomic_load"
+        | "core::sync::atomic::atomic_store" => Some(AtomicRmwIntrinsicShapeV1::OneType),
         "core::sync::atomic::atomic_add"
         | "core::sync::atomic::atomic_sub"
         | "core::sync::atomic::atomic_and"
@@ -371,6 +538,8 @@ fn is_reviewed_core_safe_atomic_rmw_method_v1<'tcx>(
                 | "fetch_xor"
                 | "fetch_max"
                 | "fetch_min"
+                | "load"
+                | "store"
         )
         || !tcx.is_mir_available(instance.def_id())
     {
@@ -385,8 +554,14 @@ fn is_reviewed_core_safe_atomic_rmw_method_v1<'tcx>(
     {
         return false;
     }
-    let [receiver, value, ordering] = signature.inputs() else {
-        return false;
+    let (receiver, value, ordering) = match signature.inputs() {
+        [receiver, ordering] if tcx.item_name(instance.def_id()).as_str() == "load" => {
+            (receiver, None, ordering)
+        }
+        [receiver, value, ordering] if tcx.item_name(instance.def_id()).as_str() != "load" => {
+            (receiver, Some(value), ordering)
+        }
+        _ => return false,
     };
     let TyKind::Ref(_, atomic, Mutability::Not) = *receiver.kind() else {
         return false;
@@ -406,8 +581,13 @@ fn is_reviewed_core_safe_atomic_rmw_method_v1<'tcx>(
     atomic_definition.did().krate == instance.def_id().krate
         && tcx.def_path_str(atomic_definition.did()) == "core::sync::atomic::Atomic"
         && supported_atomic_integer_v1(atomic_element)
-        && *value == atomic_element
-        && signature.output() == atomic_element
+        && value.is_none_or(|value| *value == atomic_element)
+        && signature.output()
+            == if tcx.item_name(instance.def_id()).as_str() == "store" {
+                tcx.types.unit
+            } else {
+                atomic_element
+            }
         && ordering_definition.did().krate == instance.def_id().krate
         && tcx.item_name(ordering_definition.did()).as_str() == "Ordering"
         && ordering_definition.is_enum()
@@ -725,6 +905,16 @@ fn fieldless_enum_discriminant_v1<'tcx>(tcx: TyCtxt<'tcx>, value: ty::Const<'tcx
     u64::try_from(definition.discriminant_for_variant(tcx, variant).val).ok()
 }
 
+const fn load_store_ordering_supported_v1(load: bool, ordering: SemanticAtomicOrderingV1) -> bool {
+    matches!(
+        ordering,
+        SemanticAtomicOrderingV1::Relaxed | SemanticAtomicOrderingV1::SequentiallyConsistent
+    ) || matches!(
+        (load, ordering),
+        (true, SemanticAtomicOrderingV1::Acquire) | (false, SemanticAtomicOrderingV1::Release)
+    )
+}
+
 const fn atomic_ordering_from_discriminant_v1(value: u64) -> Option<SemanticAtomicOrderingV1> {
     match value {
         0 => Some(SemanticAtomicOrderingV1::Relaxed),
@@ -898,12 +1088,54 @@ mod tests {
         }
         assert_eq!(
             reviewed_core_atomic_wrapper_shape_v1("core::sync::atomic::atomic_load"),
-            None
+            Some(AtomicRmwIntrinsicShapeV1::OneType)
         );
         assert_eq!(
             reviewed_core_atomic_wrapper_shape_v1("core::sync::atomic::atomic_nand"),
             None
         );
+    }
+
+    #[test]
+    fn atomic_load_store_ordering_and_identity_are_exact() {
+        use SemanticAtomicOrderingV1::*;
+        for ordering in [
+            Relaxed,
+            Release,
+            Acquire,
+            AcquireRelease,
+            SequentiallyConsistent,
+        ] {
+            assert_eq!(
+                load_store_ordering_supported_v1(true, ordering),
+                matches!(ordering, Relaxed | Acquire | SequentiallyConsistent)
+            );
+            assert_eq!(
+                load_store_ordering_supported_v1(false, ordering),
+                matches!(ordering, Relaxed | Release | SequentiallyConsistent)
+            );
+            let access = SemanticAtomicAccessV1::new(ordering, SemanticAtomicScopeV1::System);
+            let load = ProductionRustcIntrinsicOperationV1::AtomicLoad { access };
+            let store = ProductionRustcIntrinsicOperationV1::AtomicStore { access };
+            assert_eq!(load.atomic_access(), Some(access));
+            assert_eq!(store.atomic_access(), Some(access));
+            assert_eq!(load.call_arity(), 1);
+            assert_eq!(store.call_arity(), 2);
+            assert_ne!(load.operation_tag(), store.operation_tag());
+            assert_eq!(load.atomic_rmw(), None);
+            assert_eq!(store.atomic_rmw(), None);
+        }
+        assert_eq!(
+            reviewed_core_atomic_wrapper_shape_v1("core::sync::atomic::atomic_store"),
+            Some(AtomicRmwIntrinsicShapeV1::OneType)
+        );
+        for path in [
+            "user::atomic_load",
+            "core::sync::atomic::atomic_cxchg",
+            "core::sync::atomic::atomic_load_extra",
+        ] {
+            assert_eq!(reviewed_core_atomic_wrapper_shape_v1(path), None);
+        }
     }
 
     #[test]

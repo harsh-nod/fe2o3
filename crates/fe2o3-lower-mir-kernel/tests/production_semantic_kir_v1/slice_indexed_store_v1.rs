@@ -1,6 +1,9 @@
 use super::*;
 use fe2o3_kernel_ir::{AddressSpace, BasicBlock, Constant, MemoryAccess, ValueId};
 
+#[path = "slice_constant_index_v1.rs"]
+mod slice_constant_index_v1;
+
 #[derive(Clone, Copy)]
 enum IndexSource {
     Argument,
@@ -510,18 +513,26 @@ fn volatile_slice_store_keeps_its_existing_unsupported_boundary() {
 }
 
 #[test]
-fn slice_constant_index_projection_is_rejected_by_source_admission() {
-    assert!(matches!(
-        request(
-            IndexSource::Argument,
-            Effect::Assign,
-            SemanticMutabilityV1::Mutable,
-            true
+fn constant_slice_index_type_admission_does_not_grant_shared_or_volatile_store() {
+    for (effect, mutability) in [
+        (Effect::Assign, SemanticMutabilityV1::Immutable),
+        (Effect::Store, SemanticMutabilityV1::Immutable),
+        (Effect::VolatileStore, SemanticMutabilityV1::Mutable),
+    ] {
+        let semantic = request(IndexSource::Argument, effect, mutability, true)
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .unwrap();
+        let source = ProductionSemanticMirOwnerV1::try_new(
+            semantic,
+            ProductionSemanticMirLimitsV1::default(),
         )
-        .admit_current_production(SemanticMirLimitsV1::default()),
-        Err(SemanticMirErrorV1::InvalidTypeOperation {
-            operation: SemanticTypeOperationV1::Projection,
-            ..
-        })
-    ));
+        .unwrap();
+        assert!(
+            ProductionSemanticKirOwnerV1::try_lower(
+                source,
+                ProductionSemanticKirLimitsV1::default()
+            )
+            .is_err()
+        );
+    }
 }

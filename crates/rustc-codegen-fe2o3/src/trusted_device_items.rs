@@ -37,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xe0, 0xc7, 0xd0, 0xa9, 0xa9, 0x95, 0xfc, 0x33, 0x6a, 0x5a, 0x75, 0xe1, 0x43, 0xd7, 0x48, 0xeb,
-    0x51, 0x19, 0x46, 0x46, 0xcb, 0xe5, 0x4f, 0xa3, 0x59, 0xa2, 0x58, 0x48, 0x93, 0x01, 0x85, 0x16,
+    0xc6, 0x76, 0xa0, 0x67, 0x39, 0x73, 0xdb, 0x28, 0x21, 0x21, 0x55, 0xcf, 0x82, 0xad, 0xbc, 0x98,
+    0x7d, 0x8f, 0x7d, 0x5c, 0x4a, 0xed, 0x60, 0x4d, 0x6e, 0x1a, 0x99, 0x87, 0xc8, 0x68, 0xdb, 0x10,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -258,6 +258,10 @@ pub(crate) enum TrustedDeviceItem {
     StridedReadView2DError,
     StridedReadView2DFromSharedSlice,
     StridedReadView2DLoadOr,
+    ReadOnlyAllocation,
+    DisjointSliceIntoReadOnly,
+    ReadOnlyAllocationLen,
+    ReadOnlyAllocationLoadOr,
     DeviceGlobalMutPtrU32AsAtomic,
     DeviceGlobalMutPtrI32AsAtomic,
     DeviceGlobalMutPtrU64AsAtomic,
@@ -452,6 +456,26 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::StridedReadView2DLoadOr,
         "fe2o3_device_strided_read_view_2d_load_or_v1",
         "fe2o3_device::StridedReadView2D::load_or",
+    ),
+    (
+        TrustedDeviceItem::ReadOnlyAllocation,
+        "fe2o3_device_read_only_allocation_v1",
+        "fe2o3_device::ReadOnlyAllocation",
+    ),
+    (
+        TrustedDeviceItem::DisjointSliceIntoReadOnly,
+        "fe2o3_device_disjoint_slice_into_read_only_v1",
+        "fe2o3_device::DisjointSlice::into_read_only",
+    ),
+    (
+        TrustedDeviceItem::ReadOnlyAllocationLen,
+        "fe2o3_device_read_only_allocation_len_v1",
+        "fe2o3_device::ReadOnlyAllocation::len",
+    ),
+    (
+        TrustedDeviceItem::ReadOnlyAllocationLoadOr,
+        "fe2o3_device_read_only_allocation_load_or_v1",
+        "fe2o3_device::ReadOnlyAllocation::load_or",
     ),
     (
         TrustedDeviceItem::DeviceGlobalMutPtr,
@@ -1593,6 +1617,18 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::StridedReadView2DLoadOr => {
             Some("fe2o3_device::views::{impl#4}::load_or")
         }
+        TrustedDeviceItem::ReadOnlyAllocation => {
+            Some("fe2o3_device::read_only_allocation::ReadOnlyAllocation")
+        }
+        TrustedDeviceItem::DisjointSliceIntoReadOnly => {
+            Some("fe2o3_device::read_only_allocation::{impl#2}::into_read_only")
+        }
+        TrustedDeviceItem::ReadOnlyAllocationLen => {
+            Some("fe2o3_device::read_only_allocation::{impl#3}::len")
+        }
+        TrustedDeviceItem::ReadOnlyAllocationLoadOr => {
+            Some("fe2o3_device::read_only_allocation::{impl#3}::load_or")
+        }
         TrustedDeviceItem::ThreadIndex => Some("fe2o3_device::thread::ThreadIndex"),
         TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
         TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
@@ -2072,6 +2108,10 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::StridedReadView2DError
             | TrustedDeviceItem::StridedReadView2DFromSharedSlice
             | TrustedDeviceItem::StridedReadView2DLoadOr
+            | TrustedDeviceItem::ReadOnlyAllocation
+            | TrustedDeviceItem::DisjointSliceIntoReadOnly
+            | TrustedDeviceItem::ReadOnlyAllocationLen
+            | TrustedDeviceItem::ReadOnlyAllocationLoadOr
     )
 }
 
@@ -3296,6 +3336,10 @@ mod tests {
     #[test]
     fn checked_view_capabilities_reject_type_constructor_and_load_lookalikes() {
         for item in [
+            TrustedDeviceItem::ReadOnlyAllocation,
+            TrustedDeviceItem::DisjointSliceIntoReadOnly,
+            TrustedDeviceItem::ReadOnlyAllocationLen,
+            TrustedDeviceItem::ReadOnlyAllocationLoadOr,
             TrustedDeviceItem::StridedReadView2D,
             TrustedDeviceItem::StridedReadView2DError,
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
@@ -3446,7 +3490,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("e0c7d0a9a995fc336a5a75e143d748eb51194646cbe54fa359a2584893018516")
+            digest("c676a0673973db28212155cf82adbc987d8f7d5c4aed604d6e1a9987c868db10")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3851,6 +3895,10 @@ mod tests {
     #[test]
     fn semantic_registry_is_complete_and_unique() {
         let items = [
+            TrustedDeviceItem::ReadOnlyAllocation,
+            TrustedDeviceItem::DisjointSliceIntoReadOnly,
+            TrustedDeviceItem::ReadOnlyAllocationLen,
+            TrustedDeviceItem::ReadOnlyAllocationLoadOr,
             TrustedDeviceItem::KernelError,
             TrustedDeviceItem::KernelContext,
             TrustedDeviceItem::KernelContextIssue,

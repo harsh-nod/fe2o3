@@ -260,6 +260,7 @@ fn build_identity(
     let mut ownership_contracts = 0_usize;
     let mut effect_refinement_contracts = 0_usize;
     let mut index_lt_branch_candidates = 0_usize;
+    let mut memory_bounds_guard_candidates = 0_usize;
     let mut semantic_definitions = 0_usize;
     let mut semantic_refinement_contracts = 0_usize;
     for operation in prescan.operations.iter().flatten().copied() {
@@ -310,6 +311,14 @@ fn build_identity(
                 .downcast_ref::<IndexLessThanBranchArgsOp>()
                 .is_some(),
         );
+        memory_bounds_guard_candidates += usize::from(
+            operation
+                .downcast_ref::<dialect_kernel::IndexLessThanBranchOp>()
+                .is_some()
+                || operation
+                    .downcast_ref::<IndexLessThanBranchArgsOp>()
+                    .is_some(),
+        );
         semantic_definitions += usize::from(is_semantic_refinement_definition_v1(&*operation));
         semantic_refinement_contracts +=
             usize::from(is_semantic_refinement_contract_v1(&*operation));
@@ -336,6 +345,7 @@ fn build_identity(
         ownership_contracts,
         effect_refinement_contracts,
         index_lt_branch_candidates,
+        memory_bounds_guard_candidates,
         semantic_definitions,
         semantic_refinement_contracts,
         native_switch_verification_work: preflight.native_switch_verification_work,

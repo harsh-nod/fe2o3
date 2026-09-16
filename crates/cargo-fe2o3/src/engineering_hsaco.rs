@@ -80,9 +80,25 @@ pub(crate) fn command(args: &[OsString]) -> ExitCode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MirNormalizationV1 {
+    Minimal,
+    OptimizedInline,
+}
+
+impl MirNormalizationV1 {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal-v1",
+            Self::OptimizedInline => "optimized-inline-v1",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Options {
     profile: ProductionAmdTargetProfileV1,
+    mir_normalization: MirNormalizationV1,
     crate_name: String,
     output_root: PathBuf,
     extractor: FileClaim,
@@ -290,6 +306,7 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     let mut code_object_version = None;
     let mut timeout_seconds = None;
     let mut max_output_bytes = None;
+    let mut mir_normalization = None;
     let mut providers = Vec::new();
     let mut cargo_args = Vec::new();
     let mut args = args.iter();
@@ -338,6 +355,7 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--code-object-version" => set_once_string(&mut code_object_version, value, argument)?,
             "--timeout-seconds" => set_once_u64(&mut timeout_seconds, value, argument)?,
             "--max-output-bytes" => set_once_u64(&mut max_output_bytes, value, argument)?,
+            "--mir-normalization" => set_once_string(&mut mir_normalization, value, argument)?,
             "--provider" => providers.push(parse_provider(value, current_dir)?),
             _ => {
                 return Err(format!(
@@ -408,8 +426,19 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         "--llvm-build-id",
     )?;
 
+    let mir_normalization = match mir_normalization.as_deref().unwrap_or("minimal-v1") {
+        "minimal-v1" => MirNormalizationV1::Minimal,
+        "optimized-inline-v1" => MirNormalizationV1::OptimizedInline,
+        _ => {
+            return Err(
+                "--mir-normalization must be exactly minimal-v1 or optimized-inline-v1".to_owned(),
+            );
+        }
+    };
+
     Ok(Options {
         profile,
+        mir_normalization,
         crate_name,
         output_root,
         extractor: required_file_claim(
@@ -748,7 +777,10 @@ fn conflicting_environment_name(name: &OsStr) -> bool {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target <gfx942:xnack-|gfx950:xnack-> --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    concat!(
+        "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target <gfx942:xnack-|gfx950:xnack-> --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] ",
+        "[--mir-normalization <minimal-v1|optimized-inline-v1>] -- [Cargo package/feature args]",
+    )
 }
 
 #[cfg(test)]
@@ -1050,7 +1082,7 @@ mod tests {
             ]);
             let options = parse(&args, &root).unwrap();
             assert_eq!(options.profile, profile);
-            let flags = extraction_rustflags(options.profile);
+            let flags = extraction_rustflags(options.profile, options.mir_normalization);
             let flags: Vec<_> = flags.split_whitespace().collect();
             let cpus: Vec<_> = flags
                 .iter()
@@ -1070,6 +1102,50 @@ mod tests {
             );
             assert!(flags.contains(&"-Copt-level=0"));
         }
+    }
+
+    #[test]
+    fn optimized_inline_normalization_is_explicit_and_has_fixed_flags() {
+        let root = env::temp_dir();
+        let mut args = base_args(&root);
+        let delimiter = args.iter().position(|value| value == "--").unwrap();
+        args.splice(
+            delimiter..delimiter,
+            ["--mir-normalization".into(), "optimized-inline-v1".into()],
+        );
+        let options = parse(&args, &root).unwrap();
+        assert_eq!(
+            options.mir_normalization,
+            MirNormalizationV1::OptimizedInline
+        );
+        for profile in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            assert_eq!(
+                extraction_rustflags(profile, options.mir_normalization),
+                format!(
+                    "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu={} -Ctarget-feature={}",
+                    profile.cpu(),
+                    profile.rustc_features()
+                )
+            );
+        }
+        args[delimiter + 1] = "arbitrary-rustflags".into();
+        assert!(
+            parse(&args, &root)
+                .unwrap_err()
+                .contains("--mir-normalization must be exactly")
+        );
+        args[delimiter + 1] = "minimal-v1".into();
+        args.splice(
+            delimiter..delimiter,
+            ["--mir-normalization".into(), "minimal-v1".into()],
+        );
+        assert!(
+            parse(&args, &root).is_err(),
+            "duplicate normalization must fail closed"
+        );
     }
 
     #[test]

@@ -43,6 +43,10 @@ pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 // V16-V26 belong to incompatible unpublished capability drafts; V27 is held
 // for the independently coordinated numerical-relation contract.
 pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
+/// V29 retains genuine core AtomicU32 identity without changing older encodings.
+pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
+/// V30 retains the consuming read-only allocation terminals.
+pub const INERT_SEMANTIC_MIR_VERSION_V30: u16 = 30;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -66,6 +70,8 @@ pub enum SemanticMirWireVersionV1 {
     V14,
     V15,
     V28,
+    V29,
+    V30,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -86,6 +92,8 @@ impl SemanticMirWireVersionV1 {
             Self::V14 => INERT_SEMANTIC_MIR_VERSION_V14,
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
+            Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
+            Self::V30 => INERT_SEMANTIC_MIR_VERSION_V30,
         }
     }
 
@@ -106,6 +114,8 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V14 => Some(Self::V14),
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
+            INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
+            INERT_SEMANTIC_MIR_VERSION_V30 => Some(Self::V30),
             _ => None,
         }
     }
@@ -1871,6 +1881,8 @@ pub enum SemanticRustTypeKindV1 {
     #[default]
     Ordinary,
     Str,
+    /// Compiler-authenticated pinned-core Atomic<u32>; its storage stays aggregate.
+    CoreAtomicU32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5579,6 +5591,20 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         view: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
     },
+    /// Consumes an exclusive allocation into a local, non-duplicable read view.
+    DisjointSliceIntoReadOnly {
+        slice: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
+    ReadOnlyAllocationLen {
+        view: SemanticTypeIdV1,
+    },
+    /// A failed bounds predicate returns the fallback without a memory effect.
+    ReadOnlyAllocationLoadOr {
+        view: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
     /// Creates a typed zero accumulator associated with an authenticated lane.
     F32MatrixAccumulatorZero {
         lane: SemanticTypeIdV1,
@@ -6252,6 +6278,21 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V28, limits)
     }
 
+    /// Admits V29's retained genuine-core AtomicU32 nominal classification.
+    pub fn admit_exact_v29(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V29, limits)
+    }
+
+    pub fn admit_exact_v30(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V30, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6260,7 +6301,9 @@ impl InertSemanticMirRequestV1 {
     /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
     /// V14 for checked disjoint-block component projection, and V15 for checked
     /// column-major BF16 B operands. V28 retains RustCall tuple-field locals
-    /// and the unit spelling of an empty RustCall source tuple.
+    /// and the unit spelling of an empty RustCall source tuple. V29 retains
+    /// genuine-core AtomicU32 identity without changing the intrinsic grammar.
+    /// V30 adds consuming read-only allocation terminals, not launch authority.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7874,6 +7917,9 @@ fn record_intrinsic_capability_claims(
         SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
             claims.claim_grid_leader(grid_leader)
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly { slice, .. } => {
+            claims.claim_mapping(slice, SemanticDisjointIndexSpaceV1::Index1d)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
@@ -7918,6 +7964,8 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { .. }
         | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
         | SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
@@ -8497,6 +8545,11 @@ fn compiler_intrinsic_signature_matches(
                 && output == element
                 && strided_read_view_type_matches(request, view, element)
                 && supported_read_view_scalar_type(request, element)
+        }
+        operation @ (SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly { .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. }) => {
+            read_only_allocation_signature_matches_v30(request, operation, inputs, output)
         }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane,
@@ -9712,6 +9765,9 @@ fn ensure_identity_order(
     Ok(())
 }
 
+include!("semantic_mir_v1/core_atomic_u32_v29.rs");
+include!("semantic_mir_v1/read_only_allocation_v30.rs");
+
 fn validate_type(
     context: &mut ValidationContextV1<'_>,
     id: SemanticTypeIdV1,
@@ -9778,6 +9834,9 @@ fn validate_type(
             || ty.layout.randomization_seed != 0)
     {
         return Err(SemanticMirErrorV1::InvalidTypeLayout);
+    }
+    if ty.rust_type_kind == SemanticRustTypeKindV1::CoreAtomicU32 {
+        validate_core_atomic_u32_v29(context, id)?;
     }
     let location = SemanticMirLocationV1::Type(id);
     match &ty.shape {
@@ -14433,16 +14492,26 @@ fn validate_place(
                     }
                 }
             }
-            SemanticProjectionKindV1::ConstantIndex { minimum_length, .. } => {
-                let SemanticTypeShapeV1::Array { element, length } =
-                    type_shape(context, current_type)
-                else {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
-                };
-                if minimum_length > *length {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
+            SemanticProjectionKindV1::ConstantIndex {
+                minimum_length,
+                from_end,
+                ..
+            } => {
+                match type_shape(context, current_type) {
+                    SemanticTypeShapeV1::Array { element, length } if minimum_length <= *length => {
+                        *element
+                    }
+                    // MIR's minimum length is not runtime bounds authority. Ranked
+                    // projection must authenticate the literal against the slice's
+                    // actual extent and the exact controlling success edge.
+                    SemanticTypeShapeV1::Slice { element } if !from_end => *element,
+                    _ => {
+                        return invalid_type_operation(
+                            SemanticTypeOperationV1::Projection,
+                            location,
+                        );
+                    }
                 }
-                *element
             }
             SemanticProjectionKindV1::Subslice { from, to, from_end } => {
                 let SemanticTypeShapeV1::Array { element, length } =
@@ -15991,6 +16060,19 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(view);
             pending.push_back(element);
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
+            slice,
+            view,
+            element,
+        } => {
+            pending.extend([slice, view, element]);
+        }
+        SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { view } => {
+            pending.push_back(view);
+        }
+        SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { view, element } => {
+            pending.extend([view, element]);
+        }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane, fragment, ..
         } => {
@@ -16644,6 +16726,13 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if request.callables.iter().any(|callable| {
+        matches!(callable,
+        SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }
+            if is_read_only_allocation_intrinsic_v30(*operation))
+    }) {
+        return SemanticMirWireVersionV1::V30;
+    }
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
     let uses_scan = request.callables.iter().any(|callable| {
@@ -16664,7 +16753,15 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             }
         )
     });
-    let mut required = SemanticMirWireVersionV1::V2;
+    let mut required = if request
+        .types
+        .iter()
+        .any(|ty| ty.rust_type_kind == SemanticRustTypeKindV1::CoreAtomicU32)
+    {
+        SemanticMirWireVersionV1::V29
+    } else {
+        SemanticMirWireVersionV1::V2
+    };
     let unit_rust_call = |abi: &SemanticFunctionAbiV1| {
         abi.extern_abi() == SemanticExternAbiV1::RustCall
             && abi
@@ -16688,7 +16785,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         SemanticCallableDeclV1::CompilerIntrinsic { binding, .. }
         | SemanticCallableDeclV1::DeviceFfiImport { binding, .. } => unit_rust_call(&binding.abi),
     }) {
-        required = SemanticMirWireVersionV1::V28;
+        required = required.max(SemanticMirWireVersionV1::V28);
     }
     if request.callables.iter().any(|callable| {
         matches!(
@@ -17006,6 +17103,13 @@ fn encode_type(
     encode_optional_pointee_info(writer, ty.abi_properties.second_pointee)?;
     if ty.rust_type_kind == SemanticRustTypeKindV1::Str {
         return writer.u8(13);
+    }
+    if ty.rust_type_kind == SemanticRustTypeKindV1::CoreAtomicU32 {
+        let SemanticTypeShapeV1::Aggregate(fields) = &ty.shape else {
+            return Err(SemanticMirErrorV1::InvalidTypeLayout);
+        };
+        writer.u8(14)?;
+        return encode_type_list(writer, fields);
     }
     match &ty.shape {
         SemanticTypeShapeV1::Unit => writer.u8(0),
@@ -17699,8 +17803,9 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
-    // V28 changes entry-local roles, not the published intrinsic grammar.
-    let wire_version = if wire_version == SemanticMirWireVersionV1::V28 {
+    let declared_wire_version = wire_version;
+    // Existing operations keep the published V15 grammar in later schemas.
+    let wire_version = if wire_version >= SemanticMirWireVersionV1::V28 {
         SemanticMirWireVersionV1::V15
     } else {
         wire_version
@@ -18292,6 +18397,11 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(38)?;
             writer.u32(view.0)?;
             writer.u32(element.0)
+        }
+        operation @ (SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly { .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLen { .. }
+        | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. }) => {
+            encode_read_only_allocation_intrinsic_v30(writer, operation, declared_wire_version)
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
             input_witness,

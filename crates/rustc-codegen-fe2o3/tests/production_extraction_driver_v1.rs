@@ -1,3 +1,6 @@
+include!("production_extraction_driver_v1/atomic_slice_lowering_v1_tests.rs");
+include!("production_extraction_driver_v1/consumed_read_only_v1.rs");
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +18,7 @@ use fe2o3_verifier::{
 mod inert_invocation_v3;
 
 include!("production_extraction_driver_v1/generative_provider_tests.rs");
+include!("production_extraction_driver_v1/atomic_slice_admission_v1_tests.rs");
 
 struct ScratchTarget {
     path: PathBuf,
@@ -180,6 +184,285 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
                 "unsafe production fixture `{case}` omitted {expected:?}:\n{stderr}",
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn optimized_inlined_source_origins_retain_source_safety_checks() {
+    for (source, expected) in [
+        (
+            include_str!("fixtures/production-source-safety-device/local_unsafe_block.rs"),
+            "safe-signature local helper containing a user-provided unsafe block",
+        ),
+        (
+            include_str!("fixtures/production-source-safety-device/external_hir_gap.rs"),
+            "cannot authenticate the absence of user-provided unsafe blocks in external helper",
+        ),
+    ] {
+        let target = ScratchTarget::new();
+        // Both calls can disappear from optimized executable MIR. Their exact
+        // compiler-recorded inline origins must still receive the source audit.
+        let source = source.replace("#[inline(never)]", "#[inline(always)]");
+        let fixture = materialize_source_safety_fixture(&target, &source);
+        let output = Command::new(env!("CARGO"))
+            .current_dir(fixture)
+            .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
+            .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_source_safety_fixture")
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+                "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32")
+            .args(["check", "--offline", "-Zbuild-std=core", "--target", "amdgcn-amd-amdhsa", "--target-dir"])
+            .arg(target.path().join("cargo"))
+            .output()
+            .expect("run optimized source-safety fixture");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+        assert!(
+            !output.status.success(),
+            "inlined unsafe source unexpectedly passed:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(expected),
+            "wrong source-safety rejection:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("reachable call chain:"),
+            "missing root custody:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_atomic_rmw_inline_normalization_reaches_gfx950_llvm() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("rmw-gfx950.ll");
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "atomic-rmw",
+        &llvm_output,
+        "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+    assert!(
+        output.status.success(),
+        "ordinary RMW extraction failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("10 formal access(es)"),
+        "atomic effects lost:\n{stderr}"
+    );
+    assert!(stderr.contains("artifact/launch authority false"));
+    let llvm = std::fs::read_to_string(llvm_output).expect("source-derived LLVM");
+    assert_eq!(llvm.matches("atomicrmw ").count(), 10, "{llvm}");
+    for operation in [
+        "atomicrmw xchg ptr addrspace(1) %arg0, i32 1 seq_cst",
+        "atomicrmw sub ptr addrspace(1) %arg0, i32 3 acquire",
+        "atomicrmw and ptr addrspace(1) %arg0, i32 4 release",
+        "atomicrmw or ptr addrspace(1) %arg0, i32 5 acq_rel",
+        "atomicrmw xor ptr addrspace(1) %arg0, i32 6 seq_cst",
+        "atomicrmw umin ptr addrspace(1) %arg0, i32 7 monotonic",
+        "atomicrmw umax ptr addrspace(1) %arg0, i32 8 acquire",
+        "atomicrmw min ptr addrspace(1) %arg1, i32 -9 release",
+        "atomicrmw max ptr addrspace(1) %arg1, i32 10 acq_rel",
+    ] {
+        assert!(
+            llvm.contains(operation),
+            "lost operation/order/signedness {operation}:\n{llvm}"
+        );
+    }
+    let exchange = llvm
+        .lines()
+        .find(|line| line.contains("atomicrmw xchg "))
+        .unwrap();
+    let previous = exchange
+        .trim()
+        .split_once(" = ")
+        .expect("exchange result")
+        .0;
+    assert!(
+        llvm.contains(&format!(
+            "atomicrmw add ptr addrspace(1) %arg0, i32 {previous} monotonic"
+        )),
+        "atomic return value did not feed the following RMW:\n{llvm}",
+    );
+    assert!(
+        !llvm.contains("syncscope("),
+        "system coherence unexpectedly narrowed:\n{llvm}"
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_atomic_load_store_reaches_gfx950_llvm() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("load-store-gfx950.ll");
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "atomic-load-store",
+        &llvm_output,
+        "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+    assert!(
+        output.status.success(),
+        "ordinary load/store extraction failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("8 formal access(es)"),
+        "atomic effects lost:\n{stderr}"
+    );
+    assert!(stderr.contains("artifact/launch authority false"));
+    let llvm = std::fs::read_to_string(llvm_output).expect("source-derived LLVM");
+    assert_eq!(llvm.matches("load atomic ").count(), 4, "{llvm}");
+    assert_eq!(llvm.matches("store atomic ").count(), 4, "{llvm}");
+    assert!(
+        !llvm.contains("atomicrmw "),
+        "load/store must not be emulated by RMW: {llvm}"
+    );
+    assert!(
+        !llvm.contains("syncscope("),
+        "system scope narrowed: {llvm}"
+    );
+    for (argument, width, load_order, store_order) in [
+        (0, 32, "monotonic", "monotonic"),
+        (0, 32, "acquire", "release"),
+        (0, 32, "seq_cst", "seq_cst"),
+        (1, 32, "acquire", "release"),
+    ] {
+        let restriction = llvm
+            .lines()
+            .find(|line| {
+                line.contains(&format!(
+            "select i1 true, ptr addrspace(1) %arg{argument}, ptr addrspace(1) %arg{argument}"
+        ))
+            })
+            .unwrap_or_else(|| panic!("missing same-allocation access restriction: {llvm}"));
+        let pointer = restriction
+            .trim()
+            .split_once(" = ")
+            .expect("pointer restriction result")
+            .0;
+        let load = llvm
+            .lines()
+            .find(|line| {
+                line.contains(&format!(
+                    "load atomic i{width}, ptr addrspace(1) {pointer} {load_order},"
+                ))
+            })
+            .unwrap_or_else(|| panic!("missing exact load: {llvm}"));
+        let result = load.trim().split_once(" = ").expect("load SSA result").0;
+        assert!(
+            llvm.contains(&format!(
+                "store atomic i{width} {result}, ptr addrspace(1) %arg{argument} {store_order},"
+            )),
+            "load result did not feed exact ordered store: {llvm}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn wide_atomic_load_store_preserves_target_capability_rejection() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("wide-load-store-gfx950.ll");
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "atomic-load-store-wide",
+        &llvm_output,
+        "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+    assert!(
+        !output.status.success(),
+        "unbound 64-bit atomics were admitted"
+    );
+    assert!(
+        stderr.contains("FE2O3-ATOMIC-002")
+            && stderr.contains("64-bit Global atomic at System scope"),
+        "wrong rejection: {stderr}"
+    );
+    assert!(!llvm_output.exists(), "rejected source emitted LLVM");
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn atomic_load_store_wrapper_rejects_untrusted_or_nonconstant_contracts() {
+    let prefix = r#"#![no_std]
+#![allow(invalid_atomic_ordering)]
+use fe2o3_device::{kernel, DeviceGlobalMutPtr};
+use fe2o3_device::atomic::Ordering;
+"#;
+    for (case, body, expected) in [
+        (
+            "bad-order",
+            r#"
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn bad_order(pointer: DeviceGlobalMutPtr<u32>) {
+    let _ = pointer.as_atomic().load(Ordering::Release);
+}
+"#,
+            "atomic intrinsic with an unsupported ordering value",
+        ),
+        (
+            "dynamic-order",
+            r#"
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn dynamic_order(pointer: DeviceGlobalMutPtr<u32>, selector: u32) {
+    let ordering = if selector == 0 { Ordering::Relaxed } else { Ordering::Acquire };
+    let _ = pointer.as_atomic().load(ordering);
+}
+"#,
+            "atomic intrinsic without a concrete ordering argument",
+        ),
+        (
+            "lookalike-wrapper",
+            r#"
+mod core {
+    pub mod sync {
+        pub mod atomic {
+            #[inline(never)]
+            pub unsafe fn atomic_load(pointer: fe2o3_device::DeviceGlobalMutPtr<u32>) -> u32 {
+                pointer.as_atomic().load(fe2o3_device::atomic::Ordering::Acquire)
+            }
+        }
+    }
+}
+#[inline(never)]
+fn safe_bridge(pointer: DeviceGlobalMutPtr<u32>) -> u32 {
+    unsafe { core::sync::atomic::atomic_load(pointer) }
+}
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn lookalike_wrapper(pointer: DeviceGlobalMutPtr<u32>) {
+    let _ = safe_bridge(pointer);
+}
+"#,
+            "unsafe",
+        ),
+    ] {
+        let target = ScratchTarget::new();
+        let fixture = materialize_source_safety_fixture(&target, &format!("{prefix}{body}"));
+        let llvm_output = target.path().join("rejected.ll");
+        let output = Command::new(env!("CARGO"))
+            .current_dir(fixture)
+            .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
+            .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_source_safety_fixture")
+            .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", &llvm_output)
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+                "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32")
+            .args(["check", "--offline", "-Zbuild-std=core", "--target", "amdgcn-amd-amdhsa", "--target-dir"])
+            .arg(target.path().join("cargo"))
+            .output().expect("run atomic wrapper negative fixture");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+        assert!(!output.status.success(), "{case} was admitted: {stderr}");
+        assert!(
+            stderr.contains(expected) && stderr.contains("reachable call chain:"),
+            "wrong {case} rejection: {stderr}"
+        );
+        assert!(!llvm_output.exists(), "{case} emitted LLVM");
     }
 }
 
@@ -366,21 +649,28 @@ fn exact_volatile_load_reaches_checked_ordered_llvm_at_engineering_o0() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn core_atomic_rmw_set_reaches_complete_semantic_import() {
+fn core_atomic_rmw_without_inlining_remains_fail_closed_at_helper_parameters() {
     let target = ScratchTarget::new();
-    let output = run_extraction_command(&target, Some("atomic-rmw"), true);
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "atomic-rmw",
+        &target.path().join("rejected.ll"),
+        "-Zalways-encode-mir -Zinline-mir=no -Copt-level=3 -Ctarget-cpu=gfx950 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    );
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
 
     assert!(
         !output.status.success(),
-        "core atomics unexpectedly passed the pending target-neutral lowering boundary",
+        "non-inlined core atomics unexpectedly bypassed callable effect summaries",
     );
     assert!(
-        stderr.contains("then admitted one complete semantic MIR request")
-            && stderr.contains("target-neutral lowering remains pending")
-            && stderr.contains("no fallback or artifact emission was entered"),
-        "core atomic RMWs did not reach complete semantic import:\n{stderr}",
+        stderr.contains("pre-ranked materialization failed")
+            && stderr.contains(
+                "helper parameter is not an exact by-value scalar aggregate or shared slice"
+            ),
+        "non-inlined atomic RMWs did not fail closed at the expected boundary:\n{stderr}",
     );
+    assert!(!target.path().join("rejected.ll").exists());
     for forbidden in [
         "reaches unsafe function instance",
         "cannot authenticate the absence of user-provided unsafe blocks",

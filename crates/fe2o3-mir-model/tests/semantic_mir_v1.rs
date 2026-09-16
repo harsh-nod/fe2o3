@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 #[path = "semantic_mir_v1/slice_reborrow_v1.rs"]
 mod slice_reborrow_v1;
 
+#[path = "semantic_mir_v1/constant_index_slice_v1.rs"]
+mod constant_index_slice_v1;
+
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }

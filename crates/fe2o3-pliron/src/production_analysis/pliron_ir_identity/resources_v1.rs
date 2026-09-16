@@ -78,9 +78,9 @@ fn identity_capture_resource_upper_bound_v1(
         .checked_add(record_count)
         .and_then(|storage| storage.checked_add(record_summary_bytes))
         .and_then(|storage| storage.checked_add(record_location_name_bytes))
-        // Pass cardinalities, semantic subsets and the two native callback
-        // subtotals remain retained with the structural census.
-        .and_then(|storage| storage.checked_add(9))
+        // Pass cardinalities, semantic subsets, bounds guard candidates and
+        // the two native callback subtotals remain with the structural census.
+        .and_then(|storage| storage.checked_add(10))
         .ok_or_else(|| overflow("identity retained storage upper bound"))?;
     let temporary_storage_upper_bound = census
         .blocks
