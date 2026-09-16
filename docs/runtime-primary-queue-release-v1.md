@@ -818,6 +818,14 @@ records final-source validation separately from native, formal and performance
 qualification. This closes the direct Context credit-recovery implementation
 gap, not all allocation-failure recovery or full memory parity.
 
+Two opt-in native probes now cover the intended cold/warm/retry sequence for
+HostVisible and DeviceLocal allocation using deterministic session budgets.
+Their source requires exact Context/backing refunds, native owners and divergent
+native/shadow readback, zero-cache disposal and retained-root account observations.
+They require explicit device and isolation acknowledgement and remain unexecuted.
+See the [preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md);
+these are compiled qualification candidates, not native acceptance or benchmarks.
+
 ## Remaining Qualification
 
 Allocation settlement still needs native cold-admission/failure qualification,

@@ -1,0 +1,17 @@
+source-before exit=0
+rustc exit=0
+cargo exit=0
+python exit=0
+clippy exit=0
+formatting exit=0
+gnu-build exit=0
+gnu-runtime-roster exit=0
+gnu-ignored-roster exit=0
+gnu-runtime-full exit=0
+musl-build exit=0
+musl-runtime-roster exit=0
+musl-ignored-roster exit=0
+musl-runtime-full exit=0
+no-default exit=0
+unsafe-policy exit=0
+source-after exit=0

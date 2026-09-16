@@ -1,0 +1,30 @@
+{
+  "scope": "Read-only MI300X GPU isolation observation; no remote files, uploads, builds, resets, deletions, or workload changes.",
+  "capture": "Logs preserve exec_command combined command output.",
+  "isolated_device_found": false,
+  "topology_or_unique_id_lookup_performed": false,
+  "reason": "All eight devices have an attached workload and nonzero VRAM. GPU 0 is idle by utilization but owned.",
+  "records": [
+    {
+      "log": "utc-before.log",
+      "command": "ssh mi300x 'date -u +%Y-%m-%dT%H:%M:%S.%NZ'",
+      "exit_code": 0,
+      "wall_time_seconds": 0.382886025
+    },
+    {
+      "log": "gpu-ownership.log",
+      "command": "ssh mi300x 'rocm-smi --showuse --showmeminfo vram --showpids --showpidgpus'",
+      "exit_code": 0,
+      "wall_time_seconds": 3.278421218
+    },
+    {
+      "log": "utc-after.log",
+      "command": "ssh mi300x 'date -u +%Y-%m-%dT%H:%M:%S.%NZ'",
+      "exit_code": 0,
+      "wall_time_seconds": 0.455706412
+    }
+  ],
+  "omitted_records": [
+    "The separate process-detail log was intentionally not published because it contains other users' workload paths and arguments. The raw ROCm log independently shows device PID mapping and VRAM occupancy."
+  ]
+}

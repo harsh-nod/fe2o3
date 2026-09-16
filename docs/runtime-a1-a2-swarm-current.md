@@ -115,6 +115,13 @@ failures, and existing Worker V1/V4/V5 protocols remain conservative. See the
 [settlement receipt](evidence/dev-r126-allocation-settlement-2026-09-16/README.md)
 for validation scope. This does not advance R126, A1/A2 or issue #182 acceptance.
 
+Two native cold-capacity probes are now prepared for HostVisible and DeviceLocal
+Context allocation, with explicit isolation/device guards, cold and warm
+rejection checks, successful retry, native readback and exact zero-cache disposal
+observations. They remain unexecuted while the shared MI300X is occupied; see the
+[probe preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md).
+Compilation and the CPU guard test do not qualify their native assertions.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

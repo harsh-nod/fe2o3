@@ -2,8 +2,10 @@
 
 use super::*;
 use crate::RuntimeOwnedShutdownBackendV1;
-use fe2o3_kfd::Gfx942HostVisibleBackingUsageV1;
+use fe2o3_kfd::{Gfx942DeviceBackingUsageV1, Gfx942HostVisibleBackingUsageV1};
 use std::cell::Cell;
+
+mod cold_allocation;
 
 thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }; }
 
@@ -11,6 +13,8 @@ thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }
 struct PrimaryHostUsage {
     before: Option<Gfx942HostVisibleBackingUsageV1>,
     completed: Option<Gfx942HostVisibleBackingUsageV1>,
+    device_before: Option<Gfx942DeviceBackingUsageV1>,
+    device_completed: Option<Gfx942DeviceBackingUsageV1>,
     observations: [usize; 2],
 }
 
@@ -63,10 +67,13 @@ pub(super) fn observe_primary_host_usage(owner: &PrimaryQueueReleaseCustodyV1, c
     PRIMARY_HOST_USAGE.with(|slot| {
         if let Some(mut usage) = slot.get() {
             let observation = owner.host_visible_backing_usage_v1();
+            let device = owner.device_backing_usage_v1();
             if completed {
                 usage.completed = observation;
+                usage.device_completed = device;
             } else {
                 usage.before = observation;
+                usage.device_before = device;
             }
             usage.observations[usize::from(completed)] += 1;
             slot.set(Some(usage));

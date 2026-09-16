@@ -1,0 +1,2 @@
+crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/cold_allocation.rs: OK

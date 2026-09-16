@@ -1,0 +1,24 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0277]: the trait bound `Array<u8, UInt<UInt<UInt<UInt<..., ...>, ...>, ...>, ...>>: LowerHex` is not satisfied
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/cold_allocation.rs:351:9
+    |
+350 | ...   "native_cold_allocation_settlement=complete kind={kind:?} rejected_bytes={rejected_bytes} retry_bytes={PAGE_BYTES} cold={cold_error:?} host_baseline={host_baseline:?} device_baseline={device_baseline:?} shutdown={shutdown:?} native_readback_sha256={:x}",
+    |                                                                                                                                                                                                                                                               ---- required by this formatting parameter
+351 | ...   Sha256::digest(&readback)
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `LowerHex` is not implemented for `Array<u8, UInt<UInt<UInt<UInt<UInt<..., ...>, ...>, ...>, ...>, ...>>`
+    |
+    = help: the following other types implement trait `LowerHex`:
+              &T
+              &mut T
+              Access
+              AtFlags
+              CapabilitiesSecureBits
+              CapabilitySet
+              DupFlags
+              EventFlags
+            and 144 others
+    = note: the full name for the type has been written to '/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-5617a78400e220da.long-type-1327111661844337432.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-runtime` (lib test) due to 1 previous error

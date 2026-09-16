@@ -1,0 +1,2 @@
+e6844c4a0f6a436e0e999128bd034570e53b5c8968b34939be3bb54255f9a9b3  crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+0eb76333ba6db6aa3cf19168c921ea6a7f81ed204230eaf99ebf3b64b0ef025e  crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/cold_allocation.rs
