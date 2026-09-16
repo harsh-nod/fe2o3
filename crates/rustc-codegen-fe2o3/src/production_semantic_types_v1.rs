@@ -33,6 +33,8 @@ use rustc_middle::ty::{
 use crate::rustc_semantic_adapter_v1::rustc_type_identity_v1;
 use crate::rustc_semantic_plan_v1::RetainedSemanticTypeProducerV1;
 
+mod execution_v29;
+
 const MAX_RUSTC_LAYOUT_NOUNDEF_NODES_V1: usize = 16_384;
 
 #[derive(Debug)]
@@ -212,15 +214,21 @@ fn construct_type_v1<'tcx>(
     context: &TypeConstructionContextV1<'_, 'tcx>,
     producer: &RetainedSemanticTypeProducerV1<'tcx>,
 ) -> Result<SemanticTypeDeclV1, ProductionSemanticTypeErrorV1> {
-    // Nominal authority must not become an ordinary aggregate, even when unused.
+    let mut rust_type_kind = if matches!(producer.ty.kind(), TyKind::Str) {
+        SemanticRustTypeKindV1::Str
+    } else {
+        SemanticRustTypeKindV1::Ordinary
+    };
+    // Preserve nominal roles even when rustc passes their storage as an ignored ZST.
     if let TyKind::Adt(definition, _) = producer.ty.kind() {
         match crate::trusted_device_items::classify(context.tcx, definition.did()) {
             Some(item)
                 if crate::production_semantic_terminal_v1::is_reserved_capability_type_v1(item) =>
             {
-                return Err(context.unsupported(
-                    "reserved capability type has no authenticated production owner",
-                ));
+                rust_type_kind = SemanticRustTypeKindV1::Execution(
+                    execution_v29::role(context.tcx, producer.ty, item)
+                        .map_err(|construct| context.unsupported(construct))?,
+                );
             }
             None if crate::trusted_device_items::rejected_provider(
                 context.tcx,
@@ -233,11 +241,6 @@ fn construct_type_v1<'tcx>(
             _ => {}
         }
     }
-    let rust_type_kind = if matches!(producer.ty.kind(), TyKind::Str) {
-        SemanticRustTypeKindV1::Str
-    } else {
-        SemanticRustTypeKindV1::Ordinary
-    };
     let shape = match producer.ty.kind() {
         TyKind::Bool => SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
         TyKind::Char => SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Char),

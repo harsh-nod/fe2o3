@@ -55,6 +55,22 @@ effects and schedule correctness still require canonical graph validation.
 Current-production MIR admission/decoding and executable lowering reject V29
 until that integration exists. Ordinary aggregate/ZST lowering cannot erase it.
 
+The single rustc importer now preserves these nominal roles in its complete
+type inventory, including unused parameters, nested carriers and referenced
+types. It authenticates the reviewed device definition, checks generic argument
+kinds and the initial u32/geometry profile, and retains rustc's actual fields,
+layout, ABI and instantiated type identity. It selects explicit inert V29
+construction when that inventory contains a role. Ordinary requests retain
+their existing production schema selection.
+
+This is type representation, not capability issuance. In particular, a caller
+parameter with a capability type does not gain authority: executable
+materialization still rejects before aggregate/ZST erasure or export. The five
+source terminals remain rejected. Their future importer must consume the
+original/optimized entry receipt into the actual request and recover only the
+authenticated issuer-to-helper move when rustc erases its ZST argument. It must
+not accept arbitrary role constants or infer brands/epochs from equal layouts.
+
 ## Ownership And Effects
 
 One private, session-bound original/optimized issuance receipt authenticates
