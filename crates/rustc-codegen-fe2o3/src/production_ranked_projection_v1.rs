@@ -5,10 +5,17 @@
 //! success edge uniquely controls an access to the same slice and index.
 
 mod analysis_multi_split_v1;
+mod canonical_assertion_facts_v1;
+mod ranked_projection_source_v1;
 
 use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
 };
+use canonical_assertion_facts_v1::{
+    CanonicalAssertionErrorV1, ProjectedAssertionFactsV1, projected_assertion_is_proved_v1,
+    with_canonical_assertions_source_budget_v1,
+};
+use ranked_projection_source_v1::{RankedProjectionSourceV1, with_projection_source_budget_v1};
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -26,13 +33,11 @@ use dialect_kernel::{
     PipelineEventKindAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_artifacts::{BlockSize, LaunchContract};
-#[cfg(test)]
-use fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionReceiptV1;
 use fe2o3_lower_mir_kernel::{
-    ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectOriginV1,
-    ProductionRankedExecutableEffectSourceV1, ProductionSourceExecutionLayoutV1,
-    ProductionSourceLaunchErrorV1, ProductionSourceLaunchInputV1,
-    ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
+    ProductionMaterializedRankedModuleReceiptV1, ProductionRankedAccessSourceV1,
+    ProductionRankedExecutableEffectOriginV1, ProductionRankedExecutableEffectSourceV1,
+    ProductionSourceExecutionLayoutV1, ProductionSourceLaunchErrorV1,
+    ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
     ProductionSourceLaunchRosterV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -777,7 +782,7 @@ impl ProductionRankedRootProgramV1 {
 /// Move-only ordered roster retaining one exact admitted Rust semantic owner
 /// and every root-specific PLIRON graph that passed mandatory generic checks.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
-    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
 }
 
@@ -846,10 +851,10 @@ impl ProductionRankedVerifiedRootCandidateV1 {
 ///
 /// Entries remain in typed/source order. `canonical_kernel_order` records the
 /// independent descriptor-compatible `KernelId` order. No physical executable
-/// ordering, KIR, artifact, publication, load, or launch authority is present.
+/// ordering, artifact, publication, load, or launch authority is present.
 #[must_use = "dropping the ranked roster receipt abandons its production lineage"]
 pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
-    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>,
     canonical_kernel_order: Box<[usize]>,
     canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
@@ -1390,10 +1395,11 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     }
 
     pub(crate) fn verify_equivalence(&self) -> Result<(), ProductionRankedVerificationErrorV1> {
-        self.semantic_ssa_owner
+        self.materialized
+            .semantic_ssa()
             .verify_replay()
             .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
-        let semantic_owner = self.semantic_ssa_owner.source_owner();
+        let semantic_owner = self.materialized.semantic_ssa().source_owner();
         let semantic_bindings = self
             .source_order_roots
             .iter()
@@ -1450,14 +1456,14 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         self,
     ) -> Result<
         (
-            fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1,
+            ProductionMaterializedRankedModuleReceiptV1,
             AuthenticatedRankedVerificationRosterV1,
         ),
         ProductionRankedVerificationErrorV1,
     > {
         self.verify_equivalence()?;
         let Self {
-            semantic_ssa_owner,
+            materialized,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1498,8 +1504,8 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 verification,
             });
         }
-        let receipt = fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_ssa_projection_roster_candidate(
-            semantic_ssa_owner,
+        let receipt = ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+            materialized,
             lowering_roots,
         )
         .map_err(ProductionRankedVerificationErrorV1::Custody)?;
@@ -1529,11 +1535,19 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.semantic_ssa_owner.source_semantic().functions().len()
+        self.materialized
+            .semantic_ssa()
+            .source_semantic()
+            .functions()
+            .len()
     }
 
     pub(crate) fn semantic_callable_count(&self) -> usize {
-        self.semantic_ssa_owner.source_semantic().callables().len()
+        self.materialized
+            .semantic_ssa()
+            .source_semantic()
+            .callables()
+            .len()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
@@ -1559,13 +1573,14 @@ impl ProductionRankedSemanticProgramV1 {
         ProductionRankedVerificationErrorV1,
     > {
         let Self {
-            semantic_ssa_owner,
+            materialized,
             roots,
         } = self;
-        semantic_ssa_owner
+        materialized
+            .semantic_ssa()
             .verify_replay()
             .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
-        let semantic_owner = semantic_ssa_owner.source_owner();
+        let semantic_owner = materialized.semantic_ssa().source_owner();
         let semantic_bindings = roots
             .iter()
             .map(ranked_root_program_semantic_binding_v1)
@@ -1621,7 +1636,7 @@ impl ProductionRankedSemanticProgramV1 {
         let (canonical_roster_identity, canonical_kernel_order) =
             derive_ranked_kernel_roster_identity_v1(&records)?;
         let receipt = ProductionRankedSemanticProjectionRosterReceiptV1 {
-            semantic_ssa_owner,
+            materialized,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1722,6 +1737,7 @@ pub(crate) struct DeterministicDivisorDiagnosticV1 {
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
+    CanonicalAssertions(CanonicalAssertionErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
@@ -1802,6 +1818,9 @@ impl ProductionRankedProjectionErrorV1 {
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CanonicalAssertions(error) => {
+                write!(formatter, "canonical assertion analysis failed: {error}")
+            }
             Self::SemanticSsa(error) => {
                 write!(formatter, "semantic SSA custody failed: {error}")
             }
@@ -1944,6 +1963,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
 impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::CanonicalAssertions(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
@@ -2957,23 +2977,14 @@ fn derive_defined_callable_empty_effect_summaries_v1(
     })
 }
 
-pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
-    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
+/// Validates the complete source launch roster before executable materialization.
+pub(crate) fn source_launch_roster_for_ranked_inputs_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
-    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
-) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
-    semantic_ssa_owner
-        .verify_replay()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    let semantic_owner = semantic_ssa_owner.source_owner();
-    let semantic = semantic_ssa_owner.source_semantic();
-    let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
-        semantic.types(),
-        semantic.functions(),
-        semantic.callables(),
-    )?;
+) -> Result<ProductionSourceLaunchRosterV1, ProductionSourceLaunchErrorV1> {
+    let semantic = semantic_ssa.source_semantic();
     if root_inputs.is_empty() || root_inputs.len() != semantic.roots().len() {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+        return Err(ProductionSourceLaunchErrorV1::Unsupported(
             "an incomplete typed/semantic ranked root roster",
         ));
     }
@@ -2981,9 +2992,53 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .iter()
         .map(source_launch_root_input_v1)
         .collect::<Vec<_>>();
-    let source_launch_roster = ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs)
-        .map_err(source_launch_projection_error_v1)?;
-    drop(launch_inputs);
+    ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs)
+}
+
+pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    let roots = {
+        let source = RankedProjectionSourceV1::from_legacy(&materialized)?;
+        with_projection_source_budget_v1(&source, |budget| {
+            project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
+        })?
+    };
+    Ok(ProductionRankedSemanticProgramV1 {
+        materialized,
+        roots,
+    })
+}
+
+fn project_ranked_roots_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
+    source.require_floor(budget)?;
+    source
+        .semantic_ssa()
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+    let semantic_owner = source.semantic_ssa().source_owner();
+    let semantic = source.semantic_ssa().source_semantic();
+    let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
+        semantic.types(),
+        semantic.functions(),
+        semantic.callables(),
+    )?;
+    let source_launch_roster = source.source_launch();
+    if root_inputs.is_empty()
+        || root_inputs.len() != source_launch_roster.roots().len()
+        || source_launch_roster.semantic_sha256() != semantic.semantic_sha256().as_bytes()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an incomplete typed/semantic ranked root roster",
+        ));
+    }
     let root_logical_names = root_inputs
         .iter()
         .map(|input| input.logical_name.as_str())
@@ -3014,56 +3069,57 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         })
         .collect::<Result<Vec<_>, ProductionRankedProjectionErrorV1>>()?;
 
-    let mut roots = Vec::with_capacity(root_inputs.len());
-    for ((input, source_root), root_references) in root_inputs
-        .iter()
-        .zip(source_launch_roster.roots())
-        .zip(root_reference_bindings.iter())
-    {
-        let semantic_root = source_root.selected_root();
-        let selection = semantic
-            .select_kernel_body_for_root_v1(semantic_root)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "a semantic KernelRoot without one direct body or transparent Result wrapper",
-            ))?;
-        let root = project_and_verify_ranked_root_v1(
-            semantic,
-            &callable_effects,
-            selection,
-            &input.logical_name,
-            &input.source_launch,
-            *source_root,
-            root_references,
-        )
-        .map_err(|error| {
-            error.with_deterministic_root_context(
-                semantic_root,
-                selection.body(),
-                input.logical_name.as_bytes(),
+    with_canonical_assertions_source_budget_v1(source, budget, |session| {
+        let mut roots = Vec::with_capacity(root_inputs.len());
+        for ((input, source_root), root_references) in root_inputs
+            .iter()
+            .zip(source_launch_roster.roots())
+            .zip(root_reference_bindings.iter())
+        {
+            let semantic_root = source_root.selected_root();
+            let selection = semantic
+                .select_kernel_body_for_root_v1(semantic_root)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a semantic KernelRoot without one direct body or transparent Result wrapper",
+                ))?;
+            let mut facts = session.for_source(semantic_root, selection.body());
+            let root = project_and_verify_ranked_root_v1(
+                semantic,
+                &callable_effects,
+                selection,
+                input,
+                *source_root,
+                root_references,
+                &mut facts,
             )
-        })?;
-        if root.kernel_binding != input.kernel_binding {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a projected ranked root with a substituted kernel binding",
-            ));
+            .map_err(|error| {
+                error.with_deterministic_root_context(
+                    semantic_root,
+                    selection.body(),
+                    input.logical_name.as_bytes(),
+                )
+            })?;
+            if root.kernel_binding != input.kernel_binding {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected ranked root with a substituted kernel binding",
+                ));
+            }
+            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
+                semantic_owner,
+                semantic_root,
+                &root.lowering,
+                &root.ranked_ir,
+                &root.access_sources,
+                &root.executable_effect_sources,
+            )
+            .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
+            roots.push(root);
         }
-        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-            semantic_owner,
-            semantic_root,
-            &root.lowering,
-            &root.ranked_ir,
-            &root.access_sources,
-            &root.executable_effect_sources,
-        )
-        .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
-        roots.push(root);
-    }
-    semantic_ssa_owner
-        .verify_replay()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    Ok(ProductionRankedSemanticProgramV1 {
-        semantic_ssa_owner,
-        roots: roots.into_boxed_slice(),
+        source
+            .semantic_ssa()
+            .verify_replay()
+            .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+        Ok(roots.into_boxed_slice())
     })
 }
 
@@ -3084,11 +3140,13 @@ fn project_and_verify_ranked_root_v1(
     semantic: &AdmittedInertSemanticMirV1,
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     selection: SemanticKernelBodySelectionV1,
-    logical_name: &str,
-    source_launch: &LaunchContract,
+    input: &ProductionRankedRootInputV1,
     source_root: ProductionSourceLaunchRootV1,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    let logical_name = input.logical_name.as_str();
+    let source_launch = &input.source_launch;
     let semantic_u32_induction =
         fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
             .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
@@ -3452,6 +3510,7 @@ fn project_and_verify_ranked_root_v1(
         &intrinsic.uniform_inductions,
         entry_operations,
         projected_blocks,
+        assertion_facts,
     )?;
     let reference_writes =
         projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
@@ -4572,7 +4631,10 @@ fn project_rust_bounds_checks_with_ordinary_v1(
                 }
             }
         }
-        let mut unknown_for = |local: SemanticLocalIdV1| {
+        let mut unknown_for = |local: SemanticLocalIdV1| -> Result<
+            ProductionRankedValueV1,
+            ProductionRankedProjectionErrorV1,
+        > {
             let slot = local_values.get_mut(local.index() as usize).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a Rust bounds-check operand outside the semantic local table",
@@ -17966,7 +18028,7 @@ fn source_launch_root_input_v1(
     )
 }
 
-fn source_launch_projection_error_v1(
+pub(crate) fn source_launch_projection_error_v1(
     error: ProductionSourceLaunchErrorV1,
 ) -> ProductionRankedProjectionErrorV1 {
     match error {
@@ -19137,6 +19199,7 @@ fn order_projected_block_effects(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProjectedCfgTerminatorV1 {
+    AbsentMaterialized,
     Branch(usize),
     Predicate {
         predicate: GuardPredicateV1,
@@ -19160,7 +19223,7 @@ fn projected_cfg_terminator(
     block_index: usize,
     callables: &[SemanticCallableDeclV1],
     non_bounds_assert_proved: bool,
-    constants: &[Option<u64>],
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
@@ -19325,17 +19388,24 @@ fn projected_cfg_terminator(
             target: edge,
             ..
         } => {
-            if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. })
-                && !non_bounds_assert_proved
-                && constant_operand_value(condition, constants) != Some(u64::from(*expected))
-            {
-                return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
-                    block: block_index,
-                    kind: semantic_assert_kind_v1(message),
-                    expected: *expected,
-                    condition_local: simple_operand_local(condition).map(SemanticLocalIdV1::index),
-                    source: Box::new(block.terminator().source()),
-                });
+            if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. }) {
+                // A contradictory actual graph constant overrides a source proof.
+                let graph_condition =
+                    assertion_facts.condition(block_index, *expected, edge.target())?;
+                if !projected_assertion_is_proved_v1(
+                    graph_condition,
+                    *expected,
+                    non_bounds_assert_proved,
+                ) {
+                    return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
+                        block: block_index,
+                        kind: semantic_assert_kind_v1(message),
+                        expected: *expected,
+                        condition_local: simple_operand_local(condition)
+                            .map(SemanticLocalIdV1::index),
+                        source: Box::new(block.terminator().source()),
+                    });
+                }
             }
             Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
         }
@@ -19476,6 +19546,7 @@ fn build_ranked_cfg(
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<
     (
         Vec<ProductionRankedBlockV1>,
@@ -19489,7 +19560,6 @@ fn build_ranked_cfg(
             "semantic CFG projection lost a basic block",
         ));
     }
-    let constants = constant_locals(function)?;
     let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
     let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
     for induction in uniform_inductions {
@@ -19509,12 +19579,15 @@ fn build_ranked_cfg(
     }
     let terminators = (0..function.blocks().len())
         .map(|index| {
+            if !assertion_facts.is_materialized_block(index)? {
+                return Ok(ProjectedCfgTerminatorV1::AbsentMaterialized);
+            }
             projected_cfg_terminator(
                 function,
                 index,
                 callables,
                 proved_assertions[index],
-                &constants,
+                assertion_facts,
                 switch_predicates,
                 deterministic_switches,
             )
@@ -20085,6 +20158,11 @@ fn build_ranked_cfg(
                         "a uniform induction deterministic switch requires unrepresentable control expansion",
                     ));
                 }
+                ProjectedCfgTerminatorV1::AbsentMaterialized => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a projected CFG reaches a source block absent from the materialized graph",
+                    ));
+                }
                 ProjectedCfgTerminatorV1::Return | ProjectedCfgTerminatorV1::Trap => {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a uniform induction body returns before its unique latch",
@@ -20105,6 +20183,11 @@ fn build_ranked_cfg(
             continue;
         }
         match terminator {
+            ProjectedCfgTerminatorV1::AbsentMaterialized => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a projected CFG reaches a source block absent from the materialized graph",
+                ));
+            }
             ProjectedCfgTerminatorV1::Branch(target) => push_block_at(
                 &mut blocks,
                 current,
@@ -20433,6 +20516,11 @@ fn reachable_projected_blocks(
         }
         *slot = true;
         match &terminators[block] {
+            ProjectedCfgTerminatorV1::AbsentMaterialized => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a projected CFG reaches a source block absent from the materialized graph",
+                ));
+            }
             ProjectedCfgTerminatorV1::Branch(target) => pending.push(*target),
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
@@ -23690,6 +23778,81 @@ mod cold_compile_error_tests;
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
 
+    // Isolated CFG tests retain synthetic facts; full-entry tests below use
+    // genuine materialized owners and the production assertion query.
+    struct ComponentDynamicAssertionFactsV1;
+
+    impl ProjectedAssertionFactsV1 for ComponentDynamicAssertionFactsV1 {
+        fn is_materialized_block(
+            &mut self,
+            _: usize,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            Ok(true)
+        }
+
+        fn condition(
+            &mut self,
+            _: usize,
+            _: bool,
+            _: SemanticBlockIdV1,
+        ) -> Result<
+            canonical_assertion_facts_v1::ProjectedAssertionConditionV1,
+            ProductionRankedProjectionErrorV1,
+        > {
+            Ok(canonical_assertion_facts_v1::ProjectedAssertionConditionV1::Dynamic)
+        }
+    }
+
+    impl ProjectedAssertionFactsV1 for canonical_assertion_facts_v1::ProjectedAssertionConditionV1 {
+        fn is_materialized_block(
+            &mut self,
+            _: usize,
+        ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+            Ok(true)
+        }
+
+        fn condition(
+            &mut self,
+            _: usize,
+            _: bool,
+            _: SemanticBlockIdV1,
+        ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+            Ok(*self)
+        }
+    }
+
+    fn build_ranked_cfg(
+        types: &[SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+        callables: &[SemanticCallableDeclV1],
+        switch_predicates: &[Option<GuardPredicateV1>],
+        deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
+        uniform_inductions: &[ProjectedUniformInductionV1],
+        entry_operations: Vec<ProductionRankedOperationV1>,
+        projected_blocks: Vec<ProjectedSemanticBlockV1>,
+    ) -> Result<
+        (
+            Vec<ProductionRankedBlockV1>,
+            Vec<ProjectedAccessSourceV1>,
+            Vec<ProductionRankedExecutableEffectSourceV1>,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
+        super::build_ranked_cfg(
+            types,
+            function,
+            callables,
+            switch_predicates,
+            deterministic_switches,
+            uniform_inductions,
+            entry_operations,
+            projected_blocks,
+            &mut ComponentDynamicAssertionFactsV1,
+        )
+    }
+
+    include!("production_ranked_projection_v1/canonical_assertion_graph_v1_tests.rs");
+
     mod implicit_capability_capture_v1_tests {
         include!("production_ranked_projection_v1/implicit_capability_capture_v1_tests.rs");
     }
@@ -23706,7 +23869,15 @@ mod tests {
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
         assert!(matches!(
-            projected_cfg_terminator(&unresolved, 0, &[], false, &[], &[const { None }; 3], &[]),
+            projected_cfg_terminator(
+                &unresolved,
+                0,
+                &[],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[const { None }; 3],
+                &[]
+            ),
             Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
                 block: 0,
                 kind: "division-by-zero",
@@ -23716,8 +23887,16 @@ mod tests {
 
         let proven = non_bounds_assert_function(constant(1));
         assert_eq!(
-            projected_cfg_terminator(&proven, 0, &[], false, &[], &[const { None }; 3], &[])
-                .unwrap(),
+            projected_cfg_terminator(
+                &proven,
+                0,
+                &[],
+                false,
+                &mut canonical_assertion_facts_v1::ProjectedAssertionConditionV1::Bool(true),
+                &[const { None }; 3],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Branch(1)
         );
     }
@@ -29650,8 +29829,16 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],)
-                    .unwrap(),
+                projected_cfg_terminator(
+                    &function,
+                    0,
+                    &[],
+                    false,
+                    &mut ComponentDynamicAssertionFactsV1,
+                    &[const { None }; 2],
+                    &[],
+                )
+                .unwrap(),
                 ProjectedCfgTerminatorV1::AnalysisMultiSplit {
                     blocks: vec![1, 2, 3],
                 }
@@ -29679,7 +29866,7 @@ mod tests {
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[None, Some(predicate.clone())],
                 &[],
             )
@@ -32899,18 +33086,45 @@ mod tests {
         let function = destinationless_call(0);
         let trap = compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::Trap);
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[trap], false, &[], &[None], &[]).unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[trap],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[None],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Trap,
         );
 
         let barrier =
             compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier);
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[barrier], false, &[], &[None], &[]).unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[barrier],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[None],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Return,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[], false, &[], &[None], &[]).unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &mut ComponentDynamicAssertionFactsV1,
+                &[None],
+                &[]
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Return,
         );
     }
@@ -33369,7 +33583,7 @@ mod tests {
                     0,
                     &[],
                     false,
-                    &[],
+                    &mut ComponentDynamicAssertionFactsV1,
                     &[None, Some(predicate.clone())],
                     &[],
                 )
@@ -33387,7 +33601,7 @@ mod tests {
                 0,
                 &[],
                 false,
-                &[],
+                &mut ComponentDynamicAssertionFactsV1,
                 &[None, Some(predicate)],
                 &[],
             ),
@@ -38390,7 +38604,7 @@ mod tests {
             fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .unwrap();
-        let projected = project_and_verify_ranked_semantic_mir_v1(
+        let projected = project_ranked_fixture_v1(
             owner,
             &[ranked_root_input("deep_constant_alias", 0xd5, 1)],
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),

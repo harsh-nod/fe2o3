@@ -318,9 +318,10 @@ one wrapping-u32 algorithm contract across both orders; no reduction or
 schedule-equivalence evidence is granted by the coordinate mapping itself.
 
 Implementation status: operation construction, verification and coordinate
-queries in the existing dialect shell. The live source path still checks a
-ranked source projection before KIR materialization; the newer pre-ranked KIR
-owner is a separate library foundation, not an activated rustc path. The
+queries in the existing dialect shell. The live source path materializes one
+executable KIR owner before ranked projection, retains its exact assertion
+origins and source launch roster, and attaches ranked checks to that same
+owner. Materialization alone grants no checked or launch authority. The
 consuming typed executable scheduling transition and its source/output lineage
 remain integration work under #271/#272. A projection-only mapping change must
 not be presented as changing execution. This contract does not close M0 or M1.

@@ -1,3 +1,69 @@
+    // Fixtures exercise the same source roster and executable stage as production.
+    // Invalid source launches remain typed errors; a lowerer failure is a fixture
+    // failure, never a fallback to the old source-only projector.
+    fn materialize_ranked_fixture_v1(
+        ssa: ProductionSemanticSsaOwnerV1,
+        inputs: &[ProductionRankedRootInputV1],
+    ) -> Result<
+        fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+        ProductionRankedProjectionErrorV1,
+    > {
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, inputs)
+            .map_err(source_launch_projection_error_v1)?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+            usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+        );
+        let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+            &mut work,
+            crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+        );
+        let materialized =
+            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                ssa,
+                launch,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                &mut budget,
+            )
+            .expect("the source-ranked fixture must also materialize its executable graph");
+        let retained = materialized
+            .executable_storage()
+            .retained_storage()
+            .checked_add(materialized.assert_origin_storage().payload_storage())
+            .unwrap();
+        budget.reserve_storage(retained).unwrap();
+        Ok(materialized)
+    }
+
+    fn materialized_ranked_fixture_receipt_v1(
+        materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+        root: ProductionRankedRootProgramV1,
+    ) -> fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1 {
+        fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+            materialized,
+            vec![
+                fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionRootV1::new(
+                    root.semantic_root,
+                    root.source_rank,
+                    root.lowering,
+                    root.ranked_ir,
+                    root.access_sources,
+                    root.executable_effect_sources,
+                ),
+            ],
+        )
+        .expect("the fixture retains structurally valid source/ranked correspondence")
+    }
+
+
+    fn project_ranked_fixture_v1(
+        semantic_ssa: ProductionSemanticSsaOwnerV1,
+        inputs: &[ProductionRankedRootInputV1],
+        references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+        let materialized = materialize_ranked_fixture_v1(semantic_ssa, inputs)?;
+        project_and_verify_ranked_materialized_semantic_mir_v1(materialized, inputs, references)
+    }
+
     use super::*;
     use fe2o3_mir_model::SemanticOptionProducerV1;
     use fe2o3_mir_model::semantic_mir_v1::*;
@@ -77,7 +143,7 @@
             .next()
             .expect("ranked roster receipt fields");
         for retained in [
-            "semantic_ssa_owner: ProductionSemanticSsaOwnerV1",
+            "materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1",
             "source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>",
             "canonical_kernel_order: Box<[usize]>",
             "canonical_roster_identity: ProductionRankedKernelRosterIdentityV1",
@@ -115,7 +181,7 @@
             .next()
             .expect("bounded complete module transition");
         assert!(module.contains("for root in source_order_roots.into_vec()"));
-        assert!(module.contains("from_unvalidated_ssa_projection_roster_candidate"));
+        assert!(module.contains("from_unvalidated_projection_roster_candidate"));
         assert!(module.contains("AuthenticatedRankedVerificationRosterV1"));
         assert!(!module.contains("into_singleton_verified_receipt"));
         assert!(!module.contains("try_lower_after_ranked_checks"));
@@ -871,7 +937,7 @@
         elements: u32,
     ) -> ProductionRankedSemanticProgramV1 {
         let owner = neutral_ranked_source_for_operation_v1(operation, elements);
-        project_and_verify_ranked_semantic_mir_v1(
+        project_ranked_fixture_v1(
             owner,
             &[ranked_root_input_1d(
                 "neutral_generated_hostile",
