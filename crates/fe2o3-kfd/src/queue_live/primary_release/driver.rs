@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
+use crate::sdma::retained_release::{DirectionalSdmaReleaseCustodyV1, SdmaReleaseMemoryV1};
 use crate::shared_memory::DispatchDataReleaseV1;
 
 pub(in crate::queue::live) trait PrimaryReleaseMemoryV1:
-    PrimaryMemoryV1 + PristineControlReleaseV1 + DispatchDataReleaseV1
+    PrimaryMemoryV1 + PristineControlReleaseV1 + DispatchDataReleaseV1 + SdmaReleaseMemoryV1
 {
     fn restore_foundation(
         &mut self,
@@ -64,6 +65,7 @@ pub(in crate::queue::live) struct PrimaryReleasePartsV1<'a, E: PrimaryEnvironmen
     pub(in crate::queue::live) doorbell: &'a mut Option<E::Doorbell>,
     pub(in crate::queue::live) dispatch: &'a mut Option<DispatchResourceOwnerV1>,
     pub(in crate::queue::live) signals: &'a mut Option<CompletionSignalAuthority>,
+    pub(in crate::queue::live) sdma: &'a mut Option<Gfx942SdmaQueueSetV1>,
 }
 
 pub(in crate::queue::live) trait PrimaryReleaseParentV1<E: PrimaryEnvironmentV1> {
@@ -80,6 +82,7 @@ pub(in crate::queue::live) struct PrimaryReleaseStateV1<E: PrimaryReleaseEnviron
     pub(in crate::queue::live) resources: Option<QueueResourceCleanupCustodyV1>,
     pub(in crate::queue::live) dispatch: Option<ReturningControlCleanupCustodyV1>,
     pub(in crate::queue::live) signals: Option<ControlCleanupCustodyV1>,
+    pub(in crate::queue::live) sdma: Option<DirectionalSdmaReleaseCustodyV1>,
     pub(in crate::queue::live) gate: Option<E::TeardownArm>,
     pub(in crate::queue::live) destroy: NativeQueueDestroyProgressV1,
     pub(in crate::queue::live) started: bool,
@@ -144,6 +147,7 @@ where
             resources: None,
             dispatch: None,
             signals: None,
+            sdma: None,
             gate: None,
             destroy: NativeQueueDestroyProgressV1::default(),
             started: false,
@@ -182,12 +186,19 @@ where
     ) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
         parent.preflight_release()?;
         let parts = parent.release_parts()?;
+        self.sdma = parts
+            .sdma
+            .take()
+            .map(|set| DirectionalSdmaReleaseCustodyV1::new(set, parts.key, parts.queue_id));
         self.gate = Some(E::arm_teardown());
         self.platform = Some(E::retain_platform(
             parts.exception.take().expect("preflight exception owner"),
             parts.doorbell.take().expect("preflight doorbell owner"),
         ));
         let engine = parts.engine;
+        if let Some(sdma) = &mut self.sdma {
+            sdma.destroy_in_place(&mut engine.backend.session)?;
+        }
         engine
             .destroy_retaining(parts.key, &mut self.destroy)
             .map_err(map_native)?;
@@ -234,6 +245,14 @@ where
             ));
         }
         E::complete_shadows(platform)?;
+        if let Some(sdma) = &mut self.sdma {
+            sdma.release_resources_in_place(memory)?;
+            if !sdma.is_complete() {
+                return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                    "incomplete directional SDMA release",
+                ));
+            }
+        }
         if let Some(dispatch) = parts.dispatch.take() {
             self.dispatch = Some(ReturningControlCleanupCustodyV1::new(
                 dispatch,
@@ -263,7 +282,10 @@ where
         }
         E::confirm_destroyed(self.gate.take().expect("retained outer teardown arm"));
         self.complete = true;
-        Ok(destroyed_queue_observation(parts.queue_id))
+        Ok(destroyed_queue_observation_with_additional_resources(
+            parts.queue_id,
+            if self.sdma.is_some() { 6 } else { 0 },
+        ))
     }
 }
 
@@ -288,6 +310,7 @@ impl PrimaryReleaseParentV1<LinuxPrimaryEnvironmentV1> for ComputeAqlQueueSessio
             doorbell: &mut self.doorbell,
             dispatch: &mut self.dispatch,
             signals: &mut self.completion_signals,
+            sdma: &mut self.sdma,
         })
     }
     fn poison_release(&mut self) {

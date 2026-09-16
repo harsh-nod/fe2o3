@@ -86,19 +86,21 @@ observations. Missing primary owners are errors, never legacy-fallback decisions
 Only full resource, dispatch and signal cleanup confirms the gate and authorizes
 the destroyed observation. Dropping an unfinished public owner aborts.
 
-The selected route is ordinary primary AqlSpecial Release without SDMA,
+The initial selected route was ordinary primary AqlSpecial Release without SDMA,
 auxiliary, debug-runtime or persistent attachments. Other profiles retain their
 existing paths; they remain requirements, not qualified by this implementation.
 
-The runtime facade branch is not yet reached by a successful ordinary public
-native workload. Native `allocate_v1` calls `ensure_sdma_queue_v1`, which creates
+At that initial revision, the runtime facade branch was not reached by a
+successful ordinary public native workload. Native `allocate_v1` calls
+`ensure_sdma_queue_v1`, which creates
 the primary and immediately attaches directional SDMA. Shutdown trims free
 buffers but does not detach that SDMA owner, so profile selection takes the
 legacy path. Nonempty fixed-dispatch data requires those allocations; empty data
 is rejected, and opening/stream/module-only workflows leave the queue absent.
 Retained SDMA teardown or a genuinely supported compute-only allocation path is
 therefore an integration prerequisite. The direct queue probe below does not
-close this runtime-facade reachability gap.
+close this runtime-facade reachability gap. The directional integration and
+public runtime probe below now close that packetless allocation/shutdown gap.
 
 Focused GNU development checks pass: six four-resource tests, six platform
 tests, three retained-DESTROY engine tests and three primary-owner negative/Drop
@@ -247,6 +249,62 @@ cargo test --locked --offline -p fe2o3-kfd --all-features --lib queue::tests::
 cargo test --locked --offline -p fe2o3-kfd --features live-validation --example kfd-compute-aql-queue
 ```
 
+## Retained Directional SDMA Integration
+
+The development implementation now admits an ordinary primary with its original
+directional SDMA set. `DirectionalSdmaReleaseCustodyV1` retains the original vector,
+both queue identities, in-place DESTROY arguments and raw outcomes, original
+doorbells and three-token cleanup roots. Whole-roster preflight precedes the first
+native operation. Teardown remains H2D then D2H before primary destruction;
+resource release follows permanent foundation restoration, primary cleanup and
+shadow completion, and precedes dispatch/signals. Successful completion accounts
+for eleven resources. No owner is popped during fallible teardown.
+
+The three-token profile shares the fixed-order cleanup driver with the existing
+four-token primary profile. It preserves completion/control/ring unmaps before
+any disposal, USERPTR free-before-CPU-unmap, exact terminal receipts and inert
+re-entry. Its certified lower path preflights six revisions; the integrated
+permanently restored foundation is not given a replacement certificate.
+
+New tests cover real same-session mapped token owners, real anonymous doorbell
+unmaps, both directional destroy/doorbell/currentness/topology failure prefixes,
+malformed DESTROY outputs including mutation followed by panic, and bad
+second-owner admission before any effect. Lower tests sweep eleven native calls,
+eighteen currentness boundaries, projection/commit boundaries and exact revision
+headroom, with full native-record and account snapshots. Constructed-parent
+tests also fail inside the last native disposal call of either SDMA owner,
+retaining the real partially released root, sibling, primary signals and gate.
+CPU queue identities and ioctl results remain scripted; these are not
+hardware-created CPU-test queues or formal correspondence proofs.
+
+An opt-in ignored runtime test follows public open, stream creation, host
+allocation, release, stream destruction and shutdown. Its test-only observer
+records the real post-trim selector without changing routing or injecting a
+queue. It checks completed-root/backend Drop, reuse rejection and the absence of
+false compute-lane profile events. The native execution result is recorded
+in the [passing one-device receipt](evidence/dev-r126-directional-release-native-2026-09-16/README.md),
+separately from CPU tests. This closes the packetless public allocation-path
+reachability example, not native fault qualification. Pool trimming still
+precedes retained-root installation and is outside this packet's
+destructive-failure custody guarantee.
+
+Final development library regressions pass 1,297 KFD tests and 744 runtime tests
+on both GNU and musl. Each local runtime run ignores only the opt-in hardware
+test; its separate native execution passes. The 21 constructed-parent tests are
+included in the full KFD runs and also pass focused runs on both targets. Strict
+all-feature/all-target Clippy and the reviewed unsafe-source policy pass. Two
+bounded read-only reviews found no new blocking correctness issue in the
+extension. These are two-crate library regressions, not full-workspace or formal
+qualification, and do not advance the accepted R125 checkpoint.
+
+The [development receipt](evidence/dev-r126-directional-release-native-2026-09-16/README.md)
+retains source/executable identities and raw logs. An earlier intermediate GNU
+run failed five self-spawn tests because a concurrent build replaced its live
+executable; all five failed with `ENOENT`. Fresh full runs used private frozen
+copies and passed. The earlier failed run remains separate history, not passing
+evidence. Source/documentation formatting checks pass; raw logs preserve their
+original libtest whitespace.
+
 ## Remaining Qualification
 
 1. Extend constructed-parent coverage to the remaining late queue-resource and
@@ -256,14 +314,22 @@ cargo test --locked --offline -p fe2o3-kfd --features live-validation --example 
 2. Extend the no-dispatch native successful-Drop probe to applicable dispatch and
    failure-retention paths. Corrupted-observation model rejection, scripted native
    errors and actual hardware outcomes retain distinct evidence scopes.
-3. Make the retained path reachable from a genuine public runtime workflow
-   without dropping or bypassing SDMA custody. Then verify runtime retention,
-   account observations, slot reuse rejection and destruction-profile events
-   through that path. A manually installed queue or scripted early shutdown
-   return is not public-workflow evidence.
-4. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
+3. Qualify the new directional route through genuine public runtime workflows,
+   including failure retention, account observations and assigned compute-lane
+   destruction-profile events. A manually installed queue or scripted early
+   shutdown return is not public-workflow evidence. Pending ordinary/XGMI/window
+   owner matrices and remaining integrated resource/model joins need completion.
+4. Retain the pool-trim owner before queue teardown admission. The current trim
+   pops each buffer into consuming `release_buffer`; a native error/panic or
+   model-loan retake failure can lose its typed cleanup owner. Preserve the
+   original vector, active buffer, completed prefix, metadata and account
+   observations through borrowed lower cleanup and model settlement. Keep the
+   existing reverse order and reject retries after failure. Runtime shutdown
+   must also terminalize trim panics before resuming the original payload, so a
+   caller catching the panic cannot reuse the logical backend.
+5. Run fresh GNU/musl regressions, source gates, compiled negatives, checker
    calibrations and independent evidence review before R126 acceptance.
-5. Qualify applicable additional queue profiles, native GPU execution, formal
+6. Qualify applicable additional queue profiles, native GPU execution, formal
    correspondence, aggregate-memory behavior and matched HIP/HSA performance.
 
 The initial ordinary-primary profile does not remove other queue profiles from
@@ -273,13 +339,14 @@ remain subsequent requirements.
 
 ## Directional SDMA Handoff
 
-The next production packet is ordinary primary plus Directional SDMA, which
-addresses the public runtime allocation-path gap. Existing
+The handoff below motivated the now-implemented ordinary-primary plus Directional
+SDMA packet. The legacy methods still used by deferred profiles have these
+limitations: existing
 `Gfx942SdmaQueueOwnerV1::destroy_queue` consumes its doorbell without retaining
 the exact unmap outcome; `release_resources` consumes its three tokens, and
 queue-set cleanup pops owners. Wrapping those consuming methods is insufficient.
 
-Add borrowed one-shot cleanup state under the public root before effects:
+The new path installs borrowed one-shot cleanup state under the public root before effects:
 original owners, exact destroy request/outcome, doorbell progress, fixed
 completion/control/ring cleanup tokens, terminal latch and completed prefixes.
 Reuse existing vectors and indexed borrowed owners rather than popping after

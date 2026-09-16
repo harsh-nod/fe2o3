@@ -4254,6 +4254,8 @@ impl KfdRuntimeBackendV1 {
         let retained_primary = retained_primary.map_err(|error| {
             self.terminal_error(format!("primary KFD teardown profile: {error}"))
         })?;
+        #[cfg(test)]
+        super::retained_release_tests::observe_selection(retained_primary);
         if retained_primary {
             let preflight = self
                 .queue

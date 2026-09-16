@@ -24,6 +24,8 @@ use fe2o3_kfd_uapi::{
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
+#[cfg(test)]
+pub(crate) mod doorbell_release_tests;
 mod teardown;
 pub(crate) use teardown::LinuxPrimaryTeardownCustodyV1;
 
@@ -1611,6 +1613,13 @@ pub(super) struct LinuxDoorbellSliceV1 {
     active: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct LinuxDoorbellReleaseProgressV1 {
+    pub(crate) started: bool,
+    pub(crate) attempted: bool,
+    pub(crate) result: Option<Result<(), rustix::io::Errno>>,
+}
+
 impl LinuxDoorbellSliceV1 {
     pub(super) fn map(
         kfd: BorrowedFd<'_>,
@@ -1740,6 +1749,10 @@ impl LinuxDoorbellSliceV1 {
     }
 
     pub(super) fn release(mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.release_retaining_v1(&mut LinuxDoorbellReleaseProgressV1::default())
+    }
+
+    pub(crate) fn validate_release_v1(&self) -> Result<(), LinuxDoorbellErrorV1> {
         if self.opener_pid != std::process::id() {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
@@ -1748,16 +1761,43 @@ impl LinuxDoorbellSliceV1 {
                 "doorbell release state",
             ));
         }
-        // SAFETY: the exact mapping remains linearly owned and no MMIO pointer
-        // or reference can escape the capability.
-        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }.map_err(
-            |source| LinuxDoorbellErrorV1::Syscall {
-                operation: "munmap complete KFD doorbell slice",
-                source,
-            },
-        )?;
+        Ok(())
+    }
+
+    pub(crate) fn release_retaining_v1(
+        &mut self,
+        progress: &mut LinuxDoorbellReleaseProgressV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.release_retaining_with_v1(progress, Self::unmap_owned_v1)
+    }
+
+    fn release_retaining_with_v1(
+        &mut self,
+        progress: &mut LinuxDoorbellReleaseProgressV1,
+        unmap: impl FnOnce(&Self) -> Result<(), rustix::io::Errno>,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if progress.started {
+            return Err(LinuxDoorbellErrorV1::InvalidObservation(
+                "doorbell release is one-shot",
+            ));
+        }
+        progress.started = true;
+        self.validate_release_v1()?;
+        progress.attempted = true;
+        let result = unmap(self);
+        progress.result = Some(result);
+        result.map_err(|source| LinuxDoorbellErrorV1::Syscall {
+            operation: "munmap complete KFD doorbell slice",
+            source,
+        })?;
         self.active = false;
         Ok(())
+    }
+
+    fn unmap_owned_v1(&self) -> Result<(), rustix::io::Errno> {
+        // SAFETY: the exact mapping remains linearly owned and no MMIO pointer
+        // or reference can escape the capability.
+        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }
     }
 
     #[cfg(feature = "live-validation")]

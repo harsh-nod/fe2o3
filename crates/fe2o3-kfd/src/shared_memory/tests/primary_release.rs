@@ -4,6 +4,60 @@ use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_quarantine_release_v1(&mut self) {
+        let _: Result<(), MemorySessionError> =
+            self.fixture
+                .engine
+                .quarantine(MemorySessionError::KernelResultMalformed(
+                    "terminal directional SDMA release",
+                ));
+    }
+
+    pub(crate) fn primary_is_quarantined_v1(&self) -> bool {
+        self.fixture.engine.phase == SharedMemorySessionPhaseV1::Quarantined
+    }
+
+    pub(crate) fn primary_release_sdma_resources_v1(
+        &mut self,
+        resources: &mut SdmaResourceCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwned
+        ));
+        let before = resources.observation();
+        let f = &mut self.fixture;
+        let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            queue_cleanup::release_v1(&mut f.engine, &mut projection, resources, || {
+                self.control_release_process_poisoned += 1;
+            })
+        }));
+        if !before.started {
+            for (index, control) in before.controls.iter().enumerate() {
+                let record = f
+                    .engine
+                    .allocations
+                    .iter()
+                    .find(|r| r.id == control.identity.id)
+                    .unwrap();
+                assert_eq!(record.generation, control.identity.generation);
+                if record.phase == SharedAllocationPhaseV1::Released {
+                    if index == 0 {
+                        assert_eq!(record.profile, SharedGttProfileV1::HostVisibleCoherent);
+                        self.disposed_host_data.push(control.identity);
+                    } else {
+                        self.disposed_queue_resources
+                            .push((control.identity, record.profile));
+                    }
+                }
+            }
+        }
+        match result {
+            Ok(result) => result,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
     pub(crate) fn primary_fail_currentness_v1(&mut self, offset: usize, panic: bool) {
         let backend = &mut self.fixture.engine.backend;
         let at = backend.currentness_calls + offset;

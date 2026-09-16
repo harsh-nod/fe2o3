@@ -310,6 +310,20 @@ pub(super) struct ProjectionV1<'a> {
 }
 
 impl<'a> ProjectionV1<'a> {
+    pub(super) fn preflight_revisions<B: MemoryBackend>(
+        &self,
+        engine: &mut SharedMemoryEngine<B>,
+        needed: u64,
+        process_poison: impl FnOnce(),
+    ) -> Result<(), MemorySessionError> {
+        preflight_queue_foundation_native_memory_transition_v1(
+            self.foundation,
+            engine,
+            needed,
+            process_poison,
+        )
+    }
+
     pub(super) fn new(foundation: &'a mut QueueModelFoundationV1, vm: VmKeyV1) -> Self {
         Self {
             foundation,

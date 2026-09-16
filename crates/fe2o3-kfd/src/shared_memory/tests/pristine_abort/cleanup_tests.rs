@@ -7,6 +7,8 @@ use transitions::ProjectionFaultV1 as Fault;
 mod data;
 #[path = "queue_tests.rs"]
 mod queue;
+#[path = "sdma_tests.rs"]
+mod sdma;
 #[path = "split_tests.rs"]
 mod split;
 
@@ -339,9 +341,9 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
         )
     }
 
-    pub(crate) fn primary_queue_cleanup_snapshot_v1(
+    pub(crate) fn primary_queue_cleanup_snapshot_v1<const N: usize>(
         &self,
-        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1,
+        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1<N>,
     ) -> Snapshot {
         assert!(matches!(
             self.fixture.ownership.phase,

@@ -32,12 +32,11 @@ pub struct PrimaryQueueReleaseCustodyV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
-    /// Selects only the ordinary primary profile; errors never authorize fallback.
+    /// Selects ordinary primary with optional directional SDMA; errors never authorize fallback.
     pub fn supports_retained_primary_release_v1(
         &self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
-        if self.sdma.is_some()
-            || self.striped_sdma.is_some()
+        if self.striped_sdma.is_some()
             || !self.sdma_pool_free.is_empty()
             || self.sdma_outstanding_buffers != 0
             || self.has_any_persistent_compute_attachment_v1()
@@ -45,6 +44,11 @@ impl ComputeAqlQueueSessionV1 {
                 .auxiliary_compute_lanes
                 .iter()
                 .any(|lane| lane.state.is_some())
+        {
+            return Ok(false);
+        }
+        if let Some(sdma) = &self.sdma
+            && !sdma.supports_retained_directional_release_v1()?
         {
             return Ok(false);
         }
@@ -100,6 +104,9 @@ impl ComputeAqlQueueSessionV1 {
         self.completion_owner.ensure_releasable()?;
         if let Some(dispatch) = &self.dispatch {
             dispatch.ensure_releasable()?;
+        }
+        if let Some(sdma) = &self.sdma {
+            sdma.preflight_retained_directional_release_v1(self.key, self.observation.queue_id)?;
         }
         let engine = self
             .engine

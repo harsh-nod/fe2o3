@@ -1,0 +1,18 @@
+
+running 13 tests
+test queue::live::tests::userptr_control_entry_failure_is_terminal_for_every_queue_backing ... ok
+test queue::live::tests::userptr_inner_creation_failure_is_always_terminal ... ok
+test shared_memory::tests::allocation::pending_allocation_userptr_currentness_retains_returned_mapping_before_alloc ... ok
+test shared_memory::tests::allocation::pending_allocation_userptr_retains_only_returned_mapping_and_raw_output ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_currentness_sweep_preserves_userptr_reservation_and_disposal_boundaries ... ok
+test shared_memory::tests::userptr_allocation_currentness_failures_require_process_terminal_custody ... ok
+test shared_memory::tests::userptr_aql_control_is_exact_same_va_coherent_page ... ok
+test shared_memory::tests::userptr_aql_control_malformed_result_quarantines_without_cleanup ... ok
+test shared_memory::tests::userptr_output_mmap_offset_is_opaque_and_not_collision_authority ... ok
+test shared_memory::tests::userptr_probe_frees_bo_before_unmapping_original_vma ... ok
+test shared_memory::tests::userptr_probe_native_failures_quarantine_without_reordered_cleanup ... ok
+test shared_memory::tests::userptr_probe_ring_is_exact_one_x_registration ... ok
+test shared_memory::tests::userptr_release_currentness_failures_retain_exact_terminal_custody ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 1284 filtered out; finished in 0.17s
+

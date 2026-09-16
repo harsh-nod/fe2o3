@@ -1,0 +1,1873 @@
+diff --git a/crates/fe2o3-kfd/src/queue_linux.rs b/crates/fe2o3-kfd/src/queue_linux.rs
+index bb04a3a5f..9e5a87ffe 100644
+--- a/crates/fe2o3-kfd/src/queue_linux.rs
++++ b/crates/fe2o3-kfd/src/queue_linux.rs
+@@ -26,0 +27,2 @@ use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
++#[cfg(test)]
++pub(crate) mod doorbell_release_tests;
+@@ -1613,0 +1616,7 @@ pub(super) struct LinuxDoorbellSliceV1 {
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++pub(crate) struct LinuxDoorbellReleaseProgressV1 {
++    pub(crate) started: bool,
++    pub(crate) attempted: bool,
++    pub(crate) result: Option<Result<(), rustix::io::Errno>>,
++}
++
+@@ -1742,0 +1752,4 @@ impl LinuxDoorbellSliceV1 {
++        self.release_retaining_v1(&mut LinuxDoorbellReleaseProgressV1::default())
++    }
++
++    pub(crate) fn validate_release_v1(&self) -> Result<(), LinuxDoorbellErrorV1> {
+@@ -1751,8 +1764,29 @@ impl LinuxDoorbellSliceV1 {
+-        // SAFETY: the exact mapping remains linearly owned and no MMIO pointer
+-        // or reference can escape the capability.
+-        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }.map_err(
+-            |source| LinuxDoorbellErrorV1::Syscall {
+-                operation: "munmap complete KFD doorbell slice",
+-                source,
+-            },
+-        )?;
++        Ok(())
++    }
++
++    pub(crate) fn release_retaining_v1(
++        &mut self,
++        progress: &mut LinuxDoorbellReleaseProgressV1,
++    ) -> Result<(), LinuxDoorbellErrorV1> {
++        self.release_retaining_with_v1(progress, Self::unmap_owned_v1)
++    }
++
++    fn release_retaining_with_v1(
++        &mut self,
++        progress: &mut LinuxDoorbellReleaseProgressV1,
++        unmap: impl FnOnce(&Self) -> Result<(), rustix::io::Errno>,
++    ) -> Result<(), LinuxDoorbellErrorV1> {
++        if progress.started {
++            return Err(LinuxDoorbellErrorV1::InvalidObservation(
++                "doorbell release is one-shot",
++            ));
++        }
++        progress.started = true;
++        self.validate_release_v1()?;
++        progress.attempted = true;
++        let result = unmap(self);
++        progress.result = Some(result);
++        result.map_err(|source| LinuxDoorbellErrorV1::Syscall {
++            operation: "munmap complete KFD doorbell slice",
++            source,
++        })?;
+@@ -1762,0 +1797,6 @@ impl LinuxDoorbellSliceV1 {
++    fn unmap_owned_v1(&self) -> Result<(), rustix::io::Errno> {
++        // SAFETY: the exact mapping remains linearly owned and no MMIO pointer
++        // or reference can escape the capability.
++        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }
++    }
++
+diff --git a/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs b/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs
+new file mode 100644
+index 000000000..e6c7202b4
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs
+@@ -0,0 +1,108 @@
++use super::*;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++pub(crate) fn local_doorbell() -> LinuxDoorbellSliceV1 {
++    let bytes = KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES as usize;
++    // SAFETY: this independent anonymous VMA is exclusively owned by the returned
++    // test slice. It is never MMIO; tests unmap it once after their assertions.
++    let address = unsafe {
++        rustix::mm::mmap_anonymous(
++            core::ptr::null_mut(),
++            bytes,
++            ProtFlags::READ | ProtFlags::WRITE,
++            MapFlags::PRIVATE,
++        )
++    }
++    .unwrap();
++    LinuxDoorbellSliceV1 {
++        address: NonNull::new(address).unwrap(),
++        plan: DoorbellMmapPlanV1 {
++            encoded_slice_offset: 0,
++            queue_byte_offset: 0,
++            slice_bytes: bytes,
++        },
++        opener_pid: std::process::id(),
++        active: true,
++    }
++}
++
++pub(crate) fn cleanup_local_doorbell(doorbell: &mut LinuxDoorbellSliceV1) {
++    if doorbell.active {
++        doorbell.unmap_owned_v1().unwrap();
++        doorbell.active = false;
++    }
++}
++
++pub(crate) fn release_local_doorbell(
++    doorbell: &mut LinuxDoorbellSliceV1,
++    progress: &mut LinuxDoorbellReleaseProgressV1,
++    fault: Option<(usize, bool)>,
++) -> Result<(), LinuxDoorbellErrorV1> {
++    doorbell.release_retaining_with_v1(progress, |owner| {
++        if let Some((occurrence, panic)) = fault {
++            if panic {
++                std::panic::panic_any(("sdma-doorbell", occurrence));
++            }
++            return Err(rustix::io::Errno::IO);
++        }
++        owner.unmap_owned_v1()
++    })
++}
++
++#[test]
++fn retained_doorbell_success_error_panic_and_preflight_are_one_shot() {
++    for mode in 0..4 {
++        let mut owner = local_doorbell();
++        let address = owner.address;
++        let mut progress = LinuxDoorbellReleaseProgressV1::default();
++        if mode == 3 {
++            owner.opener_pid = std::process::id().wrapping_add(1);
++        }
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            owner.release_retaining_with_v1(&mut progress, |owner| match mode {
++                0 => owner.unmap_owned_v1(),
++                1 => Err(rustix::io::Errno::IO),
++                2 => std::panic::panic_any("doorbell unmap panic"),
++                _ => unreachable!(),
++            })
++        }));
++        match mode {
++            0 => result.unwrap().unwrap(),
++            1 => assert!(matches!(
++                result.unwrap(),
++                Err(LinuxDoorbellErrorV1::Syscall {
++                    source: rustix::io::Errno::IO,
++                    ..
++                })
++            )),
++            2 => assert_eq!(
++                result.unwrap_err().downcast_ref::<&str>(),
++                Some(&"doorbell unmap panic")
++            ),
++            3 => assert!(matches!(
++                result.unwrap(),
++                Err(LinuxDoorbellErrorV1::ProcessChanged)
++            )),
++            _ => unreachable!(),
++        }
++        assert_eq!(owner.address, address);
++        assert_eq!(owner.active, mode != 0);
++        assert!(progress.started);
++        assert_eq!(progress.attempted, mode != 3);
++        assert_eq!(
++            progress.result,
++            match mode {
++                0 => Some(Ok(())),
++                1 => Some(Err(rustix::io::Errno::IO)),
++                _ => None,
++            }
++        );
++        let before = (progress, owner.active, owner.address, owner.opener_pid);
++        assert!(owner.release_retaining_v1(&mut progress).is_err());
++        assert_eq!(
++            (progress, owner.active, owner.address, owner.opener_pid),
++            before
++        );
++        cleanup_local_doorbell(&mut owner);
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs
+new file mode 100644
+index 000000000..98c7a9bd0
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_sdma_tests.rs
+@@ -0,0 +1,263 @@
++use super::*;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
++    let (mut parent, t, gate) = constructed(dispatch);
++    let engine = &mut parent.engine;
++    let loan = engine
++        .backend
++        .session
++        .primary_loan(&mut engine.foundation)
++        .unwrap();
++    parent.sdma = Some(crate::sdma::retained_release::fixture::directional(
++        &mut engine.backend.session,
++        parent.key,
++    ));
++    engine
++        .backend
++        .session
++        .primary_reclaim(&mut engine.foundation, loan)
++        .unwrap();
++    parent.preflight_release().unwrap();
++    t.borrow_mut().calls.clear();
++    (parent, t, gate)
++}
++
++#[test]
++fn constructed_directional_release_orders_original_owners_and_refunds_all_backing() {
++    for dispatch in [false, true] {
++        let (mut parent, t, gate) = with_sdma(dispatch);
++        let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++        let destroyed = state.release_in_place(&mut parent).unwrap();
++        assert_eq!(destroyed.released_resources, 11);
++        assert!(parent.sdma.is_none());
++        assert!(state.sdma.as_ref().unwrap().is_complete());
++        assert!(state.complete);
++        parent
++            .engine
++            .backend
++            .session
++            .primary_assert_all_released_v1();
++        let calls = t.borrow().calls.clone();
++        let position = |name| calls.iter().position(|&c| c == name).unwrap();
++        assert!(position("sdma-destroy-h2d") < position("sdma-destroy-d2h"));
++        assert!(position("sdma-destroy-d2h") < position("destroy"));
++        assert!(position("release-resources") < position("sdma-release-resources"));
++        assert!(position("sdma-release-resources") < position("release-signals"));
++        assert_eq!(
++            calls
++                .iter()
++                .filter(|&&c| c == "sdma-release-resources")
++                .count(),
++            2
++        );
++        assert_eq!(gate.observation(), (false, false));
++        assert_no_retry(&mut parent, &mut state, &t);
++        state.sdma.as_mut().unwrap().cleanup_local_mappings();
++    }
++}
++
++#[test]
++fn constructed_directional_release_failures_keep_prefix_and_do_not_complete_primary() {
++    for (name, count) in [
++        ("sdma-topology", 2),
++        ("sdma-currentness", 4),
++        ("sdma-destroy-h2d", 1),
++        ("sdma-destroy-d2h", 1),
++        ("sdma-doorbell", 2),
++        ("sdma-release-resources", 2),
++    ] {
++        for occurrence in 1..=count {
++            for panic in [false, true] {
++                let (mut parent, t, gate) = with_sdma(false);
++                t.borrow_mut().fault = Some((name, occurrence, panic));
++                let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++                let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, usize)>(),
++                        Some(&(name, occurrence))
++                    );
++                } else {
++                    assert!(result.unwrap().is_err());
++                }
++                assert!(parent.poisoned && !state.complete);
++                assert!(parent.engine.backend.session.primary_is_quarantined_v1());
++                assert!(parent.sdma.is_none());
++                assert!(state.sdma.is_some());
++                assert!(parent.signals.is_some());
++                let observed = state.sdma.as_ref().unwrap().observation();
++                let completed = match (name, occurrence) {
++                    ("sdma-topology", 1)
++                    | ("sdma-doorbell", 1)
++                    | ("sdma-currentness", 1 | 2)
++                    | ("sdma-destroy-h2d", _) => 0,
++                    ("sdma-currentness", 3 | 4)
++                    | ("sdma-destroy-d2h", _)
++                    | ("sdma-doorbell", 2) => 1,
++                    _ => 2,
++                };
++                assert_eq!(
++                    observed.state,
++                    (
++                        true,
++                        name == "sdma-release-resources",
++                        true,
++                        completed,
++                        if name == "sdma-release-resources" {
++                            occurrence - 1
++                        } else {
++                            0
++                        }
++                    )
++                );
++                for (index, owner) in observed.owners.iter().enumerate() {
++                    let call = if index == 1 {
++                        "sdma-destroy-h2d"
++                    } else {
++                        "sdma-destroy-d2h"
++                    };
++                    let attempted = t.borrow().calls.contains(&call);
++                    let failed = name == call;
++                    assert_eq!(owner.attempted, attempted);
++                    assert_eq!(
++                        owner.request,
++                        attempted.then(|| fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs::new(
++                            100 + index as u32
++                        ))
++                    );
++                    assert_eq!(
++                        owner.result,
++                        if !attempted || (failed && panic) {
++                            None
++                        } else if failed {
++                            Some(Err(rustix::io::Errno::IO))
++                        } else {
++                            Some(Ok(()))
++                        }
++                    );
++                    let doorbell_failed = name == "sdma-doorbell" && occurrence == 2 - index;
++                    assert_eq!(owner.destroyed, attempted && !failed && !doorbell_failed);
++                    assert_eq!(owner.doorbell.attempted, attempted && !failed);
++                    assert_eq!(
++                        owner.doorbell.result,
++                        if !attempted || failed || (doorbell_failed && panic) {
++                            None
++                        } else if doorbell_failed {
++                            Some(Err(rustix::io::Errno::IO))
++                        } else {
++                            Some(Ok(()))
++                        }
++                    );
++                    assert!(owner.poisoned);
++                }
++                assert_eq!(gate.observation(), (false, true));
++                if name != "sdma-release-resources" {
++                    assert!(!state.destroy.attempted);
++                    assert!(state.resources.is_none());
++                }
++                assert_no_retry(&mut parent, &mut state, &t);
++                state.sdma.as_mut().unwrap().cleanup_local_mappings();
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_directional_release_retains_mutated_destroy_argument_and_raw_outcome() {
++    for id in [101, 100] {
++        for panic in [false, true] {
++            let (mut parent, t, _gate) = with_sdma(false);
++            t.borrow_mut().sdma_destroy_mutation = Some((id, panic));
++            let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++            let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, u32)>(),
++                    Some(&("mutated SDMA destroy", id))
++                );
++            } else {
++                assert!(result.unwrap().is_err());
++            }
++            let observed = state.sdma.as_ref().unwrap().observation();
++            assert_eq!(observed.state.3, usize::from(id == 100));
++            let owner = &observed.owners[(id - 100) as usize];
++            assert_eq!(
++                owner.request,
++                Some(fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs {
++                    queue_id: id,
++                    pad: 17
++                })
++            );
++            assert!(owner.attempted && owner.poisoned);
++            assert_eq!(owner.result, (!panic).then_some(Ok(())));
++            assert!(!owner.destroyed && !owner.doorbell.started);
++            assert!(!state.destroy.attempted);
++            assert!(parent.engine.backend.session.primary_is_quarantined_v1());
++            assert_no_retry(&mut parent, &mut state, &t);
++            state.sdma.as_mut().unwrap().cleanup_local_mappings();
++        }
++    }
++}
++
++#[test]
++fn constructed_directional_release_rejects_bad_second_owner_before_any_effect() {
++    for case in 0..9 {
++        let (mut parent, t, gate) = with_sdma(false);
++        crate::sdma::retained_release::fixture::corrupt_preflight(
++            parent.sdma.as_mut().unwrap(),
++            case,
++            parent.queue_id,
++        );
++        let before = parent
++            .engine
++            .backend
++            .session
++            .primary_release_memory_snapshot_v1(&parent.engine.foundation);
++        assert!(parent.preflight_release().is_err());
++        assert!(t.borrow().calls.is_empty());
++        assert_eq!(gate.teardown_count(), 0);
++        assert!(!parent.poisoned);
++        assert_eq!(
++            parent
++                .engine
++                .backend
++                .session
++                .primary_release_memory_snapshot_v1(&parent.engine.foundation),
++            before
++        );
++        crate::sdma::retained_release::fixture::cleanup_set(parent.sdma.as_mut().unwrap());
++    }
++}
++
++#[test]
++fn constructed_directional_release_late_native_resource_failure_keeps_real_prefix() {
++    for occurrence in 1..=2 {
++        for panic in [false, true] {
++            let (mut parent, t, gate) = with_sdma(false);
++            t.borrow_mut().sdma_resource_native_fault = Some((occurrence, panic));
++            let mut state = PrimaryReleaseStateV1::<Fixture>::new();
++            let result = catch_unwind(AssertUnwindSafe(|| state.release_in_place(&mut parent)));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, &str)>(),
++                    Some(&("N2 native panic", "release_va_reservation"))
++                );
++            } else {
++                assert!(result.unwrap().is_err());
++            }
++            state.sdma.as_ref().unwrap().assert_late_resource_failure(
++                &parent.engine.backend.session,
++                t.borrow().sdma_resource_snapshot.as_ref().unwrap(),
++                occurrence,
++                panic,
++            );
++            assert!(state.resources.as_ref().unwrap().is_complete());
++            assert!(state.signals.is_none() && parent.signals.is_some());
++            assert!(parent.poisoned && !state.complete);
++            assert_eq!(gate.observation(), (false, true));
++            assert_no_retry(&mut parent, &mut state, &t);
++            state.sdma.as_mut().unwrap().cleanup_local_mappings();
++        }
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index 2c5ca7d2f..01e360d16 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -13,0 +14,2 @@ mod fault_cases;
++#[path = "integration_release_sdma_tests.rs"]
++mod sdma_cases;
+@@ -22,0 +25 @@ struct Parent {
++    sdma: Option<Gfx942SdmaQueueSetV1>,
+@@ -42,0 +46,3 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
++        if let Some(sdma) = &self.sdma {
++            sdma.preflight_retained_directional_release_v1(self.key, self.queue_id)?;
++        }
+@@ -61,0 +68 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
++            sdma: &mut self.sdma,
+@@ -112,0 +120,68 @@ impl PrimaryReleaseMemoryV1 for Memory {
++impl crate::sdma::retained_release::SdmaReleaseMemoryV1 for Memory {
++    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError> {
++        memory_step("sdma-currentness")?;
++        self.primary_currentness()
++    }
++    fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError> {
++        memory_step("sdma-topology")?;
++        self.primary_currentness()
++    }
++    fn sdma_destroy(
++        &mut self,
++        args: &mut fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
++    ) -> Result<(), rustix::io::Errno> {
++        if let Some((id, panic)) = trace().borrow().sdma_destroy_mutation
++            && id == args.queue_id
++        {
++            args.pad = 17;
++            if panic {
++                std::panic::panic_any(("mutated SDMA destroy", id));
++            }
++        }
++        step(if args.queue_id == 101 {
++            "sdma-destroy-h2d"
++        } else {
++            "sdma-destroy-d2h"
++        })
++        .map_err(|_| rustix::io::Errno::IO)
++    }
++    fn sdma_release_resources(
++        &mut self,
++        resources: &mut crate::shared_memory::SdmaResourceCleanupCustodyV1,
++    ) -> Result<(), MemorySessionError> {
++        memory_step("sdma-release-resources")?;
++        let t = trace();
++        let mut t = t.borrow_mut();
++        let occurrence = t
++            .calls
++            .iter()
++            .filter(|&&name| name == "sdma-release-resources")
++            .count();
++        if let Some((nth, panic)) = t.sdma_resource_native_fault
++            && nth == occurrence
++        {
++            t.sdma_resource_snapshot = Some(self.primary_queue_cleanup_snapshot_v1(resources));
++            self.primary_fail_cleanup_call_v1(11, "release_va_reservation", panic);
++        }
++        drop(t);
++        self.primary_release_sdma_resources_v1(resources)
++    }
++    fn sdma_release_doorbell(
++        &mut self,
++        doorbell: &mut crate::queue_linux::LinuxDoorbellSliceV1,
++        progress: &mut crate::queue_linux::LinuxDoorbellReleaseProgressV1,
++    ) -> Result<(), crate::queue_linux::LinuxDoorbellErrorV1> {
++        let occurrence = record("sdma-doorbell");
++        let fault = trace().borrow().fault.and_then(|(name, nth, panic)| {
++            (name == "sdma-doorbell" && nth == occurrence).then_some((nth, panic))
++        });
++        crate::queue_linux::doorbell_release_tests::release_local_doorbell(
++            doorbell, progress, fault,
++        )
++    }
++    fn sdma_release_poison(&mut self) {
++        self.primary_quarantine_release_v1();
++        trace().borrow_mut().poison = true;
++    }
++}
++
+@@ -146,0 +222 @@ fn constructed_on_gate(
++        sdma: None,
+@@ -233,0 +310 @@ fn assert_no_retry(
++    let sdma = state.sdma.as_ref().map(|s| s.observation());
+@@ -276,0 +354 @@ fn assert_no_retry(
++    assert_eq!(state.sdma.as_ref().map(|s| s.observation()), sdma);
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+index c4a6bdb75..8951ddd8f 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+@@ -44,0 +45,3 @@ struct Trace {
++    sdma_destroy_mutation: Option<(u32, bool)>,
++    sdma_resource_native_fault: Option<(usize, bool)>,
++    sdma_resource_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
+diff --git a/crates/fe2o3-kfd/src/queue_live/primary_release.rs b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+index 9c78950a2..b525fb678 100644
+--- a/crates/fe2o3-kfd/src/queue_live/primary_release.rs
++++ b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+@@ -35 +35 @@ impl ComputeAqlQueueSessionV1 {
+-    /// Selects only the ordinary primary profile; errors never authorize fallback.
++    /// Selects ordinary primary with optional directional SDMA; errors never authorize fallback.
+@@ -39,2 +39 @@ impl ComputeAqlQueueSessionV1 {
+-        if self.sdma.is_some()
+-            || self.striped_sdma.is_some()
++        if self.striped_sdma.is_some()
+@@ -50,0 +50,5 @@ impl ComputeAqlQueueSessionV1 {
++        if let Some(sdma) = &self.sdma
++            && !sdma.supports_retained_directional_release_v1()?
++        {
++            return Ok(false);
++        }
+@@ -103,0 +108,3 @@ impl ComputeAqlQueueSessionV1 {
++        if let Some(sdma) = &self.sdma {
++            sdma.preflight_retained_directional_release_v1(self.key, self.observation.queue_id)?;
++        }
+diff --git a/crates/fe2o3-kfd/src/queue_live/primary_release/driver.rs b/crates/fe2o3-kfd/src/queue_live/primary_release/driver.rs
+index d26ad42ae..5a7836433 100644
+--- a/crates/fe2o3-kfd/src/queue_live/primary_release/driver.rs
++++ b/crates/fe2o3-kfd/src/queue_live/primary_release/driver.rs
+@@ -4,0 +5 @@ use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
++use crate::sdma::retained_release::{DirectionalSdmaReleaseCustodyV1, SdmaReleaseMemoryV1};
+@@ -8 +9 @@ pub(in crate::queue::live) trait PrimaryReleaseMemoryV1:
+-    PrimaryMemoryV1 + PristineControlReleaseV1 + DispatchDataReleaseV1
++    PrimaryMemoryV1 + PristineControlReleaseV1 + DispatchDataReleaseV1 + SdmaReleaseMemoryV1
+@@ -66,0 +68 @@ pub(in crate::queue::live) struct PrimaryReleasePartsV1<'a, E: PrimaryEnvironmen
++    pub(in crate::queue::live) sdma: &'a mut Option<Gfx942SdmaQueueSetV1>,
+@@ -82,0 +85 @@ pub(in crate::queue::live) struct PrimaryReleaseStateV1<E: PrimaryReleaseEnviron
++    pub(in crate::queue::live) sdma: Option<DirectionalSdmaReleaseCustodyV1>,
+@@ -146,0 +150 @@ where
++            sdma: None,
+@@ -184,0 +189,4 @@ where
++        self.sdma = parts
++            .sdma
++            .take()
++            .map(|set| DirectionalSdmaReleaseCustodyV1::new(set, parts.key, parts.queue_id));
+@@ -190,0 +199,3 @@ where
++        if let Some(sdma) = &mut self.sdma {
++            sdma.destroy_in_place(&mut engine.backend.session)?;
++        }
+@@ -236,0 +248,8 @@ where
++        if let Some(sdma) = &mut self.sdma {
++            sdma.release_resources_in_place(memory)?;
++            if !sdma.is_complete() {
++                return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                    "incomplete directional SDMA release",
++                ));
++            }
++        }
+@@ -266 +285,4 @@ where
+-        Ok(destroyed_queue_observation(parts.queue_id))
++        Ok(destroyed_queue_observation_with_additional_resources(
++            parts.queue_id,
++            if self.sdma.is_some() { 6 } else { 0 },
++        ))
+@@ -290,0 +313 @@ impl PrimaryReleaseParentV1<LinuxPrimaryEnvironmentV1> for ComputeAqlQueueSessio
++            sdma: &mut self.sdma,
+diff --git a/crates/fe2o3-kfd/src/sdma.rs b/crates/fe2o3-kfd/src/sdma.rs
+index 55f578322..f840fd073 100644
+--- a/crates/fe2o3-kfd/src/sdma.rs
++++ b/crates/fe2o3-kfd/src/sdma.rs
+@@ -50,0 +51 @@ mod multi_queue;
++pub(crate) mod retained_release;
+diff --git a/crates/fe2o3-kfd/src/sdma/retained_release.rs b/crates/fe2o3-kfd/src/sdma/retained_release.rs
+new file mode 100644
+index 000000000..f0c1e8650
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/sdma/retained_release.rs
+@@ -0,0 +1,276 @@
++//! Borrowed directional teardown, rooted before any destructive operation.
++
++#![forbid(unsafe_code)]
++
++use super::*;
++use crate::queue_linux::LinuxDoorbellReleaseProgressV1;
++use crate::shared_memory::SdmaResourceCleanupCustodyV1;
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++#[cfg(test)]
++pub(crate) mod fixture;
++
++pub(crate) trait SdmaReleaseMemoryV1 {
++    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError>;
++    fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError>;
++    fn sdma_destroy(
++        &mut self,
++        args: &mut KfdIoctlDestroyQueueArgs,
++    ) -> Result<(), rustix::io::Errno>;
++    fn sdma_release_doorbell(
++        &mut self,
++        doorbell: &mut LinuxDoorbellSliceV1,
++        progress: &mut LinuxDoorbellReleaseProgressV1,
++    ) -> Result<(), crate::queue_linux::LinuxDoorbellErrorV1> {
++        doorbell.release_retaining_v1(progress)
++    }
++    fn sdma_release_resources(
++        &mut self,
++        resources: &mut SdmaResourceCleanupCustodyV1,
++    ) -> Result<(), MemorySessionError>;
++    fn sdma_release_poison(&mut self);
++}
++
++impl SdmaReleaseMemoryV1 for SharedGttMemorySessionV1 {
++    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError> {
++        self.check_queue_currentness()
++    }
++    fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError> {
++        self.check_gfx942_sdma_topology_capability_currentness()
++    }
++    fn sdma_destroy(
++        &mut self,
++        args: &mut KfdIoctlDestroyQueueArgs,
++    ) -> Result<(), rustix::io::Errno> {
++        destroy_queue(self.kfd_fd(), args)
++    }
++    fn sdma_release_resources(
++        &mut self,
++        resources: &mut SdmaResourceCleanupCustodyV1,
++    ) -> Result<(), MemorySessionError> {
++        self.release_queue_resources_in_place_v1(resources)
++    }
++    fn sdma_release_poison(&mut self) {
++        let _ = self.quarantine_queue_composition("terminal directional SDMA release");
++        permanently_poison_process_global_kfd_runtime_gate_v1();
++    }
++}
++
++#[derive(Default)]
++struct OwnerProgressV1 {
++    request: Option<KfdIoctlDestroyQueueArgs>,
++    attempted: bool,
++    result: Option<Result<(), rustix::io::Errno>>,
++    doorbell: LinuxDoorbellReleaseProgressV1,
++    resources: Option<SdmaResourceCleanupCustodyV1>,
++}
++
++pub(crate) struct DirectionalSdmaReleaseCustodyV1 {
++    set: Gfx942SdmaQueueSetV1,
++    owner: QueueKeyV1,
++    primary_id: u32,
++    progress: [OwnerProgressV1; 2],
++    started: bool,
++    resources_started: bool,
++    failed: bool,
++    destroyed: usize,
++    released: usize,
++}
++
++impl Gfx942SdmaQueueSetV1 {
++    pub(crate) fn supports_retained_directional_release_v1(
++        &self,
++    ) -> Result<bool, Gfx942SdmaErrorV1> {
++        match self {
++            Self::Directional(owners) if owners.len() == 2 => Ok(true),
++            Self::Directional(_) => {
++                Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"))
++            }
++            Self::TerminalRetained { .. } => Err(Gfx942SdmaErrorV1::Contract(
++                "terminal retained SDMA queues require process teardown",
++            )),
++            _ => Ok(false),
++        }
++    }
++
++    pub(crate) fn preflight_retained_directional_release_v1(
++        &self,
++        key: QueueKeyV1,
++        primary_id: u32,
++    ) -> Result<(), Gfx942SdmaErrorV1> {
++        let Self::Directional(owners) = self else {
++            return Err(Gfx942SdmaErrorV1::Contract("retained SDMA release profile"));
++        };
++        if owners.len() != 2 || owners[0].queue_id == owners[1].queue_id {
++            return Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"));
++        }
++        for (index, owner) in owners.iter().enumerate() {
++            owner.require_live()?;
++            if owner.owner != key
++                || owner.queue_id == primary_id
++                || owner.engine_index != Some(index as u32)
++                || owner.records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
++                || owner.xgmi_records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
++                || owner.persistent_window_slots.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
++                || owner.persistent_window_records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
++                || owner.ring.is_none()
++                || owner.control.is_none()
++                || owner.completions.is_none()
++            {
++                return Err(Gfx942SdmaErrorV1::Contract(
++                    "directional SDMA release owners",
++                ));
++            }
++            if owner.records.iter().any(Option::is_some)
++                || owner.xgmi_records.iter().any(Option::is_some)
++                || owner.persistent_window_slots.iter().any(Option::is_some)
++                || owner.persistent_window_records.iter().any(Option::is_some)
++                || owner.uncertain_xgmi_ticket.is_some()
++            {
++                return Err(Gfx942SdmaErrorV1::Pending);
++            }
++            owner
++                .doorbell
++                .as_ref()
++                .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
++                .validate_release_v1()
++                .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA doorbell release owner"))?;
++        }
++        Ok(())
++    }
++}
++
++impl DirectionalSdmaReleaseCustodyV1 {
++    pub(crate) fn new(set: Gfx942SdmaQueueSetV1, owner: QueueKeyV1, primary_id: u32) -> Self {
++        Self {
++            set,
++            owner,
++            primary_id,
++            progress: std::array::from_fn(|_| OwnerProgressV1::default()),
++            started: false,
++            resources_started: false,
++            failed: false,
++            destroyed: 0,
++            released: 0,
++        }
++    }
++
++    fn settle(
++        &mut self,
++        memory: &mut impl SdmaReleaseMemoryV1,
++        result: std::thread::Result<Result<(), Gfx942SdmaErrorV1>>,
++    ) -> Result<(), Gfx942SdmaErrorV1> {
++        match result {
++            Ok(Ok(())) => Ok(()),
++            result => {
++                self.failed = true;
++                if let Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set {
++                    for owner in owners {
++                        owner.poisoned = true;
++                    }
++                }
++                memory.sdma_release_poison();
++                match result {
++                    Ok(Err(error)) => Err(error),
++                    Err(payload) => resume_unwind(payload),
++                    Ok(Ok(())) => unreachable!(),
++                }
++            }
++        }
++    }
++
++    pub(crate) fn destroy_in_place(
++        &mut self,
++        memory: &mut impl SdmaReleaseMemoryV1,
++    ) -> Result<(), Gfx942SdmaErrorV1> {
++        if self.started {
++            return Err(Gfx942SdmaErrorV1::Contract("SDMA destroy is one-shot"));
++        }
++        self.started = true;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            self.set
++                .preflight_retained_directional_release_v1(self.owner, self.primary_id)?;
++            memory.sdma_release_topology()?;
++            let Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set else {
++                unreachable!()
++            };
++            for index in [GFX942_SDMA_H2D_OWNER_SLOT_V1, GFX942_SDMA_D2H_OWNER_SLOT_V1] {
++                let owner = &mut owners[index];
++                let progress = &mut self.progress[index];
++                memory.sdma_release_currentness()?;
++                let original = KfdIoctlDestroyQueueArgs::new(owner.queue_id);
++                progress.request = Some(original);
++                owner.poisoned = true;
++                progress.attempted = true;
++                // The actual ioctl argument is rooted even if the call unwinds.
++                let result =
++                    memory.sdma_destroy(progress.request.as_mut().expect("retained request"));
++                progress.result = Some(result);
++                result.map_err(|_| Gfx942SdmaErrorV1::QueueDestroyIndeterminate)?;
++                if progress.request != Some(original) {
++                    return Err(Gfx942SdmaErrorV1::Contract(
++                        "kernel changed immutable SDMA DESTROY_QUEUE inputs",
++                    ));
++                }
++                memory
++                    .sdma_release_doorbell(
++                        owner.doorbell.as_mut().expect("preflight doorbell"),
++                        &mut progress.doorbell,
++                    )
++                    .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA doorbell release"))?;
++                owner.destroyed = true;
++                memory.sdma_release_currentness()?;
++                owner.poisoned = false;
++                self.destroyed += 1;
++            }
++            memory.sdma_release_topology()?;
++            Ok(())
++        }));
++        self.settle(memory, result)
++    }
++
++    pub(crate) fn release_resources_in_place(
++        &mut self,
++        memory: &mut impl SdmaReleaseMemoryV1,
++    ) -> Result<(), Gfx942SdmaErrorV1> {
++        if !self.started || self.failed || self.destroyed != 2 || self.resources_started {
++            return Err(Gfx942SdmaErrorV1::Contract(
++                "SDMA resources are not releasable",
++            ));
++        }
++        self.resources_started = true;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            let Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set else {
++                unreachable!()
++            };
++            for index in [GFX942_SDMA_H2D_OWNER_SLOT_V1, GFX942_SDMA_D2H_OWNER_SLOT_V1] {
++                let owner = &mut owners[index];
++                // All owners were checked before destruction; extraction is pure and infallible.
++                self.progress[index].resources = Some(SdmaResourceCleanupCustodyV1::new_sdma(
++                    owner.completions.take().expect("preflight completions"),
++                    owner
++                        .control
++                        .take()
++                        .expect("preflight control")
++                        .into_token(),
++                    owner.ring.take().expect("preflight ring").into_token(),
++                ));
++                let resources = self.progress[index]
++                    .resources
++                    .as_mut()
++                    .expect("rooted resources");
++                memory.sdma_release_resources(resources)?;
++                if !resources.is_complete() {
++                    return Err(Gfx942SdmaErrorV1::Contract("incomplete SDMA resources"));
++                }
++                self.released += 1;
++            }
++            Ok(())
++        }));
++        self.settle(memory, result)
++    }
++
++    pub(crate) fn is_complete(&self) -> bool {
++        !self.failed && self.destroyed == 2 && self.released == 2
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs b/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs
+new file mode 100644
+index 000000000..e87282d0f
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs
+@@ -0,0 +1,187 @@
++use super::*;
++use crate::queue_linux::doorbell_release_tests::{cleanup_local_doorbell, local_doorbell};
++use crate::shared_memory::PreparationMemoryFixtureV1;
++
++pub(crate) fn directional(
++    memory: &mut PreparationMemoryFixtureV1,
++    key: QueueKeyV1,
++) -> Gfx942SdmaQueueSetV1 {
++    let owners = (0..2)
++        .map(|index| {
++            let mut ring = memory.allocate::<AqlQueueGttV1>(4096).unwrap();
++            memory
++                .primary_write(&mut ring, |bytes| bytes.fill(0))
++                .unwrap();
++            let ring = memory.map(ring).unwrap();
++            let ring = memory
++                .primary_retain::<AqlRingResourceRoleV1, _, _>(ring)
++                .unwrap();
++            let mut control = memory.allocate::<UserptrAqlControlGttV1>(4096).unwrap();
++            memory
++                .primary_write(&mut control, initialize_amd_aql_control)
++                .unwrap()
++                .unwrap();
++            let control = memory.map(control).unwrap();
++            let control = memory
++                .primary_retain::<AqlControlResourceRoleV1, _, _>(control)
++                .unwrap();
++            let mut completions = memory.allocate::<HostVisibleCoherentGttV1>(4096).unwrap();
++            memory
++                .primary_write(&mut completions, |bytes| bytes.fill(0))
++                .unwrap();
++            let completions = memory.map(completions).unwrap();
++            let host = prepare_sdma_queue_host_resources()
++                .unwrap_or_else(|_| panic!("fixture roster allocation"));
++            PreparedGfx942SdmaQueueV1 {
++                owner: key,
++                engine_index: Some(index),
++                ring,
++                control,
++                completions,
++                records: host.records,
++                xgmi_records: host.xgmi_records,
++                persistent_window_slots: host.persistent_window_slots,
++                persistent_window_records: host.persistent_window_records,
++            }
++            .into_live(100 + index, local_doorbell())
++        })
++        .collect();
++    Gfx942SdmaQueueSetV1::Directional(owners)
++}
++
++#[derive(Debug, Eq, PartialEq)]
++pub(crate) struct OwnerObservation {
++    key: QueueKeyV1,
++    id: u32,
++    engine: Option<u32>,
++    pub(crate) destroyed: bool,
++    pub(crate) poisoned: bool,
++    identities: [Option<SharedGttAllocationIdentityV1>; 3],
++    pub(crate) request: Option<KfdIoctlDestroyQueueArgs>,
++    pub(crate) attempted: bool,
++    pub(crate) result: Option<Result<(), rustix::io::Errno>>,
++    pub(crate) doorbell: LinuxDoorbellReleaseProgressV1,
++    doorbell_present: bool,
++    pub(crate) resources: Option<crate::shared_memory::QueueResourceCleanupObservationV1<3>>,
++}
++
++#[derive(Debug, Eq, PartialEq)]
++pub(crate) struct Observation {
++    pub(crate) owners: Vec<OwnerObservation>,
++    pub(crate) state: (bool, bool, bool, usize, usize),
++}
++
++impl DirectionalSdmaReleaseCustodyV1 {
++    pub(crate) fn assert_late_resource_failure(
++        &self,
++        memory: &PreparationMemoryFixtureV1,
++        before: &crate::shared_memory::ControlReleaseMemorySnapshotV1,
++        occurrence: usize,
++        panic: bool,
++    ) {
++        let index = 2 - occurrence;
++        before.assert_sdma_late_cleanup_v1(
++            memory,
++            self.progress[index].resources.as_ref().unwrap(),
++            panic,
++        );
++        assert_eq!(self.released, occurrence - 1);
++        assert_eq!(self.destroyed, 2);
++        if occurrence == 1 {
++            assert!(self.progress[0].resources.is_none());
++        } else {
++            assert!(self.progress[1].resources.as_ref().unwrap().is_complete());
++        }
++    }
++    pub(crate) fn observation(&self) -> Observation {
++        let Gfx942SdmaQueueSetV1::Directional(owners) = &self.set else {
++            panic!("fixture profile")
++        };
++        Observation {
++            owners: owners
++                .iter()
++                .enumerate()
++                .map(|(index, owner)| {
++                    let p = &self.progress[index];
++                    OwnerObservation {
++                        key: owner.owner,
++                        id: owner.queue_id,
++                        engine: owner.engine_index,
++                        destroyed: owner.destroyed,
++                        poisoned: owner.poisoned,
++                        identities: [
++                            owner.completions.as_ref().map(|t| t.storage_identity()),
++                            owner
++                                .control
++                                .as_ref()
++                                .map(PreparationMemoryFixtureV1::primary_token_identity),
++                            owner
++                                .ring
++                                .as_ref()
++                                .map(PreparationMemoryFixtureV1::primary_token_identity),
++                        ],
++                        request: p.request,
++                        attempted: p.attempted,
++                        result: p.result,
++                        doorbell: p.doorbell,
++                        doorbell_present: owner.doorbell.is_some(),
++                        resources: p.resources.as_ref().map(|r| r.observation()),
++                    }
++                })
++                .collect(),
++            state: (
++                self.started,
++                self.resources_started,
++                self.failed,
++                self.destroyed,
++                self.released,
++            ),
++        }
++    }
++
++    pub(crate) fn cleanup_local_mappings(&mut self) {
++        cleanup_set(&mut self.set);
++    }
++}
++
++pub(crate) fn cleanup_set(set: &mut Gfx942SdmaQueueSetV1) {
++    let Gfx942SdmaQueueSetV1::Directional(owners) = set else {
++        panic!("fixture profile")
++    };
++    for owner in owners {
++        cleanup_local_doorbell(owner.doorbell.as_mut().unwrap());
++    }
++}
++
++pub(crate) fn corrupt_preflight(set: &mut Gfx942SdmaQueueSetV1, case: u8, primary_id: u32) {
++    let Gfx942SdmaQueueSetV1::Directional(owners) = set else {
++        panic!("fixture profile")
++    };
++    let duplicate = owners[1].queue_id;
++    let owner = &mut owners[0]; // H2D would otherwise be destroyed first.
++    match case {
++        0 => owner.engine_index = Some(1),
++        1 => owner.queue_id = primary_id,
++        2 => owner.queue_id = duplicate,
++        3 => owner.poisoned = true,
++        4 => owner.destroyed = true,
++        5 => owner.records.truncate(GFX942_SDMA_RING_SLOT_COUNT_V1 - 1),
++        6 => {
++            owner.uncertain_xgmi_ticket = Some(Gfx942SdmaCopyTicketV1 {
++                owner: owner.owner,
++                queue_id: owner.queue_id,
++                slot: 0,
++                generation: 1,
++            })
++        }
++        7 => {
++            owner.persistent_window_slots[0] = Some(PersistentSdmaWindowSlotV1 {
++                anchor_slot: 0,
++                generation: 1,
++                completion_value: 1,
++            })
++        }
++        8 => owner.owner.generation.0 += 1,
++        _ => unreachable!(),
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/shared_memory.rs b/crates/fe2o3-kfd/src/shared_memory.rs
+index 758144f79..3466ff8ab 100644
+--- a/crates/fe2o3-kfd/src/shared_memory.rs
++++ b/crates/fe2o3-kfd/src/shared_memory.rs
+@@ -21 +21,3 @@ pub(crate) use dispatch_retention::{RetainedDispatchDataRosterV1, RetainedDispat
+-pub(crate) use queue_cleanup::QueueResourceCleanupCustodyV1;
++#[cfg(test)]
++pub(crate) use queue_cleanup::QueueResourceCleanupObservationV1;
++pub(crate) use queue_cleanup::{QueueResourceCleanupCustodyV1, SdmaResourceCleanupCustodyV1};
+@@ -6589 +6591 @@ impl SharedGttMemorySessionV1 {
+-    pub(crate) fn release_queue_resources_in_place_v1(
++    pub(crate) fn release_queue_resources_in_place_v1<const N: usize>(
+@@ -6591 +6593 @@ impl SharedGttMemorySessionV1 {
+-        custody: &mut QueueResourceCleanupCustodyV1,
++        custody: &mut QueueResourceCleanupCustodyV1<N>,
+diff --git a/crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs b/crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs
+index f570a4a61..deac2eb81 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/control_cleanup.rs
+@@ -312,0 +313,14 @@ impl<'a> ProjectionV1<'a> {
++    pub(super) fn preflight_revisions<B: MemoryBackend>(
++        &self,
++        engine: &mut SharedMemoryEngine<B>,
++        needed: u64,
++        process_poison: impl FnOnce(),
++    ) -> Result<(), MemorySessionError> {
++        preflight_queue_foundation_native_memory_transition_v1(
++            self.foundation,
++            engine,
++            needed,
++            process_poison,
++        )
++    }
++
+diff --git a/crates/fe2o3-kfd/src/shared_memory/queue_cleanup.rs b/crates/fe2o3-kfd/src/shared_memory/queue_cleanup.rs
+index ec0229e83..0b0e33595 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/queue_cleanup.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/queue_cleanup.rs
+@@ -1 +1 @@
+-//! Fixed-order, retained cleanup of the four ordinary primary-queue resources.
++//! Fixed-order, retained queue cleanup: all unmaps precede all disposals.
+@@ -5,2 +5,2 @@ use super::*;
+-pub(crate) struct QueueResourceCleanupCustodyV1 {
+-    controls: [ControlCleanupCustodyV1; 4],
++pub(crate) struct QueueResourceCleanupCustodyV1<const N: usize = 4> {
++    controls: [ControlCleanupCustodyV1; N],
+@@ -32,0 +33,23 @@ impl QueueResourceCleanupCustodyV1 {
++}
++
++pub(crate) type SdmaResourceCleanupCustodyV1 = QueueResourceCleanupCustodyV1<3>;
++
++impl SdmaResourceCleanupCustodyV1 {
++    pub(crate) fn new_sdma(
++        completions: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
++        control: SharedGttAllocationV1<UserptrAqlControlGttV1, GttGpuAccessibleMutableV1>,
++        ring: SharedGttAllocationV1<AqlQueueGttV1, GttGpuAccessibleMutableV1>,
++    ) -> Self {
++        Self {
++            controls: [
++                ControlCleanupCustodyV1::host_data(completions),
++                ControlCleanupCustodyV1::aql_control(control),
++                ControlCleanupCustodyV1::aql_ring(ring),
++            ],
++            started: false,
++            failed: false,
++            unmapped: 0,
++            released: 0,
++        }
++    }
++}
+@@ -33,0 +57 @@ impl QueueResourceCleanupCustodyV1 {
++impl<const N: usize> QueueResourceCleanupCustodyV1<N> {
+@@ -46 +70 @@ impl QueueResourceCleanupCustodyV1 {
+-pub(super) fn release_v1<B: MemoryBackend>(
++pub(super) fn release_v1<B: MemoryBackend, const N: usize>(
+@@ -49 +73 @@ pub(super) fn release_v1<B: MemoryBackend>(
+-    custody: &mut QueueResourceCleanupCustodyV1,
++    custody: &mut QueueResourceCleanupCustodyV1<N>,
+@@ -56,0 +81,5 @@ pub(super) fn release_v1<B: MemoryBackend>(
++        // SDMA admits the whole six-transition batch before its first unmap.
++        // The four-resource primary profile retains its existing per-step policy.
++        if N == 3 {
++            projection.preflight_revisions(engine, 6, &mut process_poison)?;
++        }
+@@ -83,2 +112,2 @@ pub(super) fn release_v1<B: MemoryBackend>(
+-pub(crate) struct QueueResourceCleanupObservationV1 {
+-    pub(crate) controls: [control_cleanup::ControlCleanupObservationV1; 4],
++pub(crate) struct QueueResourceCleanupObservationV1<const N: usize = 4> {
++    pub(crate) controls: [control_cleanup::ControlCleanupObservationV1; N],
+@@ -92,2 +121,2 @@ pub(crate) struct QueueResourceCleanupObservationV1 {
+-impl QueueResourceCleanupCustodyV1 {
+-    pub(crate) fn observation(&self) -> QueueResourceCleanupObservationV1 {
++impl<const N: usize> QueueResourceCleanupCustodyV1<N> {
++    pub(crate) fn observation(&self) -> QueueResourceCleanupObservationV1<N> {
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+index f4a5fa55f..d2aabbb7d 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+@@ -6,0 +7,54 @@ impl PreparationMemoryFixtureV1 {
++    pub(crate) fn primary_quarantine_release_v1(&mut self) {
++        let _: Result<(), MemorySessionError> =
++            self.fixture
++                .engine
++                .quarantine(MemorySessionError::KernelResultMalformed(
++                    "terminal directional SDMA release",
++                ));
++    }
++
++    pub(crate) fn primary_is_quarantined_v1(&self) -> bool {
++        self.fixture.engine.phase == SharedMemorySessionPhaseV1::Quarantined
++    }
++
++    pub(crate) fn primary_release_sdma_resources_v1(
++        &mut self,
++        resources: &mut SdmaResourceCleanupCustodyV1,
++    ) -> Result<(), MemorySessionError> {
++        assert!(matches!(
++            self.fixture.ownership.phase,
++            QueueModelOwnershipPhaseV1::SessionOwned
++        ));
++        let before = resources.observation();
++        let f = &mut self.fixture;
++        let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            queue_cleanup::release_v1(&mut f.engine, &mut projection, resources, || {
++                self.control_release_process_poisoned += 1;
++            })
++        }));
++        if !before.started {
++            for (index, control) in before.controls.iter().enumerate() {
++                let record = f
++                    .engine
++                    .allocations
++                    .iter()
++                    .find(|r| r.id == control.identity.id)
++                    .unwrap();
++                assert_eq!(record.generation, control.identity.generation);
++                if record.phase == SharedAllocationPhaseV1::Released {
++                    if index == 0 {
++                        assert_eq!(record.profile, SharedGttProfileV1::HostVisibleCoherent);
++                        self.disposed_host_data.push(control.identity);
++                    } else {
++                        self.disposed_queue_resources
++                            .push((control.identity, record.profile));
++                    }
++                }
++            }
++        }
++        match result {
++            Ok(result) => result,
++            Err(payload) => resume_unwind(payload),
++        }
++    }
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
+index 073523b92..79449f81b 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
+@@ -9,0 +10,2 @@ mod queue;
++#[path = "sdma_tests.rs"]
++mod sdma;
+@@ -342 +344 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
+-    pub(crate) fn primary_queue_cleanup_snapshot_v1(
++    pub(crate) fn primary_queue_cleanup_snapshot_v1<const N: usize>(
+@@ -344 +346 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
+-        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1,
++        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1<N>,
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/sdma_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/sdma_tests.rs
+new file mode 100644
+index 000000000..8f17f96d1
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/sdma_tests.rs
+@@ -0,0 +1,512 @@
++use super::*;
++use crate::shared_memory::{SdmaResourceCleanupCustodyV1, queue_cleanup};
++
++struct Fixture {
++    memory: PristineAbortMemoryFixtureV1,
++    custody: SdmaResourceCleanupCustodyV1,
++}
++
++impl Fixture {
++    fn new() -> Self {
++        let mut memory = PristineAbortMemoryFixtureV1::new();
++        let ring = memory.allocate::<AqlQueueGttV1>(4096);
++        let ring = memory.map(ring);
++        let control = memory.allocate::<UserptrAqlControlGttV1>(4096);
++        let control = memory.map(control);
++        let completions = memory.allocate::<HostVisibleCoherentGttV1>(4096);
++        let completions = memory.map(completions);
++        Self {
++            memory,
++            custody: SdmaResourceCleanupCustodyV1::new_sdma(completions, control, ring),
++        }
++    }
++    fn snapshot(&self) -> Snapshot {
++        let mut snapshot = self.memory.memory_snapshot();
++        snapshot.controls = self.custody.observation().controls.into();
++        snapshot
++    }
++    fn release(&mut self, fault: Option<(usize, Stage, Fault)>) -> Result<(), MemorySessionError> {
++        let f = &mut self.memory.fixture;
++        let mut projection = control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm);
++        if let Some((index, stage, fault)) = fault {
++            projection.fault = Some((stage, fault));
++            projection.skip_fault_matches = index;
++        }
++        queue_cleanup::release_v1(&mut f.engine, &mut projection, &mut self.custody, || {
++            self.memory.process_poisoned += 1;
++        })
++    }
++    fn retry(&mut self) {
++        let before = self.snapshot();
++        let custody = self.custody.observation();
++        assert!(matches!(
++            self.release(None),
++            Err(MemorySessionError::InvalidAllocationAuthority)
++        ));
++        assert_eq!(self.snapshot(), before);
++        assert_eq!(self.custody.observation(), custody);
++    }
++    fn model(&self, before: &Snapshot, unmapped: usize, released: usize) -> MemoryLifecycleStateV1 {
++        let mut model = before.model.clone();
++        for c in before.controls.iter().take(unmapped) {
++            let (_, _, map) =
++                model_keys(self.memory.fixture.vm, c.identity.id, c.identity.generation);
++            model = project_unmap(&model, map).unwrap();
++        }
++        for c in before.controls.iter().take(released) {
++            let (reservation, allocation, map) =
++                model_keys(self.memory.fixture.vm, c.identity.id, c.identity.generation);
++            model = project_release(&model, reservation, allocation, map).unwrap();
++        }
++        model
++    }
++    fn identities(&self, before: &Snapshot) {
++        let after = self.snapshot();
++        assert_eq!(after.identity, before.identity);
++        assert_eq!(after.devices, before.devices);
++        assert_eq!(after.storage, before.storage);
++        assert_eq!(after.usage.1, before.usage.1);
++        for (old, new) in before.controls.iter().zip(&after.controls) {
++            assert_eq!(
++                (old.identity, old.layout, old.profile_type),
++                (new.identity, new.layout, new.profile_type)
++            );
++            if !new.started {
++                assert_eq!(old, new);
++            }
++        }
++    }
++
++    fn records(
++        &self,
++        before: &Snapshot,
++        unmapped: usize,
++        settled: usize,
++        active: Option<(usize, usize, bool, bool)>,
++    ) {
++        assert_records(before, &self.snapshot(), unmapped, settled, active);
++    }
++}
++
++fn assert_records(
++    before: &Snapshot,
++    after: &Snapshot,
++    unmapped: usize,
++    settled: usize,
++    active: Option<(usize, usize, bool, bool)>,
++) {
++    let mut records = before.records.clone();
++    let mut usage = before.usage;
++    let mut retained = before.retained_va;
++    for i in 0..3 {
++        let r = records
++            .iter_mut()
++            .find(|r| r.id == before.controls[i].identity.id)
++            .unwrap();
++        let partial = active.filter(|a| a.0 == i);
++        let calls = if i < settled {
++            disposal(before, i).len()
++        } else {
++            partial.map_or(0, |a| a.1)
++        };
++        if i < unmapped {
++            r.phase = SharedAllocationPhaseV1::CpuWritable;
++        }
++        if calls >= if i == 1 { 2 } else { 1 } {
++            r.mapping = None;
++        }
++        if calls >= if i == 1 { 1 } else { 2 } {
++            r.handle = None;
++            r.free_attempted = true;
++        }
++        if partial.is_some_and(|a| a.3) {
++            r.free_attempted = true;
++        }
++        if i < settled || partial.is_some_and(|a| a.2) {
++            r.reservation = None;
++        }
++        if i < settled {
++            r.phase = SharedAllocationPhaseV1::Released;
++            r.indexed = None;
++            retained -= r.layout.gpu_va_bytes();
++            if r.charged {
++                let host = usage.0.as_mut().unwrap();
++                host.used_backing_bytes -= r.layout.gpu_va_bytes();
++                host.used_allocation_records -= 1;
++                host.retained_records -= 1;
++                r.charged = false;
++            }
++        }
++    }
++    assert_eq!(after.records, records);
++    assert_eq!(after.usage, usage);
++    assert_eq!(after.retained_va, retained);
++}
++
++impl Snapshot {
++    pub(crate) fn assert_sdma_late_cleanup_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        custody: &SdmaResourceCleanupCustodyV1,
++        panic: bool,
++    ) {
++        let after = memory.primary_queue_cleanup_snapshot_v1(custody);
++        assert_eq!(after.calls, calls(self));
++        assert_records(self, &after, 3, 2, Some((2, 2, false, false)));
++        let state = custody.observation();
++        assert_eq!(
++            (state.started, state.failed, state.unmapped, state.released),
++            (true, true, 3, 2)
++        );
++        assert_eq!(
++            state.controls[2].disposal,
++            [
++                (true, Some(true)),
++                (true, Some(true)),
++                (true, (!panic).then_some(false))
++            ]
++        );
++        assert_eq!(state.controls[0].owner, "NativeDisposed");
++        assert_eq!(state.controls[1].owner, "NativeDisposed");
++        assert_eq!(state.controls[2].owner, "Unmapped");
++        let mut model = self.model.clone();
++        for control in &self.controls {
++            let (_, _, mapping) = model_keys(
++                memory.fixture.vm,
++                control.identity.id,
++                control.identity.generation,
++            );
++            model = project_unmap(&model, mapping).unwrap();
++        }
++        for control in self.controls.iter().take(2) {
++            let (reservation, allocation, mapping) = model_keys(
++                memory.fixture.vm,
++                control.identity.id,
++                control.identity.generation,
++            );
++            model = project_release(&model, reservation, allocation, mapping).unwrap();
++        }
++        assert_eq!(after.model, model);
++    }
++}
++
++fn disposal(before: &Snapshot, index: usize) -> Vec<CleanupCallV1> {
++    let r = record(before, index);
++    let m = r.mapping.as_ref().unwrap();
++    let cpu = CleanupCallV1::UnmapCpu(m.address, m.pointer, m.bytes.len());
++    let free = CleanupCallV1::Free(r.handle.unwrap());
++    if index == 1 {
++        assert!(r.userptr);
++        vec![free, cpu]
++    } else {
++        assert!(!r.userptr);
++        let va = r.reservation.unwrap();
++        vec![cpu, free, CleanupCallV1::ReleaseVa(va.0, va.1)]
++    }
++}
++
++fn calls(before: &Snapshot) -> Vec<CleanupCallV1> {
++    let mut calls = before.calls.clone();
++    for i in 0..3 {
++        calls.push(CleanupCallV1::UnmapGpu(
++            record(before, i).handle.unwrap(),
++            0,
++        ));
++    }
++    for i in 0..3 {
++        calls.extend(disposal(before, i));
++    }
++    calls
++}
++
++#[test]
++fn sdma_cleanup_exact_two_phase_order_and_account_refund() {
++    let mut f = Fixture::new();
++    let before = f.snapshot();
++    f.release(None).unwrap();
++    let after = f.snapshot();
++    assert!(f.custody.is_complete());
++    assert_eq!(after.calls, calls(&before));
++    assert_eq!(after.calls.len(), 11);
++    assert_eq!(after.currentness - before.currentness, 18);
++    assert_eq!(after.model, f.model(&before, 3, 3));
++    assert_eq!(after.retained_va, 0);
++    assert_eq!(after.usage.0.unwrap().used_backing_bytes, 0);
++    for c in &after.controls {
++        assert_eq!(c.owner, "NativeDisposed");
++        assert_eq!(c.stage, Stage::Complete);
++    }
++    assert_eq!(after.controls[1].disposal[2], (false, None));
++    f.identities(&before);
++    f.records(&before, 3, 3, None);
++    f.retry();
++}
++
++#[test]
++fn sdma_cleanup_all_native_failures_retain_exact_prefix_and_panic() {
++    for failed in 0..11 {
++        for panic in [false, true] {
++            let mut f = Fixture::new();
++            let before = f.snapshot();
++            let all = calls(&before);
++            let op = match all[failed] {
++                CleanupCallV1::UnmapGpu(..) => "unmap_gpu",
++                CleanupCallV1::UnmapCpu(..) => "unmap_cpu",
++                CleanupCallV1::Free(..) => "free",
++                CleanupCallV1::ReleaseVa(..) => "release_va_reservation",
++            };
++            f.memory.fixture.engine.backend.cleanup_fault = Some((failed + 1, op, panic));
++            let result = catch_unwind(AssertUnwindSafe(|| f.release(None)));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, &str)>(),
++                    Some(&("N2 native panic", op))
++                );
++            } else {
++                assert!(
++                    matches!(result.unwrap(), Err(MemorySessionError::Injected(got)) if got == op)
++                );
++            }
++            let after = f.snapshot();
++            let state = f.custody.observation();
++            let index = if failed < 3 {
++                failed
++            } else if failed < 6 {
++                0
++            } else if failed < 8 {
++                1
++            } else {
++                2
++            };
++            let unmapped = if failed < 3 { index } else { 3 };
++            let released = if failed < 3 { 0 } else { index };
++            assert_eq!((state.unmapped, state.released), (unmapped, released));
++            assert_eq!(after.calls, all[..=failed]);
++            assert_eq!(after.model, f.model(&before, unmapped, released));
++            let offset = if failed < 3 {
++                failed
++            } else {
++                3 + (0..index)
++                    .map(|i| disposal(&before, i).len())
++                    .sum::<usize>()
++            };
++            f.records(
++                &before,
++                unmapped,
++                released,
++                Some((index, failed - offset, false, op == "free")),
++            );
++            assert!(state.failed && state.controls[index].failed);
++            for i in 0..3 {
++                assert_eq!(
++                    after.controls[i].owner,
++                    if i < released {
++                        "NativeDisposed"
++                    } else if i < unmapped {
++                        "Unmapped"
++                    } else {
++                        "Mapped"
++                    }
++                );
++            }
++            assert_eq!(
++                after.usage.0.unwrap().used_backing_bytes,
++                if released > 0 {
++                    0
++                } else {
++                    before.usage.0.unwrap().used_backing_bytes
++                }
++            );
++            f.identities(&before);
++            f.retry();
++        }
++    }
++}
++
++#[test]
++fn sdma_cleanup_all_currentness_boundaries_retain_unsettled_disposal() {
++    for point in 1..=18 {
++        for panic in [false, true] {
++            let mut f = Fixture::new();
++            let before = f.snapshot();
++            f.memory.fail_currentness(point, panic);
++            let result = catch_unwind(AssertUnwindSafe(|| f.release(None)));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, &str)>(),
++                    Some(&("N2 native panic", "currentness"))
++                );
++            } else {
++                assert!(matches!(
++                    result.unwrap(),
++                    Err(MemorySessionError::Injected("currentness"))
++                ));
++            }
++            let release = point > 6;
++            let index = if release {
++                (point - 7) / 4
++            } else {
++                (point - 1) / 2
++            };
++            let at = if release {
++                (point - 7) % 4 + 1
++            } else {
++                (point - 1) % 2 + 1
++            };
++            let unmapped = if release { 3 } else { index };
++            let released = if release { index } else { 0 };
++            let count = if release {
++                3 + (0..released)
++                    .map(|i| disposal(&before, i).len())
++                    .sum::<usize>()
++                    + (at - 1).min(disposal(&before, index).len())
++            } else {
++                index + usize::from(at == 2)
++            };
++            let after = f.snapshot();
++            let state = f.custody.observation();
++            assert_eq!((state.unmapped, state.released), (unmapped, released));
++            assert_eq!(after.calls, calls(&before)[..count]);
++            assert_eq!(after.model, f.model(&before, unmapped, released));
++            assert_eq!(after.currentness - before.currentness, point);
++            f.records(
++                &before,
++                unmapped,
++                released,
++                Some((
++                    index,
++                    if release {
++                        (at - 1).min(disposal(&before, index).len())
++                    } else {
++                        0
++                    },
++                    release && at == 4,
++                    false,
++                )),
++            );
++            assert_eq!(
++                after.controls[index].owner,
++                if !release {
++                    "Mapped"
++                } else if at == 4 {
++                    "NativeDisposed"
++                } else {
++                    "Unmapped"
++                }
++            );
++            assert_eq!(after.controls[index].native_disposed, release && at == 4);
++            assert_eq!(
++                after.usage.0.unwrap().used_backing_bytes,
++                if released > 0 {
++                    0
++                } else {
++                    before.usage.0.unwrap().used_backing_bytes
++                }
++            );
++            f.identities(&before);
++            f.retry();
++        }
++    }
++}
++
++#[test]
++fn sdma_cleanup_projection_and_commit_boundaries_keep_native_receipts_separate() {
++    for index in 0..3 {
++        for stage in [
++            Stage::UnmapProjection,
++            Stage::UnmapCommit,
++            Stage::ReleaseProjection,
++            Stage::ReleaseCommit,
++        ] {
++            for fault in [Fault::Error, Fault::Panic] {
++                let mut f = Fixture::new();
++                let before = f.snapshot();
++                let result =
++                    catch_unwind(AssertUnwindSafe(|| f.release(Some((index, stage, fault)))));
++                if matches!(fault, Fault::Panic) {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, Stage)>(),
++                        Some(&("control cleanup projection", stage))
++                    );
++                } else {
++                    assert!(result.unwrap().is_err());
++                }
++                let unmap = matches!(stage, Stage::UnmapProjection | Stage::UnmapCommit);
++                let disposed = stage == Stage::ReleaseCommit;
++                let after = f.snapshot();
++                let unmapped = if unmap { index } else { 3 };
++                let released = if unmap { 0 } else { index };
++                let count = if unmap {
++                    index + 1
++                } else {
++                    3 + (0..(released + usize::from(disposed)))
++                        .map(|i| disposal(&before, i).len())
++                        .sum::<usize>()
++                };
++                assert_eq!(after.calls, calls(&before)[..count]);
++                assert_eq!(after.model, f.model(&before, unmapped, released));
++                f.records(
++                    &before,
++                    if unmap { index + 1 } else { 3 },
++                    released + usize::from(disposed),
++                    None,
++                );
++                assert_eq!(
++                    after.controls[index].owner,
++                    if unmap || !disposed {
++                        "Unmapped"
++                    } else {
++                        "NativeDisposed"
++                    }
++                );
++                assert_eq!(after.controls[index].native_disposed, disposed);
++                assert_eq!(
++                    after.usage.0.unwrap().used_backing_bytes,
++                    if released > 0 || disposed {
++                        0
++                    } else {
++                        before.usage.0.unwrap().used_backing_bytes
++                    }
++                );
++                f.identities(&before);
++                f.retry();
++            }
++        }
++    }
++}
++
++#[test]
++fn sdma_cleanup_requires_six_revision_headroom_before_native_effects() {
++    for headroom in 0..=6 {
++        let mut f = Fixture::new();
++        let m = &mut f.memory.fixture;
++        m.foundation
++            .mint_invariant_certificate(m.engine.session_id, m.device, m.vm)
++            .unwrap();
++        m.foundation
++            .set_certificate_revision_for_test(u64::MAX - headroom)
++            .unwrap();
++        let before = f.snapshot();
++        let result = f.release(None);
++        if headroom == 6 {
++            result.unwrap();
++            assert!(f.custody.is_complete());
++        } else {
++            assert!(matches!(
++                result,
++                Err(MemorySessionError::Model(
++                    "queue foundation certificate revision exhausted"
++                ))
++            ));
++            let after = f.snapshot();
++            assert_eq!(after.calls, before.calls);
++            assert_eq!(after.currentness, before.currentness);
++            assert_eq!(after.model, before.model);
++            assert_eq!(after.controls, before.controls);
++            assert_eq!(after.usage, before.usage);
++            assert_eq!(after.process_poisoned, before.process_poisoned + 1);
++            assert!(f.custody.observation().failed);
++        }
++        f.retry();
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 7910dc0e8..97af2dc4f 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -12876,0 +12877,3 @@ impl Drop for KfdRuntimeBackendV1 {
++#[cfg(test)]
++mod retained_release_tests;
++
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+index 0724aedbe..675b0c4ed 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+@@ -4256,0 +4257,2 @@ impl KfdRuntimeBackendV1 {
++        #[cfg(test)]
++        super::retained_release_tests::observe_selection(retained_primary);
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+new file mode 100644
+index 000000000..48f81092d
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -0,0 +1,79 @@
++//! Opt-in hardware test: public allocation workflow, no seeded native queue.
++
++use super::*;
++use crate::RuntimeOwnedShutdownBackendV1;
++use std::cell::Cell;
++
++thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }; }
++
++pub(super) fn observe_selection(retained: bool) {
++    SELECTION.with(|selection| {
++        if selection.get().is_some() {
++            selection.set(Some(retained));
++        }
++    });
++}
++
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
++    let value = std::env::var("FE2O3_TEST_NATIVE_UNIQUE_ID").expect("explicit device unique ID");
++    let device = u64::from_str_radix(value.strip_prefix("0x").unwrap_or(&value), 16).unwrap();
++    assert_ne!(device, 0);
++    // Any accidental compute authorization panics; no kernel authority is issued.
++    let mut backend = KfdRuntimeBackendV1::open_default(device, TestPanickingAuthorityV1).unwrap();
++    backend
++        .configure_host_visible_backing_budget_v1(
++            Gfx942HostVisibleBackingBudgetV1::new(16 * 1024 * 1024, 32).unwrap(),
++        )
++        .unwrap();
++    backend
++        .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x76; 32], 64).unwrap())
++        .unwrap();
++    let devices = backend.enumerate_devices_v1().unwrap();
++    assert_eq!(devices.len(), 1);
++    assert_eq!(devices[0].backend_device, device);
++    let stream = backend.create_stream_v1(device).unwrap();
++    let allocation = backend
++        .allocate_v1(device, RuntimeMemoryKindV1::HostVisible, 4096, 4096)
++        .unwrap();
++    assert!(backend.sdma_enabled && backend.queue.is_some());
++    assert!(
++        backend
++            .host_visible_backing_usage_v1()
++            .unwrap()
++            .used_backing_bytes
++            >= 4096
++    );
++    backend.release_allocation_v1(allocation).unwrap();
++    backend.destroy_stream_v1(stream).unwrap();
++    // Observe the real shutdown selector AFTER its own pool trim, without changing it.
++    SELECTION.with(|selection| selection.set(Some(false)));
++    backend.shutdown_owned_v1().unwrap();
++    assert_eq!(SELECTION.with(Cell::get), Some(true));
++    SELECTION.with(|selection| selection.set(None));
++    assert!(backend.queue_retired && backend.queue.is_none() && backend.primary_teardown.is_none());
++    assert!(!backend.terminal);
++    assert!(matches!(
++        backend.create_stream_v1(device),
++        Err(RuntimeBackendFailureV1::Rejected(_))
++    ));
++    assert!(matches!(
++        backend.allocate_v1(device, RuntimeMemoryKindV1::HostVisible, 4096, 4096),
++        Err(RuntimeBackendFailureV1::Rejected(_))
++    ));
++    let profile = backend.finish_profiler_v1().unwrap();
++    profile.validate().unwrap();
++    assert_eq!(profile.coverage.dropped_events, 0);
++    assert!(profile.coverage.complete_runtime_operation_history);
++    // An SDMA bootstrap queue has no logical compute lane and emits no false lane destruction.
++    assert!(!profile.events.iter().any(|event| matches!(
++        event.event,
++        KfdRuntimeProfileEventKindV1::NativeQueueCreated { .. }
++            | KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }
++    )));
++    drop(backend);
++    println!(
++        "native_runtime_retained_directional_release=complete allocation_workflow=public selector=retained completed_root_drop=confirmed backend_drop=completed packets=0"
++    );
++}

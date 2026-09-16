@@ -11,6 +11,8 @@ use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV
 
 #[path = "integration_release_fault_tests.rs"]
 mod fault_cases;
+#[path = "integration_release_sdma_tests.rs"]
+mod sdma_cases;
 
 struct Parent {
     engine: NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,
@@ -20,6 +22,7 @@ struct Parent {
     doorbell: Option<Owner>,
     dispatch: Option<DispatchResourceOwnerV1>,
     signals: Option<CompletionSignalAuthority>,
+    sdma: Option<Gfx942SdmaQueueSetV1>,
     submission: NativeAqlSubmissionOwnerV1,
     completion: CompletionSignalArenaOwnerV1,
     dependency: ComputeDependencySessionOwnerV1,
@@ -40,6 +43,9 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
         if let Some(dispatch) = &self.dispatch {
             dispatch.ensure_releasable()?;
         }
+        if let Some(sdma) = &self.sdma {
+            sdma.preflight_retained_directional_release_v1(self.key, self.queue_id)?;
+        }
         preflight_primary_owners_v1::<Fixture>(
             &self.engine,
             self.key,
@@ -59,6 +65,7 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
             doorbell: &mut self.doorbell,
             dispatch: &mut self.dispatch,
             signals: &mut self.signals,
+            sdma: &mut self.sdma,
         })
     }
     fn poison_release(&mut self) {
@@ -110,6 +117,74 @@ impl PrimaryReleaseMemoryV1 for Memory {
     }
 }
 
+impl crate::sdma::retained_release::SdmaReleaseMemoryV1 for Memory {
+    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError> {
+        memory_step("sdma-currentness")?;
+        self.primary_currentness()
+    }
+    fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError> {
+        memory_step("sdma-topology")?;
+        self.primary_currentness()
+    }
+    fn sdma_destroy(
+        &mut self,
+        args: &mut fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
+    ) -> Result<(), rustix::io::Errno> {
+        if let Some((id, panic)) = trace().borrow().sdma_destroy_mutation
+            && id == args.queue_id
+        {
+            args.pad = 17;
+            if panic {
+                std::panic::panic_any(("mutated SDMA destroy", id));
+            }
+        }
+        step(if args.queue_id == 101 {
+            "sdma-destroy-h2d"
+        } else {
+            "sdma-destroy-d2h"
+        })
+        .map_err(|_| rustix::io::Errno::IO)
+    }
+    fn sdma_release_resources(
+        &mut self,
+        resources: &mut crate::shared_memory::SdmaResourceCleanupCustodyV1,
+    ) -> Result<(), MemorySessionError> {
+        memory_step("sdma-release-resources")?;
+        let t = trace();
+        let mut t = t.borrow_mut();
+        let occurrence = t
+            .calls
+            .iter()
+            .filter(|&&name| name == "sdma-release-resources")
+            .count();
+        if let Some((nth, panic)) = t.sdma_resource_native_fault
+            && nth == occurrence
+        {
+            t.sdma_resource_snapshot = Some(self.primary_queue_cleanup_snapshot_v1(resources));
+            self.primary_fail_cleanup_call_v1(11, "release_va_reservation", panic);
+        }
+        drop(t);
+        self.primary_release_sdma_resources_v1(resources)
+    }
+    fn sdma_release_doorbell(
+        &mut self,
+        doorbell: &mut crate::queue_linux::LinuxDoorbellSliceV1,
+        progress: &mut crate::queue_linux::LinuxDoorbellReleaseProgressV1,
+    ) -> Result<(), crate::queue_linux::LinuxDoorbellErrorV1> {
+        let occurrence = record("sdma-doorbell");
+        let fault = trace().borrow().fault.and_then(|(name, nth, panic)| {
+            (name == "sdma-doorbell" && nth == occurrence).then_some((nth, panic))
+        });
+        crate::queue_linux::doorbell_release_tests::release_local_doorbell(
+            doorbell, progress, fault,
+        )
+    }
+    fn sdma_release_poison(&mut self) {
+        self.primary_quarantine_release_v1();
+        trace().borrow_mut().poison = true;
+    }
+}
+
 fn constructed(with_dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
     constructed_on_gate(with_dispatch, LocalGateV1::new())
 }
@@ -144,6 +219,7 @@ fn constructed_on_gate(
         doorbell: complete.doorbell,
         dispatch: complete.dispatch,
         signals: Some(complete.completion_signals),
+        sdma: None,
         submission: complete.submission,
         completion: complete.completion_owner,
         dependency: complete.dependency_owner,
@@ -231,6 +307,7 @@ fn assert_no_retry(
         .as_ref()
         .map(|p| (p.identities(), p.observation(), p.progress()));
     let destroy = state.destroy;
+    let sdma = state.sdma.as_ref().map(|s| s.observation());
     let phase = parent.engine.phase(parent.key);
     let model = parent.engine.model.clone();
     let authority_poisoned = parent.engine.authority_poisoned;
@@ -274,6 +351,7 @@ fn assert_no_retry(
         platform
     );
     assert_eq!(state.destroy, destroy);
+    assert_eq!(state.sdma.as_ref().map(|s| s.observation()), sdma);
     assert_eq!(parent.engine.phase(parent.key), phase);
     assert_eq!(parent.engine.model, model);
     assert_eq!(parent.engine.authority_poisoned, authority_poisoned);

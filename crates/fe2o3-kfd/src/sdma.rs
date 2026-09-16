@@ -48,6 +48,7 @@ pub(crate) use host_pool_policy::{
 };
 
 mod multi_queue;
+pub(crate) mod retained_release;
 use multi_queue::next_striped_owner;
 pub use multi_queue::{
     GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_PER_NATIVE_QUEUE_V2,

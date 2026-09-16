@@ -12875,6 +12875,9 @@ impl Drop for KfdRuntimeBackendV1 {
 }
 
 #[cfg(test)]
+mod retained_release_tests;
+
+#[cfg(test)]
 mod tests {
     use super::kfd_backend_sdma_seam::{
         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,

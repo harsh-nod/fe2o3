@@ -30,6 +30,14 @@ a one-device packetless native probe confirms successful concrete public-root
 Drop. Remaining parent/runtime fault coverage and fresh qualification stay open;
 R125 is still accepted.
 
+The new R126 directional-SDMA extension retains both original owners and their
+native/resource cleanup prefixes under the primary root. It removes the normal
+allocation workflow's SDMA routing exclusion, with genuine-token failure tests
+and a passing native public allocation/shutdown probe. Five additional
+constructed-parent tests bring that cohort to twenty-one. See the R126 document for
+execution evidence and remaining qualification; this does not advance the
+accepted checkpoint or close A1/A2.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

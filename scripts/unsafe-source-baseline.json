@@ -700,6 +700,9 @@
     "block": 45,
     "extern_block": 1
   },
+  "crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs": {
+    "block": 1
+  },
   "crates/fe2o3-kfd/src/queue_linux/primary_fixture.rs": {
     "block": 5
   },

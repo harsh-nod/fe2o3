@@ -18,7 +18,9 @@ pub(crate) use data_cleanup::{DataCleanupCustodyV1, DispatchDataReleaseV1};
 pub(crate) use data_cleanup::{DataCleanupMetadataV1, DataCleanupObservationV1};
 
 pub(crate) use dispatch_retention::{RetainedDispatchDataRosterV1, RetainedDispatchDataV1};
-pub(crate) use queue_cleanup::QueueResourceCleanupCustodyV1;
+#[cfg(test)]
+pub(crate) use queue_cleanup::QueueResourceCleanupObservationV1;
+pub(crate) use queue_cleanup::{QueueResourceCleanupCustodyV1, SdmaResourceCleanupCustodyV1};
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -6586,9 +6588,9 @@ impl SharedGttMemorySessionV1 {
         )
     }
 
-    pub(crate) fn release_queue_resources_in_place_v1(
+    pub(crate) fn release_queue_resources_in_place_v1<const N: usize>(
         &mut self,
-        custody: &mut QueueResourceCleanupCustodyV1,
+        custody: &mut QueueResourceCleanupCustodyV1<N>,
     ) -> Result<(), MemorySessionError> {
         queue_cleanup::release_v1(
             &mut self.engine,

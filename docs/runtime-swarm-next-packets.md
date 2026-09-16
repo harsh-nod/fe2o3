@@ -18,10 +18,13 @@ prefixes. A one-device packetless native probe confirms completed public-root
 Drop. Remaining parent/runtime coverage, other queue profiles and qualification
 remain open.
 
-Runtime integration must address reachability: ordinary public native allocation
-eagerly attaches SDMA, and shutdown trims buffers without removing that owner.
-Those workflows still select legacy teardown. The new direct queue probe does
-not qualify the runtime facade's retained branch.
+The directional-SDMA extension now removes the routing exclusion that kept
+ordinary public native allocations on legacy teardown. It retains the original
+two-owner vector, native destroy/doorbell outcomes and three-token resource
+cleanup under the primary root. New genuine-owner CPU matrices and an opt-in
+public allocation/shutdown hardware test cover this route; execution evidence
+and remaining gaps are recorded in the R126 document. Other profiles, pool-trim
+failure retention and full qualification remain open.
 
 Preceding Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each

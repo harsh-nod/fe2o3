@@ -1,0 +1,14 @@
+diff --git a/scripts/unsafe-source-baseline.json b/scripts/unsafe-source-baseline.json
+index 5ea2bf5c7..257dd4977 100644
+--- a/scripts/unsafe-source-baseline.json
++++ b/scripts/unsafe-source-baseline.json
+@@ -700,6 +700,9 @@
+     "block": 45,
+     "extern_block": 1
+   },
++  "crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs": {
++    "block": 1
++  },
+   "crates/fe2o3-kfd/src/queue_linux/primary_fixture.rs": {
+     "block": 5
+   },
