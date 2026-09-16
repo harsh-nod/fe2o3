@@ -151,6 +151,7 @@ pub use queue::{
     Gfx942KfdQueueExceptionObservationV1, Gfx942PromotedSdmaDestinationV1,
     Gfx942R66NativeObservationFailureV1, Gfx942RecycledDispatchResourcesV1,
     Gfx942RecycledDispatchWriteRequestV1, Gfx942RepeatedByteContentV1,
+    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1,
     Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
     Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
     Gfx942SdmaCompletedPromotionFailureV1, Gfx942SdmaDispatchDataBridgeV1,

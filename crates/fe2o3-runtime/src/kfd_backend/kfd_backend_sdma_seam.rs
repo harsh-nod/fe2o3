@@ -41,7 +41,8 @@ use fe2o3_kfd::{
     Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1,
     Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1,
     Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
-    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaBufferV1, Gfx942SdmaErrorV1,
+    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaAllocationDispositionV1,
+    Gfx942SdmaAllocationFailureV1, Gfx942SdmaBufferV1, Gfx942SdmaErrorV1,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -491,6 +492,7 @@ pub(super) enum SdmaTransitionFailureV1<R, D = String> {
     },
 }
 
+#[derive(Debug)]
 pub(super) enum SdmaOwnerDiagnosticV1 {
     Native(ComputeAqlQueueSessionErrorV1),
     Message(String),
@@ -519,6 +521,31 @@ impl core::fmt::Display for SdmaOwnerDiagnosticV1 {
                 f,
                 "directional SDMA synchronous wait returned non-timeout retryable custody: {detail}"
             ),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SdmaAllocationFailureV1 {
+    pub(super) detail: SdmaOwnerDiagnosticV1,
+    pub(super) disposition: Gfx942SdmaAllocationDispositionV1,
+}
+
+impl From<Gfx942SdmaAllocationFailureV1> for SdmaAllocationFailureV1 {
+    fn from(failure: Gfx942SdmaAllocationFailureV1) -> Self {
+        Self {
+            disposition: failure.disposition(),
+            detail: SdmaOwnerDiagnosticV1::Native(failure.into_error()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl SdmaAllocationFailureV1 {
+    fn scripted_protocol(detail: String) -> Self {
+        Self {
+            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
+            disposition: Gfx942SdmaAllocationDispositionV1::ProcessTeardown,
         }
     }
 }
@@ -691,12 +718,15 @@ fn map_native_ready_promotion_v1(
 }
 
 impl<'a> DirectionalSdmaOpsV1<'a> {
-    pub(super) fn allocate_host(&mut self, byte_len: usize) -> Result<SdmaBufferOwnerV1, String> {
+    pub(super) fn allocate_host(
+        &mut self,
+        byte_len: usize,
+    ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
         match self {
             Self::Native(queue) => queue
-                .allocate_sdma_pooled_host_buffer(byte_len)
+                .allocate_sdma_pooled_host_buffer_classified_v1(byte_len)
                 .map(SdmaBufferOwnerV1::Native)
-                .map_err(|error| error.to_string()),
+                .map_err(SdmaAllocationFailureV1::from),
             #[cfg(test)]
             Self::Scripted(driver) => driver.allocate_buffer(byte_len, ScriptedBufferKindV1::Host),
         }
@@ -706,16 +736,19 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         &mut self,
         byte_len: u64,
         alignment: u64,
-    ) -> Result<SdmaBufferOwnerV1, String> {
+    ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
         match self {
             Self::Native(queue) => queue
-                .allocate_sdma_pooled_device_buffer(byte_len, alignment)
+                .allocate_sdma_pooled_device_buffer_classified_v1(byte_len, alignment)
                 .map(SdmaBufferOwnerV1::Native)
-                .map_err(|error| error.to_string()),
+                .map_err(SdmaAllocationFailureV1::from),
             #[cfg(test)]
             Self::Scripted(driver) => {
-                let len = usize::try_from(byte_len)
-                    .map_err(|_| "scripted device allocation length overflow".to_owned())?;
+                let len = usize::try_from(byte_len).map_err(|_| {
+                    SdmaAllocationFailureV1::scripted_protocol(
+                        "scripted device allocation length overflow".to_owned(),
+                    )
+                })?;
                 driver.allocate_buffer(len, ScriptedBufferKindV1::Device)
             }
         }
@@ -2106,6 +2139,15 @@ mod scripted {
             byte_len: usize,
             fill: u8,
         },
+        AllocateFailure {
+            kind: ScriptedBufferKindV1,
+            byte_len: usize,
+            failure: SdmaAllocationFailureV1,
+        },
+        AllocatePanic {
+            kind: ScriptedBufferKindV1,
+            byte_len: usize,
+        },
         Write {
             offset: u64,
             byte_len: usize,
@@ -2515,8 +2557,11 @@ mod scripted {
             &mut self,
             byte_len: usize,
             kind: ScriptedBufferKindV1,
-        ) -> Result<SdmaBufferOwnerV1, String> {
-            let fill = match self.pop()? {
+        ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
+            let fill = match self
+                .pop()
+                .map_err(SdmaAllocationFailureV1::scripted_protocol)?
+            {
                 ScriptedSdmaStepV1::Allocate {
                     kind: expected_kind,
                     byte_len: expected_len,
@@ -2525,7 +2570,22 @@ mod scripted {
                     byte_len: expected_len,
                     fill,
                 } if kind == ScriptedBufferKindV1::Host && expected_len == byte_len => fill,
-                step => return Err(format!("scripted SDMA allocation mismatch: {step:?}")),
+                ScriptedSdmaStepV1::AllocateFailure {
+                    kind: expected_kind,
+                    byte_len: expected_len,
+                    failure,
+                } if expected_kind == kind && expected_len == byte_len => return Err(failure),
+                ScriptedSdmaStepV1::AllocatePanic {
+                    kind: expected_kind,
+                    byte_len: expected_len,
+                } if expected_kind == kind && expected_len == byte_len => {
+                    std::panic::panic_any("scripted SDMA allocation panic")
+                }
+                step => {
+                    return Err(SdmaAllocationFailureV1::scripted_protocol(format!(
+                        "scripted SDMA allocation mismatch: {step:?}"
+                    )));
+                }
             };
             Ok(SdmaBufferOwnerV1::Scripted(ScriptedBufferOwnerV1 {
                 token: ScriptedOwnerTokenV1::new(

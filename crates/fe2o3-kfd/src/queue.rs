@@ -25,8 +25,10 @@ use fe2o3_runtime_model::{
 
 #[path = "queue_live.rs"]
 mod live;
-pub use live::Gfx942SdmaHostReadIntoErrorV1;
 pub(crate) use live::sdma_synchronous::SdmaSynchronousCustodyV1;
+pub use live::{
+    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, Gfx942SdmaHostReadIntoErrorV1,
+};
 
 #[cfg(test)]
 pub(crate) use live::{

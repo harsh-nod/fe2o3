@@ -1,0 +1,11 @@
+
+running 6 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_classified_capacity_requires_settlement_witness ... ok
+test queue::live::tests::sdma_allocation_classified_pool_hit_preserves_owner_generation_and_legacy_behavior ... ok
+test queue::live::tests::sdma_allocation_classified_pool_miss_keeps_original_error_and_legacy_state ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_classified_validation_and_loan_rejection_preserve_legacy_state ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_classified_capacity_preserves_exact_error_and_retry ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_classified_retake_and_native_failures_never_grant_retry ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1366 filtered out; finished in 12.76s
+

@@ -262,6 +262,7 @@ pub(in crate::queue) mod persistent_bind;
 mod pool_trim;
 #[path = "queue_live/sdma_allocation.rs"]
 mod sdma_allocation;
+pub use sdma_allocation::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1};
 #[path = "queue_live/sdma_demotion.rs"]
 mod sdma_demotion;
 #[path = "queue_live/sdma_promotion.rs"]
@@ -6645,19 +6646,36 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         bytes: usize,
     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_no_sdma_recycle_v1()?;
-        self.require_no_sdma_owner_transition_v1()?;
+        self.allocate_sdma_pooled_host_buffer_classified_v1(bytes)
+            .map_err(Gfx942SdmaAllocationFailureV1::into_error)
+    }
+
+    /// Pooled allocation with an explicit, settled backing-capacity disposition.
+    pub fn allocate_sdma_pooled_host_buffer_classified_v1(
+        &mut self,
+        bytes: usize,
+    ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
+        self.require_no_sdma_recycle_v1()
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+        self.require_no_sdma_owner_transition_v1()
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
         self.sdma_device_pool.begin_activity();
         let requested = u64::try_from(bytes).map_err(|_| {
-            ComputeAqlQueueSessionErrorV1::Contract("pooled host-buffer size conversion")
+            Gfx942SdmaAllocationFailureV1::unclassified(ComputeAqlQueueSessionErrorV1::Contract(
+                "pooled host-buffer size conversion",
+            ))
         })?;
-        if let Some(mut buffer) =
-            self.checkout_sdma_pool(Gfx942SdmaBufferKindV1::HostVisibleCoherent, requested, 1)?
+        if let Some(mut buffer) = self
+            .checkout_sdma_pool(Gfx942SdmaBufferKindV1::HostVisibleCoherent, requested, 1)
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?
         {
             buffer.set_logical_bytes(requested);
             return Ok(buffer);
         }
-        self.allocate_sdma_host_buffer(bytes)
+        sdma_allocation::allocate_classified_in_place(
+            self,
+            sdma_allocation::SdmaAllocationRequestV1::Host(bytes),
+        )
     }
 
     pub fn allocate_sdma_pooled_device_buffer(
@@ -6665,21 +6683,37 @@ impl ComputeAqlQueueSessionV1 {
         bytes: u64,
         alignment: u64,
     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
-        self.require_no_sdma_recycle_v1()?;
-        self.require_no_sdma_owner_transition_v1()?;
+        self.allocate_sdma_pooled_device_buffer_classified_v1(bytes, alignment)
+            .map_err(Gfx942SdmaAllocationFailureV1::into_error)
+    }
+
+    /// Pooled allocation with an explicit, settled backing-capacity disposition.
+    pub fn allocate_sdma_pooled_device_buffer_classified_v1(
+        &mut self,
+        bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
+        self.require_no_sdma_recycle_v1()
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+        self.require_no_sdma_owner_transition_v1()
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
         self.sdma_device_pool.begin_activity();
         if alignment == 0 || !alignment.is_power_of_two() {
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "pooled device-buffer alignment",
+            return Err(Gfx942SdmaAllocationFailureV1::unclassified(
+                ComputeAqlQueueSessionErrorV1::Contract("pooled device-buffer alignment"),
             ));
         }
-        if let Some(mut buffer) =
-            self.checkout_sdma_pool(Gfx942SdmaBufferKindV1::DeviceLocal, bytes, alignment)?
+        if let Some(mut buffer) = self
+            .checkout_sdma_pool(Gfx942SdmaBufferKindV1::DeviceLocal, bytes, alignment)
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?
         {
             buffer.set_logical_bytes(bytes);
             return Ok(buffer);
         }
-        self.allocate_sdma_device_buffer(bytes, alignment)
+        sdma_allocation::allocate_classified_in_place(
+            self,
+            sdma_allocation::SdmaAllocationRequestV1::Device { bytes, alignment },
+        )
     }
 
     /// Promotes one exact queue-owned device buffer into the R18 persistent
@@ -13617,6 +13651,87 @@ mod tests {
                 // These engine-less synthetic fixtures deliberately retain their roots.
                 // Separate constructed-owner subprocess tests require terminal Drop abort.
                 std::mem::forget(session);
+            }
+        }
+    }
+
+    #[test]
+    fn sdma_allocation_classified_pool_hit_preserves_owner_generation_and_legacy_behavior() {
+        for host in [false, true] {
+            for classified in [false, true] {
+                let queue = test_queue_key(802, 1);
+                let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+                // These public pool transitions have no Linux engine or native effect.
+                session.sdma = Some(Gfx942SdmaQueueSetV1::Generic(Vec::new()));
+                let (device, host_buffer) = crate::sdma::persistent_sdma_buffers_for_test(queue, 2);
+                let identity = if host {
+                    host_buffer.storage_identity()
+                } else {
+                    device.storage_identity()
+                };
+                session.sdma_outstanding_buffers = 2;
+                session.recycle_sdma_buffer(device).unwrap();
+                session.recycle_sdma_buffer(host_buffer).unwrap();
+                let recycled = match (host, classified) {
+                    (true, true) => session
+                        .allocate_sdma_pooled_host_buffer_classified_v1(16)
+                        .unwrap(),
+                    (false, true) => session
+                        .allocate_sdma_pooled_device_buffer_classified_v1(16, 4)
+                        .unwrap(),
+                    (true, false) => session.allocate_sdma_pooled_host_buffer(16).unwrap(),
+                    (false, false) => session.allocate_sdma_pooled_device_buffer(16, 4).unwrap(),
+                };
+                assert_eq!(recycled.storage_identity(), identity);
+                assert_eq!(recycled.pool_generation(), 2);
+                assert_eq!(recycled.requested_bytes(), 16);
+                assert_eq!(session.sdma_outstanding_buffers, 1);
+                assert_eq!(session.sdma_pool_reuse_count, 1);
+                assert_eq!(session.sdma_pool_free.len(), 1);
+                assert!(session.sdma_device_pool.activity_started && !session.terminal_poisoned);
+                session.recycle_sdma_buffer(recycled).unwrap();
+                assert_eq!(session.sdma_outstanding_buffers, 0);
+                assert_eq!(session.sdma_pool_free.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn sdma_allocation_classified_pool_miss_keeps_original_error_and_legacy_state() {
+        for host in [false, true] {
+            for classified in [false, true] {
+                let queue = test_queue_key(802, 1);
+                let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+                session.sdma = Some(Gfx942SdmaQueueSetV1::Generic(Vec::new()));
+                let error = if classified {
+                    let failure = if host {
+                        session.allocate_sdma_pooled_host_buffer_classified_v1(16)
+                    } else {
+                        session.allocate_sdma_pooled_device_buffer_classified_v1(16, 4)
+                    }
+                    .err()
+                    .unwrap();
+                    assert_eq!(
+                        failure.disposition(),
+                        Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+                    );
+                    failure.into_error()
+                } else if host {
+                    session.allocate_sdma_pooled_host_buffer(16).err().unwrap()
+                } else {
+                    session
+                        .allocate_sdma_pooled_device_buffer(16, 4)
+                        .err()
+                        .unwrap()
+                };
+                assert!(matches!(
+                    error,
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine")
+                ));
+                assert!(session.sdma_device_pool.activity_started && !session.terminal_poisoned);
+                assert!(session.sdma_pool_free.is_empty() && session.sdma_allocation.is_none());
+                assert_eq!(session.sdma_outstanding_buffers, 0);
+                assert_eq!(session.sdma_pool_reuse_count, 0);
             }
         }
     }

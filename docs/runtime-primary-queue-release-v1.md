@@ -572,9 +572,9 @@ after a caller catches a backend panic; the backend is already terminal and the
 next valid backend call seals the Context without native work. This packet does
 not change that facade policy, admit pending-compute allocation, qualify native
 partial writes, add executable/formal correspondence or establish performance.
-Directional promotion, demotion, recycle/release and synchronous-copy custody
-are now covered below. Typed capacity disposition remains open, followed by
-owner-roster preflight and pending-compute qualification.
+Directional promotion, demotion, recycle/release, synchronous-copy custody and
+typed capacity disposition are now covered below. Native owner-roster preflight
+and pending-compute qualification remain open.
 
 ## Directional Promotion Custody
 
@@ -718,16 +718,55 @@ core success path counts zero heap allocations in its scripted fixture; public
 readback still allocates its intermediate byte slice. See the
 [development receipt](evidence/dev-r126-runtime-synchronous-2026-09-16/README.md).
 Fresh native validation is pending while the shared MI300X is busy. Typed
-capacity disposition and pending-compute allocation remain next; R125 is still
-the accepted CPU/test checkpoint.
+capacity disposition is implemented below; pending-compute allocation remains
+disabled. R125 is still the accepted CPU/test checkpoint.
+
+## Typed SDMA Allocation Disposition
+
+The lower fresh-allocation driver now preserves the original typed error and
+supplies retry authority only for exact host-visible/device backing-credit
+`Capacity` after successful model retake and complete owner settlement. A
+nonterminal flag alone is insufficient. Other errors remain conservatively
+classified for process teardown; legacy allocation APIs erase this added
+classification without changing their original errors or state transitions.
+Pooled APIs share the same checkout and fresh-allocation implementation.
+
+Runtime allocation captures queue readiness before initialization. Proven
+capacity rejection on an already established primary/SDMA route is `Rejected`;
+if this call created queues, it is `Quiescent`. Host-side activity bookkeeping
+and model revisions can still advance. Configured Context admission refunds
+only `Rejected`; a cold `Quiescent` failure retains quarantined credit even
+without an allocation handle. This conservative behavior is not full memory
+parity. Errors after successful allocation, including recovered promotion and
+zero-initialization followed by successful cleanup, are also `Quiescent`.
+
+Staging uses the same typed helper. Existing public read/write and partial-chunk
+boundaries preserve prior-effect classification and visible prefixes. Driver
+selection, allocation and diagnostic panics seal the backend while preserving
+original panic payloads and existing owners. No message matching or new unsafe
+code is introduced.
+
+Fourteen added tests cover genuine constructed allocation/accounting/model
+transitions, denied settlement authority, public pool hit/miss compatibility,
+Context credit behavior, exact terminal custody and chunk visibility. The
+[development receipt](evidence/dev-r126-sdma-allocation-disposition-2026-09-16/README.md)
+records validation and limitations. Scripted cold admission is not native queue
+creation; engine-less pool coverage is not a native fresh-allocation test.
+R126 acceptance, native pending-compute allocation, formal correspondence and
+matched HIP/HSA performance remain open.
 
 ## Remaining Qualification
+
+Cold no-handle credit recovery remains a separate behavioral gap. It needs an
+allocation-specific settled-no-owner outcome before Context may refund the
+attempt's allocation credits. Legacy backends must retain conservative behavior;
+neither a capacity error string nor generic `Quiescent` grants that authority.
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
    ownership changes with pending compute after qualifying synchronous-copy
-   custody and completing typed capacity disposition. Lower fresh-allocation outputs now
+   custody and typed capacity disposition. Lower fresh-allocation outputs now
    remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.

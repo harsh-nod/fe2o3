@@ -1,0 +1,1711 @@
+diff --git a/crates/fe2o3-kfd/src/lib.rs b/crates/fe2o3-kfd/src/lib.rs
+index f5774063a..96bc420fa 100644
+--- a/crates/fe2o3-kfd/src/lib.rs
++++ b/crates/fe2o3-kfd/src/lib.rs
+@@ -151,6 +151,7 @@ pub use queue::{
+     Gfx942KfdQueueExceptionObservationV1, Gfx942PromotedSdmaDestinationV1,
+     Gfx942R66NativeObservationFailureV1, Gfx942RecycledDispatchResourcesV1,
+     Gfx942RecycledDispatchWriteRequestV1, Gfx942RepeatedByteContentV1,
++    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1,
+     Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
+     Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
+     Gfx942SdmaCompletedPromotionFailureV1, Gfx942SdmaDispatchDataBridgeV1,
+diff --git a/crates/fe2o3-kfd/src/queue.rs b/crates/fe2o3-kfd/src/queue.rs
+index a7a62c182..192fc6394 100644
+--- a/crates/fe2o3-kfd/src/queue.rs
++++ b/crates/fe2o3-kfd/src/queue.rs
+@@ -25,8 +25,10 @@ use fe2o3_runtime_model::{
+ 
+ #[path = "queue_live.rs"]
+ mod live;
+-pub use live::Gfx942SdmaHostReadIntoErrorV1;
+ pub(crate) use live::sdma_synchronous::SdmaSynchronousCustodyV1;
++pub use live::{
++    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, Gfx942SdmaHostReadIntoErrorV1,
++};
+ 
+ #[cfg(test)]
+ pub(crate) use live::{
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index 3952e3c84..a289ff6f6 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -262,6 +262,7 @@ pub(in crate::queue) mod persistent_bind;
+ mod pool_trim;
+ #[path = "queue_live/sdma_allocation.rs"]
+ mod sdma_allocation;
++pub use sdma_allocation::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1};
+ #[path = "queue_live/sdma_demotion.rs"]
+ mod sdma_demotion;
+ #[path = "queue_live/sdma_promotion.rs"]
+@@ -6645,19 +6646,36 @@ impl ComputeAqlQueueSessionV1 {
+         &mut self,
+         bytes: usize,
+     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+-        self.require_no_sdma_recycle_v1()?;
+-        self.require_no_sdma_owner_transition_v1()?;
++        self.allocate_sdma_pooled_host_buffer_classified_v1(bytes)
++            .map_err(Gfx942SdmaAllocationFailureV1::into_error)
++    }
++
++    /// Pooled allocation with an explicit, settled backing-capacity disposition.
++    pub fn allocate_sdma_pooled_host_buffer_classified_v1(
++        &mut self,
++        bytes: usize,
++    ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
++        self.require_no_sdma_recycle_v1()
++            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
++        self.require_no_sdma_owner_transition_v1()
++            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+         self.sdma_device_pool.begin_activity();
+         let requested = u64::try_from(bytes).map_err(|_| {
+-            ComputeAqlQueueSessionErrorV1::Contract("pooled host-buffer size conversion")
++            Gfx942SdmaAllocationFailureV1::unclassified(ComputeAqlQueueSessionErrorV1::Contract(
++                "pooled host-buffer size conversion",
++            ))
+         })?;
+-        if let Some(mut buffer) =
+-            self.checkout_sdma_pool(Gfx942SdmaBufferKindV1::HostVisibleCoherent, requested, 1)?
++        if let Some(mut buffer) = self
++            .checkout_sdma_pool(Gfx942SdmaBufferKindV1::HostVisibleCoherent, requested, 1)
++            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?
+         {
+             buffer.set_logical_bytes(requested);
+             return Ok(buffer);
+         }
+-        self.allocate_sdma_host_buffer(bytes)
++        sdma_allocation::allocate_classified_in_place(
++            self,
++            sdma_allocation::SdmaAllocationRequestV1::Host(bytes),
++        )
+     }
+ 
+     pub fn allocate_sdma_pooled_device_buffer(
+@@ -6665,21 +6683,37 @@ impl ComputeAqlQueueSessionV1 {
+         bytes: u64,
+         alignment: u64,
+     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+-        self.require_no_sdma_recycle_v1()?;
+-        self.require_no_sdma_owner_transition_v1()?;
++        self.allocate_sdma_pooled_device_buffer_classified_v1(bytes, alignment)
++            .map_err(Gfx942SdmaAllocationFailureV1::into_error)
++    }
++
++    /// Pooled allocation with an explicit, settled backing-capacity disposition.
++    pub fn allocate_sdma_pooled_device_buffer_classified_v1(
++        &mut self,
++        bytes: u64,
++        alignment: u64,
++    ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
++        self.require_no_sdma_recycle_v1()
++            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
++        self.require_no_sdma_owner_transition_v1()
++            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+         self.sdma_device_pool.begin_activity();
+         if alignment == 0 || !alignment.is_power_of_two() {
+-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+-                "pooled device-buffer alignment",
++            return Err(Gfx942SdmaAllocationFailureV1::unclassified(
++                ComputeAqlQueueSessionErrorV1::Contract("pooled device-buffer alignment"),
+             ));
+         }
+-        if let Some(mut buffer) =
+-            self.checkout_sdma_pool(Gfx942SdmaBufferKindV1::DeviceLocal, bytes, alignment)?
++        if let Some(mut buffer) = self
++            .checkout_sdma_pool(Gfx942SdmaBufferKindV1::DeviceLocal, bytes, alignment)
++            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?
+         {
+             buffer.set_logical_bytes(bytes);
+             return Ok(buffer);
+         }
+-        self.allocate_sdma_device_buffer(bytes, alignment)
++        sdma_allocation::allocate_classified_in_place(
++            self,
++            sdma_allocation::SdmaAllocationRequestV1::Device { bytes, alignment },
++        )
+     }
+ 
+     /// Promotes one exact queue-owned device buffer into the R18 persistent
+@@ -13621,6 +13655,87 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn sdma_allocation_classified_pool_hit_preserves_owner_generation_and_legacy_behavior() {
++        for host in [false, true] {
++            for classified in [false, true] {
++                let queue = test_queue_key(802, 1);
++                let mut session = persistent_compute_cancellation_test_session(queue, None, None);
++                // These public pool transitions have no Linux engine or native effect.
++                session.sdma = Some(Gfx942SdmaQueueSetV1::Generic(Vec::new()));
++                let (device, host_buffer) = crate::sdma::persistent_sdma_buffers_for_test(queue, 2);
++                let identity = if host {
++                    host_buffer.storage_identity()
++                } else {
++                    device.storage_identity()
++                };
++                session.sdma_outstanding_buffers = 2;
++                session.recycle_sdma_buffer(device).unwrap();
++                session.recycle_sdma_buffer(host_buffer).unwrap();
++                let recycled = match (host, classified) {
++                    (true, true) => session
++                        .allocate_sdma_pooled_host_buffer_classified_v1(16)
++                        .unwrap(),
++                    (false, true) => session
++                        .allocate_sdma_pooled_device_buffer_classified_v1(16, 4)
++                        .unwrap(),
++                    (true, false) => session.allocate_sdma_pooled_host_buffer(16).unwrap(),
++                    (false, false) => session.allocate_sdma_pooled_device_buffer(16, 4).unwrap(),
++                };
++                assert_eq!(recycled.storage_identity(), identity);
++                assert_eq!(recycled.pool_generation(), 2);
++                assert_eq!(recycled.requested_bytes(), 16);
++                assert_eq!(session.sdma_outstanding_buffers, 1);
++                assert_eq!(session.sdma_pool_reuse_count, 1);
++                assert_eq!(session.sdma_pool_free.len(), 1);
++                assert!(session.sdma_device_pool.activity_started && !session.terminal_poisoned);
++                session.recycle_sdma_buffer(recycled).unwrap();
++                assert_eq!(session.sdma_outstanding_buffers, 0);
++                assert_eq!(session.sdma_pool_free.len(), 2);
++            }
++        }
++    }
++
++    #[test]
++    fn sdma_allocation_classified_pool_miss_keeps_original_error_and_legacy_state() {
++        for host in [false, true] {
++            for classified in [false, true] {
++                let queue = test_queue_key(802, 1);
++                let mut session = persistent_compute_cancellation_test_session(queue, None, None);
++                session.sdma = Some(Gfx942SdmaQueueSetV1::Generic(Vec::new()));
++                let error = if classified {
++                    let failure = if host {
++                        session.allocate_sdma_pooled_host_buffer_classified_v1(16)
++                    } else {
++                        session.allocate_sdma_pooled_device_buffer_classified_v1(16, 4)
++                    }
++                    .err()
++                    .unwrap();
++                    assert_eq!(
++                        failure.disposition(),
++                        Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++                    );
++                    failure.into_error()
++                } else if host {
++                    session.allocate_sdma_pooled_host_buffer(16).err().unwrap()
++                } else {
++                    session
++                        .allocate_sdma_pooled_device_buffer(16, 4)
++                        .err()
++                        .unwrap()
++                };
++                assert!(matches!(
++                    error,
++                    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine")
++                ));
++                assert!(session.sdma_device_pool.activity_started && !session.terminal_poisoned);
++                assert!(session.sdma_pool_free.is_empty() && session.sdma_allocation.is_none());
++                assert_eq!(session.sdma_outstanding_buffers, 0);
++                assert_eq!(session.sdma_pool_reuse_count, 0);
++            }
++        }
++    }
++
+     #[test]
+     fn device_pool_default_preserves_recycle_checkout_and_host_cache_behavior() {
+         let queue = test_queue_key(802, 1);
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs
+index c64a7d705..08f8d5562 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs
+@@ -6,8 +6,9 @@ mod promotion;
+ #[path = "integration_sdma_recycle_tests.rs"]
+ mod recycle;
+ use crate::queue::live::sdma_allocation::{
+-    SdmaAllocationContextV1, SdmaAllocationCustodyV1, SdmaAllocationMemoryV1,
+-    SdmaAllocationPartsV1, SdmaAllocationRequestV1, allocate_in_place,
++    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, SdmaAllocationContextV1,
++    SdmaAllocationCustodyV1, SdmaAllocationMemoryV1, SdmaAllocationPartsV1,
++    SdmaAllocationRequestV1, allocate_classified_in_place, allocate_in_place,
+ };
+ use crate::shared_memory::{
+     CoherentAllocationCustodyV1, CoherentInsertionFaultV1, CoherentInsertionPrefixV1,
+@@ -63,6 +64,7 @@ struct AllocationParent {
+     outstanding: usize,
+     opening: Fault,
+     closing: Fault,
++    capacity_retry_settled: bool,
+     poison_panics: bool,
+     calls: Vec<&'static str>,
+ }
+@@ -85,6 +87,7 @@ impl AllocationParent {
+             outstanding: 0,
+             opening: Fault::None,
+             closing: Fault::None,
++            capacity_retry_settled: true,
+             poison_panics: false,
+             calls: Vec::new(),
+         }
+@@ -241,6 +244,19 @@ impl SdmaAllocationContextV1 for AllocationParent {
+     fn is_terminal(&self) -> bool {
+         self.parent.poisoned
+     }
++    fn capacity_retry_is_settled(&self) -> bool {
++        self.capacity_retry_settled
++            && !self.parent.poisoned
++            && self.custody.is_none()
++            && self.parent.sdma.is_some()
++            && self.parent.engine.backend.foundation_in_engine
++            && !self
++                .parent
++                .engine
++                .backend
++                .session
++                .primary_is_quarantined_v1()
++    }
+     fn poison(&mut self) {
+         self.parent.poison_release();
+         if self.poison_panics {
+@@ -602,6 +618,213 @@ fn constructed_sdma_allocation_invalid_device_layout_retakes_without_native_effe
+     }
+ }
+ 
++fn classified_allocate(
++    parent: &mut AllocationParent,
++    host: bool,
++    bytes: usize,
++) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
++    allocate_classified_in_place(
++        parent,
++        if host {
++            SdmaAllocationRequestV1::Host(bytes)
++        } else {
++            SdmaAllocationRequestV1::Device {
++                bytes: bytes as u64,
++                alignment: 4096,
++            }
++        },
++    )
++}
++
++#[test]
++fn constructed_sdma_allocation_classified_capacity_preserves_exact_error_and_retry() {
++    for host in [false, true] {
++        let mut f = AllocationParent::new();
++        let e = &f.parent.engine;
++        let host_before = e.backend.session.coherent_insertion_snapshot_v1();
++        let device_before = e.backend.session.insertion_memory_snapshot_v1();
++        let account_before = e.backend.session.observation();
++        let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
++        let failure = match classified_allocate(&mut f, host, (1 << 20) + 4096) {
++            Err(failure) => failure,
++            Ok(_) => panic!("capacity rejection required"),
++        };
++        assert_eq!(
++            failure.disposition(),
++            Gfx942SdmaAllocationDispositionV1::RetryableCapacity
++        );
++        assert!(std::error::Error::source(&failure).is_some());
++        assert_eq!(failure.to_string(), failure.error().to_string());
++        let detail = failure.to_string();
++        match failure.into_error() {
++            ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
++                MemorySessionError::HostVisibleBackingCredits(
++                    fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity,
++                ),
++            )) => assert!(host),
++            ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
++                MemorySessionError::DeviceBackingCredits(
++                    fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity,
++                ),
++            )) => assert!(!host),
++            _ => panic!("original typed capacity"),
++        }
++        assert!(f.capacity_retry_is_settled());
++        assert_eq!(f.calls, ["loan", "retake"]);
++        assert_eq!(f.outstanding, 0);
++        let e = &f.parent.engine;
++        assert!(e.backend.session.coherent_insertion_snapshot_v1() == host_before);
++        assert!(e.backend.session.insertion_memory_snapshot_v1() == device_before);
++        assert!(e.backend.session.observation() == account_before);
++        assert_eq!(
++            e.backend.session.primary_loan_state_v1(&e.foundation),
++            (loan.0, None, loan.2 + 1)
++        );
++        let legacy = f.allocate(host, (1 << 20) + 4096).err().unwrap();
++        assert_eq!(legacy.to_string(), detail);
++        assert!(f.capacity_retry_is_settled());
++        let buffer = classified_allocate(&mut f, host, 17).ok().unwrap();
++        f.release(buffer);
++        f.shutdown();
++    }
++}
++
++#[test]
++fn constructed_sdma_allocation_classified_capacity_requires_settlement_witness() {
++    let mut f = AllocationParent::new();
++    // Deny only the adapter's final witness; memory admission and model retake are real.
++    f.capacity_retry_settled = false;
++    let e = &f.parent.engine;
++    let host = e.backend.session.coherent_insertion_snapshot_v1();
++    let device = e.backend.session.insertion_memory_snapshot_v1();
++    let accounting = e.backend.session.observation();
++    let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
++    let failure = classified_allocate(&mut f, true, (1 << 20) + 4096)
++        .err()
++        .unwrap();
++    assert_eq!(
++        failure.disposition(),
++        Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++    );
++    assert!(matches!(
++        failure.into_error(),
++        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
++            MemorySessionError::HostVisibleBackingCredits(
++                fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity
++            )
++        ))
++    ));
++    assert_eq!(f.calls, ["loan", "retake"]);
++    assert!(f.custody.is_none() && !f.parent.poisoned && f.outstanding == 0);
++    let e = &f.parent.engine;
++    assert!(e.backend.foundation_in_engine);
++    assert!(e.backend.session.coherent_insertion_snapshot_v1() == host);
++    assert!(e.backend.session.insertion_memory_snapshot_v1() == device);
++    assert!(e.backend.session.observation() == accounting);
++    assert_eq!(
++        e.backend.session.primary_loan_state_v1(&e.foundation),
++        (loan.0, None, loan.2 + 1)
++    );
++    f.shutdown();
++}
++
++#[test]
++fn constructed_sdma_allocation_classified_retake_and_native_failures_never_grant_retry() {
++    for host in [false, true] {
++        for closing in [Fault::Error, Fault::AfterError, Fault::Regression] {
++            let mut f = AllocationParent::new();
++            f.closing = closing;
++            let failure = classified_allocate(&mut f, host, (1 << 20) + 4096)
++                .err()
++                .unwrap();
++            assert_eq!(
++                failure.disposition(),
++                Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++            );
++            if closing != Fault::Regression {
++                assert!(matches!(
++                    failure.error(),
++                    ComputeAqlQueueSessionErrorV1::Contract(
++                        "allocation retake" | "allocation retake after"
++                    )
++                ));
++            }
++            assert!(f.parent.poisoned && f.custody.is_some());
++            assert!(!f.capacity_retry_is_settled());
++            f.no_retry();
++        }
++        let mut f = AllocationParent::new();
++        f.parent
++            .engine
++            .backend
++            .session
++            .primary_arm_native("map_gpu", false);
++        let failure = classified_allocate(&mut f, host, 17).err().unwrap();
++        assert_eq!(
++            failure.disposition(),
++            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++        );
++        assert!(f.parent.poisoned && f.custody.is_some());
++        let calls = f.calls.clone();
++        let repeat = classified_allocate(&mut f, host, 17).err().unwrap();
++        assert_eq!(
++            repeat.disposition(),
++            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++        );
++        assert!(matches!(
++            repeat.error(),
++            ComputeAqlQueueSessionErrorV1::Contract("unfinished SDMA allocation")
++        ));
++        assert_eq!(f.calls, calls);
++        f.no_retry();
++    }
++}
++
++#[test]
++fn constructed_sdma_allocation_classified_validation_and_loan_rejection_preserve_legacy_state() {
++    for case in 0..3 {
++        let mut f = AllocationParent::new();
++        if case == 1 {
++            f.opening = Fault::Error;
++        }
++        if case == 2 {
++            f.outstanding = usize::MAX;
++        }
++        let failure = classified_allocate(&mut f, false, if case == 0 { 0 } else { 17 })
++            .err()
++            .unwrap();
++        assert_eq!(
++            failure.disposition(),
++            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++        );
++        match (case, failure.into_error()) {
++            (
++                0,
++                ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
++                    MemorySessionError::InvalidDeviceMemorySize,
++                )),
++            ) => (),
++            (1, ComputeAqlQueueSessionErrorV1::Contract("allocation loan")) => (),
++            (2, ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted")) => (),
++            _ => panic!("original error is preserved"),
++        }
++        assert!(!f.parent.poisoned && f.custody.is_none());
++        assert_eq!(
++            f.calls.as_slice(),
++            match case {
++                0 => &["loan", "retake"][..],
++                1 => &["loan"][..],
++                _ => &[][..],
++            }
++        );
++        f.opening = Fault::None;
++        f.outstanding = 0;
++        let buffer = f.allocate(false, 17).unwrap();
++        f.release(buffer);
++        f.shutdown();
++    }
++}
++
+ #[test]
+ fn constructed_sdma_allocation_budget_rejection_is_healthy_and_retryable() {
+     for host in [false, true] {
+diff --git a/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs b/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs
+index 6fe9006e2..ee6266070 100644
+--- a/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs
++++ b/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs
+@@ -8,6 +8,69 @@ use crate::shared_memory::{
+ };
+ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+ 
++/// Classification supplied only by the retained allocation driver.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum Gfx942SdmaAllocationDispositionV1 {
++    /// Backing credits rejected before native allocation; model ownership is settled.
++    /// Host-side pool activity and model revision bookkeeping may have advanced.
++    RetryableCapacity,
++    /// No retry authority is supplied; any uncertain lower owner remains retained.
++    ProcessTeardown,
++}
++
++/// The original native error, without allocating a diagnostic before settlement.
++#[derive(Debug)]
++pub struct Gfx942SdmaAllocationFailureV1 {
++    error: ComputeAqlQueueSessionErrorV1,
++    disposition: Gfx942SdmaAllocationDispositionV1,
++}
++
++impl Gfx942SdmaAllocationFailureV1 {
++    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
++        &self.error
++    }
++
++    pub fn disposition(&self) -> Gfx942SdmaAllocationDispositionV1 {
++        self.disposition
++    }
++
++    pub fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
++        self.error
++    }
++
++    pub(super) fn unclassified(error: ComputeAqlQueueSessionErrorV1) -> Self {
++        Self {
++            error,
++            disposition: Gfx942SdmaAllocationDispositionV1::ProcessTeardown,
++        }
++    }
++}
++
++impl core::fmt::Display for Gfx942SdmaAllocationFailureV1 {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        core::fmt::Display::fmt(&self.error, f)
++    }
++}
++
++impl std::error::Error for Gfx942SdmaAllocationFailureV1 {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        Some(&self.error)
++    }
++}
++
++fn is_backing_capacity(error: &ComputeAqlQueueSessionErrorV1) -> bool {
++    matches!(
++        error,
++        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
++            MemorySessionError::HostVisibleBackingCredits(
++                fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity
++            ) | MemorySessionError::DeviceBackingCredits(
++                fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity
++            )
++        ))
++    )
++}
++
+ pub(super) enum SdmaAllocationRequestV1 {
+     Host(usize),
+     Device { bytes: u64, alignment: u64 },
+@@ -134,6 +197,7 @@ pub(super) trait SdmaAllocationContextV1 {
+         loan: LiveQueueModelFoundationLoanV1,
+     ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
+     fn is_terminal(&self) -> bool;
++    fn capacity_retry_is_settled(&self) -> bool;
+     fn poison(&mut self);
+ }
+ 
+@@ -146,21 +210,34 @@ pub(super) fn allocate_in_place<C: SdmaAllocationContextV1>(
+     context: &mut C,
+     request: SdmaAllocationRequestV1,
+ ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+-    context.preflight()?;
+-    let parts = context.parts()?;
++    allocate_classified_in_place(context, request)
++        .map_err(Gfx942SdmaAllocationFailureV1::into_error)
++}
++
++pub(super) fn allocate_classified_in_place<C: SdmaAllocationContextV1>(
++    context: &mut C,
++    request: SdmaAllocationRequestV1,
++) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
++    context
++        .preflight()
++        .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
++    let parts = context
++        .parts()
++        .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+     if parts.custody.is_some() {
+-        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+-            "unfinished SDMA allocation",
++        return Err(Gfx942SdmaAllocationFailureV1::unclassified(
++            ComputeAqlQueueSessionErrorV1::Contract("unfinished SDMA allocation"),
+         ));
+     }
+-    let next_outstanding =
+-        parts
+-            .outstanding
+-            .checked_add(1)
+-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+-                "SDMA buffer ledger exhausted",
+-            ))?;
++    let next_outstanding = parts
++        .outstanding
++        .checked_add(1)
++        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++            "SDMA buffer ledger exhausted",
++        ))
++        .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+     *parts.custody = Some(SdmaAllocationCustodyV1::new(request));
++    let mut model_retaken = false;
+     let result = catch_unwind(AssertUnwindSafe(|| {
+         let (operation, retake) = execute_live_model_custody_v1(
+             context,
+@@ -178,6 +255,7 @@ pub(super) fn allocate_in_place<C: SdmaAllocationContextV1>(
+             poison_without_replacing_failure,
+         )?;
+         retake?;
++        model_retaken = true;
+         operation?;
+         let parts = context.parts()?;
+         let buffer = parts
+@@ -214,7 +292,16 @@ pub(super) fn allocate_in_place<C: SdmaAllocationContextV1>(
+             if terminal {
+                 poison_without_replacing_failure(context);
+             }
+-            Err(error)
++            let disposition = if !terminal
++                && model_retaken
++                && is_backing_capacity(&error)
++                && context.capacity_retry_is_settled()
++            {
++                Gfx942SdmaAllocationDispositionV1::RetryableCapacity
++            } else {
++                Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++            };
++            Err(Gfx942SdmaAllocationFailureV1 { error, disposition })
+         }
+         Err(payload) => {
+             poison_without_replacing_failure(context);
+@@ -285,6 +372,14 @@ impl SdmaAllocationContextV1 for ComputeAqlQueueSessionV1 {
+     fn is_terminal(&self) -> bool {
+         self.terminal_poisoned
+     }
++    fn capacity_retry_is_settled(&self) -> bool {
++        self.require_sdma_enabled().is_ok()
++            && self.sdma_pool_trim.is_none()
++            && self.engine.as_ref().is_some_and(|engine| {
++                engine.backend.foundation_in_engine
++                    && engine.backend.session.phase() != SharedMemorySessionPhaseV1::Quarantined
++            })
++    }
+     fn poison(&mut self) {
+         self.poison_terminal();
+         permanently_poison_process_global_kfd_runtime_gate_v1();
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 1ed87ef06..68660cb37 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -110,6 +110,7 @@ pub use qualification_drain_capture::{
+     KfdDrainCaptureCustodyObservationV1, KfdDrainCaptureObservationFailureV1,
+ };
+ mod kfd_backend_sdma_seam;
++mod sdma_allocation;
+ mod sdma_demotion;
+ mod sdma_host_read;
+ mod sdma_host_write;
+@@ -4745,10 +4746,13 @@ impl KfdRuntimeBackendV1 {
+                 "SDMA upload exceeds one admitted linear packet",
+             )
+         })?;
+-        let staging = self
+-            .directional_sdma_ops_v1()
+-            .allocate_host(bytes.len())
+-            .map_err(|error| self.terminal_error(format!("KFD upload staging: {error}")))?;
++        let staging = self.allocate_sdma_owner_v1(
++            RuntimeMemoryKindV1::HostVisible,
++            bytes.len(),
++            1,
++            true,
++            "KFD upload staging",
++        )?;
+         let staging = self.initialize_sdma_host_v1(staging, bytes, "KFD upload staging write")?;
+         let staging = self.execute_synchronous_directional_sdma_v1(
+             allocation,
+@@ -4871,10 +4875,13 @@ impl KfdRuntimeBackendV1 {
+                 "SDMA download exceeds one admitted linear packet",
+             )
+         })?;
+-        let staging = self
+-            .directional_sdma_ops_v1()
+-            .allocate_host(destination.len())
+-            .map_err(|error| self.terminal_error(format!("KFD download staging: {error}")))?;
++        let staging = self.allocate_sdma_owner_v1(
++            RuntimeMemoryKindV1::HostVisible,
++            destination.len(),
++            1,
++            true,
++            "KFD download staging",
++        )?;
+         let staging = self.execute_synchronous_directional_sdma_v1(
+             allocation,
+             Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+@@ -5801,18 +5808,15 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+         let bytes = try_zeroed_staging_v1(len)?;
+         let id = self.next_id()?;
+         let sdma_storage = if self.native_available {
++            let ready_before = self.sdma_allocation_ready_v1();
+             self.ensure_sdma_queue_v1()?;
+-            let result = match kind {
+-                RuntimeMemoryKindV1::DeviceLocal => self
+-                    .directional_sdma_ops_v1()
+-                    .allocate_device_buffer(byte_len, alignment),
+-                RuntimeMemoryKindV1::HostVisible => {
+-                    self.directional_sdma_ops_v1().allocate_host(len)
+-                }
+-            };
+-            let buffer = result.map_err(|error| {
+-                self.terminal_error(format!("KFD persistent SDMA allocation: {error}"))
+-            })?;
++            let buffer = self.allocate_sdma_owner_v1(
++                kind,
++                len,
++                alignment,
++                ready_before,
++                "KFD persistent SDMA allocation",
++            )?;
+             match kind {
+                 RuntimeMemoryKindV1::HostVisible => {
+                     let buffer = self.initialize_sdma_host_v1(
+@@ -5822,9 +5826,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+                     )?;
+                     KfdRuntimeSdmaStorageV1::Host(buffer)
+                 }
+-                RuntimeMemoryKindV1::DeviceLocal => {
+-                    KfdRuntimeSdmaStorageV1::Device(Box::new(self.promote_sdma_buffer_v1(buffer)?))
+-                }
++                RuntimeMemoryKindV1::DeviceLocal => KfdRuntimeSdmaStorageV1::Device(Box::new(
++                    self.promote_sdma_buffer_v1(buffer)
++                        .map_err(Self::after_possible_host_mutation)?,
++                )),
+             }
+         } else {
+             KfdRuntimeSdmaStorageV1::Synthetic
+@@ -5863,7 +5868,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+                         )),
+                     };
+                 }
+-                return Err(failure);
++                return Err(Self::after_possible_host_mutation(failure));
+             }
+             self.allocations
+                 .get_mut(&id)
+@@ -12580,6 +12585,7 @@ mod retained_release_tests;
+ 
+ #[cfg(test)]
+ mod tests {
++    mod sdma_allocation_tests;
+     mod sdma_demotion_tests;
+     mod sdma_host_read_tests;
+     mod sdma_host_write_tests;
+@@ -13729,7 +13735,7 @@ mod tests {
+         retry.scripted_sdma = Some(ScriptedSdmaDriverV1::new(retry_steps));
+         assert!(matches!(
+             retry.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
+-            Err(RuntimeBackendFailureV1::Rejected(error))
++            Err(RuntimeBackendFailureV1::Quiescent(error))
+                 if error.kind() == KfdRuntimeBackendErrorKindV1::Native
+         ));
+         assert!(retry.allocations.is_empty());
+@@ -19755,7 +19761,7 @@ mod tests {
+         backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new(steps));
+         assert!(matches!(
+             backend.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
+-            Err(RuntimeBackendFailureV1::Rejected(error))
++            Err(RuntimeBackendFailureV1::Quiescent(error))
+                 if error.kind() == KfdRuntimeBackendErrorKindV1::Native
+         ));
+         assert!(backend.allocations.is_empty());
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+index de90a65e6..a7453c936 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+@@ -41,7 +41,8 @@ use fe2o3_kfd::{
+     Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1,
+     Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1,
+     Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
+-    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaBufferV1, Gfx942SdmaErrorV1,
++    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaAllocationDispositionV1,
++    Gfx942SdmaAllocationFailureV1, Gfx942SdmaBufferV1, Gfx942SdmaErrorV1,
+ };
+ #[cfg(test)]
+ use sha2::{Digest, Sha256};
+@@ -491,6 +492,7 @@ pub(super) enum SdmaTransitionFailureV1<R, D = String> {
+     },
+ }
+ 
++#[derive(Debug)]
+ pub(super) enum SdmaOwnerDiagnosticV1 {
+     Native(ComputeAqlQueueSessionErrorV1),
+     Message(String),
+@@ -523,6 +525,31 @@ impl core::fmt::Display for SdmaOwnerDiagnosticV1 {
+     }
+ }
+ 
++#[derive(Debug)]
++pub(crate) struct SdmaAllocationFailureV1 {
++    pub(super) detail: SdmaOwnerDiagnosticV1,
++    pub(super) disposition: Gfx942SdmaAllocationDispositionV1,
++}
++
++impl From<Gfx942SdmaAllocationFailureV1> for SdmaAllocationFailureV1 {
++    fn from(failure: Gfx942SdmaAllocationFailureV1) -> Self {
++        Self {
++            disposition: failure.disposition(),
++            detail: SdmaOwnerDiagnosticV1::Native(failure.into_error()),
++        }
++    }
++}
++
++#[cfg(test)]
++impl SdmaAllocationFailureV1 {
++    fn scripted_protocol(detail: String) -> Self {
++        Self {
++            detail: SdmaOwnerDiagnosticV1::Scripted(detail),
++            disposition: Gfx942SdmaAllocationDispositionV1::ProcessTeardown,
++        }
++    }
++}
++
+ pub(super) enum DirectionalSdmaExecutionFailureV1 {
+     Retryable {
+         detail: String,
+@@ -691,12 +718,15 @@ fn map_native_ready_promotion_v1(
+ }
+ 
+ impl<'a> DirectionalSdmaOpsV1<'a> {
+-    pub(super) fn allocate_host(&mut self, byte_len: usize) -> Result<SdmaBufferOwnerV1, String> {
++    pub(super) fn allocate_host(
++        &mut self,
++        byte_len: usize,
++    ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
+         match self {
+             Self::Native(queue) => queue
+-                .allocate_sdma_pooled_host_buffer(byte_len)
++                .allocate_sdma_pooled_host_buffer_classified_v1(byte_len)
+                 .map(SdmaBufferOwnerV1::Native)
+-                .map_err(|error| error.to_string()),
++                .map_err(SdmaAllocationFailureV1::from),
+             #[cfg(test)]
+             Self::Scripted(driver) => driver.allocate_buffer(byte_len, ScriptedBufferKindV1::Host),
+         }
+@@ -706,16 +736,19 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+         &mut self,
+         byte_len: u64,
+         alignment: u64,
+-    ) -> Result<SdmaBufferOwnerV1, String> {
++    ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
+         match self {
+             Self::Native(queue) => queue
+-                .allocate_sdma_pooled_device_buffer(byte_len, alignment)
++                .allocate_sdma_pooled_device_buffer_classified_v1(byte_len, alignment)
+                 .map(SdmaBufferOwnerV1::Native)
+-                .map_err(|error| error.to_string()),
++                .map_err(SdmaAllocationFailureV1::from),
+             #[cfg(test)]
+             Self::Scripted(driver) => {
+-                let len = usize::try_from(byte_len)
+-                    .map_err(|_| "scripted device allocation length overflow".to_owned())?;
++                let len = usize::try_from(byte_len).map_err(|_| {
++                    SdmaAllocationFailureV1::scripted_protocol(
++                        "scripted device allocation length overflow".to_owned(),
++                    )
++                })?;
+                 driver.allocate_buffer(len, ScriptedBufferKindV1::Device)
+             }
+         }
+@@ -2106,6 +2139,15 @@ mod scripted {
+             byte_len: usize,
+             fill: u8,
+         },
++        AllocateFailure {
++            kind: ScriptedBufferKindV1,
++            byte_len: usize,
++            failure: SdmaAllocationFailureV1,
++        },
++        AllocatePanic {
++            kind: ScriptedBufferKindV1,
++            byte_len: usize,
++        },
+         Write {
+             offset: u64,
+             byte_len: usize,
+@@ -2515,8 +2557,11 @@ mod scripted {
+             &mut self,
+             byte_len: usize,
+             kind: ScriptedBufferKindV1,
+-        ) -> Result<SdmaBufferOwnerV1, String> {
+-            let fill = match self.pop()? {
++        ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
++            let fill = match self
++                .pop()
++                .map_err(SdmaAllocationFailureV1::scripted_protocol)?
++            {
+                 ScriptedSdmaStepV1::Allocate {
+                     kind: expected_kind,
+                     byte_len: expected_len,
+@@ -2525,7 +2570,22 @@ mod scripted {
+                     byte_len: expected_len,
+                     fill,
+                 } if kind == ScriptedBufferKindV1::Host && expected_len == byte_len => fill,
+-                step => return Err(format!("scripted SDMA allocation mismatch: {step:?}")),
++                ScriptedSdmaStepV1::AllocateFailure {
++                    kind: expected_kind,
++                    byte_len: expected_len,
++                    failure,
++                } if expected_kind == kind && expected_len == byte_len => return Err(failure),
++                ScriptedSdmaStepV1::AllocatePanic {
++                    kind: expected_kind,
++                    byte_len: expected_len,
++                } if expected_kind == kind && expected_len == byte_len => {
++                    std::panic::panic_any("scripted SDMA allocation panic")
++                }
++                step => {
++                    return Err(SdmaAllocationFailureV1::scripted_protocol(format!(
++                        "scripted SDMA allocation mismatch: {step:?}"
++                    )));
++                }
+             };
+             Ok(SdmaBufferOwnerV1::Scripted(ScriptedBufferOwnerV1 {
+                 token: ScriptedOwnerTokenV1::new(
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_allocation.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_allocation.rs
+new file mode 100644
+index 000000000..b633d61a6
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_allocation.rs
+@@ -0,0 +1,84 @@
++//! Native allocation disposition survives driver selection and diagnostic unwind.
++
++#![forbid(unsafe_code)]
++
++use super::kfd_backend_sdma_seam::{SdmaAllocationFailureV1, SdmaOwnerDiagnosticV1};
++use super::sdma_host_write::resume_sdma_owner_panic_v1;
++use super::*;
++use fe2o3_kfd::Gfx942SdmaAllocationDispositionV1;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++impl KfdRuntimeBackendV1 {
++    pub(super) fn sdma_allocation_ready_v1(&self) -> bool {
++        let ready = self.queue.is_some();
++        #[cfg(test)]
++        let ready = ready || self.scripted_sdma.is_some();
++        ready && self.sdma_enabled
++    }
++
++    pub(super) fn allocate_sdma_owner_v1(
++        &mut self,
++        kind: RuntimeMemoryKindV1,
++        byte_len: usize,
++        alignment: u64,
++        ready_before: bool,
++        operation: &'static str,
++    ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            let result = match kind {
++                RuntimeMemoryKindV1::HostVisible => {
++                    self.directional_sdma_ops_v1().allocate_host(byte_len)
++                }
++                RuntimeMemoryKindV1::DeviceLocal => self
++                    .directional_sdma_ops_v1()
++                    .allocate_device_buffer(byte_len as u64, alignment),
++            };
++            result.map_err(|failure| {
++                self.settle_sdma_allocation_failure_v1(failure, ready_before, operation, |detail| {
++                    detail.to_string()
++                })
++            })
++        }));
++        match result {
++            Ok(result) => result,
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || {
++                if !self.terminal {
++                    self.poison_terminal_v1();
++                }
++            }),
++        }
++    }
++
++    pub(super) fn settle_sdma_allocation_failure_v1(
++        &mut self,
++        failure: SdmaAllocationFailureV1,
++        ready_before: bool,
++        operation: &'static str,
++        diagnostic: impl FnOnce(&SdmaOwnerDiagnosticV1) -> String,
++    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            let retryable =
++                failure.disposition == Gfx942SdmaAllocationDispositionV1::RetryableCapacity;
++            if !retryable {
++                self.poison_terminal_v1();
++            }
++            let message = format!("{operation}: {}", diagnostic(&failure.detail));
++            if !retryable {
++                return RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(
++                    KfdRuntimeBackendErrorKindV1::Terminal,
++                    message,
++                ));
++            }
++            if ready_before {
++                Self::rejected(KfdRuntimeBackendErrorKindV1::Capacity, message)
++            } else {
++                // Queue creation was visible, but the admitted empty queues are idle.
++                Self::quiescent_error(KfdRuntimeBackendErrorKindV1::Capacity, message)
++            }
++        }));
++        match result {
++            Ok(failure) => failure,
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
++        }
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+new file mode 100644
+index 000000000..f843eb6ab
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_allocation_tests.rs
+@@ -0,0 +1,657 @@
++use super::sdma_host_write_tests::{
++    assert_terminal_retries_inert, discard_scripted_fixture, fixture, host_observation, snapshot,
++};
++use super::*;
++use crate::kfd_backend::kfd_backend_sdma_seam::{SdmaAllocationFailureV1, SdmaOwnerDiagnosticV1};
++use fe2o3_kfd::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaErrorV1, MemorySessionError};
++use std::mem::ManuallyDrop;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++fn capacity(kind: RuntimeMemoryKindV1, terminal: bool) -> SdmaAllocationFailureV1 {
++    let credit = fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity;
++    let memory = match kind {
++        RuntimeMemoryKindV1::HostVisible => MemorySessionError::HostVisibleBackingCredits(credit),
++        RuntimeMemoryKindV1::DeviceLocal => MemorySessionError::DeviceBackingCredits(credit),
++    };
++    SdmaAllocationFailureV1 {
++        detail: SdmaOwnerDiagnosticV1::Native(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Sdma(
++            Gfx942SdmaErrorV1::Memory(memory),
++        )),
++        disposition: if terminal {
++            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
++        } else {
++            Gfx942SdmaAllocationDispositionV1::RetryableCapacity
++        },
++    }
++}
++
++fn scripted_kind(kind: RuntimeMemoryKindV1) -> ScriptedBufferKindV1 {
++    match kind {
++        RuntimeMemoryKindV1::HostVisible => ScriptedBufferKindV1::Host,
++        RuntimeMemoryKindV1::DeviceLocal => ScriptedBufferKindV1::Device,
++    }
++}
++
++fn reject(kind: RuntimeMemoryKindV1, byte_len: usize, terminal: bool) -> ScriptedSdmaStepV1 {
++    ScriptedSdmaStepV1::AllocateFailure {
++        kind: scripted_kind(kind),
++        byte_len,
++        failure: capacity(kind, terminal),
++    }
++}
++
++fn success(kind: RuntimeMemoryKindV1) -> Vec<ScriptedSdmaStepV1> {
++    let mut steps = vec![ScriptedSdmaStepV1::Allocate {
++        kind: scripted_kind(kind),
++        byte_len: 8,
++    }];
++    match kind {
++        RuntimeMemoryKindV1::HostVisible => steps.push(ScriptedSdmaStepV1::Write {
++            offset: 0,
++            byte_len: 8,
++        }),
++        RuntimeMemoryKindV1::DeviceLocal => {
++            steps.push(ScriptedSdmaStepV1::Promote(ScriptedFailureModeV1::Success));
++            steps.extend(scripted_sync_copy_steps_v1(
++                Gfx942PersistentSdmaDirectionV1::HostToDevice,
++                0,
++                8,
++                ScriptedFailureModeV1::Success,
++            ));
++        }
++    }
++    steps
++}
++
++#[test]
++fn sdma_allocation_capacity_preserves_neighbors_and_retries_after_warm_or_cold_admission() {
++    for kind in [
++        RuntimeMemoryKindV1::HostVisible,
++        RuntimeMemoryKindV1::DeviceLocal,
++    ] {
++        for warm in [false, true] {
++            let expected_detail = format!(
++                "KFD persistent SDMA allocation: {}",
++                capacity(kind, false).detail
++            );
++            let mut steps = vec![reject(kind, 8, false)];
++            steps.extend(success(kind));
++            let (backend, _, host, device) = fixture(8, steps);
++            let mut backend = ManuallyDrop::new(backend);
++            // Cold is a scripted provenance model, not native queue-creation evidence.
++            backend.sdma_enabled = warm;
++            let candidate = backend.next_handle;
++            let mut before = snapshot(&backend, host, device);
++            before.next_handle += 1;
++            let error = match backend.allocate_v1(7, kind, 8, 8).unwrap_err() {
++                RuntimeBackendFailureV1::Rejected(error) if warm => error,
++                RuntimeBackendFailureV1::Quiescent(error) if !warm => error,
++                _ => panic!("wrong capacity disposition"),
++            };
++            assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++            assert_eq!(error.detail(), expected_detail);
++            assert_eq!(snapshot(&backend, host, device), before);
++            assert!(!backend.terminal && backend.sdma_enabled);
++            assert!(!backend.allocations.contains_key(&candidate));
++            assert!(backend.terminal_sdma_custody.is_none());
++            assert_eq!(
++                backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++                2
++            );
++            let allocated = backend.allocate_v1(7, kind, 8, 8).unwrap();
++            assert_eq!(allocated, candidate + 1);
++            assert!(backend.allocations[&allocated].sdma_initialized);
++            assert_eq!(&*backend.allocations[&allocated].bytes, &[0; 8]);
++            assert_eq!(backend.staged_context_bytes, 24);
++            let driver = backend.scripted_sdma.as_ref().unwrap();
++            assert_eq!(driver.remaining_steps(), 0);
++            assert_eq!(driver.live_owner_count(), 3);
++            assert_eq!(driver.unexpected_drops(), 0);
++            discard_scripted_fixture(backend);
++        }
++    }
++}
++
++#[test]
++fn sdma_allocation_terminal_capacity_protocol_error_and_panic_seal_without_new_owner() {
++    for kind in [
++        RuntimeMemoryKindV1::HostVisible,
++        RuntimeMemoryKindV1::DeviceLocal,
++    ] {
++        for mode in 0..3 {
++            let step = match mode {
++                0 => reject(kind, 8, true),
++                1 => ScriptedSdmaStepV1::Read {
++                    offset: 0,
++                    byte_len: 8,
++                },
++                _ => ScriptedSdmaStepV1::AllocatePanic {
++                    kind: scripted_kind(kind),
++                    byte_len: 8,
++                },
++            };
++            let (backend, _, host, device) = fixture(
++                8,
++                [
++                    step,
++                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++                ],
++            );
++            let mut backend = ManuallyDrop::new(backend);
++            let mut before = snapshot(&backend, host, device);
++            before.next_handle += 1;
++            let result = catch_unwind(AssertUnwindSafe(|| backend.allocate_v1(7, kind, 8, 8)));
++            if mode == 2 {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<&str>(),
++                    Some(&"scripted SDMA allocation panic")
++                );
++            } else {
++                let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                    panic!()
++                };
++                assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
++                if mode == 0 {
++                    assert_eq!(
++                        error.detail(),
++                        format!(
++                            "KFD persistent SDMA allocation: {}",
++                            capacity(kind, true).detail
++                        )
++                    );
++                } else {
++                    assert!(error.detail().starts_with(
++                        "KFD persistent SDMA allocation: scripted SDMA allocation mismatch:"
++                    ));
++                }
++            }
++            assert_eq!(snapshot(&backend, host, device), before);
++            assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 1);
++            assert_eq!(
++                backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++                2
++            );
++            assert_terminal_retries_inert(&mut backend, host, device);
++            discard_scripted_fixture(backend);
++        }
++    }
++}
++
++#[test]
++fn sdma_allocation_diagnostic_panic_preserves_original_payload_and_all_prior_owners() {
++    for terminal in [false, true] {
++        for warm in [false, true] {
++            let (backend, _, host, device) = fixture(8, []);
++            let mut backend = ManuallyDrop::new(backend);
++            let before = snapshot(&backend, host, device);
++            let payload = Box::new(981_u64);
++            let address = &*payload as *const u64;
++            let caught = catch_unwind(AssertUnwindSafe(|| {
++                backend.settle_sdma_allocation_failure_v1(
++                    capacity(RuntimeMemoryKindV1::HostVisible, terminal),
++                    warm,
++                    "KFD persistent SDMA allocation",
++                    |detail| {
++                        assert!(matches!(detail, SdmaOwnerDiagnosticV1::Native(_)));
++                        std::panic::resume_unwind(payload)
++                    },
++                )
++            }))
++            .unwrap_err()
++            .downcast::<u64>()
++            .unwrap();
++            assert_eq!(&*caught as *const u64, address);
++            assert_eq!(*caught, 981);
++            assert_eq!(snapshot(&backend, host, device), before);
++            assert_terminal_retries_inert(&mut backend, host, device);
++            discard_scripted_fixture(backend);
++        }
++    }
++}
++
++#[test]
++fn sdma_allocation_context_refunds_only_warm_capacity_and_preserves_cold_quarantine() {
++    for configured in [false, true] {
++        for warm in [false, true] {
++            for kind in [
++                RuntimeMemoryKindV1::HostVisible,
++                RuntimeMemoryKindV1::DeviceLocal,
++            ] {
++                let mut steps = vec![reject(kind, 8, false)];
++                steps.extend(success(kind));
++                let mut backend = KfdRuntimeBackendV1::mock();
++                backend.native_available = true;
++                backend.sdma_enabled = warm;
++                backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new(steps));
++                let mut context =
++                    ManuallyDrop::new(crate::RuntimeContextV1::open(backend).unwrap());
++                let device = context.devices()[0].id();
++                if configured {
++                    context
++                        .configure_allocation_admission_v1(device, 8, 1)
++                        .unwrap();
++                }
++                match context.allocate(device, kind, 8, 8).unwrap_err() {
++                    crate::RuntimeErrorV1::BackendRejected(error) if warm => {
++                        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity)
++                    }
++                    crate::RuntimeErrorV1::BackendQuiescent(error) if !warm => {
++                        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity)
++                    }
++                    _ => panic!("wrong Context disposition"),
++                }
++                assert!(!context.is_terminal());
++                assert!(context.backend_mut_for_test_v1().allocations.is_empty());
++                if configured {
++                    let usage = context
++                        .allocation_admission_usage_v1(device)
++                        .unwrap()
++                        .unwrap();
++                    assert_eq!(
++                        usage
++                            .used
++                            .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                        if warm { 0 } else { 8 }
++                    );
++                    assert_eq!(
++                        usage
++                            .used
++                            .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                        u64::from(!warm)
++                    );
++                    assert_eq!(usage.quarantined_records, usize::from(!warm));
++                }
++                let steps = context
++                    .backend_mut_for_test_v1()
++                    .scripted_sdma
++                    .as_ref()
++                    .unwrap()
++                    .remaining_steps();
++                if configured && !warm {
++                    let usage = context.allocation_admission_usage_v1(device).unwrap();
++                    assert!(matches!(
++                        context.allocate(device, kind, 8, 8),
++                        Err(crate::RuntimeErrorV1::Validation(
++                            crate::RuntimeValidationErrorV1::Capacity
++                        ))
++                    ));
++                    assert_eq!(
++                        context.allocation_admission_usage_v1(device).unwrap(),
++                        usage
++                    );
++                    assert_eq!(
++                        context
++                            .backend_mut_for_test_v1()
++                            .scripted_sdma
++                            .as_ref()
++                            .unwrap()
++                            .remaining_steps(),
++                        steps
++                    );
++                    assert_eq!(context.cleanup().allocation_credit_records_v1(), 1);
++                } else {
++                    context.allocate(device, kind, 8, 8).unwrap();
++                    assert_eq!(
++                        context
++                            .backend_mut_for_test_v1()
++                            .scripted_sdma
++                            .as_ref()
++                            .unwrap()
++                            .remaining_steps(),
++                        0
++                    );
++                }
++                let backend = context.backend_mut_for_test_v1();
++                assert!(!backend.terminal);
++                assert_eq!(
++                    backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++                    0
++                );
++                disarm_scripted_drop_after_inspection_v1(backend);
++                drop(ManuallyDrop::into_inner(context));
++            }
++        }
++    }
++}
++
++#[test]
++fn sdma_allocation_context_terminal_error_and_panic_keep_prior_owner_and_credits() {
++    for configured in [false, true] {
++        for panic in [false, true] {
++            for kind in [
++                RuntimeMemoryKindV1::HostVisible,
++                RuntimeMemoryKindV1::DeviceLocal,
++            ] {
++                let mut steps = success(RuntimeMemoryKindV1::HostVisible);
++                steps.extend([
++                    if panic {
++                        ScriptedSdmaStepV1::AllocatePanic {
++                            kind: scripted_kind(kind),
++                            byte_len: 8,
++                        }
++                    } else {
++                        reject(kind, 8, true)
++                    },
++                    ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++                ]);
++                let mut backend = KfdRuntimeBackendV1::mock();
++                backend.native_available = true;
++                backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new(steps));
++                let mut context =
++                    ManuallyDrop::new(crate::RuntimeContextV1::open(backend).unwrap());
++                let device = context.devices()[0].id();
++                if configured {
++                    context
++                        .configure_allocation_admission_v1(device, 16, 2)
++                        .unwrap();
++                }
++                let allocation = context
++                    .allocate(device, RuntimeMemoryKindV1::HostVisible, 8, 8)
++                    .unwrap();
++                let backend = context.backend_mut_for_test_v1();
++                let host = *backend.allocations.keys().next().unwrap();
++                let observe = |backend: &KfdRuntimeBackendV1| {
++                    let record = &backend.allocations[&host];
++                    let KfdRuntimeSdmaStorageV1::Host(owner) = &record.sdma_storage else {
++                        panic!("prior Context allocation must retain its original host owner");
++                    };
++                    (
++                        host_observation(owner),
++                        Arc::as_ptr(&record.bytes) as *const u8 as usize,
++                        record.bytes.to_vec(),
++                        record.content_sha256,
++                        backend.allocations.len(),
++                        backend.staged_context_bytes,
++                    )
++                };
++                let before = observe(backend);
++                let candidate = backend.next_handle;
++                let result =
++                    catch_unwind(AssertUnwindSafe(|| context.allocate(device, kind, 8, 8)));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<&str>(),
++                        Some(&"scripted SDMA allocation panic")
++                    );
++                    assert_eq!(context.is_terminal(), configured);
++                } else {
++                    let Err(crate::RuntimeErrorV1::BackendTerminal(error)) = result.unwrap() else {
++                        panic!("terminal lower disposition must reach Context");
++                    };
++                    assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
++                    assert_eq!(
++                        error.detail(),
++                        format!(
++                            "KFD persistent SDMA allocation: {}",
++                            capacity(kind, true).detail
++                        )
++                    );
++                    assert!(context.is_terminal());
++                }
++                let usage = context.allocation_admission_usage_v1(device).unwrap();
++                if configured {
++                    let usage = usage.as_ref().unwrap();
++                    assert_eq!(
++                        usage
++                            .used
++                            .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                        16
++                    );
++                    assert_eq!(
++                        usage
++                            .used
++                            .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                        2
++                    );
++                    assert_eq!(usage.quarantined_records, 1);
++                } else {
++                    assert!(usage.is_none());
++                }
++                assert!(context.allocate(device, kind, 8, 8).is_err());
++                assert!(context.is_terminal());
++                assert!(context.release_allocation(allocation).is_err());
++                assert_eq!(
++                    context.allocation_admission_usage_v1(device).unwrap(),
++                    usage
++                );
++                let backend = context.backend_mut_for_test_v1();
++                assert!(backend.terminal && backend.terminal_sdma_custody.is_none());
++                assert_eq!(backend.next_handle, candidate + 1);
++                assert_eq!(observe(backend), before);
++                let driver = backend.scripted_sdma.as_ref().unwrap();
++                assert_eq!(driver.remaining_steps(), 1);
++                assert_eq!(driver.live_owner_count(), 1);
++                assert_eq!(driver.unexpected_drops(), 0);
++                disarm_scripted_drop_after_inspection_v1(backend);
++                drop(ManuallyDrop::into_inner(context));
++            }
++        }
++    }
++}
++
++#[test]
++fn sdma_allocation_driver_selection_panic_keeps_neighbors_and_seals() {
++    for kind in [
++        RuntimeMemoryKindV1::HostVisible,
++        RuntimeMemoryKindV1::DeviceLocal,
++    ] {
++        let (backend, _, host, device) = fixture(8, []);
++        let mut backend = ManuallyDrop::new(backend);
++        let before = snapshot(&backend, host, device);
++        let driver = backend.scripted_sdma.take().unwrap();
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.allocate_sdma_owner_v1(kind, 8, 8, true, "allocation selection")
++        }));
++        let payload = result.unwrap_err();
++        assert_eq!(
++            payload.downcast_ref::<String>().map(String::as_str),
++            Some("native directional SDMA ownership retains its queue")
++        );
++        backend.scripted_sdma = Some(driver);
++        assert_eq!(snapshot(&backend, host, device), before);
++        assert!(backend.terminal_sdma_custody.is_none());
++        assert_terminal_retries_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_allocation_zero_initialization_capacity_is_quiescent_only_after_hidden_cleanup() {
++    for cleanup in [
++        ScriptedRecycleOutcomeV1::Success,
++        ScriptedRecycleOutcomeV1::Recovered,
++        ScriptedRecycleOutcomeV1::Ambiguous,
++        ScriptedRecycleOutcomeV1::Panic,
++    ] {
++        let (backend, _, host, device) = fixture(
++            8,
++            [
++                ScriptedSdmaStepV1::Allocate {
++                    kind: ScriptedBufferKindV1::Device,
++                    byte_len: 8,
++                },
++                ScriptedSdmaStepV1::Promote(ScriptedFailureModeV1::Success),
++                reject(RuntimeMemoryKindV1::HostVisible, 8, false),
++                ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
++                ScriptedSdmaStepV1::Recycle(cleanup),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let hidden = backend.next_handle;
++        let mut before = snapshot(&backend, host, device);
++        let hidden_owner = before.device.0 + 1;
++        before.next_handle += 1;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++        }));
++        if cleanup == ScriptedRecycleOutcomeV1::Success {
++            let Err(RuntimeBackendFailureV1::Quiescent(error)) = result.unwrap() else {
++                panic!()
++            };
++            assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++            assert_eq!(
++                error.detail(),
++                format!(
++                    "KFD upload staging: {}",
++                    capacity(RuntimeMemoryKindV1::HostVisible, false).detail
++                )
++            );
++            assert_eq!(snapshot(&backend, host, device), before);
++            assert!(!backend.allocations.contains_key(&hidden) && !backend.terminal);
++            assert_eq!(
++                backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++                2
++            );
++        } else {
++            if cleanup == ScriptedRecycleOutcomeV1::Panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<&str>(),
++                    Some(&"scripted recycle panic")
++                );
++            } else {
++                let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
++                    panic!("hidden cleanup failure must be terminal");
++                };
++                assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
++                assert_eq!(
++                    error.detail(),
++                    if cleanup == ScriptedRecycleOutcomeV1::Recovered {
++                        "hidden KFD allocation cleanup retained unreachable native custody"
++                    } else {
++                        "KFD persistent allocation recycle became ambiguous: scripted recycle ambiguous"
++                    }
++                );
++            }
++            before.staged_bytes += 8;
++            before.allocations += 1;
++            assert_eq!(snapshot(&backend, host, device), before);
++            let hidden_record = &backend.allocations[&hidden];
++            assert_eq!(hidden_record.kind, RuntimeMemoryKindV1::DeviceLocal);
++            assert_eq!(&*hidden_record.bytes, &[0; 8]);
++            assert!(hidden_record.sdma_backed && !hidden_record.sdma_initialized);
++            assert!(backend.terminal_sdma_custody.is_none());
++            let driver = backend.scripted_sdma.as_ref().unwrap();
++            if cleanup == ScriptedRecycleOutcomeV1::Recovered {
++                let KfdRuntimeSdmaStorageV1::DemotedDevice(buffer) = &hidden_record.sdma_storage
++                else {
++                    panic!("recovered hidden owner must remain indexed");
++                };
++                assert_eq!(host_observation(buffer), (hidden_owner, vec![0; 8], None));
++                assert!(driver.recycle_custody().is_none());
++            } else {
++                assert!(matches!(
++                    hidden_record.sdma_storage,
++                    KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous)
++                ));
++                assert_eq!(
++                    driver.recycle_custody().unwrap().observation(),
++                    (hidden_owner, &[0; 8][..], None)
++                );
++            }
++            assert_eq!(
++                backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
++                3
++            );
++            assert_terminal_retries_inert(&mut backend, host, device);
++        }
++        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 0);
++        assert_eq!(
++            backend.scripted_sdma.as_ref().unwrap().unexpected_drops(),
++            0
++        );
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_allocation_staging_capacity_preserves_first_and_second_chunk_visibility() {
++    let chunk = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize;
++    for upload in [false, true] {
++        for second in [false, true] {
++            let direction = if upload {
++                Gfx942PersistentSdmaDirectionV1::HostToDevice
++            } else {
++                Gfx942PersistentSdmaDirectionV1::DeviceToHost
++            };
++            let mut steps = if second {
++                scripted_sync_copy_steps_v1(
++                    direction,
++                    0,
++                    chunk as u32,
++                    ScriptedFailureModeV1::Success,
++                )
++            } else {
++                Vec::new()
++            };
++            steps.push(reject(
++                RuntimeMemoryKindV1::HostVisible,
++                if second { 8 } else { chunk },
++                false,
++            ));
++            let (backend, _, host, device) = fixture(chunk + 8, steps);
++            let mut backend = ManuallyDrop::new(backend);
++            let KfdRuntimeSdmaStorageV1::Device(owner) =
++                &mut backend.allocations.get_mut(&device).unwrap().sdma_storage
++            else {
++                panic!()
++            };
++            owner.scripted_bytes_mut().unwrap().fill(0x36);
++            let mut before = snapshot(&backend, host, device);
++            let events = backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1()
++                .to_vec();
++            let mut destination = vec![0xed; chunk + 8];
++            let result = if upload {
++                backend.write_allocation_v1(device, 0, &vec![0x79; chunk + 8])
++            } else {
++                backend.read_allocation_v1(device, 0, &mut destination)
++            };
++            let Err(RuntimeBackendFailureV1::Quiescent(error)) = result else {
++                panic!("public prior-effect boundary")
++            };
++            assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++            assert!(!backend.terminal);
++            let record = &backend.allocations[&device];
++            let KfdRuntimeSdmaStorageV1::Device(owner) = &record.sdma_storage else {
++                panic!()
++            };
++            assert_eq!(&*record.bytes, &vec![0; chunk + 8]);
++            assert!(record.content_sha256.is_none() && record.last_full_host_write.is_none());
++            assert_eq!(record.sdma_shadow_dirty, upload && second);
++            if upload && second {
++                assert!(
++                    owner.scripted_bytes().unwrap()[..chunk]
++                        .iter()
++                        .all(|&b| b == 0x79)
++                );
++                assert_eq!(&owner.scripted_bytes().unwrap()[chunk..], &[0x36; 8]);
++                before.device.1[..chunk].fill(0x79);
++            } else {
++                assert!(owner.scripted_bytes().unwrap().iter().all(|&b| b == 0x36));
++            }
++            assert_eq!(snapshot(&backend, host, device), before);
++            if !upload && second {
++                assert!(destination[..chunk].iter().all(|&b| b == 0x36));
++                assert_eq!(&destination[chunk..], &[0xed; 8]);
++            } else {
++                assert!(destination.iter().all(|&b| b == 0xed));
++            }
++            assert_eq!(
++                backend
++                    .profiler
++                    .as_ref()
++                    .unwrap()
++                    .recorded_events_for_test_v1(),
++                events
++            );
++            let driver = backend.scripted_sdma.as_ref().unwrap();
++            assert_eq!(driver.remaining_steps(), 0);
++            assert_eq!(driver.live_owner_count(), 2);
++            assert_eq!(driver.unexpected_drops(), 0);
++            discard_scripted_fixture(backend);
++        }
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
+index c82ee309e..5d8d95c68 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
+@@ -31,10 +31,10 @@ pub(super) fn retained_host(backend: &KfdRuntimeBackendV1) -> &SdmaBufferOwnerV1
+ #[derive(Debug, PartialEq)]
+ pub(super) struct Snapshot {
+     pub(super) next_handle: u64,
+-    staged_bytes: u64,
+-    allocations: usize,
++    pub(super) staged_bytes: u64,
++    pub(super) allocations: usize,
+     host: (u64, Vec<u8>, Option<[u8; 32]>),
+-    device: (u64, Vec<u8>),
++    pub(super) device: (u64, Vec<u8>),
+     host_shadow: Arc<[u8]>,
+     device_shadow: Arc<[u8]>,
+     host_shadow_address: usize,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs
+index 3ab778d8f..73b8f68a4 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs
+@@ -139,7 +139,7 @@ fn sdma_promotion_ordinary_rejection_keeps_neighbors_and_exact_error() {
+                 );
+                 assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
+             }
+-            RuntimeBackendFailureV1::Rejected(error) if !terminal => {
++            RuntimeBackendFailureV1::Quiescent(error) if !terminal => {
+                 assert_eq!(
+                     error.detail(),
+                     "KFD persistent device promotion: scripted promotion retryable"

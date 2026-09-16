@@ -110,6 +110,7 @@ pub use qualification_drain_capture::{
     KfdDrainCaptureCustodyObservationV1, KfdDrainCaptureObservationFailureV1,
 };
 mod kfd_backend_sdma_seam;
+mod sdma_allocation;
 mod sdma_demotion;
 mod sdma_host_read;
 mod sdma_host_write;
@@ -4745,10 +4746,13 @@ impl KfdRuntimeBackendV1 {
                 "SDMA upload exceeds one admitted linear packet",
             )
         })?;
-        let staging = self
-            .directional_sdma_ops_v1()
-            .allocate_host(bytes.len())
-            .map_err(|error| self.terminal_error(format!("KFD upload staging: {error}")))?;
+        let staging = self.allocate_sdma_owner_v1(
+            RuntimeMemoryKindV1::HostVisible,
+            bytes.len(),
+            1,
+            true,
+            "KFD upload staging",
+        )?;
         let staging = self.initialize_sdma_host_v1(staging, bytes, "KFD upload staging write")?;
         let staging = self.execute_synchronous_directional_sdma_v1(
             allocation,
@@ -4871,10 +4875,13 @@ impl KfdRuntimeBackendV1 {
                 "SDMA download exceeds one admitted linear packet",
             )
         })?;
-        let staging = self
-            .directional_sdma_ops_v1()
-            .allocate_host(destination.len())
-            .map_err(|error| self.terminal_error(format!("KFD download staging: {error}")))?;
+        let staging = self.allocate_sdma_owner_v1(
+            RuntimeMemoryKindV1::HostVisible,
+            destination.len(),
+            1,
+            true,
+            "KFD download staging",
+        )?;
         let staging = self.execute_synchronous_directional_sdma_v1(
             allocation,
             Gfx942PersistentSdmaDirectionV1::DeviceToHost,
@@ -5801,18 +5808,15 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         let bytes = try_zeroed_staging_v1(len)?;
         let id = self.next_id()?;
         let sdma_storage = if self.native_available {
+            let ready_before = self.sdma_allocation_ready_v1();
             self.ensure_sdma_queue_v1()?;
-            let result = match kind {
-                RuntimeMemoryKindV1::DeviceLocal => self
-                    .directional_sdma_ops_v1()
-                    .allocate_device_buffer(byte_len, alignment),
-                RuntimeMemoryKindV1::HostVisible => {
-                    self.directional_sdma_ops_v1().allocate_host(len)
-                }
-            };
-            let buffer = result.map_err(|error| {
-                self.terminal_error(format!("KFD persistent SDMA allocation: {error}"))
-            })?;
+            let buffer = self.allocate_sdma_owner_v1(
+                kind,
+                len,
+                alignment,
+                ready_before,
+                "KFD persistent SDMA allocation",
+            )?;
             match kind {
                 RuntimeMemoryKindV1::HostVisible => {
                     let buffer = self.initialize_sdma_host_v1(
@@ -5822,9 +5826,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                     )?;
                     KfdRuntimeSdmaStorageV1::Host(buffer)
                 }
-                RuntimeMemoryKindV1::DeviceLocal => {
-                    KfdRuntimeSdmaStorageV1::Device(Box::new(self.promote_sdma_buffer_v1(buffer)?))
-                }
+                RuntimeMemoryKindV1::DeviceLocal => KfdRuntimeSdmaStorageV1::Device(Box::new(
+                    self.promote_sdma_buffer_v1(buffer)
+                        .map_err(Self::after_possible_host_mutation)?,
+                )),
             }
         } else {
             KfdRuntimeSdmaStorageV1::Synthetic
@@ -5863,7 +5868,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                         )),
                     };
                 }
-                return Err(failure);
+                return Err(Self::after_possible_host_mutation(failure));
             }
             self.allocations
                 .get_mut(&id)
@@ -12580,6 +12585,7 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    mod sdma_allocation_tests;
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;
     mod sdma_host_write_tests;
@@ -13729,7 +13735,7 @@ mod tests {
         retry.scripted_sdma = Some(ScriptedSdmaDriverV1::new(retry_steps));
         assert!(matches!(
             retry.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
-            Err(RuntimeBackendFailureV1::Rejected(error))
+            Err(RuntimeBackendFailureV1::Quiescent(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Native
         ));
         assert!(retry.allocations.is_empty());
@@ -19755,7 +19761,7 @@ mod tests {
         backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new(steps));
         assert!(matches!(
             backend.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8),
-            Err(RuntimeBackendFailureV1::Rejected(error))
+            Err(RuntimeBackendFailureV1::Quiescent(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Native
         ));
         assert!(backend.allocations.is_empty());

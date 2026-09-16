@@ -31,10 +31,10 @@ pub(super) fn retained_host(backend: &KfdRuntimeBackendV1) -> &SdmaBufferOwnerV1
 #[derive(Debug, PartialEq)]
 pub(super) struct Snapshot {
     pub(super) next_handle: u64,
-    staged_bytes: u64,
-    allocations: usize,
+    pub(super) staged_bytes: u64,
+    pub(super) allocations: usize,
     host: (u64, Vec<u8>, Option<[u8; 32]>),
-    device: (u64, Vec<u8>),
+    pub(super) device: (u64, Vec<u8>),
     host_shadow: Arc<[u8]>,
     device_shadow: Arc<[u8]>,
     host_shadow_address: usize,

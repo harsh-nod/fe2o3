@@ -6,8 +6,9 @@ mod promotion;
 #[path = "integration_sdma_recycle_tests.rs"]
 mod recycle;
 use crate::queue::live::sdma_allocation::{
-    SdmaAllocationContextV1, SdmaAllocationCustodyV1, SdmaAllocationMemoryV1,
-    SdmaAllocationPartsV1, SdmaAllocationRequestV1, allocate_in_place,
+    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, SdmaAllocationContextV1,
+    SdmaAllocationCustodyV1, SdmaAllocationMemoryV1, SdmaAllocationPartsV1,
+    SdmaAllocationRequestV1, allocate_classified_in_place, allocate_in_place,
 };
 use crate::shared_memory::{
     CoherentAllocationCustodyV1, CoherentInsertionFaultV1, CoherentInsertionPrefixV1,
@@ -63,6 +64,7 @@ struct AllocationParent {
     outstanding: usize,
     opening: Fault,
     closing: Fault,
+    capacity_retry_settled: bool,
     poison_panics: bool,
     calls: Vec<&'static str>,
 }
@@ -85,6 +87,7 @@ impl AllocationParent {
             outstanding: 0,
             opening: Fault::None,
             closing: Fault::None,
+            capacity_retry_settled: true,
             poison_panics: false,
             calls: Vec::new(),
         }
@@ -240,6 +243,19 @@ impl SdmaAllocationContextV1 for AllocationParent {
     }
     fn is_terminal(&self) -> bool {
         self.parent.poisoned
+    }
+    fn capacity_retry_is_settled(&self) -> bool {
+        self.capacity_retry_settled
+            && !self.parent.poisoned
+            && self.custody.is_none()
+            && self.parent.sdma.is_some()
+            && self.parent.engine.backend.foundation_in_engine
+            && !self
+                .parent
+                .engine
+                .backend
+                .session
+                .primary_is_quarantined_v1()
     }
     fn poison(&mut self) {
         self.parent.poison_release();
@@ -596,6 +612,213 @@ fn constructed_sdma_allocation_invalid_device_layout_retakes_without_native_effe
             e.backend.session.primary_loan_state_v1(&e.foundation),
             (loan.0, None, loan.2 + 1)
         );
+        let buffer = f.allocate(false, 17).unwrap();
+        f.release(buffer);
+        f.shutdown();
+    }
+}
+
+fn classified_allocate(
+    parent: &mut AllocationParent,
+    host: bool,
+    bytes: usize,
+) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
+    allocate_classified_in_place(
+        parent,
+        if host {
+            SdmaAllocationRequestV1::Host(bytes)
+        } else {
+            SdmaAllocationRequestV1::Device {
+                bytes: bytes as u64,
+                alignment: 4096,
+            }
+        },
+    )
+}
+
+#[test]
+fn constructed_sdma_allocation_classified_capacity_preserves_exact_error_and_retry() {
+    for host in [false, true] {
+        let mut f = AllocationParent::new();
+        let e = &f.parent.engine;
+        let host_before = e.backend.session.coherent_insertion_snapshot_v1();
+        let device_before = e.backend.session.insertion_memory_snapshot_v1();
+        let account_before = e.backend.session.observation();
+        let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
+        let failure = match classified_allocate(&mut f, host, (1 << 20) + 4096) {
+            Err(failure) => failure,
+            Ok(_) => panic!("capacity rejection required"),
+        };
+        assert_eq!(
+            failure.disposition(),
+            Gfx942SdmaAllocationDispositionV1::RetryableCapacity
+        );
+        assert!(std::error::Error::source(&failure).is_some());
+        assert_eq!(failure.to_string(), failure.error().to_string());
+        let detail = failure.to_string();
+        match failure.into_error() {
+            ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
+                MemorySessionError::HostVisibleBackingCredits(
+                    fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity,
+                ),
+            )) => assert!(host),
+            ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
+                MemorySessionError::DeviceBackingCredits(
+                    fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity,
+                ),
+            )) => assert!(!host),
+            _ => panic!("original typed capacity"),
+        }
+        assert!(f.capacity_retry_is_settled());
+        assert_eq!(f.calls, ["loan", "retake"]);
+        assert_eq!(f.outstanding, 0);
+        let e = &f.parent.engine;
+        assert!(e.backend.session.coherent_insertion_snapshot_v1() == host_before);
+        assert!(e.backend.session.insertion_memory_snapshot_v1() == device_before);
+        assert!(e.backend.session.observation() == account_before);
+        assert_eq!(
+            e.backend.session.primary_loan_state_v1(&e.foundation),
+            (loan.0, None, loan.2 + 1)
+        );
+        let legacy = f.allocate(host, (1 << 20) + 4096).err().unwrap();
+        assert_eq!(legacy.to_string(), detail);
+        assert!(f.capacity_retry_is_settled());
+        let buffer = classified_allocate(&mut f, host, 17).ok().unwrap();
+        f.release(buffer);
+        f.shutdown();
+    }
+}
+
+#[test]
+fn constructed_sdma_allocation_classified_capacity_requires_settlement_witness() {
+    let mut f = AllocationParent::new();
+    // Deny only the adapter's final witness; memory admission and model retake are real.
+    f.capacity_retry_settled = false;
+    let e = &f.parent.engine;
+    let host = e.backend.session.coherent_insertion_snapshot_v1();
+    let device = e.backend.session.insertion_memory_snapshot_v1();
+    let accounting = e.backend.session.observation();
+    let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
+    let failure = classified_allocate(&mut f, true, (1 << 20) + 4096)
+        .err()
+        .unwrap();
+    assert_eq!(
+        failure.disposition(),
+        Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+    );
+    assert!(matches!(
+        failure.into_error(),
+        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
+            MemorySessionError::HostVisibleBackingCredits(
+                fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity
+            )
+        ))
+    ));
+    assert_eq!(f.calls, ["loan", "retake"]);
+    assert!(f.custody.is_none() && !f.parent.poisoned && f.outstanding == 0);
+    let e = &f.parent.engine;
+    assert!(e.backend.foundation_in_engine);
+    assert!(e.backend.session.coherent_insertion_snapshot_v1() == host);
+    assert!(e.backend.session.insertion_memory_snapshot_v1() == device);
+    assert!(e.backend.session.observation() == accounting);
+    assert_eq!(
+        e.backend.session.primary_loan_state_v1(&e.foundation),
+        (loan.0, None, loan.2 + 1)
+    );
+    f.shutdown();
+}
+
+#[test]
+fn constructed_sdma_allocation_classified_retake_and_native_failures_never_grant_retry() {
+    for host in [false, true] {
+        for closing in [Fault::Error, Fault::AfterError, Fault::Regression] {
+            let mut f = AllocationParent::new();
+            f.closing = closing;
+            let failure = classified_allocate(&mut f, host, (1 << 20) + 4096)
+                .err()
+                .unwrap();
+            assert_eq!(
+                failure.disposition(),
+                Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+            );
+            if closing != Fault::Regression {
+                assert!(matches!(
+                    failure.error(),
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "allocation retake" | "allocation retake after"
+                    )
+                ));
+            }
+            assert!(f.parent.poisoned && f.custody.is_some());
+            assert!(!f.capacity_retry_is_settled());
+            f.no_retry();
+        }
+        let mut f = AllocationParent::new();
+        f.parent
+            .engine
+            .backend
+            .session
+            .primary_arm_native("map_gpu", false);
+        let failure = classified_allocate(&mut f, host, 17).err().unwrap();
+        assert_eq!(
+            failure.disposition(),
+            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+        );
+        assert!(f.parent.poisoned && f.custody.is_some());
+        let calls = f.calls.clone();
+        let repeat = classified_allocate(&mut f, host, 17).err().unwrap();
+        assert_eq!(
+            repeat.disposition(),
+            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+        );
+        assert!(matches!(
+            repeat.error(),
+            ComputeAqlQueueSessionErrorV1::Contract("unfinished SDMA allocation")
+        ));
+        assert_eq!(f.calls, calls);
+        f.no_retry();
+    }
+}
+
+#[test]
+fn constructed_sdma_allocation_classified_validation_and_loan_rejection_preserve_legacy_state() {
+    for case in 0..3 {
+        let mut f = AllocationParent::new();
+        if case == 1 {
+            f.opening = Fault::Error;
+        }
+        if case == 2 {
+            f.outstanding = usize::MAX;
+        }
+        let failure = classified_allocate(&mut f, false, if case == 0 { 0 } else { 17 })
+            .err()
+            .unwrap();
+        assert_eq!(
+            failure.disposition(),
+            Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+        );
+        match (case, failure.into_error()) {
+            (
+                0,
+                ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
+                    MemorySessionError::InvalidDeviceMemorySize,
+                )),
+            ) => (),
+            (1, ComputeAqlQueueSessionErrorV1::Contract("allocation loan")) => (),
+            (2, ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted")) => (),
+            _ => panic!("original error is preserved"),
+        }
+        assert!(!f.parent.poisoned && f.custody.is_none());
+        assert_eq!(
+            f.calls.as_slice(),
+            match case {
+                0 => &["loan", "retake"][..],
+                1 => &["loan"][..],
+                _ => &[][..],
+            }
+        );
+        f.opening = Fault::None;
+        f.outstanding = 0;
         let buffer = f.allocate(false, 17).unwrap();
         f.release(buffer);
         f.shutdown();

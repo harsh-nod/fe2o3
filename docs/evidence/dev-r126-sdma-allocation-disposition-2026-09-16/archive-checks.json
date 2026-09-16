@@ -1,0 +1,14 @@
+{
+  "scope": "after staging source/docs and primary raw evidence, before adding this receipt and whitespace logs",
+  "source_documentation": {
+    "command": "git diff --cached --check -- crates docs/runtime-a1-a2-swarm-current.md docs/runtime-primary-queue-release-v1.md docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/README.md docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/verify-allocation.sh",
+    "exit": 0,
+    "log": "source-doc-whitespace.log"
+  },
+  "raw_archive": {
+    "command": "git diff --cached --check",
+    "exit": 2,
+    "log": "archive-whitespace.log",
+    "note": "Preserved raw command spacing, libtest endings and unified-diff context; not a source whitespace failure."
+  }
+}

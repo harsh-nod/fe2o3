@@ -8,6 +8,69 @@ use crate::shared_memory::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+/// Classification supplied only by the retained allocation driver.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942SdmaAllocationDispositionV1 {
+    /// Backing credits rejected before native allocation; model ownership is settled.
+    /// Host-side pool activity and model revision bookkeeping may have advanced.
+    RetryableCapacity,
+    /// No retry authority is supplied; any uncertain lower owner remains retained.
+    ProcessTeardown,
+}
+
+/// The original native error, without allocating a diagnostic before settlement.
+#[derive(Debug)]
+pub struct Gfx942SdmaAllocationFailureV1 {
+    error: ComputeAqlQueueSessionErrorV1,
+    disposition: Gfx942SdmaAllocationDispositionV1,
+}
+
+impl Gfx942SdmaAllocationFailureV1 {
+    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn disposition(&self) -> Gfx942SdmaAllocationDispositionV1 {
+        self.disposition
+    }
+
+    pub fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
+        self.error
+    }
+
+    pub(super) fn unclassified(error: ComputeAqlQueueSessionErrorV1) -> Self {
+        Self {
+            error,
+            disposition: Gfx942SdmaAllocationDispositionV1::ProcessTeardown,
+        }
+    }
+}
+
+impl core::fmt::Display for Gfx942SdmaAllocationFailureV1 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl std::error::Error for Gfx942SdmaAllocationFailureV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+fn is_backing_capacity(error: &ComputeAqlQueueSessionErrorV1) -> bool {
+    matches!(
+        error,
+        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
+            MemorySessionError::HostVisibleBackingCredits(
+                fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity
+            ) | MemorySessionError::DeviceBackingCredits(
+                fe2o3_resource_accounting::ResourceCreditErrorV1::Capacity
+            )
+        ))
+    )
+}
+
 pub(super) enum SdmaAllocationRequestV1 {
     Host(usize),
     Device { bytes: u64, alignment: u64 },
@@ -134,6 +197,7 @@ pub(super) trait SdmaAllocationContextV1 {
         loan: LiveQueueModelFoundationLoanV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
     fn is_terminal(&self) -> bool;
+    fn capacity_retry_is_settled(&self) -> bool;
     fn poison(&mut self);
 }
 
@@ -146,21 +210,34 @@ pub(super) fn allocate_in_place<C: SdmaAllocationContextV1>(
     context: &mut C,
     request: SdmaAllocationRequestV1,
 ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
-    context.preflight()?;
-    let parts = context.parts()?;
+    allocate_classified_in_place(context, request)
+        .map_err(Gfx942SdmaAllocationFailureV1::into_error)
+}
+
+pub(super) fn allocate_classified_in_place<C: SdmaAllocationContextV1>(
+    context: &mut C,
+    request: SdmaAllocationRequestV1,
+) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
+    context
+        .preflight()
+        .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+    let parts = context
+        .parts()
+        .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
     if parts.custody.is_some() {
-        return Err(ComputeAqlQueueSessionErrorV1::Contract(
-            "unfinished SDMA allocation",
+        return Err(Gfx942SdmaAllocationFailureV1::unclassified(
+            ComputeAqlQueueSessionErrorV1::Contract("unfinished SDMA allocation"),
         ));
     }
-    let next_outstanding =
-        parts
-            .outstanding
-            .checked_add(1)
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                "SDMA buffer ledger exhausted",
-            ))?;
+    let next_outstanding = parts
+        .outstanding
+        .checked_add(1)
+        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+            "SDMA buffer ledger exhausted",
+        ))
+        .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
     *parts.custody = Some(SdmaAllocationCustodyV1::new(request));
+    let mut model_retaken = false;
     let result = catch_unwind(AssertUnwindSafe(|| {
         let (operation, retake) = execute_live_model_custody_v1(
             context,
@@ -178,6 +255,7 @@ pub(super) fn allocate_in_place<C: SdmaAllocationContextV1>(
             poison_without_replacing_failure,
         )?;
         retake?;
+        model_retaken = true;
         operation?;
         let parts = context.parts()?;
         let buffer = parts
@@ -214,7 +292,16 @@ pub(super) fn allocate_in_place<C: SdmaAllocationContextV1>(
             if terminal {
                 poison_without_replacing_failure(context);
             }
-            Err(error)
+            let disposition = if !terminal
+                && model_retaken
+                && is_backing_capacity(&error)
+                && context.capacity_retry_is_settled()
+            {
+                Gfx942SdmaAllocationDispositionV1::RetryableCapacity
+            } else {
+                Gfx942SdmaAllocationDispositionV1::ProcessTeardown
+            };
+            Err(Gfx942SdmaAllocationFailureV1 { error, disposition })
         }
         Err(payload) => {
             poison_without_replacing_failure(context);
@@ -284,6 +371,14 @@ impl SdmaAllocationContextV1 for ComputeAqlQueueSessionV1 {
     }
     fn is_terminal(&self) -> bool {
         self.terminal_poisoned
+    }
+    fn capacity_retry_is_settled(&self) -> bool {
+        self.require_sdma_enabled().is_ok()
+            && self.sdma_pool_trim.is_none()
+            && self.engine.as_ref().is_some_and(|engine| {
+                engine.backend.foundation_in_engine
+                    && engine.backend.session.phase() != SharedMemorySessionPhaseV1::Quarantined
+            })
     }
     fn poison(&mut self) {
         self.poison_terminal();

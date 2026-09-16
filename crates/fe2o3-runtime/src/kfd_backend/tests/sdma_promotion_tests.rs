@@ -139,7 +139,7 @@ fn sdma_promotion_ordinary_rejection_keeps_neighbors_and_exact_error() {
                 );
                 assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
             }
-            RuntimeBackendFailureV1::Rejected(error) if !terminal => {
+            RuntimeBackendFailureV1::Quiescent(error) if !terminal => {
                 assert_eq!(
                     error.detail(),
                     "KFD persistent device promotion: scripted promotion retryable"

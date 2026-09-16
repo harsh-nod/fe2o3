@@ -1,0 +1,60 @@
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/cargo.command:1: trailing whitespace.
++cargo -V 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/clippy.command:1: trailing whitespace.
++cargo clippy --locked --offline -p fe2o3-kfd -p fe2o3-runtime --all-features --all-targets -- -D warnings 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/formatting.command:1: trailing whitespace.
++cargo fmt --all -- --check 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/gnu-build.command:1: trailing whitespace.
++cargo test --locked --offline -p fe2o3-kfd -p fe2o3-runtime --all-features --lib --no-run --message-format=json 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/gnu-fe2o3_kfd-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_kfd-6457f2b90c780e5d --test-threads=4 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/gnu-fe2o3_kfd-full.log:1408: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/gnu-fe2o3_runtime-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-6da97149b4b59494 --test-threads=4 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/gnu-fe2o3_runtime-full.log:849: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/kfd-focused.log:11: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/musl-build.command:1: trailing whitespace.
++cargo test --locked --offline -p fe2o3-kfd -p fe2o3-runtime --all-features --lib --target x86_64-unknown-linux-musl --no-run --message-format=json 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/musl-fe2o3_kfd-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-b1291e310e7b0abc --test-threads=4 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/musl-fe2o3_kfd-full.log:1421: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/musl-fe2o3_runtime-full.command:1: trailing whitespace.
++prlimit --core=0:0 -- /home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-fc1dc596f3761ce3 --test-threads=4 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/musl-fe2o3_runtime-full.log:849: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/no-default.command:1: trailing whitespace.
++cargo check --locked --offline -p fe2o3-runtime --no-default-features 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/runtime-early-full.log:849: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/runtime-focused.log:151: new blank line at EOF.
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/rustc.command:1: trailing whitespace.
++rustc -vV 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source-after.command:1: trailing whitespace.
++sha256sum --check /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source-files.sha256 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source-before.command:1: trailing whitespace.
++sha256sum --check /home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source-files.sha256 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:18: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:26: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:82: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:127: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:132: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:272: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:490: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:564: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:751: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:793: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:801: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/source.patch:832: trailing whitespace.
++ 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/unsafe-policy.command:1: trailing whitespace.
++cargo test --locked --offline -p cargo-fe2o3 --test unsafe_source_policy 
+docs/evidence/dev-r126-sdma-allocation-disposition-2026-09-16/unsafe-policy.log:17: new blank line at EOF.
