@@ -200,11 +200,10 @@ use crate::sdma::{
     PersistentSdmaWindowPollV1, PreparedPersistentSdmaWindowPublicationFailureV1,
     PreparedPersistentSdmaWindowV1, PreparedSdmaPublicationFailureV1,
     PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1, SdmaWaitProfileV1,
-    SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer, allocate_host_buffer,
-    combined_striped_sdma_queue_count_is_admitted, device_pool_recycle_decision_v1,
-    device_pool_usage_v1, exact_full_host_write_is_authenticatable,
-    gfx942_sdma_logical_mux_lane_count_is_admitted_v2, host_pool_recycle_decision_v1,
-    host_pool_usage_v1, persistent_sdma_window_packet_count,
+    SingleSdmaWaitInCurrentScopeV1, combined_striped_sdma_queue_count_is_admitted,
+    device_pool_recycle_decision_v1, device_pool_usage_v1,
+    exact_full_host_write_is_authenticatable, gfx942_sdma_logical_mux_lane_count_is_admitted_v2,
+    host_pool_recycle_decision_v1, host_pool_usage_v1, persistent_sdma_window_packet_count,
     planned_ticket_matches_queue_occurrence, read_host_buffer, release_buffer,
     striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated, write_host_buffer,
 };
@@ -261,6 +260,8 @@ use model_loan::execute_live_model_custody_v1;
 pub(in crate::queue) mod persistent_bind;
 #[path = "queue_live/pool_trim.rs"]
 mod pool_trim;
+#[path = "queue_live/sdma_allocation.rs"]
+mod sdma_allocation;
 use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent_bind_inputs_v1};
 #[path = "queue_live/persistent_cancel.rs"]
 pub(in crate::queue) mod persistent_cancel;
@@ -3751,6 +3752,7 @@ pub struct ComputeAqlQueueSessionV1 {
     sdma_outstanding_buffers: usize,
     sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
     sdma_pool_trim: Option<pool_trim::SdmaPoolTrimCustodyV1>,
+    sdma_allocation: Option<sdma_allocation::SdmaAllocationCustodyV1>,
     sdma_pool_reuse_count: u64,
     sdma_device_pool: SdmaDevicePoolConfigurationV1,
     // Both policies share sdma_device_pool's irreversible activity latch.
@@ -6623,17 +6625,10 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         bytes: usize,
     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
-        self.sdma_device_pool.begin_activity();
-        self.require_sdma_enabled()?;
-        let next_outstanding = self.sdma_outstanding_buffers.checked_add(1).ok_or(
-            ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted"),
-        )?;
-        let owner = self.key;
-        let buffer = self.with_live_queue_memory_model(|memory| {
-            allocate_host_buffer(memory, owner, bytes).map_err(Into::into)
-        })?;
-        self.sdma_outstanding_buffers = next_outstanding;
-        Ok(buffer)
+        sdma_allocation::allocate_in_place(
+            self,
+            sdma_allocation::SdmaAllocationRequestV1::Host(bytes),
+        )
     }
 
     pub fn allocate_sdma_device_buffer(
@@ -6641,17 +6636,10 @@ impl ComputeAqlQueueSessionV1 {
         bytes: u64,
         alignment: u64,
     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
-        self.sdma_device_pool.begin_activity();
-        self.require_sdma_enabled()?;
-        let next_outstanding = self.sdma_outstanding_buffers.checked_add(1).ok_or(
-            ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted"),
-        )?;
-        let owner = self.key;
-        let buffer = self.with_live_queue_memory_model(|memory| {
-            allocate_device_buffer(memory, owner, bytes, alignment).map_err(Into::into)
-        })?;
-        self.sdma_outstanding_buffers = next_outstanding;
-        Ok(buffer)
+        sdma_allocation::allocate_in_place(
+            self,
+            sdma_allocation::SdmaAllocationRequestV1::Device { bytes, alignment },
+        )
     }
 
     pub fn allocate_sdma_pooled_host_buffer(
@@ -10106,6 +10094,11 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     pub fn trim_sdma_memory_pool(&mut self) -> Result<usize, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma_allocation.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished SDMA allocation",
+            ));
+        }
         if self.terminal_poisoned || self.sdma_pool_trim.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal or unfinished SDMA pool trim",
@@ -12264,6 +12257,11 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         mode: QueueDestroyModeV1,
     ) -> Result<QueueAfterEventDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma_allocation.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished SDMA allocation",
+            ));
+        }
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
@@ -12563,6 +12561,11 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn require_sdma_enabled(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.sdma_allocation.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished SDMA allocation",
+            ));
+        }
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
@@ -13782,8 +13785,8 @@ fn validate_barrier_probe_success_snapshot(
 
 impl Drop for ComputeAqlQueueSessionV1 {
     fn drop(&mut self) {
-        if self.sdma_pool_trim.is_some() {
-            // Failed trim retains native owners or disposed-but-unsettled receipts.
+        if self.sdma_pool_trim.is_some() || self.sdma_allocation.is_some() {
+            // Failed mutation retains native owners or disposed-but-unsettled receipts.
             std::process::abort();
         }
         // Model ownership can be restored without native effects. There is
@@ -16373,6 +16376,7 @@ mod tests {
             sdma_outstanding_buffers: 0,
             sdma_pool_free: Vec::new(),
             sdma_pool_trim: None,
+            sdma_allocation: None,
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
             sdma_host_pool_limits: None,

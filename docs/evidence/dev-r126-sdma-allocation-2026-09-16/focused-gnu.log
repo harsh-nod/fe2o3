@@ -1,0 +1,17 @@
+
+running 12 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_budget_rejection_is_healthy_and_retryable ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_invalid_device_layout_retakes_without_native_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_currentness_failures_retain_exact_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_lower_panic_wins_secondary_retake_and_poison_panics ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_opening_failure_never_calls_native_or_commits ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_partial_and_malformed_mapping_never_return_authority ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_rejections_preserve_loan_precedence_and_retry ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_native_error_and_panic_keep_original_owner_partition ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_retake_error_precedes_lower_error ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_success_preserves_extents_owners_and_refunds ... ok
+test queue::live::sdma_allocation::tests::unfinished_sdma_allocation_rejects_reentry_teardown_and_drop_aborts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::constructed_sdma_allocation_retake_failure_keeps_exact_completed_owner ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1314 filtered out; finished in 75.59s
+

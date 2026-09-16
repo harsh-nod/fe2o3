@@ -176,6 +176,7 @@ impl InitialBindingParentV1 for &mut ComputeAqlQueueSessionV1 {
             || self.has_any_persistent_compute_attachment_v1()
             || self.terminal_dependency.is_some()
             || self.sdma_pool_trim.is_some()
+            || self.sdma_allocation.is_some()
             || !initial_dispatch_state_admitted_v1(
                 &self.unpublished_dispatch,
                 self.dispatch.is_some(),

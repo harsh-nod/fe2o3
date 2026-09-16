@@ -1,0 +1,2 @@
+bash: -c: line 1: syntax error near unexpected token `('
+bash: -c: line 1: `pgrep -af ^/tmp/fe2o3-r126-sdma-allocation[.]XquyXI/runtime-native([[:space:]]|$)'

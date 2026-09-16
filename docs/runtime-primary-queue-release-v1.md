@@ -503,13 +503,56 @@ noninterference/currentness qualification; existing copy and persistent-compute
 alias restrictions must remain intact. R125 remains accepted; this packet does
 not accept R126 or close A1/A2/#182.
 
+## Fresh SDMA Allocation Custody
+
+Fresh host/device allocation now installs a bounded queue-owned slot before the
+real model loan and native allocation. The operation returns only unit through
+model retake; the mapped buffer leaves the slot and increments the outstanding
+ledger only after successful retake. Device allocation reuses the existing
+borrowed-map root, retaining the unmapped lease on map failure instead of passing
+it through the old consuming map helper. Host transition failures retain their
+actual lower transition/pending owner; a completed host allocation remains in the
+queue slot if retake fails. No success-path heap wrapper is added by this driver.
+
+Healthy size/alignment, backing-credit and opening rejections clear only the
+empty slot and preserve retryability. Quarantined lower state, returned owners,
+retake failures and panics retain custody and seal the parent. Original errors,
+retake-error precedence and first-panic identity survive secondary poison panics.
+Device extent validation remains inside the original loan/retake boundary, and
+rejected SDMA activity still closes pool configuration. Initial binding, trim,
+retained/legacy teardown and Drop cannot discard an unfinished allocation slot.
+
+Twelve focused tests cover constructed directional parents with configured
+accounts, allocation/release at lengths 1/17/4097, real backing-credit rejection
+and retry, native/currentness errors and panics, malformed/partial mapping,
+opening and retake failures, generation exhaustion, exact error precedence,
+terminal reentry and process-isolated Drop. This is CPU fault-injection evidence,
+not a native failure campaign or executable/formal correspondence. The existing
+six MI300X success/AUX budget-rejection regressions pass on the new binary. See
+the [allocation receipt](evidence/dev-r126-sdma-allocation-2026-09-16/README.md).
+Full KFD GNU/musl regressions each pass 1,326 tests; runtime GNU/musl each pass
+764 with four opt-in hardware tests ignored locally. Strict Clippy, formatting,
+no-default-feature compilation and unsafe-source checks pass. These crate-level
+checks do not replace the remaining full R126 qualification campaign.
+
+Pending-compute allocation remains disabled. Runtime HostVisible initialization
+and upload staging still need retention across borrowed-write panic; consuming
+promotion needs rooted input through live-model validation and unwind. Device
+initialization additionally needs retained synchronous submit/wait/retire/recycle
+boundaries. Runtime allocation error conversion also still terminalizes healthy
+backing-credit rejection; a typed disposition must preserve the lower contract.
+Only after those prerequisites should borrowed owner-roster preflight
+separate reuse of existing directional SDMA from idle-only queue creation. R125
+remains accepted; R126/A1/A2/#182 and HIP/HSA parity remain incomplete.
+
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
-   ownership changes with pending compute after rooting lower allocation outputs
-   through model retake.
+   ownership changes with pending compute after completing runtime initialization,
+   promotion and synchronous-copy custody. Lower fresh-allocation outputs now
+   remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.
 2. Qualify the new directional route through genuine public runtime workflows,

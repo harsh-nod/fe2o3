@@ -6321,22 +6321,6 @@ const fn directional_sdma_pair_quiescence_is_admitted(
     device_to_host_quiescent && host_to_device_quiescent
 }
 
-pub(crate) fn allocate_host_buffer(
-    memory: &mut SharedGttMemorySessionV1,
-    owner: QueueKeyV1,
-    bytes: usize,
-) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaErrorV1> {
-    let token = memory.allocate_host_visible_coherent(bytes)?;
-    let token = memory.map_to_gpu(token)?;
-    Ok(Gfx942SdmaBufferV1 {
-        storage: Gfx942SdmaBufferStorageV1::Host(token),
-        owner,
-        pool_generation: 1,
-        logical_bytes: bytes as u64,
-        host_content_certificate: None,
-    })
-}
-
 pub(crate) fn device_buffer_allocation_extents_v1(
     logical_bytes: u64,
     alignment: u64,
@@ -6347,26 +6331,6 @@ pub(crate) fn device_buffer_allocation_extents_v1(
         fe2o3_kfd_uapi::KfdAllocMemoryFlags::DEVICE_LOCAL,
     )?;
     Ok((logical_bytes, layout.backing_bytes()))
-}
-
-pub(crate) fn allocate_device_buffer(
-    memory: &mut SharedGttMemorySessionV1,
-    owner: QueueKeyV1,
-    bytes: u64,
-    alignment: u64,
-) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaErrorV1> {
-    // Promotion needs exact mapped authority for the rounded backing. Copies
-    // still use the original logical extent, never the allocation's padding.
-    let (logical_bytes, physical_bytes) = device_buffer_allocation_extents_v1(bytes, alignment)?;
-    let lease = memory.allocate_gfx942_device_memory(physical_bytes, alignment)?;
-    let lease = memory.map_gfx942_device_memory(lease)?;
-    Ok(Gfx942SdmaBufferV1 {
-        storage: Gfx942SdmaBufferStorageV1::Device(lease),
-        owner,
-        pool_generation: 1,
-        logical_bytes,
-        host_content_certificate: None,
-    })
 }
 
 #[cfg(test)]
@@ -6728,15 +6692,10 @@ mod tests {
 
     #[test]
     fn device_buffer_allocation_wires_rounded_backing_and_original_logical_extent() {
-        let body = include_str!("sdma.rs")
-            .split("pub(crate) fn allocate_device_buffer(")
-            .nth(1)
-            .unwrap()
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        assert!(body.contains("device_buffer_allocation_extents_v1(bytes, alignment)?"));
-        assert!(body.contains("allocate_gfx942_device_memory(physical_bytes, alignment)?"));
+        let body = include_str!("queue_live/sdma_allocation.rs");
+        assert!(body.contains("device_buffer_allocation_extents_v1("));
+        assert!(body.contains("device_buffer_allocation_extents_v1(*logical_bytes, *alignment)?"));
+        assert!(body.contains("prepare_device(allocation, physical_bytes, *alignment)"));
         assert!(body.contains("logical_bytes,"));
         assert!(!body.contains("logical_bytes: physical_bytes"));
     }
