@@ -562,29 +562,29 @@ fn contextual_proof_has_literal_work_and_storage_boundaries_and_atomic_exhaustio
     let function = constant_fixture(false);
     with_facts(&function, |facts, effective| {
         let original = effective.clone();
-        assert_eq!(refine_with_limits(facts, effective, 43, 1), Err(()));
+        assert_eq!(refine_with_limits(facts, effective, 48, 7), Err(()));
         assert_eq!(*effective, original);
-        assert_eq!(refine_with_limits(facts, effective, 44, 0), Err(()));
+        assert_eq!(refine_with_limits(facts, effective, 49, 6), Err(()));
         assert_eq!(*effective, original);
         assert_eq!(
-            refine_with_limits(facts, effective, 44, 1),
-            Ok(Receipt { work: 44, rows: 1 })
+            refine_with_limits(facts, effective, 49, 7),
+            Ok(Receipt { work: 49, rows: 7 })
         );
         assert_eq!(effective[&BlockId(0)], BTreeSet::from([BlockId(1)]));
     });
     with_facts(&constant_fixture(true), |facts, effective| {
         let original = effective.clone();
         assert_eq!(
-            refine_with_limits(facts, effective, MAX_RELATIONAL_PROOF_WORK, 1),
+            refine_with_limits(facts, effective, MAX_RELATIONAL_PROOF_WORK, 7),
             Err(())
         );
         assert_eq!(*effective, original);
         assert_eq!(
-            refine_with_limits(facts, effective, 90, 2),
-            Ok(Receipt { work: 90, rows: 2 }),
+            refine_with_limits(facts, effective, 88, 8),
+            Ok(Receipt { work: 88, rows: 8 }),
         );
         *effective = original.clone();
-        assert_eq!(refine_with_limits(facts, effective, 89, 2), Err(()));
+        assert_eq!(refine_with_limits(facts, effective, 87, 8), Err(()));
         assert_eq!(*effective, original);
     });
 }
@@ -730,11 +730,40 @@ fn contradictory_path_bounds_remain_unknown() {
 }
 
 #[test]
-fn a_large_borrowed_index_exhausts_atomically_without_allocating_proof_indexes() {
+fn large_borrowed_indexes_have_exact_bounded_work_and_storage() {
     let mut function = constant_fixture(true);
     block_mut(&mut function, 0)
         .operations
         .extend((10..6000).map(|id| constant(id, u64::from(id))));
+    with_facts(&function, |facts, effective| {
+        let original = effective.clone();
+        assert_eq!(
+            refine_with_limits(facts, effective, 24_241, 11_988),
+            Err(())
+        );
+        assert_eq!(*effective, original);
+        assert_eq!(
+            refine_with_limits(facts, effective, 24_242, 11_987),
+            Err(())
+        );
+        assert_eq!(*effective, original);
+        assert_eq!(
+            refine_with_limits(facts, effective, 24_242, 11_988),
+            Ok(Receipt {
+                work: 24_242,
+                rows: 11_988
+            })
+        );
+        assert_eq!(effective[&BlockId(0)], BTreeSet::from([BlockId(1)]));
+    });
+}
+
+#[test]
+fn over_cap_index_construction_cannot_mutate_effective_edges() {
+    let mut function = constant_fixture(true);
+    block_mut(&mut function, 0)
+        .operations
+        .extend((10..40_000).map(|id| constant(id, u64::from(id))));
     with_facts(&function, |facts, effective| {
         let original = effective.clone();
         assert_eq!(
@@ -749,3 +778,5 @@ fn a_large_borrowed_index_exhausts_atomically_without_allocating_proof_indexes()
         assert_eq!(*effective, original);
     });
 }
+
+include!("checked_product_tests.rs");

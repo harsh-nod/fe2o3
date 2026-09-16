@@ -78,7 +78,7 @@ type ProofResult<T> = Result<T, ()>;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Receipt {
     work: usize,
-    // Requested capacity of the sole proposal allocation, not Analyzer storage.
+    // Cumulative requested rows for pass-local indexes and proposals only.
     rows: usize,
 }
 
@@ -99,11 +99,12 @@ impl Budget {
     }
 
     fn reserve_rows(&mut self, rows: usize) -> ProofResult<()> {
-        if rows > self.row_limit {
+        let next = self.receipt.rows.checked_add(rows).ok_or(())?;
+        if next > self.row_limit {
             return Err(());
         }
         self.charge(rows)?;
-        self.receipt.rows = rows;
+        self.receipt.rows = next;
         Ok(())
     }
 
@@ -123,6 +124,74 @@ impl Budget {
     }
 }
 
+// Sorted borrowed rows let the pass meter every search comparison without
+// relying on an assumed cost for the standard library's tree implementation.
+struct BorrowedIndex<'a, K, V> {
+    rows: Vec<(&'a K, &'a V)>,
+}
+
+impl<'a, K: Ord, V> BorrowedIndex<'a, K, V> {
+    fn new(map: &'a BTreeMap<K, V>, budget: &mut Budget) -> ProofResult<Self> {
+        budget.reserve_rows(map.len())?;
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(map.len()).map_err(|_| ())?;
+        for (key, value) in map {
+            budget.charge(1)?;
+            rows.push((key, value));
+        }
+        Ok(Self { rows })
+    }
+
+    fn get(&self, key: &K, budget: &mut Budget) -> ProofResult<Option<&'a V>> {
+        let mut low = 0;
+        let mut high = self.rows.len();
+        while low < high {
+            budget.charge(1)?;
+            let middle = low + (high - low) / 2;
+            let (candidate, value) = self.rows[middle];
+            match candidate.cmp(key) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Equal => return Ok(Some(value)),
+                std::cmp::Ordering::Greater => high = middle,
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl<'a, K: Ord> BorrowedIndex<'a, K, ()> {
+    fn from_set(set: &'a BTreeSet<K>, budget: &mut Budget) -> ProofResult<Self> {
+        budget.reserve_rows(set.len())?;
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(set.len()).map_err(|_| ())?;
+        for key in set {
+            budget.charge(1)?;
+            rows.push((key, &()));
+        }
+        Ok(Self { rows })
+    }
+}
+
+struct IndexedFacts<'a> {
+    body: &'a FunctionBody,
+    incoming: &'a BTreeMap<BlockId, Vec<Edge>>,
+    dominators: &'a BTreeMap<BlockId, BTreeSet<BlockId>>,
+    types: BorrowedIndex<'a, ValueId, Type>,
+    definitions: BorrowedIndex<'a, ValueId, &'a Operation>,
+}
+
+impl<'a> IndexedFacts<'a> {
+    fn new(facts: &'a Facts<'a>, budget: &mut Budget) -> ProofResult<Self> {
+        Ok(Self {
+            body: facts.body,
+            incoming: facts.incoming,
+            dominators: facts.dominators,
+            types: BorrowedIndex::new(facts.types, budget)?,
+            definitions: BorrowedIndex::new(facts.definitions, budget)?,
+        })
+    }
+}
+
 struct Facts<'a> {
     body: &'a FunctionBody,
     incoming: &'a BTreeMap<BlockId, Vec<Edge>>,
@@ -138,9 +207,9 @@ struct Comparison {
     rhs: ValueId,
 }
 
-impl Facts<'_> {
+impl IndexedFacts<'_> {
     fn comparison(&self, value: ValueId, budget: &mut Budget) -> ProofResult<Option<Comparison>> {
-        let Some(operation) = budget.get(self.definitions, &value)? else {
+        let Some(operation) = self.definitions.get(&value, budget)? else {
             return Ok(None);
         };
         let [result] = operation.results.as_slice() else {
@@ -157,8 +226,8 @@ impl Facts<'_> {
         if result.id != value || result.ty != Type::BOOL {
             return Ok(None);
         }
-        let lhs_type = budget.get(self.types, &lhs)?;
-        let rhs_type = budget.get(self.types, &rhs)?;
+        let lhs_type = self.types.get(&lhs, budget)?;
+        let rhs_type = self.types.get(&rhs, budget)?;
         if lhs_type.and_then(unsigned_type_range).is_none()
             || lhs_type != rhs_type
             || (lhs_type == Some(&Type::BOOL)
@@ -182,7 +251,7 @@ impl Facts<'_> {
         ty: &Type,
         budget: &mut Budget,
     ) -> ProofResult<Option<UnsignedRange>> {
-        let Some(operation) = budget.get(self.definitions, &value)? else {
+        let Some(operation) = self.definitions.get(&value, budget)? else {
             return Ok(None);
         };
         let [result] = operation.results.as_slice() else {
@@ -201,10 +270,10 @@ impl Facts<'_> {
         &self,
         source: BlockId,
         target: BlockId,
-        query_dominators: &BTreeSet<BlockId>,
+        query_dominators: &BorrowedIndex<'_, BlockId, ()>,
         budget: &mut Budget,
     ) -> ProofResult<bool> {
-        if source == target || !budget.contains(query_dominators, &target)? {
+        if source == target || query_dominators.get(&target, budget)?.is_none() {
             return Ok(false);
         }
         Ok(budget
@@ -218,7 +287,75 @@ impl Facts<'_> {
         query: BlockId,
         budget: &mut Budget,
     ) -> ProofResult<Option<UnsignedRange>> {
-        let Some(ty) = budget.get(self.types, &value)? else {
+        let Some(base) = self.base_range(value, query, budget)? else {
+            return Ok(None);
+        };
+        let Some(operation) = self.definitions.get(&value, budget)? else {
+            return Ok(Some(base));
+        };
+        let [result, overflow] = operation.results.as_slice() else {
+            return Ok(Some(base));
+        };
+        let OperationKind::Binary {
+            op: BinaryOp::Checked(fe2o3_kernel_ir::CheckedBinaryOperator::Multiply),
+            lhs,
+            rhs,
+        } = operation.kind
+        else {
+            return Ok(Some(base));
+        };
+        if result.id != value
+            || overflow.ty != Type::BOOL
+            || !matches!(
+                result.ty,
+                Type::Scalar(
+                    ScalarType::U8
+                        | ScalarType::U16
+                        | ScalarType::U32
+                        | ScalarType::U64
+                        | ScalarType::U128
+                        | ScalarType::Index
+                )
+            )
+            || self.types.get(&lhs, budget)? != Some(&result.ty)
+            || self.types.get(&rhs, budget)? != Some(&result.ty)
+        {
+            return Ok(Some(base));
+        }
+        let (factor, operand) = if let Some(factor) = self.constant(lhs, &result.ty, budget)? {
+            (factor, rhs)
+        } else if let Some(factor) = self.constant(rhs, &result.ty, budget)? {
+            (factor, lhs)
+        } else {
+            return Ok(Some(base));
+        };
+        // This one-level transfer uses only original-CFG guards, never another
+        // product transfer or a refined successor fact. A wrapping product is unknown.
+        let Some(operand) = self.base_range(operand, query, budget)? else {
+            return Ok(Some(base));
+        };
+        let Some(min) = operand.min.checked_mul(factor.min) else {
+            return Ok(Some(base));
+        };
+        let Some(max) = operand.max.checked_mul(factor.max) else {
+            return Ok(Some(base));
+        };
+        let Some(type_range) = unsigned_type_range(&result.ty) else {
+            return Ok(Some(base));
+        };
+        if max > type_range.max {
+            return Ok(Some(base));
+        }
+        Ok(Some(base.intersect(UnsignedRange { min, max })))
+    }
+
+    fn base_range(
+        &self,
+        value: ValueId,
+        query: BlockId,
+        budget: &mut Budget,
+    ) -> ProofResult<Option<UnsignedRange>> {
+        let Some(ty) = self.types.get(&value, budget)? else {
             return Ok(None);
         };
         let Some(mut range) = unsigned_type_range(ty) else {
@@ -230,11 +367,12 @@ impl Facts<'_> {
         let Some(query_dominators) = budget.get(self.dominators, &query)? else {
             return Ok(None);
         };
+        let query_dominators = BorrowedIndex::from_set(query_dominators, budget)?;
         for block in &self.body.blocks {
             budget.charge(1)?;
             // Both dominances use the original CFG. Strict source dominance also
             // excludes the implicit entry edge and facts from a future loop visit.
-            if block.id == query || !budget.contains(query_dominators, &block.id)? {
+            if block.id == query || query_dominators.get(&block.id, budget)?.is_none() {
                 continue;
             }
             match &block.terminator {
@@ -255,9 +393,9 @@ impl Facts<'_> {
                         continue;
                     };
                     let then_edge =
-                        self.exclusive_edge(block.id, *then_target, query_dominators, budget)?;
+                        self.exclusive_edge(block.id, *then_target, &query_dominators, budget)?;
                     let else_edge =
-                        self.exclusive_edge(block.id, *else_target, query_dominators, budget)?;
+                        self.exclusive_edge(block.id, *else_target, &query_dominators, budget)?;
                     let predicate = match (then_edge, else_edge) {
                         (true, false) => predicate,
                         (false, true) => invert_predicate(predicate),
@@ -282,7 +420,7 @@ impl Facts<'_> {
                             || !self.exclusive_edge(
                                 block.id,
                                 case.target,
-                                query_dominators,
+                                &query_dominators,
                                 budget,
                             )?
                         {
@@ -311,7 +449,7 @@ impl Facts<'_> {
                             || !self.exclusive_edge(
                                 block.id,
                                 case.target,
-                                query_dominators,
+                                &query_dominators,
                                 budget,
                             )?
                         {
@@ -390,6 +528,7 @@ fn refine_with_limits(
         work_limit,
         row_limit,
     };
+    let facts = IndexedFacts::new(facts, &mut budget)?;
     let mut proposals = Vec::new();
     let mut candidates = 0_usize;
     for block in &facts.body.blocks {
@@ -415,6 +554,12 @@ fn refine_with_limits(
         if then_target == else_target {
             continue;
         }
+        let Some(successors) = budget.get(effective, &block.id)? else {
+            continue;
+        };
+        if successors.len() <= 1 {
+            continue;
+        }
         let Some(comparison) = facts.comparison(*condition, &mut budget)? else {
             continue;
         };
@@ -428,10 +573,7 @@ fn refine_with_limits(
             continue;
         };
         let target = if truth { *then_target } else { *else_target };
-        let Some(successors) = budget.get(effective, &block.id)? else {
-            continue;
-        };
-        if !budget.contains(successors, &target)? || successors.len() <= 1 {
+        if !budget.contains(successors, &target)? {
             continue;
         }
         budget.charge(1)?;
