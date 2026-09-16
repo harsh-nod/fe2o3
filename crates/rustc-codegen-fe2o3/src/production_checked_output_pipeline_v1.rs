@@ -556,14 +556,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             let mut callback_error = None;
             let result = crate::production_ranked_projection_v1::with_source_checked_output_module_catalog_v1(
                 source, bound, checked, stage.bindings.rustc_target.profile(), budget,
-                |formals, catalog, budget| {
+                |formals, input_catalog, catalog, budget| {
                     let result = (|| {
                         CheckedOutputMemoryPreparedProductionCompilation {
                             source: &stage.materialized, bindings: &stage.bindings,
                             checked, formals,
                         }.validate_inert_target_geometry_v1(budget)?;
                         crate::production_ranked_projection_v1::with_source_checked_output_local_relations_v1(
-                            source, bound, checked, catalog, formals,
+                            source, bound, checked, input_catalog, catalog, formals,
                             &stage.bindings.typed_descriptor_roots,
                             stage.bindings.rustc_target.profile(),
                             stage.bindings.rustc_target.device_target(),

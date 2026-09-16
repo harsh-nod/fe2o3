@@ -150,6 +150,51 @@ The following boundaries remain closed:
   hardware execution, or formal compiler verification follows from this
   shared-verifier boundary.
 
+## Held Production Relation Chain
+
+The held [Stage A](../crates/rustc-codegen-fe2o3/src/production_checked_output_pipeline_v1.rs)
+and [Stage B1](../crates/rustc-codegen-fe2o3/src/production_checked_output_export_buffer_v1.rs)
+callbacks use a shared
+[local relation adapter](../crates/rustc-codegen-fe2o3/src/production_ranked_projection_v1/checked_output_local_relations_v1.rs).
+Here N is the original materialized native graph, B is its actual target-bound
+graph, and O is the actual checked policy-3 optimizer output:
+
+```text
+original source/SSA, launch configuration and N
+  -> original source functional, aggregate and reference checks
+  -> actual B and checked O
+  -> per-root physical/address checks and fresh Complete formal-memory results
+  -> source-owned target geometry
+  -> complete source/N emitter and input-catalog replay
+  -> exact N/B target binding and catalog checks
+  -> checked policy-3 execution receipt, source descriptor and native text replay
+```
+
+The module join lends both its B input catalog and its separately transported O
+catalog. The adapter binds the input catalog independently to inventories of N
+and B; O's relocated allocation rows cannot substitute for those input rows.
+Both inventories, both checked catalog views and both new relation results stay
+live through the existing execution-receipt/descriptor/native-text callback.
+Every returned storage receipt is accepted immediately on the original ledger.
+Cleanup ends the borrowed scope before restoring its entry floor; accounting
+failure takes precedence over callback failure or panic resumption.
+
+This adds one paid catalog getter and nine fixed bookkeeping work units, plus
+the existing inventory, catalog, emitter-replay and target-relation costs.
+Inventory and coordinate checks already performed by the module join are not
+reused here: the additional work is once per module, not once per root. Existing
+source/emitter and native-lowering resource domains remain separate.
+
+The [source/N checker](../crates/fe2o3-lower-mir-kernel/src/production_supplied_native_materialization_v1.rs)
+reuses the original emitter and compares complete native and catalog bytes. It
+cannot detect semantic errors shared with that emitter or authenticate a past
+producer execution. Original input custody comes from the enclosing pipeline,
+not from this consistency query. The source functional/aggregate/reference gates
+remain mandatory before this adapter can be reached. Component tests do not
+establish a successful run through those gates. This wiring does not activate
+the default route, define protected export framing or qualify the tutorial
+corpus, LLVM object toolchain or hardware.
+
 ## Native Text/Descriptor Replay
 
 [`check_native_v12_text_descriptor_relation_v1`](../crates/fe2o3-amdgcn-model/src/native_v12_text_descriptor_replay_v1.rs)

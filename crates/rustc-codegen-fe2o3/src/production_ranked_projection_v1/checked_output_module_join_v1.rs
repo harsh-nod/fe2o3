@@ -103,6 +103,7 @@ pub(crate) fn with_source_checked_output_module_v1<T>(
 
 // The catalog is borrowed from the already constructed and retained J view.
 // Historical adapters above do not invoke this paid getter.
+// The input catalog remains B-derived until independently bound on N as well.
 pub(crate) fn with_source_checked_output_module_catalog_v1<T>(
     custody: &SourceRankedCustodyV1<'_>,
     bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
@@ -116,6 +117,7 @@ pub(crate) fn with_source_checked_output_module_catalog_v1<T>(
             'source,
             'output,
         >],
+        &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
         &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<
@@ -133,7 +135,10 @@ pub(crate) fn with_source_checked_output_module_catalog_v1<T>(
             let catalog = view.output_pipeline_catalog(budget).map_err(
                 fe2o3_lower_mir_kernel::ProductionScopedFormalMemoryErrorV1::SourceOutput,
             )?;
-            next(formals, catalog, budget)
+            let input_catalog = view.input_pipeline_catalog(budget).map_err(
+                fe2o3_lower_mir_kernel::ProductionScopedFormalMemoryErrorV1::SourceOutput,
+            )?;
+            next(formals, input_catalog, catalog, budget)
         },
     )
 }

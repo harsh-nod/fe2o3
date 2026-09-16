@@ -1,6 +1,10 @@
 #[derive(Debug)]
 pub(crate) enum CheckedOutputLocalRelationErrorV1 {
     Resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
+    Inventory(fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1),
+    Catalog(fe2o3_kernel_analysis::KernelIrContractCatalogBindingErrorV1),
+    Materialization(fe2o3_lower_mir_kernel::SuppliedNativeMaterializationErrorV1),
+    Target(dialect_amdgcn::NativeV12TargetBindingRelationErrorV1),
     Policy3(fe2o3_kernel_opt::CanonicalPolicy3ExecutionReceiptErrorV1),
     Native(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
 }
@@ -9,6 +13,10 @@ impl fmt::Display for CheckedOutputLocalRelationErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(error) => error.fmt(f),
+            Self::Inventory(error) => error.fmt(f),
+            Self::Catalog(error) => error.fmt(f),
+            Self::Materialization(error) => error.fmt(f),
+            Self::Target(error) => error.fmt(f),
             Self::Policy3(error) => error.fmt(f),
             Self::Native(error) => error.fmt(f),
         }
@@ -19,6 +27,10 @@ impl std::error::Error for CheckedOutputLocalRelationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Resource(error) => Some(error),
+            Self::Inventory(error) => Some(error),
+            Self::Catalog(error) => Some(error),
+            Self::Materialization(error) => Some(error),
+            Self::Target(error) => Some(error),
             Self::Policy3(error) => Some(error),
             Self::Native(error) => Some(error),
         }
@@ -71,6 +83,7 @@ pub(crate) fn with_source_checked_output_local_relations_v1(
     custody: &SourceRankedCustodyV1<'_>,
     bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    input_catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
     catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
     formals: &[fe2o3_lower_mir_kernel::ProductionScopedCompleteFormalMemoryV1<'_, '_, '_, '_>],
     typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
@@ -84,19 +97,126 @@ pub(crate) fn with_source_checked_output_local_relations_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<(), crate::production_pipeline::ProductionPipelineError>,
 ) -> Result<(), crate::production_pipeline::ProductionPipelineError> {
-    with_checked_output_local_relations_v1(
-        custody.original,
+    with_native_input_relations_v1(
+        custody.materialized,
         bound,
-        checked,
-        catalog,
-        formals,
-        typed_roots,
+        input_catalog,
         profile,
-        target,
-        source_envelope,
         budget,
-        next,
+        |_, _, budget| {
+            with_checked_output_local_relations_v1(
+                custody.original,
+                bound,
+                checked,
+                catalog,
+                formals,
+                typed_roots,
+                profile,
+                target,
+                source_envelope,
+                budget,
+                next,
+            )
+        },
     )
+}
+
+fn with_native_input_relation_scope_v1(
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    body: impl FnOnce(
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), crate::production_pipeline::ProductionPipelineError>,
+) -> Result<(), crate::production_pipeline::ProductionPipelineError> {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    // One scope entry, six immediate receipt acceptances and two cleanup actions.
+    budget.charge_work(9).map_err(local_relation_resource_v1)?;
+    let floor = budget.storage();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(budget)));
+    // The callback frame, including non-Drop catalog views, has ended here.
+    let released = budget
+        .storage()
+        .checked_sub(floor)
+        .ok_or_else(|| local_relation_resource_v1(Resource::Accounting))?;
+    budget
+        .release_storage(released)
+        .map_err(local_relation_resource_v1)?;
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+// Inert caller-borrow consistency only. The production caller separately keeps
+// original source/Some/reference custody; this prefix cannot manufacture it.
+// Each inventory is built once for this module. J's earlier inventory/coordinate
+// work is not reused, and existing emitter/replay engine domains stay separate.
+fn with_native_input_relations_v1(
+    materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    input_catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl FnOnce(
+        &fe2o3_lower_mir_kernel::ReplayedSuppliedNativeMaterializationV1<'_, '_, '_, '_>,
+        &dialect_amdgcn::CheckedNativeV12TargetBindingRelationV1<'_, '_, '_, '_>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), crate::production_pipeline::ProductionPipelineError>,
+) -> Result<(), crate::production_pipeline::ProductionPipelineError> {
+    use CheckedOutputLocalRelationErrorV1 as Error;
+    use fe2o3_kernel_analysis::{CanonicalKirInventoryV1, check_kernel_ir_contract_catalog_v1};
+    with_native_input_relation_scope_v1(budget, |budget| {
+        let neutral = materialized.executable();
+        let (neutral_inventory, neutral_inventory_storage) =
+            CanonicalKirInventoryV1::derive(neutral, budget)
+                .map_err(|error| local_relation_error_v1(Error::Inventory(error)))?;
+        budget
+            .reserve_storage(neutral_inventory_storage.retained_storage())
+            .map_err(local_relation_resource_v1)?;
+        let (neutral_catalog, neutral_catalog_storage) =
+            check_kernel_ir_contract_catalog_v1(&neutral_inventory, input_catalog, budget)
+                .map_err(|error| local_relation_error_v1(Error::Catalog(error)))?;
+        budget
+            .reserve_storage(neutral_catalog_storage.retained_storage())
+            .map_err(local_relation_resource_v1)?;
+        let (materialization, materialization_storage) =
+            fe2o3_lower_mir_kernel::check_supplied_native_materialization_consistency_v1(
+                materialized.semantic_ssa(),
+                materialized.source_launch(),
+                neutral,
+                &neutral_catalog,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                budget,
+            )
+            .map_err(|error| local_relation_error_v1(Error::Materialization(error)))?;
+        budget
+            .reserve_storage(materialization_storage.retained_storage())
+            .map_err(local_relation_resource_v1)?;
+        let (bound_inventory, bound_inventory_storage) =
+            CanonicalKirInventoryV1::derive(bound, budget)
+                .map_err(|error| local_relation_error_v1(Error::Inventory(error)))?;
+        budget
+            .reserve_storage(bound_inventory_storage.retained_storage())
+            .map_err(local_relation_resource_v1)?;
+        let (bound_catalog, bound_catalog_storage) =
+            check_kernel_ir_contract_catalog_v1(&bound_inventory, input_catalog, budget)
+                .map_err(|error| local_relation_error_v1(Error::Catalog(error)))?;
+        budget
+            .reserve_storage(bound_catalog_storage.retained_storage())
+            .map_err(local_relation_resource_v1)?;
+        let (target, target_storage) = dialect_amdgcn::check_native_v12_target_binding_relation_v1(
+            neutral,
+            &neutral_catalog,
+            bound,
+            &bound_catalog,
+            profile,
+            budget,
+        )
+        .map_err(|error| local_relation_error_v1(Error::Target(error)))?;
+        budget
+            .reserve_storage(target_storage.retained_storage())
+            .map_err(local_relation_resource_v1)?;
+        next(&materialization, &target, budget)
+    })
 }
 
 // Shared inert core; direct component use does not establish the source gate.

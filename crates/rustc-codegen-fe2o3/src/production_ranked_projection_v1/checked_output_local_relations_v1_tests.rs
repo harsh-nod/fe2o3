@@ -242,6 +242,34 @@ mod checked_output_local_relations_tests {
             &mut Budget<'_>,
         ),
     ) {
+        with_fixture_catalogs_expected_tail(
+            profile,
+            count,
+            exhausted,
+            false,
+            |r1, bound, checked, input, catalog, formals, typed, budget| {
+                assert!(input.is_none());
+                body(r1, bound, checked, catalog, formals, typed, budget);
+            },
+        )
+    }
+
+    fn with_fixture_catalogs_expected_tail(
+        profile: Profile,
+        count: usize,
+        exhausted: bool,
+        borrow_input: bool,
+        body: impl FnOnce(
+            &R1<'_>,
+            &Owner,
+            &Checked,
+            Option<&Catalog>,
+            &Catalog,
+            &[Complete<'_, '_, '_, '_>],
+            &[crate::compiler_descriptor::TypedDescriptorRootV1],
+            &mut Budget<'_>,
+        ),
+    ) {
         let mut work = Work::new(WORK);
         let mut budget = Budget::new(&mut work, STORAGE);
         budget.charge_work(7).unwrap();
@@ -320,7 +348,15 @@ mod checked_output_local_relations_tests {
                         let start = budget.work();
                         let catalog = view.output_pipeline_catalog(budget).unwrap();
                         assert_eq!(budget.work() - start, 1);
-                        body(r1, &bound, &checked, catalog, formals, &typed, budget);
+                        let input = if borrow_input {
+                            let start = budget.work();
+                            let input = view.input_pipeline_catalog(budget).unwrap();
+                            assert_eq!(budget.work() - start, 1);
+                            Some(input)
+                        } else {
+                            None
+                        };
+                        body(r1, &bound, &checked, input, catalog, formals, &typed, budget);
                         Ok(())
                     },
                 );
@@ -666,6 +702,565 @@ mod checked_output_local_relations_tests {
         }
     }
 
+    #[test]
+    fn native_input_chain_keeps_original_borrows_through_t_and_l_on_all_component_roots() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for count in [1, 2] {
+                with_fixture_catalogs_expected_tail(
+                    profile,
+                    count,
+                    false,
+                    true,
+                    |r1, bound, checked, input, output, formals, typed, budget| {
+                        let input = input.unwrap();
+                        let source = r1.materialized();
+                        let floor = budget.storage();
+                        let mut previous = budget.work();
+                        for _ in 0..2 {
+                            with_native_input_relations_v1(
+                                source,
+                                bound,
+                                input,
+                                profile,
+                                budget,
+                                |materialization, target, budget| {
+                                    assert!(std::ptr::eq(
+                                        materialization.source(),
+                                        source.semantic_ssa()
+                                    ));
+                                    assert!(std::ptr::eq(
+                                        materialization.launch(),
+                                        source.source_launch()
+                                    ));
+                                    assert!(std::ptr::eq(
+                                        materialization.native(),
+                                        source.executable()
+                                    ));
+                                    assert!(std::ptr::eq(materialization.catalog(), input));
+                                    assert!(std::ptr::eq(target.neutral(), source.executable()));
+                                    assert!(std::ptr::eq(target.bound(), bound));
+                                    assert!(std::ptr::eq(target.neutral_catalog(), input));
+                                    assert!(std::ptr::eq(target.bound_catalog(), input));
+                                    assert_eq!(target.profile(), profile);
+                                    assert!(!materialization.grants_authority());
+                                    assert!(!target.grants_authority());
+                                    let input_floor = budget.storage();
+                                    assert!(
+                                        input_floor
+                                            >= floor
+                                                + std::mem::size_of_val(materialization)
+                                                + std::mem::size_of_val(target)
+                                    );
+                                    run(
+                                        r1,
+                                        bound,
+                                        checked,
+                                        output,
+                                        formals,
+                                        typed,
+                                        profile,
+                                        budget,
+                                        |local, native, budget| {
+                                            assert!(std::ptr::eq(local.input(), target.bound()));
+                                            assert!(std::ptr::eq(local.execution_owner(), checked));
+                                            assert!(std::ptr::eq(native.output(), checked.owner()));
+                                            assert!(std::ptr::eq(native.catalog(), output));
+                                            assert_eq!(native.descriptors().kernels().len(), count);
+                                            assert!(!local.grants_authority());
+                                            assert!(!native.grants_authority());
+                                            assert!(budget.storage() >= input_floor);
+                                            Ok(())
+                                        },
+                                    )?;
+                                    assert_eq!(budget.storage(), input_floor);
+                                    Ok(())
+                                },
+                            )
+                            .unwrap();
+                            assert_eq!(budget.storage(), floor);
+                            assert!(budget.work() > previous);
+                            previous = budget.work();
+                        }
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_input_scope_has_independent_nine_unit_prefix_and_cumulative_cleanup() {
+        for prior in [0, 7] {
+            for allowance in [8, 9, 18] {
+                let mut work = Work::new(prior + allowance);
+                let mut budget = Budget::new(&mut work, PREFIX + 3);
+                budget.charge_work(prior).unwrap();
+                budget.reserve_storage(PREFIX).unwrap();
+                let mut entered = 0;
+                for call in 0..2 {
+                    let result = with_native_input_relation_scope_v1(&mut budget, |budget| {
+                        entered += 1;
+                        budget
+                            .reserve_storage(3)
+                            .map_err(local_relation_resource_v1)?;
+                        Ok(())
+                    });
+                    let accepted = allowance >= (call + 1) * 9;
+                    assert_eq!(result.is_ok(), accepted);
+                    assert_eq!(budget.storage(), PREFIX);
+                }
+                assert_eq!(entered, allowance / 9);
+                assert_eq!(budget.work(), prior + (allowance / 9) * 9);
+                budget.release_storage(PREFIX).unwrap();
+                assert_eq!(work.failed_work().is_some(), allowance < 18);
+            }
+        }
+    }
+
+    #[test]
+    fn native_input_inventory_header_denial_preserves_floor_and_reentry() {
+        use fe2o3_kernel_analysis::{CanonicalKirInventoryErrorV1, CanonicalKirInventoryV1};
+        with_fixture_catalogs_expected_tail(
+            Profile::Gfx942,
+            1,
+            false,
+            true,
+            |r1, bound, _, input, _, _, _, budget| {
+                let input = input.unwrap();
+                let floor = budget.storage();
+                // Inventory census precedes its fixed header reservation. This is
+                // one short of that minimum, not a calibrated whole-query cap.
+                let minimum = std::mem::size_of::<CanonicalKirInventoryV1<'_>>();
+                let held = budget.storage_limit() - floor - (minimum - 1);
+                budget.reserve_storage(held).unwrap();
+                let mut entered = false;
+                let result = with_native_input_relations_v1(
+                    r1.materialized(),
+                    bound,
+                    input,
+                    Profile::Gfx942,
+                    budget,
+                    |_, _, _| {
+                        entered = true;
+                        Ok(())
+                    },
+                );
+                assert!(matches!(
+                    result,
+                    Err(Pipeline::CheckedOutputMemoryTarget(
+                        crate::production_pipeline::CheckedOutputMemoryTargetErrorV1::LocalRelation(
+                            CheckedOutputLocalRelationErrorV1::Inventory(
+                                CanonicalKirInventoryErrorV1::Resource(Resource::Storage(_))
+                            )
+                        )
+                    ))
+                ));
+                assert!(!entered);
+                assert_eq!(budget.storage(), floor + held);
+                let denial = budget.failed_storage();
+                assert!(denial.is_some());
+                budget.release_storage(held).unwrap();
+                with_native_input_relations_v1(
+                    r1.materialized(),
+                    bound,
+                    input,
+                    Profile::Gfx942,
+                    budget,
+                    |_, _, _| Ok(()),
+                )
+                .unwrap();
+                assert_eq!(budget.storage(), floor);
+                assert_eq!(budget.failed_storage(), denial);
+            },
+        );
+    }
+
+    #[test]
+    fn native_input_prefix_retains_callback_errors_panic_and_accounting_precedence() {
+        with_fixture_catalogs_expected_tail(
+            Profile::Gfx942,
+            1,
+            false,
+            true,
+            |r1, bound, _, input, _, _, _, budget| {
+                let input = input.unwrap();
+                let floor = budget.storage();
+                let result = with_native_input_relations_v1(
+                    r1.materialized(),
+                    bound,
+                    input,
+                    Profile::Gfx942,
+                    budget,
+                    |_, _, _| Err(marker()),
+                );
+                assert!(matches!(
+                    result,
+                    Err(Pipeline::RankedVerification(
+                        ProductionRankedVerificationErrorV1::RosterMetadata(
+                            "stage A callback marker"
+                        )
+                    ))
+                ));
+                assert_eq!(budget.storage(), floor);
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    with_native_input_relations_v1(
+                        r1.materialized(),
+                        bound,
+                        input,
+                        Profile::Gfx942,
+                        budget,
+                        |_, _, _| panic!("native input panic marker"),
+                    )
+                }))
+                .unwrap_err();
+                assert_eq!(
+                    panic.downcast_ref::<&str>(),
+                    Some(&"native input panic marker")
+                );
+                assert_eq!(budget.storage(), floor);
+                for unwind in [false, true] {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        with_native_input_relations_v1(
+                            r1.materialized(),
+                            bound,
+                            input,
+                            Profile::Gfx942,
+                            budget,
+                            |_, _, budget| {
+                                budget
+                                    .release_storage(budget.storage() - floor + 1)
+                                    .unwrap();
+                                if unwind {
+                                    panic!("native input broken floor");
+                                }
+                                Err(marker())
+                            },
+                        )
+                    }))
+                    .unwrap();
+                    assert!(matches!(result, Err(Pipeline::CheckedOutputMemoryTarget(
+                        crate::production_pipeline::CheckedOutputMemoryTargetErrorV1::LocalRelation(
+                            CheckedOutputLocalRelationErrorV1::Resource(Resource::Accounting)
+                        )
+                    ))));
+                    assert_eq!(budget.storage(), floor - 1);
+                    // Repair only the deliberate hostile byte after all query
+                    // borrows have ended, so the original fixture can tear down.
+                    budget.reserve_storage(1).unwrap();
+                }
+                with_native_input_relations_v1(
+                    r1.materialized(),
+                    bound,
+                    input,
+                    Profile::Gfx942,
+                    budget,
+                    |_, _, _| Ok(()),
+                )
+                .unwrap();
+                assert_eq!(budget.storage(), floor);
+            },
+        );
+    }
+
+    #[test]
+    fn native_input_chain_preserves_later_descriptor_work_failure_over_err_and_panic() {
+        for unwind in [false, true] {
+            with_fixture_catalogs_expected_tail(
+                Profile::Gfx942,
+                1,
+                true,
+                true,
+                |r1, bound, checked, input, output, formals, typed, budget| {
+                    let floor = budget.storage();
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        with_native_input_relations_v1(
+                            r1.materialized(),
+                            bound,
+                            input.unwrap(),
+                            Profile::Gfx942,
+                            budget,
+                            |_, _, budget| {
+                                run(
+                                    r1,
+                                    bound,
+                                    checked,
+                                    output,
+                                    formals,
+                                    typed,
+                                    Profile::Gfx942,
+                                    budget,
+                                    |_, _, budget| {
+                                        budget.charge_work(WORK - budget.work()).unwrap();
+                                        if unwind {
+                                            panic!("native input later postflight");
+                                        }
+                                        Err(marker())
+                                    },
+                                )
+                            },
+                        )
+                    }))
+                    .unwrap();
+                    assert!(matches!(result, Err(Pipeline::DescriptorEvidence(
+                        crate::compiler_descriptor::CompilerDescriptorError::CheckedOutputSource(
+                            fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1::Resource(Resource::Work(_))
+                        )
+                    ))));
+                    assert_eq!(budget.storage(), floor);
+                    assert_eq!(budget.work(), WORK);
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn native_input_chain_source_catalog_and_bound_mismatches_do_not_enter_t_or_l() {
+        with_fixture_catalogs_expected_tail(
+            Profile::Gfx942,
+            1,
+            false,
+            true,
+            |r1, bound, _, input, _, _, _, budget| {
+                let input = input.unwrap();
+                let floor = budget.storage();
+                let mut semantic = *input.semantic_source();
+                semantic[0] ^= 1;
+                let (foreign, receipt) = Catalog::from_rows_with_budget(
+                    semantic,
+                    input.definitions(),
+                    input.bindings(),
+                    budget,
+                )
+                .unwrap();
+                budget.reserve_storage(receipt.retained_storage()).unwrap();
+                let with_foreign = budget.storage();
+                let mut entered = false;
+                let result = with_native_input_relations_v1(
+                    r1.materialized(),
+                    bound,
+                    &foreign,
+                    Profile::Gfx942,
+                    budget,
+                    |_, _, _| {
+                        entered = true;
+                        Ok(())
+                    },
+                );
+                assert!(matches!(result, Err(Pipeline::CheckedOutputMemoryTarget(
+                    crate::production_pipeline::CheckedOutputMemoryTargetErrorV1::LocalRelation(
+                        CheckedOutputLocalRelationErrorV1::Materialization(
+                            fe2o3_lower_mir_kernel::SuppliedNativeMaterializationErrorV1::Invalid("complete source catalog bytes")
+                        )
+                    )
+                ))));
+                assert!(!entered);
+                assert_eq!(budget.storage(), with_foreign);
+                drop(foreign);
+                budget.release_storage(receipt.retained_storage()).unwrap();
+
+                // Prefix-only adversary: real J would reject this B before
+                // this later chain. A valid different workgroup reaches B2.
+                let (changed, receipt) = {
+                    let mut module = bound.module().clone();
+                    module.kernels[0].workgroup_size =
+                        Some(fe2o3_kernel_ir::WorkgroupSize::new(128, 1, 1));
+                    Owner::from_module_ref_with_verification_budget_v12(&module, budget).unwrap()
+                };
+                budget.reserve_storage(receipt.retained_storage()).unwrap();
+                let changed_floor = budget.storage();
+                let result = with_native_input_relations_v1(
+                    r1.materialized(),
+                    &changed,
+                    input,
+                    Profile::Gfx942,
+                    budget,
+                    |_, _, _| {
+                        entered = true;
+                        Ok(())
+                    },
+                );
+                assert!(matches!(
+                    result,
+                    Err(Pipeline::CheckedOutputMemoryTarget(
+                        crate::production_pipeline::CheckedOutputMemoryTargetErrorV1::LocalRelation(
+                            CheckedOutputLocalRelationErrorV1::Target(
+                                dialect_amdgcn::NativeV12TargetBindingRelationErrorV1::Target(_)
+                            )
+                        )
+                    ))
+                ));
+                assert!(!entered);
+                assert_eq!(budget.storage(), changed_floor);
+                drop(changed);
+                budget.release_storage(receipt.retained_storage()).unwrap();
+                assert_eq!(budget.storage(), floor);
+            },
+        );
+    }
+
+    #[test]
+    fn native_input_chain_production_order_keeps_source_gates_and_owned_stage_cleanup() {
+        let local = include_str!("checked_output_local_relations_v1.rs");
+        let adapter = local
+            .split("pub(crate) fn with_source_checked_output_local_relations_v1(")
+            .nth(1)
+            .unwrap()
+            .split("fn with_native_input_relation_scope_v1(")
+            .next()
+            .unwrap();
+        assert!(
+            adapter.find("with_native_input_relations_v1(").unwrap()
+                < adapter
+                    .find("with_checked_output_local_relations_v1(")
+                    .unwrap()
+        );
+        let prefix = local
+            .split("fn with_native_input_relations_v1(")
+            .nth(1)
+            .unwrap()
+            .split("// Shared inert core;")
+            .next()
+            .unwrap();
+        assert_eq!(
+            prefix.matches("CanonicalKirInventoryV1::derive(").count(),
+            2
+        );
+        assert_eq!(
+            prefix
+                .matches("check_kernel_ir_contract_catalog_v1(")
+                .count(),
+            2
+        );
+        assert_eq!(prefix.matches(".reserve_storage(").count(), 6);
+        assert!(
+            prefix
+                .find("check_supplied_native_materialization_consistency_v1(")
+                .unwrap()
+                < prefix
+                    .find("check_native_v12_target_binding_relation_v1(")
+                    .unwrap()
+        );
+        assert!(
+            prefix
+                .find("check_native_v12_target_binding_relation_v1(")
+                .unwrap()
+                < prefix
+                    .find("next(&materialization, &target, budget)")
+                    .unwrap()
+        );
+        assert!(!prefix.contains("optimize_"));
+        assert!(!prefix.contains("bind_production_target_v1("));
+        assert!(!prefix.contains("try_materialize_with_budget("));
+
+        let join = include_str!("checked_output_module_join_v1.rs");
+        let catalog = join
+            .split("pub(crate) fn with_source_checked_output_module_catalog_v1<T>(")
+            .nth(1)
+            .unwrap()
+            .split("fn with_source_checked_output_module_view_v1<T>(")
+            .next()
+            .unwrap();
+        assert!(
+            catalog
+                .find("view.output_pipeline_catalog(budget)")
+                .unwrap()
+                < catalog.find("view.input_pipeline_catalog(budget)").unwrap()
+        );
+        assert!(catalog.contains("next(formals, input_catalog, catalog, budget)"));
+        assert!(
+            join.find(".check_borrowed_ranked_addresses_v1(").unwrap()
+                < join
+                    .find("::with_complete_formal_memory_module_v1(")
+                    .unwrap()
+        );
+
+        let source = include_str!("checked_output_source_join_v1.rs");
+        for gate in [
+            "has_authenticated_functional_verification()",
+            "retained_functional_verification_is_coherent()",
+            "aggregate_verus_execution().is_none()",
+        ] {
+            assert!(source.contains(gate));
+        }
+        let source_gate = source
+            .split("pub(crate) fn with_source_ranked_custody_v1<T>(")
+            .nth(1)
+            .unwrap();
+        assert!(
+            source_gate
+                .find("require_source_functional_roster_v1(")
+                .unwrap()
+                < source_gate.find("next(&SourceRankedCustodyV1").unwrap()
+        );
+
+        let pipeline = include_str!("../production_checked_output_pipeline_v1.rs");
+        let setup = pipeline
+            .split("fn with_source_checked_output_transaction_v1<T>(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn lower_checked_output_memory_target_v1(")
+            .next()
+            .unwrap();
+        assert!(
+            setup.find("::with_source_ranked_custody_v1(").unwrap()
+                < setup
+                    .find("with_checked_output_target_endpoint_v1(")
+                    .unwrap()
+        );
+        let stage_a = pipeline
+            .split("pub(crate) fn with_checked_output_local_relations_v1(")
+            .nth(1)
+            .unwrap();
+        let export = include_str!("../production_checked_output_export_buffer_v1.rs");
+        let stage_b1 = export
+            .split("fn prepare_inert_checked_output_buffer_v1(")
+            .nth(1)
+            .unwrap();
+        for route in [stage_a, stage_b1] {
+            assert!(route.contains("|formals, input_catalog, catalog, budget|"));
+            assert!(route.contains("source, bound, checked, input_catalog, catalog, formals,"));
+            assert!(
+                route
+                    .find("::with_source_checked_output_module_catalog_v1(")
+                    .unwrap()
+                    < route
+                        .find(".validate_inert_target_geometry_v1(budget)")
+                        .unwrap()
+            );
+            assert!(
+                route
+                    .find(".validate_inert_target_geometry_v1(budget)")
+                    .unwrap()
+                    < route
+                        .find("::with_source_checked_output_local_relations_v1(")
+                        .unwrap()
+            );
+            assert!(!route.contains("AuthenticatedReferenceEffectBindingsV1::default"));
+        }
+        assert!(
+            stage_b1.find("::with_source_ranked_custody_v1(").unwrap()
+                < stage_b1
+                    .find("with_checked_output_target_endpoint_v1(")
+                    .unwrap()
+        );
+        let split = stage_b1.split("|stage| {").last().unwrap();
+        assert!(
+            split.find("drop((materialized, ranked_roots));").unwrap()
+                < split.rfind("bindings").unwrap()
+        );
+        assert_eq!(
+            pipeline
+                .matches("dialect_amdgcn::bind_production_target_v1(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            pipeline
+                .matches("optimize_native_neutral_kernel_ir_policy3_v1(")
+                .count(),
+            1
+        );
+    }
+
     fn copied_bytes(bytes: &[u8], budget: &mut Budget<'_>) -> (Vec<u8>, usize) {
         budget.charge_work(bytes.len() + 2).unwrap();
         let header = std::mem::size_of::<Vec<u8>>();
@@ -834,5 +1429,226 @@ mod checked_output_local_relations_tests {
         drop(source);
         budget.release_storage(retained).unwrap();
         assert_eq!(budget.storage(), PREFIX);
+    }
+}
+
+mod native_input_pipeline_catalog_tests {
+    use super::*;
+    use crate::production_pipeline::{CheckedOutputMemoryTargetErrorV1, ProductionPipelineError};
+    use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
+    use fe2o3_kernel_analysis::{CanonicalKirInventoryV1, check_kernel_ir_contract_catalog_v1};
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work, InertCanonicalKernelIrContractCatalogV1 as Catalog,
+        VerifiedCanonicalKernelIrModuleV12 as Owner,
+    };
+
+    include!("source_output_pipeline_fixture_v1_tests.rs");
+
+    fn graph_binding_without_markers(owner: &Owner, catalog: &Catalog, budget: &mut Budget<'_>) {
+        let floor = budget.storage();
+        {
+            let (inventory, inventory_storage) =
+                CanonicalKirInventoryV1::derive(owner, budget).unwrap();
+            budget
+                .reserve_storage(inventory_storage.retained_storage())
+                .unwrap();
+            let (checked, storage) =
+                check_kernel_ir_contract_catalog_v1(&inventory, catalog, budget).unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            assert_eq!(checked.marker_count(), 0);
+            assert!(!checked.grants_authority());
+        }
+        // Both the catalog view and the inventory are lexically gone.
+        budget
+            .release_storage(budget.storage().checked_sub(floor).unwrap())
+            .unwrap();
+        assert_eq!(budget.storage(), floor);
+    }
+
+    #[test]
+    fn native_input_prefix_uses_real_nonempty_source_catalog_not_relocated_output_rows() {
+        const WORK: usize = 1_000_000_000_000;
+        const STORAGE: usize = 1_000_000_000;
+        const PREFIX: usize = 97;
+        let mut work = Work::new(WORK);
+        let mut budget = Budget::new(&mut work, STORAGE);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(PREFIX).unwrap();
+        let (mut ssa, launch) = pipeline_fixture(false);
+        let capture = ssa
+            .try_capture_occurrences_with_budget_v1(&mut budget)
+            .unwrap();
+        budget.reserve_storage(capture.retained_storage()).unwrap();
+        let source =
+            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                ssa,
+                launch,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                &mut budget,
+            )
+            .unwrap();
+        let owner_storage = source.executable_storage().retained_storage()
+            + source.assert_origin_storage().payload_storage();
+        budget.reserve_storage(owner_storage).unwrap();
+        let source_floor = budget.storage();
+        let mut previous = budget.work();
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            {
+                let (bound, bound_storage) = {
+                    let raw = dialect_amdgcn::bind_production_target_v1(
+                        source.executable().module(),
+                        profile,
+                    )
+                    .unwrap();
+                    Owner::from_module_ref_with_verification_budget_v12(raw.module(), &mut budget)
+                        .unwrap()
+                };
+                budget
+                    .reserve_storage(bound_storage.retained_storage())
+                    .unwrap();
+                let checked = fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy3_v1(
+                    &bound,
+                    &mut budget,
+                )
+                .unwrap();
+                budget
+                    .reserve_storage(checked.storage().retained_storage())
+                    .unwrap();
+                let (coordinates, coordinate_storage) =
+                    dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                        source.executable(),
+                        &bound,
+                        profile,
+                        &mut budget,
+                    )
+                    .unwrap();
+                budget
+                    .reserve_storage(coordinate_storage.retained_storage())
+                    .unwrap();
+                let (view, view_storage) =
+                    fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                        &source,
+                        &coordinates,
+                        &checked,
+                        &mut budget,
+                    )
+                    .unwrap();
+                budget
+                    .reserve_storage(view_storage.retained_storage())
+                    .unwrap();
+                let input = view.input_pipeline_catalog(&mut budget).unwrap();
+                let output = view.output_pipeline_catalog(&mut budget).unwrap();
+                assert_eq!((input.definitions().len(), input.bindings().len()), (1, 1));
+                assert_eq!(output.bindings().len(), 1);
+                assert_ne!(input.bindings()[0], output.bindings()[0]);
+                assert!(
+                    view.pipeline_marker_placements(&mut budget)
+                        .unwrap()
+                        .is_empty()
+                );
+                graph_binding_without_markers(source.executable(), input, &mut budget);
+                graph_binding_without_markers(&bound, input, &mut budget);
+                let floor = budget.storage();
+                let mut entered = false;
+                with_native_input_relations_v1(
+                    &source,
+                    &bound,
+                    input,
+                    profile,
+                    &mut budget,
+                    |materialization, target, _| {
+                        entered = true;
+                        assert!(std::ptr::eq(
+                            materialization.source(),
+                            source.semantic_ssa()
+                        ));
+                        assert!(std::ptr::eq(
+                            materialization.launch(),
+                            source.source_launch()
+                        ));
+                        assert!(std::ptr::eq(materialization.native(), source.executable()));
+                        assert!(std::ptr::eq(materialization.catalog(), input));
+                        assert!(std::ptr::eq(target.neutral_catalog(), input));
+                        assert!(std::ptr::eq(target.bound_catalog(), input));
+                        assert_eq!(target.bound_catalog().bindings().len(), 1);
+                        assert!(!materialization.grants_authority());
+                        assert!(!target.grants_authority());
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert!(entered);
+                assert_eq!(budget.storage(), floor);
+
+                // Missing allocation metadata is graph-valid for this ordinary
+                // marker-free emission, but not the source-derived full catalog.
+                {
+                    let (omitted, receipt) = Catalog::from_rows_with_budget(
+                        *input.semantic_source(),
+                        input.definitions(),
+                        &[],
+                        &mut budget,
+                    )
+                    .unwrap();
+                    budget.reserve_storage(receipt.retained_storage()).unwrap();
+                    graph_binding_without_markers(source.executable(), &omitted, &mut budget);
+                    graph_binding_without_markers(&bound, &omitted, &mut budget);
+                    let retained = budget.storage();
+                    let rejected = with_native_input_relations_v1(
+                        &source,
+                        &bound,
+                        &omitted,
+                        profile,
+                        &mut budget,
+                        |_, _, _| panic!("incomplete source catalog entered local continuation"),
+                    );
+                    assert!(matches!(rejected, Err(ProductionPipelineError::CheckedOutputMemoryTarget(
+                        CheckedOutputMemoryTargetErrorV1::LocalRelation(
+                            CheckedOutputLocalRelationErrorV1::Materialization(
+                                fe2o3_lower_mir_kernel::SuppliedNativeMaterializationErrorV1::Invalid("complete source catalog bytes")
+                            )
+                        )
+                    ))));
+                    assert_eq!(budget.storage(), retained);
+                }
+                budget
+                    .release_storage(budget.storage().checked_sub(floor).unwrap())
+                    .unwrap();
+
+                // This is a proved relocated catalog, not merely a different
+                // pointer to byte-identical N/B/O metadata.
+                let rejected = with_native_input_relations_v1(
+                    &source,
+                    &bound,
+                    output,
+                    profile,
+                    &mut budget,
+                    |_, _, _| panic!("relocated output rows entered input continuation"),
+                );
+                assert!(matches!(
+                    rejected,
+                    Err(ProductionPipelineError::CheckedOutputMemoryTarget(
+                        CheckedOutputMemoryTargetErrorV1::LocalRelation(
+                            CheckedOutputLocalRelationErrorV1::Catalog(_)
+                        )
+                    ))
+                ));
+                assert_eq!(budget.storage(), floor);
+            }
+            // View, coordinates, checked O, and B all end before release.
+            budget
+                .release_storage(budget.storage().checked_sub(source_floor).unwrap())
+                .unwrap();
+            assert_eq!(budget.storage(), source_floor);
+            assert!(budget.work() > previous);
+            previous = budget.work();
+        }
+        drop(source);
+        budget
+            .release_storage(owner_storage + capture.retained_storage())
+            .unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+        budget.release_storage(PREFIX).unwrap();
     }
 }
