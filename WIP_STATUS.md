@@ -1,4 +1,4 @@
-# Issue 271 Address-Correspondence Checkpoint
+# Issue 271 Actual-Collector Address Correspondence
 
 Reviewable WIP, not default activation or tutorial qualification. Do not merge
 this historical tree wholesale over current main. M5/M7 remain active; no
@@ -10,87 +10,85 @@ acceptance milestone is newly complete.
 - Checkout: /home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913.
 - Checkout HEAD: 10b190b8267c0c4011b4ef6bbb52680a3c44b391.
 - Source: 5,069 files, manifest SHA256
-  624245e3cbbed8c58419fc05ba46ca46a811cfd52ee938adfcd2d9b661a5b960.
-- Previous published WIP: 1c2bb6404fb42034f8390100a3805821c4b3c336,
-  source c1a85b1b414cd62b8487338819c79d77ce834f9df6dc31e35c161efefe290082.
+  4781066c8495229411633d0ade83450c1734468002d20afa1b35f64ef6abe8c0.
+- Previous published WIP: 3d524469941d8a3725219015aee222fff7ca3044,
+  source 624245e3cbbed8c58419fc05ba46ca46a811cfd52ee938adfcd2d9b661a5b960.
 
 The source checkout HEAD/index remain unchanged. This status is outside the
 source manifest; snapshot construction verifies every source Git blob.
 
 ## New Work
 
-The private physical-address relation can now compare the full Expression
-projection with the checked canonical getter/Store relation (R2). It uses the
-genuine original materialized program (N), actual optimized Store/GEP identities
-(O), retained source SSA occurrences, and the same original reference object.
-The scalar index is the witness SSA value, not the Option call-return value.
-The extent is the original slice formal's length. Separate statement/getter
-event-key formats and full/checked-projection identifiers remain distinct.
+An explicit diagnostic selector, FE2O3_EXTRACT_COLLECTED_ADDRESSES_V1=1, now
+checks the full Expression/R1 prefix from the original materialized semantic
+program (N), followed by D/P/R2 against each actual optimized root (O). This
+reuses the private physical-address relation from the previous WIP. The
+original references must be genuinely empty; they are never cleared or
+substituted. Nonempty references retain their existing refusal.
 
-The check retains exact owners, root, ledger, source sites, scalar width,
-allocation, offsets and query-wide consistent claims. Preparation happens once
-per query, not once per Store. The additional capture, transfer, preparation
-and Store work is prepaid; expanded headers and retained vector capacity are
-accounted for. No new public identity leaf, functional theorem, aggregate
-owner, reference discharge, resource limit or default route is introduced.
+The shared prefix preserves source admission and resource checks. The existing
+source-custody wrapper still requires functional Some and aggregate coherence;
+the diagnostic retains functional None and aggregate absence. The diagnostic
+does not grant source-proof, artifact, launch, or default-route authority.
+Exact root/access counts and a completion line are emitted only after the
+bounded writer and all outer postflight checks succeed.
 
-Exactly three source paths change from the previous WIP:
+Eight source paths change from the previous WIP, all under
+crates/rustc-codegen-fe2o3:
 
-- crates/fe2o3-lower-mir-kernel/src/production_source_output_control_coverage_v1.rs
-- crates/fe2o3-lower-mir-kernel/src/production_source_output_functional_address_v1.rs
-- crates/rustc-codegen-fe2o3/src/production_ranked_projection_v1/physical_address_v1_tests.rs
+- src/production_ranked_projection_v1/checked_output_source_join_v1.rs
+- src/production_checked_output_pipeline_v1.rs
+- src/production_rustc_driver_v1.rs
+- src/lib.rs
+- src/bin/fe2o3-rustc-extract.rs
+- tests/reference_binding_v1.rs
+- src/production_ranked_projection_v1/checked_output_source_join_v1_tests.rs
+- src/production_ranked_projection_v1/checked_output_local_relations_v1_tests.rs
+
+The last path changes only a formatting-sensitive source audit: it narrows the
+audit to its wrapper and normalizes whitespace while retaining the assertion
+that source gates run before continuation. No production check is removed.
 
 ## Qualification
 
-The exact corrected source passed 1,295 tests: 401 lowerer library tests,
-876 backend library tests (116.23s), and 18 extractor tests (0.02s).
-All source/helper guards passed. These are CPU compiler tests, not a fresh
-actual-collector, tutorial, hardware or proof-runtime qualification.
+The exact corrected source passed 1,304 ordinary compiler tests:
 
-The corrected source passed all 401 lowerer library tests (8.21s), including
-the four new components. An earlier broad attempt passed 400 and failed one
-new component oracle, stopping before the backend suite. Its unsupported
-invocation cases are excluded by the existing indexer, before the later leaf
-matcher. The test-only correction now checks the surviving compiled fields,
-actual index absence, and exact earlier refusal. Production is unchanged.
+- 401 lowerer library tests, 17.75s.
+- 883 backend library tests, 289.24s.
+- 20 extractor tests, 0.04s.
 
-Before that test-only correction, all 29 focused backend tests passed (14.30s).
-Those tests also passed in the corrected-source 876-test backend suite and
-are included in, not additional to, the 1,295-test total above.
-They include the 22 unchanged prerequisite cases and seven new tests. Genuine
-full Expression/R1/D/P/R2 positives cover gfx942/gfx950, both discriminator
-modes and one/two Stores. Negatives cover claims, Option/witness confusion,
-foreign owners/ledgers, source sites, widths, callback errors and exact panic
-payloads, with storage-floor restoration and reentry. The width mutation
-actually reached the exact R2 refusal on both profiles, not an earlier R1 gate.
+All source/helper guards passed. The integration harness also built
+successfully with guards intact. Logs in the diagnostics checkout:
 
-Source/helper guards passed after completed qualification commands. Logs:
-v257-clean-v340-getmut-r2-focused.N5iRuUHC,
-v257-clean-v340-getmut-r2-lowerer-corrected.1XatTrac, and
-v257-clean-v340-getmut-r2-backend-extractor.KagOBeza.
+- v257-clean-v344-collected-r2-lowerer.ijovI1nm
+- v257-clean-v344-collected-r2-audit-corrected.6I8wfSiv
+- v257-clean-v344-collected-r2-integration-build.durJ0TKr
+
+The earlier source passed 882 backend tests and failed the formatting-sensitive
+audit described above; extractor tests did not run on that failed attempt.
+The corrected-source results above supersede it, without treating it as a pass.
+
+Seven exact ignored actual-collector cases and a retained positive transcript
+are being run separately with freshly built binaries, source/tool/config
+guards, bounded logs, and owned scratch cleanup. They have NOT yet qualified
+this snapshot. In particular, passing semantic-factory tests does not establish
+that fresh rustc-collected getter programs pass the N-only Expression prefix.
 
 ## Remaining Boundaries
 
-These positives use admitted semantic factories, not fresh rustc collection.
-They retain honest functional None and no aggregate execution. Their original
-reference bindings are genuinely empty; this does not discharge nonempty
-reference obligations. An actual-collector follow-on is being designed around
-existing unannotated getter fixtures. Reference-annotated sources retain their
-separate proof-runtime and source-custody gates.
+Separate one-short tests at the private 32/24 charge boundaries and hostile
+captured-event objects remain gaps. The inherited physical relation still
+refuses differing N/O function ordinals. No arbitrary helper, wrapper, phi,
+reordered-function, source-functional Some or default-activation claim follows.
 
-Separate one-short tests at the new private 32/24 charge boundaries and hostile
-captured-event objects remain gaps; insertion/transfer components do not stand
-in for those tests. The inherited physical relation still refuses differing
-N/O function ordinals. No arbitrary helper, wrapper, phi, reordered-function,
-source-functional Some or default-activation claim follows.
+Approved Verus runtime qualification remains deferred, not passed. Native/LLVM/
+ABI, simulation, hardware, all-tutorial qualification, legacy retirement and
+final production integration remain pending. The tutorial website evidence
+pin has not advanced.
 
-The older three actual-collector integrations belong only to source 26b2f152,
-not this snapshot. Approved Verus runtime qualification remains deferred, not
-passed. Native/LLVM/ABI, simulation, hardware, all-tutorial qualification,
-legacy retirement and final production integration remain pending.
-
-Both main branches separately contain e7aff682c054e152c2256dae1da63ecfcce12fe3.
-The newer main-based race-name census and Pliron dependency update are a
-separate local candidate, not part of this historical WIP. Its independent
-tests cannot qualify this snapshot, and vice versa. CPU and #272 WIP branches
-are unchanged. The tutorial website evidence pin has not advanced.
+Both main branches separately contain d5424f5bf00b7531e11380a86d5d2cb71603807c,
+including the race-name accounting fix and tested Pliron dependency update.
+That batch removes the scalar-attention storage-budget refusal but exposes a
+later missing-ranked-effect correspondence failure. Pipelined attention still
+refuses a multiply-defined scalar. Main tests cannot qualify this historical
+snapshot, or vice versa. CPU and issue 272 WIP branches are unchanged.

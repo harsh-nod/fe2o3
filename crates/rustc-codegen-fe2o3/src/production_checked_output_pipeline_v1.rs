@@ -466,6 +466,34 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
+        self.with_collected_shape_inputs_v1(
+            |source, bound, checked, _inputs, references, profile, budget| {
+                next(
+                    source,
+                    bound,
+                    checked,
+                    references.as_slice(),
+                    profile,
+                    budget,
+                )
+            },
+        )
+    }
+
+    // Diagnostic-only lending of the original stage's inputs. No source proof
+    // capability is constructed, and the old shape callback remains an adapter.
+    pub(crate) fn with_collected_shape_inputs_v1(
+        self,
+        next: impl FnOnce(
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+            &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+            &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+            &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<(), String>,
+    ) -> Result<(), String> {
         if !self.stage.transaction.compiler_custody.is_extraction_only() {
             return Err("collected shape observation requires extraction-only custody".to_owned());
         }
@@ -483,7 +511,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                             &stage.materialized,
                             bound,
                             checked,
-                            stage.bindings.reference_effect_bindings.as_slice(),
+                            &stage.ranked_roots,
+                            &stage.bindings.reference_effect_bindings,
                             stage.bindings.rustc_target.profile(),
                             budget,
                         ))

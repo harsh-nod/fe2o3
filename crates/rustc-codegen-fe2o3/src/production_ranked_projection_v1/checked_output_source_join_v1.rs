@@ -176,6 +176,56 @@ pub(crate) fn with_source_ranked_custody_v1<T>(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<T, SourceJoinPipelineErrorV1>,
 ) -> Result<T, SourceJoinPipelineErrorV1> {
+    with_source_ranked_prefix_v1(
+        materialized,
+        inputs,
+        references,
+        budget,
+        |_source, original, verification, effects, partition, recorders, budget| {
+            require_source_functional_roster_v1(verification, inputs.len(), budget).and_then(|()| {
+                budget.charge_work(2).map_err(|error| {
+                    SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error))
+                })?;
+                budget
+                    .reserve_storage(std::mem::size_of::<SourceRankedCustodyV1<'_>>())
+                    .map_err(|error| {
+                        SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error))
+                    })?;
+                next(
+                    &SourceRankedCustodyV1 {
+                        materialized,
+                        original,
+                        verification,
+                        inputs,
+                        references,
+                        partition,
+                        effects,
+                        recorders,
+                    },
+                    budget,
+                )
+            })
+        },
+    )
+}
+
+// Source-only full projection and R1, without the capability-producing gate.
+// Only the existing wrapper above constructs SourceRankedCustodyV1.
+fn with_source_ranked_prefix_v1<T>(
+    materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    inputs: &[ProductionRankedRootInputV1],
+    references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl for<'scope> FnOnce(
+        &'scope RankedProjectionSourceV1<'scope>,
+        &'scope fe2o3_lower_mir_kernel::ProductionBorrowedRankedCorrespondenceV1<'scope>,
+        &'scope AuthenticatedRankedVerificationRosterV1,
+        &'scope DefinedCallableEmptyEffectSummariesV1,
+        &'scope [crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1],
+        &'scope [canonical_memory_control_v1::CanonicalMemoryControlRecorderV1],
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<T, SourceJoinPipelineErrorV1>,
+) -> Result<T, SourceJoinPipelineErrorV1> {
     let source = RankedProjectionSourceV1::from_legacy(materialized)
         .map_err(SourceJoinPipelineErrorV1::RankedProjection)?;
     source
@@ -236,16 +286,7 @@ pub(crate) fn with_source_ranked_custody_v1<T>(
             session.with_recording_budget_v1(|budget| {
                 let result = with_authenticated_borrowed_ranked_source_roster_v1(
                     materialized, roots, budget, |original, verification, budget| {
-                        let result = require_source_functional_roster_v1(verification, inputs.len(), budget)
-                            .and_then(|()| {
-                                budget.charge_work(2).map_err(|error| SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error)))?;
-                                budget.reserve_storage(std::mem::size_of::<SourceRankedCustodyV1<'_>>())
-                                    .map_err(|error| SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error)))?;
-                                next(&SourceRankedCustodyV1 {
-                                materialized, original, verification, inputs, references, partition, effects,
-                                recorders: &recorders,
-                                }, budget)
-                            });
+                        let result = next(&source, original, verification, effects, partition, &recorders, budget);
                         Ok(result)
                     },
                 );
@@ -253,4 +294,85 @@ pub(crate) fn with_source_ranked_custody_v1<T>(
             })
         })
     }).map_err(SourceJoinPipelineErrorV1::RankedProjection)?
+}
+
+// An extraction-only consistency diagnostic. No relation or proof owner escapes;
+// the final callback receives only observed counts. It is not the Some gate.
+pub(crate) fn observe_collected_ranked_addresses_v1<'owners>(
+    view: &fe2o3_lower_mir_kernel::ProductionSourceOutputOccurrencesV1<'owners, 'owners>,
+    inputs: &[ProductionRankedRootInputV1],
+    references: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    next: impl FnOnce(
+        usize,
+        usize,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), String>,
+) -> Result<(), String> {
+    use fe2o3_lower_mir_kernel::ProductionSourceOutputErrorV1 as Output;
+    // Entry/empty-reference/input checks and fixed report setup. No reservation
+    // precedes the shared prefix's original live source/capture floor checks.
+    budget.charge_work(6).map_err(|error| error.to_string())?;
+    if !references.as_slice().is_empty() {
+        return Err("collected address diagnostic requires original empty reference bindings; source-proof=not-run".to_owned());
+    }
+    if inputs.is_empty() {
+        return Err(
+            "collected address diagnostic requires a nonempty original root roster".to_owned(),
+        );
+    }
+    let materialized = view.source();
+    with_source_ranked_prefix_v1(
+        materialized, inputs, references, budget,
+        |source, original, verification, effects, partition, recorders, budget| {
+            budget.charge_work(4).map_err(|error| SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error)))?;
+            if original.root_count() != inputs.len()
+                || verification.root_count() != inputs.len()
+                || recorders.len() != inputs.len()
+                || partition.len() != inputs.len()
+            {
+                return Err(SourceJoinPipelineErrorV1::RankedProjection(
+                    ProductionRankedProjectionErrorV1::Incomplete("collected address diagnostic source rosters differ"),
+                ));
+            }
+            budget.reserve_storage(std::mem::size_of::<[usize; 2]>())
+                .map_err(|error| SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error)))?;
+            let mut completed = [0usize; 2];
+            checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| {
+                with_prepared_canonical_memory_session_v1(source, inputs, effects, partition, session, |analyses, budget| {
+                    // This final cardinality check is prepaid by entry work.
+                    if analyses.len() != inputs.len() {
+                        return Err(Output::Invalid("collected address diagnostic output roster differs"));
+                    }
+                    for (ordinal, ((analysis, recorder), verified)) in analyses.iter()
+                        .zip(recorders).zip(verification.roots()).enumerate()
+                    {
+                        // Zipped row, None/aggregate check, relation wrapper,
+                        // access count and two checked report additions.
+                        budget.charge_work(6).map_err(Output::Resource)?;
+                        if verified.verification().has_authenticated_functional_verification()
+                            || verified.verification().aggregate_verus_execution().is_some()
+                        {
+                            return Err(Output::Invalid("collected address diagnostic expected actual functional None and absent aggregate"));
+                        }
+                        let accesses = analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                            relation.check_borrowed_ranked_addresses_v1(original, ordinal, recorder.candidate(), budget)?;
+                            Ok(relation.global_access_count())
+                        })?;
+                        completed[0] = completed[0].checked_add(1).ok_or(Output::Resource(
+                            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                        ))?;
+                        completed[1] = completed[1].checked_add(accesses).ok_or(Output::Resource(
+                            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+                        ))?;
+                    }
+                    Ok(())
+                })
+            }).map_err(SourceJoinPipelineErrorV1::RankedProjection)?;
+            budget.charge_work(2).map_err(|error| SourceJoinPipelineErrorV1::RankedProjection(source_join_resource_v1(error)))?;
+            // D/P/R2 have completed and dropped. The source/R1 and outer
+            // endpoint postflights still precede the driver's final marker.
+            Ok(next(completed[0], completed[1], budget))
+        },
+    ).map_err(|error| error.to_string())?
 }

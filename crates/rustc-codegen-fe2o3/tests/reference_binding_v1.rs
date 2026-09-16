@@ -3,6 +3,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const COLLECTED_SHAPE_COMPLETE: &str = "fe2o3 collected-shape: complete; source-proof=not-run; artifact-authority=false; launch-authority=false";
+const COLLECTED_ADDRESSES_COMPLETE: &str = "fe2o3 collected-addresses: complete; source-proof=not-run; artifact-authority=false; launch-authority=false";
 
 struct ScratchTarget(PathBuf);
 
@@ -35,6 +36,14 @@ fn workspace() -> PathBuf {
 }
 
 fn run_collected_shape(feature: &str, profile: &str) -> (bool, String) {
+    run_collected_observation(feature, profile, false)
+}
+
+fn run_collected_addresses(feature: &str, profile: &str) -> (bool, String) {
+    run_collected_observation(feature, profile, true)
+}
+
+fn run_collected_observation(feature: &str, profile: &str, addresses: bool) -> (bool, String) {
     // A fresh target directory is essential: a Cargo-fresh result did not run
     // this invocation's selected rustc callback.
     let target = ScratchTarget::new();
@@ -45,7 +54,8 @@ fn run_collected_shape(feature: &str, profile: &str) -> (bool, String) {
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", format!("-Zalways-encode-mir -Ctarget-cpu={profile} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"))
-        .env("FE2O3_EXTRACT_COLLECTED_SHAPE_V1", "1")
+        .env_remove("FE2O3_EXTRACT_COLLECTED_SHAPE_V1")
+        .env_remove("FE2O3_EXTRACT_COLLECTED_ADDRESSES_V1")
         .env("RUSTC_WORKSPACE_WRAPPER", env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
         .env("FE2O3_EXTRACT_CRATE_V1", "fe2o3_production_extraction_fixture");
     for variable in [
@@ -64,6 +74,14 @@ fn run_collected_shape(feature: &str, profile: &str) -> (bool, String) {
     ] {
         command.env_remove(variable);
     }
+    command.env(
+        if addresses {
+            "FE2O3_EXTRACT_COLLECTED_ADDRESSES_V1"
+        } else {
+            "FE2O3_EXTRACT_COLLECTED_SHAPE_V1"
+        },
+        "1",
+    );
     let output = command
         .args([
             "check",
@@ -78,11 +96,98 @@ fn run_collected_shape(feature: &str, profile: &str) -> (bool, String) {
         .arg(&target.0)
         .args(["--no-default-features", "--features", feature])
         .output()
-        .expect("run actual collected shape diagnostic");
+        .expect("run actual collected diagnostic");
     (
         output.status.success(),
         String::from_utf8(output.stderr).expect("UTF-8 diagnostic"),
     )
+}
+
+fn require_collected_addresses_success(success: bool, stderr: &str, profile: &str, roots: usize) {
+    assert!(
+        success,
+        "actual collected address relation failed:\n{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| *line == COLLECTED_ADDRESSES_COMPLETE)
+            .count(),
+        1,
+        "missing unique address postflight completion:\n{stderr}"
+    );
+    let profile = match profile {
+        "gfx942" => "Gfx942",
+        "gfx950" => "Gfx950",
+        other => panic!("unexpected test profile {other}"),
+    };
+    let expected = format!(
+        "fe2o3 collected-addresses: incomplete; profile={profile}; references=0; checked-roots={roots}; global-accesses={roots}; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false"
+    );
+    assert_eq!(
+        stderr.lines().filter(|line| *line == expected).count(),
+        1,
+        "actual root/access/None report does not match fixture:\n{stderr}"
+    );
+    assert!(!stderr.lines().any(|line| line == COLLECTED_SHAPE_COMPLETE));
+    assert!(!stderr.contains("functional-refinement proof runtime unavailable"));
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual gfx942/gfx950 collection; no proof runtime"]
+fn collected_addresses_checks_all_getmut_roots_on_both_profiles() {
+    for profile in ["gfx942", "gfx950"] {
+        let (success, stderr) = run_collected_addresses("multi-root-ownership", profile);
+        require_collected_addresses_success(success, &stderr, profile, 2);
+    }
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual AMD collection; no proof runtime"]
+fn collected_addresses_checks_three_root_roster() {
+    let (success, stderr) = run_collected_addresses("three-root-ownership", "gfx942");
+    require_collected_addresses_success(success, &stderr, "gfx942", 3);
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual AMD collection; no proof runtime"]
+fn collected_addresses_retains_nonempty_reference_refusal() {
+    for feature in ["reference-positive", "reference-mutated"] {
+        let (success, stderr) = run_collected_addresses(feature, "gfx942");
+        assert!(
+            !success,
+            "nonempty original references unexpectedly accepted:\n{stderr}"
+        );
+        assert!(stderr.contains("collected address diagnostic requires original empty reference bindings; source-proof=not-run"),
+            "wrong reference refusal:\n{stderr}");
+        assert!(!stderr.contains("functional-refinement proof runtime unavailable"));
+        assert!(
+            !stderr
+                .lines()
+                .any(|line| line == COLLECTED_ADDRESSES_COMPLETE)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and actual AMD collection; no proof runtime"]
+fn collected_addresses_preserves_source_admission_refusals() {
+    for (feature, expected) in [
+        ("reference-unsafe", "is declared unsafe"),
+        (
+            "reference-abi-mismatch",
+            "logical ABI mismatch at argument 1",
+        ),
+    ] {
+        let (success, stderr) = run_collected_addresses(feature, "gfx942");
+        assert!(!success, "source admission unexpectedly passed:\n{stderr}");
+        assert!(stderr.contains(expected), "wrong source refusal:\n{stderr}");
+        assert!(
+            !stderr
+                .lines()
+                .any(|line| line == COLLECTED_ADDRESSES_COMPLETE)
+        );
+    }
 }
 
 fn require_collected_shape_success(success: bool, stderr: &str) {
@@ -181,6 +286,7 @@ fn collected_shape_preserves_unsafe_and_abi_source_admission_refusals() {
 fn run_feature(target: &Path, feature: &str) -> String {
     let output = Command::new(env!("CARGO"))
         .current_dir(workspace())
+        .env_remove("FE2O3_EXTRACT_COLLECTED_ADDRESSES_V1")
         .env(
             "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
             "55".repeat(32),

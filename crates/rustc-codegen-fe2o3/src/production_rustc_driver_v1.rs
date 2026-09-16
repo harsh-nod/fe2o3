@@ -19,6 +19,7 @@ const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
     collected_shape: bool,
+    collected_addresses: bool,
     amdgpu_llvm_output: Option<PathBuf>,
     expected_llvm_target: Option<&'static str>,
     compiler_handoff_output: Option<(PathBuf, Option<&'static str>)>,
@@ -29,6 +30,10 @@ struct ProductionExtractionCallbacksV1 {
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        if self.collected_addresses {
+            self.result = Some(extract_collected_addresses_in_active_session_v1(tcx));
+            return Compilation::Stop;
+        }
         if self.collected_shape {
             self.result = Some(extract_collected_shape_in_active_session_v1(tcx));
             return Compilation::Stop;
@@ -127,6 +132,7 @@ fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
 }
 
 const COLLECTED_SHAPE_COMPLETE_V1: &str = "fe2o3 collected-shape: complete; source-proof=not-run; artifact-authority=false; launch-authority=false\n";
+const COLLECTED_ADDRESSES_COMPLETE_V1: &str = "fe2o3 collected-addresses: complete; source-proof=not-run; artifact-authority=false; launch-authority=false\n";
 // A diagnostic component bound, not an export-frame or transport limit.
 const COLLECTED_SHAPE_MAX_BYTES_V1: usize =
     fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3;
@@ -153,13 +159,25 @@ impl<'sink, 'budget, 'work, W: std::io::Write> CollectedShapeWriterV1<'sink, 'bu
         budget: &'budget mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'work>,
         limit: usize,
     ) -> Result<Self, CollectedShapeWriteErrorV1> {
+        Self::new_for_completion(sink, budget, limit, COLLECTED_SHAPE_COMPLETE_V1.len())
+    }
+
+    fn new_for_completion(
+        sink: &'sink mut W,
+        budget: &'budget mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'work>,
+        limit: usize,
+        completion_bytes: usize,
+    ) -> Result<Self, CollectedShapeWriteErrorV1> {
         use CollectedShapeWriteErrorV1 as Error;
-        if limit > COLLECTED_SHAPE_MAX_BYTES_V1 - COLLECTED_SHAPE_COMPLETE_V1.len() {
+        if COLLECTED_SHAPE_MAX_BYTES_V1
+            .checked_sub(completion_bytes)
+            .is_none_or(|remaining| limit > remaining)
+        {
             return Err(Error::Capacity);
         }
         // Prepay the final static marker, written only after both postflights.
         budget
-            .charge_work(2 + COLLECTED_SHAPE_COMPLETE_V1.len())
+            .charge_work(2 + completion_bytes)
             .map_err(Error::Resource)?;
         budget
             .reserve_storage(std::mem::size_of::<Self>())
@@ -331,6 +349,55 @@ fn extract_collected_shape_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), S
     // The original callback value is successful only after both existing
     // postflights. Dynamic text above is Debug-escaped and cannot inject this line.
     complete_collected_shape_observation_v1(result, &mut stderr)
+}
+
+fn extract_collected_addresses_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
+    let transaction = transaction_in_active_session_v1(
+        tcx,
+        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+    )?;
+    let mut stderr = std::io::stderr().lock();
+    let result = transaction.with_collected_shape_inputs_v1(
+        |source, bound, checked, inputs, references, profile, budget| {
+            let (coordinates, storage) =
+                dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                    source.executable(), bound, profile, budget,
+                ).map_err(|error| error.to_string())?;
+            budget.reserve_storage(storage.retained_storage())
+                .map_err(|error| error.to_string())?;
+            let (view, storage) =
+                fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                    source, &coordinates, checked, budget,
+                ).map_err(|error| error.to_string())?;
+            budget.reserve_storage(storage.retained_storage())
+                .map_err(|error| error.to_string())?;
+            crate::production_ranked_projection_v1::observe_collected_ranked_addresses_v1(
+                &view, inputs, references, budget,
+                |roots, accesses, budget| {
+                    let write_error = |error| format!("collected address diagnostic failed: {error:?}");
+                    let mut writer = CollectedShapeWriterV1::new_for_completion(
+                        &mut stderr, budget,
+                        COLLECTED_SHAPE_MAX_BYTES_V1 - COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+                        COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+                    ).map_err(write_error)?;
+                    writer.record(format_args!(
+                        "fe2o3 collected-addresses: incomplete; profile={profile:?}; references=0; checked-roots={roots}; global-accesses={accesses}; functional=None; aggregate=absent; source-proof=not-run; artifact-authority=false; launch-authority=false"
+                    )).map_err(write_error)?;
+                    writer.finish().map_err(write_error)
+                },
+            )
+        },
+    );
+    complete_collected_addresses_observation_v1(result, &mut stderr)
+}
+
+fn complete_collected_addresses_observation_v1(
+    result: Result<(), String>,
+    sink: &mut impl std::io::Write,
+) -> Result<(), String> {
+    result?;
+    sink.write_all(COLLECTED_ADDRESSES_COMPLETE_V1.as_bytes())
+        .map_err(|error| format!("collected address completion failed: {error}"))
 }
 
 fn write_collected_shape_report_v1(
@@ -567,6 +634,124 @@ mod collected_shape_tests_v1 {
 
     fn header() -> usize {
         std::mem::size_of::<CollectedShapeWriterV1<'_, '_, '_, Vec<u8>>>()
+    }
+
+    #[test]
+    fn address_writer_prepays_its_own_marker_and_finish_denial_stays_poisoned() {
+        let initial = 2 + COLLECTED_ADDRESSES_COMPLETE_V1.len();
+        assert_ne!(
+            COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+            COLLECTED_SHAPE_COMPLETE_V1.len()
+        );
+        for limit in [initial, initial + 1] {
+            let mut work = Work::new(limit);
+            let mut budget = Budget::new(&mut work, 17 + header());
+            budget.reserve_storage(17).unwrap();
+            let mut bytes = Vec::new();
+            {
+                let mut writer = CollectedShapeWriterV1::new_for_completion(
+                    &mut bytes,
+                    &mut budget,
+                    0,
+                    COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+                )
+                .unwrap();
+                assert_eq!(writer.budget.work(), initial);
+                if limit == initial + 1 {
+                    writer.finish().unwrap();
+                } else {
+                    let error = writer.finish().unwrap_err();
+                    assert!(matches!(
+                        error,
+                        CollectedShapeWriteErrorV1::Resource(Resource::Work(_))
+                    ));
+                    assert_eq!(writer.record(format_args!("")), Err(error));
+                    assert_eq!(writer.finish(), Err(error));
+                    assert_eq!(writer.budget.work(), initial);
+                }
+            }
+            assert!(bytes.is_empty());
+            assert_eq!(budget.storage(), 17 + header());
+            budget.release_storage(header()).unwrap();
+            assert_eq!(budget.storage(), 17);
+        }
+    }
+
+    #[test]
+    fn address_writer_exact_byte_cap_and_large_marker_refusals_are_bounded() {
+        for limit in [1, 2] {
+            let mut work = Work::new(2 + COLLECTED_ADDRESSES_COMPLETE_V1.len() + 16);
+            let mut budget = Budget::new(&mut work, header());
+            let mut bytes = Vec::new();
+            {
+                let mut writer = CollectedShapeWriterV1::new_for_completion(
+                    &mut bytes,
+                    &mut budget,
+                    limit,
+                    COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+                )
+                .unwrap();
+                let result = writer.record(format_args!("x"));
+                if limit == 2 {
+                    result.unwrap();
+                    writer.finish().unwrap();
+                } else {
+                    assert_eq!(result, Err(CollectedShapeWriteErrorV1::Capacity));
+                    assert_eq!(
+                        writer.record(format_args!("")),
+                        Err(CollectedShapeWriteErrorV1::Capacity)
+                    );
+                    assert_eq!(writer.finish(), Err(CollectedShapeWriteErrorV1::Capacity));
+                }
+            }
+            assert_eq!(
+                bytes.as_slice(),
+                if limit == 2 {
+                    b"x\n".as_slice()
+                } else {
+                    b"x".as_slice()
+                }
+            );
+            budget.release_storage(header()).unwrap();
+            assert_eq!(budget.storage(), 0);
+        }
+        for (limit, marker) in [
+            (
+                COLLECTED_SHAPE_MAX_BYTES_V1 - COLLECTED_ADDRESSES_COMPLETE_V1.len() + 1,
+                COLLECTED_ADDRESSES_COMPLETE_V1.len(),
+            ),
+            (0, usize::MAX),
+        ] {
+            let mut work = Work::new(0);
+            let mut budget = Budget::new(&mut work, 0);
+            let mut bytes = Vec::new();
+            assert!(matches!(
+                CollectedShapeWriterV1::new_for_completion(&mut bytes, &mut budget, limit, marker),
+                Err(CollectedShapeWriteErrorV1::Capacity)
+            ));
+            assert_eq!(budget.work(), 0);
+            assert_eq!(budget.storage(), 0);
+            assert!(bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn address_completion_is_suppressed_after_a_report_if_postflight_fails() {
+        // Completion composition component only: actual source/R1 cleanup is
+        // exercised by the genuine prefix tests, not this injected Result.
+        let mut bytes = b"incomplete numeric report\n".to_vec();
+        let original = bytes.clone();
+        assert_eq!(
+            complete_collected_addresses_observation_v1(Err("postflight".to_owned()), &mut bytes),
+            Err("postflight".to_owned())
+        );
+        assert_eq!(bytes, original);
+        complete_collected_addresses_observation_v1(Ok(()), &mut bytes).unwrap();
+        assert_eq!(
+            &bytes[original.len()..],
+            COLLECTED_ADDRESSES_COMPLETE_V1.as_bytes()
+        );
+        assert!(complete_collected_addresses_observation_v1(Ok(()), &mut BrokenSink).is_err());
     }
 
     #[test]
@@ -821,7 +1006,17 @@ mod collected_shape_tests_v1 {
         assert!(body.contains("compiler_custody.is_extraction_only()"));
         assert!(body.contains("with_captured_materialized_target_neutral_v1"));
         assert!(body.contains("with_checked_output_target_endpoint_v1"));
-        assert!(body.contains("stage.bindings.reference_effect_bindings.as_slice()"));
+        let (adapter, shared) = body
+            .split_once("pub(crate) fn with_collected_shape_inputs_v1(")
+            .unwrap();
+        assert!(adapter.contains("self.with_collected_shape_inputs_v1("));
+        let adapter_call: String = adapter.split_whitespace().collect();
+        assert!(
+            adapter_call
+                .contains("next(source,bound,checked,references.as_slice(),profile,budget,)")
+        );
+        assert!(shared.contains("&stage.ranked_roots,"));
+        assert!(shared.contains("&stage.bindings.reference_effect_bindings,"));
         assert!(body.contains("Ok(next("));
         assert!(!body.contains("with_source_ranked_custody_v1"));
         assert!(!body.contains("prove_and_compile"));
@@ -1376,12 +1571,28 @@ pub fn run_production_collected_shape_extraction_driver_v1(args: &[String]) -> R
     )
 }
 
+/// Checks real collected full/R1 and actual-O D/P/R2 with original empty
+/// references. No functional receipt, artifact or launch authority is produced.
+pub fn run_production_collected_addresses_extraction_driver_v1(
+    args: &[String],
+) -> Result<(), String> {
+    run_production_driver_v1(
+        args,
+        ProductionExtractionCallbacksV1 {
+            collected_addresses: true,
+            ..Default::default()
+        },
+        "collected address callback did not reach rustc analysis",
+    )
+}
+
 /// Runs the same production importer followed by generic ranked-memory
 /// construction and verification, without granting artifact authority.
 pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: true,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1405,6 +1616,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1427,6 +1639,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
         compiler_handoff_output: None,
@@ -1470,6 +1683,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: Some((
@@ -1497,6 +1711,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1520,6 +1735,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1543,6 +1759,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1566,6 +1783,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1589,6 +1807,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,
@@ -1612,6 +1831,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
     let callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
         collected_shape: false,
+        collected_addresses: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         compiler_handoff_output: None,

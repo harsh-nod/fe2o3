@@ -10,6 +10,261 @@ mod checked_output_source_join_tests {
     const STORAGE: usize = 64 * 1024 * 1024;
     const PREFIX: usize = 97;
 
+    #[test]
+    fn collected_prefix_retains_real_none_and_old_presence_gate_cost_on_all_roots() {
+        for multiple in [false, true] {
+            with_source(multiple, true, |materialized, inputs, budget| {
+                let references =
+                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+                let floor = budget.storage();
+                let before = budget.work();
+                let mut entered = false;
+                with_source_ranked_prefix_v1(
+                    materialized,
+                    inputs,
+                    &references,
+                    budget,
+                    |source, original, verification, _effects, partition, recorders, _budget| {
+                        entered = true;
+                        assert!(std::ptr::eq(source.materialized(), materialized));
+                        assert!(std::ptr::eq(original.materialized(), materialized));
+                        assert_eq!(original.root_count(), inputs.len());
+                        assert_eq!(verification.root_count(), inputs.len());
+                        assert_eq!(partition.len(), inputs.len());
+                        assert_eq!(recorders.len(), inputs.len());
+                        assert!(partition.iter().all(|part| part.as_slice().is_empty()));
+                        for root in verification.roots() {
+                            assert!(
+                                !root
+                                    .verification()
+                                    .has_authenticated_functional_verification()
+                            );
+                            assert!(root.verification().aggregate_verus_execution().is_none());
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert!(entered);
+                assert_eq!(budget.storage(), floor);
+                let prefix_work = budget.work() - before;
+                let before_gate = budget.work();
+                let mut gated = false;
+                let error = with_source_ranked_custody_v1(
+                    materialized,
+                    inputs,
+                    &references,
+                    budget,
+                    |_, _| {
+                        gated = true;
+                        Ok(())
+                    },
+                )
+                .unwrap_err();
+                assert!(!gated);
+                assert!(matches!(
+                    error,
+                    SourceJoinPipelineErrorV1::RankedVerification(
+                        ProductionRankedVerificationErrorV1::RosterMetadata(
+                            "every source-first root requires retained functional and aggregate custody"
+                        )
+                    )
+                ));
+                // Existing presence gate: roster2 + first missing root4. No
+                // diagnostic entry/report/loop charge enters this old path.
+                assert_eq!(budget.work() - before_gate, prefix_work + 6);
+                assert_eq!(budget.storage(), floor);
+                assert!(references.as_slice().is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn collected_prefix_missing_capture_never_enters_its_callback() {
+        with_source(false, false, |source, inputs, budget| {
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            let floor = budget.storage();
+            let mut entered = false;
+            let error = with_source_ranked_prefix_v1(
+                source,
+                inputs,
+                &references,
+                budget,
+                |_, _, _, _, _, _, _| {
+                    entered = true;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+            assert!(!entered);
+            assert!(matches!(
+                error,
+                SourceJoinPipelineErrorV1::RankedVerification(
+                    ProductionRankedVerificationErrorV1::RosterMetadata(
+                        "source-first SSA capture absent"
+                    )
+                )
+            ));
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+
+    #[test]
+    fn collected_prefix_real_r1_callback_error_and_exact_panic_restore_floor_and_reenter() {
+        with_source(false, true, |source, inputs, budget| {
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            let floor = budget.storage();
+            let before = budget.work();
+            let mut entered = false;
+            let error = with_source_ranked_prefix_v1(
+                source,
+                inputs,
+                &references,
+                budget,
+                |_, original, verification, _, _, _, budget| {
+                    entered = true;
+                    assert!(std::ptr::eq(original.materialized(), source));
+                    assert!(
+                        !verification.roots()[0]
+                            .verification()
+                            .has_authenticated_functional_verification()
+                    );
+                    budget.charge_work(3).unwrap();
+                    Err::<(), _>(SourceJoinPipelineErrorV1::RankedProjection(
+                        ProductionRankedProjectionErrorV1::Incomplete(
+                            "collected prefix callback error",
+                        ),
+                    ))
+                },
+            )
+            .unwrap_err();
+            assert!(entered);
+            assert!(matches!(
+                error,
+                SourceJoinPipelineErrorV1::RankedProjection(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "collected prefix callback error"
+                    )
+                )
+            ));
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > before);
+            let before_panic = budget.work();
+            let mut panic_entered = false;
+            let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_source_ranked_prefix_v1::<()>(
+                    source,
+                    inputs,
+                    &references,
+                    budget,
+                    |_, original, verification, _, _, _, budget| {
+                        panic_entered = true;
+                        assert!(std::ptr::eq(original.materialized(), source));
+                        assert!(
+                            verification.roots()[0]
+                                .verification()
+                                .aggregate_verus_execution()
+                                .is_none()
+                        );
+                        budget.charge_work(3).unwrap();
+                        std::panic::panic_any(0x340_u32);
+                    },
+                )
+            }))
+            .expect_err("completed real R1 callback must unwind");
+            assert!(panic_entered);
+            assert_eq!(payload.downcast_ref::<u32>(), Some(&0x340));
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > before_panic);
+            let before_reentry = budget.work();
+            let mut reentered = false;
+            with_source_ranked_prefix_v1(
+                source,
+                inputs,
+                &references,
+                budget,
+                |_, _, verification, _, _, _, _| {
+                    reentered = true;
+                    assert!(
+                        !verification.roots()[0]
+                            .verification()
+                            .has_authenticated_functional_verification()
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(reentered);
+            assert_eq!(budget.storage(), floor);
+            assert!(budget.work() > before_reentry);
+        });
+    }
+
+    #[test]
+    fn collected_address_source_audit_keeps_n_only_prefix_and_original_presence_gate() {
+        let text = include_str!("checked_output_source_join_v1.rs");
+        let production = text
+            .split("pub(crate) fn with_source_ranked_custody_v1<T>(")
+            .nth(1)
+            .unwrap()
+            .split("fn with_source_ranked_prefix_v1<T>(")
+            .next()
+            .unwrap();
+        assert!(
+            production.find("with_source_ranked_prefix_v1(").unwrap()
+                < production
+                    .find("require_source_functional_roster_v1(")
+                    .unwrap()
+        );
+        assert!(
+            production
+                .find("require_source_functional_roster_v1(")
+                .unwrap()
+                < production.find("&SourceRankedCustodyV1 {").unwrap()
+        );
+        let prefix = text
+            .split("fn with_source_ranked_prefix_v1<T>(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn observe_collected_ranked_addresses_v1")
+            .next()
+            .unwrap();
+        assert!(prefix.contains("with_canonical_assertions_source_budget_v1("));
+        assert!(!prefix.contains("with_checked_output_assertions_view_budget_v1("));
+        let diagnostic = text
+            .split("pub(crate) fn observe_collected_ranked_addresses_v1")
+            .nth(1)
+            .unwrap();
+        assert!(
+            diagnostic
+                .find("if !references.as_slice().is_empty()")
+                .unwrap()
+                < diagnostic.find("with_source_ranked_prefix_v1(").unwrap()
+        );
+        assert!(
+            diagnostic.find("with_source_ranked_prefix_v1(").unwrap()
+                < diagnostic
+                    .find("with_checked_output_assertions_view_budget_v1(")
+                    .unwrap()
+        );
+        assert!(
+            diagnostic.find("partition.len() != inputs.len()").unwrap()
+                < diagnostic
+                    .find("with_prepared_canonical_memory_session_v1(")
+                    .unwrap()
+        );
+        for forbidden in [
+            "SourceRankedCustodyV1 {",
+            "with_complete_formal_memory_module_v1(",
+            "AuthenticatedReferenceEffectBindingsV1::default",
+            "prove_and_compile(",
+        ] {
+            assert!(!diagnostic.contains(forbidden));
+        }
+    }
+
     fn with_source(
         multiple: bool,
         capture: bool,

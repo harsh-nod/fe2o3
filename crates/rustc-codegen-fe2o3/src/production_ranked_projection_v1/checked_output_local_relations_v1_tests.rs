@@ -1181,10 +1181,15 @@ mod checked_output_local_relations_tests {
         ] {
             assert!(source.contains(gate));
         }
-        let source_gate = source
+        let source_gate: String = source
             .split("pub(crate) fn with_source_ranked_custody_v1<T>(")
             .nth(1)
-            .unwrap();
+            .unwrap()
+            .split("fn with_source_ranked_prefix_v1<T>(")
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect();
         assert!(
             source_gate
                 .find("require_source_functional_roster_v1(")
