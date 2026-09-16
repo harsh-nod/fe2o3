@@ -1067,7 +1067,7 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                     .unwrap(),
                 )
                 .unwrap();
-                let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(
+                let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(
                     &typed_bundle_path,
                     &request_path,
                 )
