@@ -1,3 +1,170 @@
+#[test]
+fn dynamic_local_array_and_slice_guards_share_authenticated_component_indices() {
+    let (mut types, original) = ordinary_component_payload_fixture();
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(210)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(210)),
+        SemanticTypeLayoutV1::new(Some(1), 1).unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+    ));
+    let slice_type = SemanticTypeIdV1::from_index(5);
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(211)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(211)),
+        SemanticTypeLayoutV1::new(None, 4).unwrap(),
+        SemanticTypeShapeV1::Slice {
+            element: SCALAR_TYPE,
+        },
+    ));
+    let mut blocks = original.blocks().to_vec();
+    let fixed_comparison = typed_assignment(
+        4,
+        BOOL_TYPE,
+        SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left: typed_operand(3, SCALAR_TYPE),
+            right: constant(4),
+        },
+    );
+    blocks[1] = block(
+        212,
+        vec![blocks[1].statements()[0].clone(), fixed_comparison],
+        SemanticTerminatorKindV1::Assert {
+            condition: typed_operand(4, BOOL_TYPE),
+            expected: true,
+            message: SemanticAssertMessageV1::BoundsCheck {
+                length: constant(4),
+                index: typed_operand(3, SCALAR_TYPE),
+            },
+            target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 4),
+            unwind: SemanticUnwindActionV1::Unreachable,
+        },
+    );
+    blocks.push(block(
+        213,
+        vec![
+            typed_assignment(
+                5,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Length(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(6), vec![], slice_type)
+                        .unwrap(),
+                ),
+            ),
+            typed_assignment(
+                7,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left: typed_operand(3, SCALAR_TYPE),
+                    right: typed_operand(5, SCALAR_TYPE),
+                },
+            ),
+        ],
+        SemanticTerminatorKindV1::Assert {
+            condition: typed_operand(7, BOOL_TYPE),
+            expected: true,
+            message: SemanticAssertMessageV1::BoundsCheck {
+                length: typed_operand(5, SCALAR_TYPE),
+                index: typed_operand(3, SCALAR_TYPE),
+            },
+            target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 5),
+            unwind: SemanticUnwindActionV1::Unreachable,
+        },
+    ));
+    blocks.push(block(214, vec![], SemanticTerminatorKindV1::Return));
+    let mut locals = original.locals().to_vec();
+    locals.extend([
+        local(215, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+        local(216, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+        local(217, slice_type, SemanticLocalRoleV1::Argument(0)),
+        local(218, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+    ]);
+    let function = projection_function_with_locals(blocks, locals);
+    let dominance = SemanticEnumPayloadDominanceV1::analyze(&function, &types).unwrap();
+    let mut payloads = vec![None; function.locals().len()];
+    let expected = ProductionRankedValueV1::Argument(7);
+    payloads[1] = Some(expected);
+    let ordinary = bind_component_index_enum_payloads_v1(
+        &function,
+        &payloads,
+        &local_definition_counts(&function),
+        &vec![false; function.locals().len()],
+        &[PendingEnumPayloadLoadV1 {
+            carrier: 1,
+            variant: 1,
+            destination: 3,
+            use_block: 1,
+            statement: 0,
+        }],
+        &dominance,
+    )
+    .unwrap();
+    let mut operations = vec![];
+    let checks = project_rust_bounds_checks_with_ordinary_v1(
+        &types,
+        &function,
+        0,
+        &[],
+        &ordinary,
+        Some(&dominance),
+        &mut operations,
+        &mut 0,
+    )
+    .unwrap();
+    assert_eq!(checks.checks.len(), 2);
+    assert!(checks.checks.iter().all(|check| check.index == expected));
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|operation| matches!(
+                operation,
+                ProductionRankedOperationV1::IndexUnknown { .. }
+            ))
+            .count(),
+        1,
+        "only the slice extent is unknown; the shared index must retain its identity"
+    );
+    let index_local = SemanticLocalIdV1::from_index(3);
+    let mut values = vec![None; function.locals().len()];
+    for _ in 0..2 {
+        reconcile_bounds_ordinary_index_v1(
+            1,
+            index_local,
+            &ordinary,
+            Some(&dominance),
+            &mut values,
+        )
+        .unwrap();
+        assert_eq!(values[3], Some(expected));
+    }
+    values[3] = Some(ProductionRankedValueV1::Argument(8));
+    assert!(
+        reconcile_bounds_ordinary_index_v1(
+            1,
+            index_local,
+            &ordinary,
+            Some(&dominance),
+            &mut values
+        )
+        .is_err()
+    );
+    values[3] = None;
+    assert!(
+        reconcile_bounds_ordinary_index_v1(
+            2,
+            index_local,
+            &ordinary,
+            Some(&dominance),
+            &mut values
+        )
+        .is_err()
+    );
+    assert!(
+        reconcile_bounds_ordinary_index_v1(1, index_local, &ordinary, None, &mut values).is_err()
+    );
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct FixedGuardOptions {
     wrong_comparison: bool,
@@ -58,7 +225,7 @@ fn fixed_guard_function(options: FixedGuardOptions) -> SemanticFunctionDeclV1 {
         statements.push(assign(
             2,
             U64_TYPE,
-            SemanticRvalueKindV1::Use(bound(1_u128 << 32)),
+            SemanticRvalueKindV1::Use(operand(4, U64_TYPE)),
         ));
     }
     if options.mutated_array {
@@ -99,6 +266,7 @@ fn fixed_guard_function(options: FixedGuardOptions) -> SemanticFunctionDeclV1 {
             local(194, ARRAY_TYPE, SemanticLocalRoleV1::Temporary),
             local(195, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
             local(196, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            local(197, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
         ],
     )
 }
