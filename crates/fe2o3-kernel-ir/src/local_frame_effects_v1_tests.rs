@@ -1020,8 +1020,33 @@ fn exact_scalar_slot_load_and_direct_gep_zero_alias_transport_the_index() {
 
 #[test]
 fn every_unknown_overwrite_clears_a_slot_and_known_reinitialization_restores_it() {
-    for alias_zero in [false, true] {
-        let mut unknown = retained_index(alias_zero);
+    for (initial_alias, unknown_alias, restored_alias) in [
+        (false, false, false),
+        (true, false, false),
+        (false, false, true),
+        (false, true, false),
+        (false, true, true),
+        (true, false, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        let mut unknown = retained_index(initial_alias);
+        if !initial_alias && (unknown_alias || restored_alias) {
+            // Define the alias before the original direct Store without changing it.
+            operations(&mut unknown).splice(
+                3..3,
+                [
+                    constant(73, Constant::Index(0)),
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(74), pointer(scalar())),
+                        OperationKind::GetElementPointer {
+                            base: ValueId(70),
+                            offset: ValueId(73),
+                        },
+                    ),
+                ],
+            );
+        }
         unknown.functions[0].signature.parameters = vec![scalar()];
         unknown.functions[0].body.as_mut().unwrap().parameters = vec![ValueId(9)];
         let load = operations(&mut unknown)
@@ -1038,7 +1063,7 @@ fn every_unknown_overwrite_clears_a_slot_and_known_reinitialization_restores_it(
             Operation::new(
                 vec![],
                 OperationKind::Store {
-                    pointer: ValueId(70),
+                    pointer: ValueId(if unknown_alias { 74 } else { 70 }),
                     value: ValueId(9),
                     access: MemoryAccess::new(AddressSpace::Private, 4),
                 },
@@ -1054,7 +1079,7 @@ fn every_unknown_overwrite_clears_a_slot_and_known_reinitialization_restores_it(
             Operation::new(
                 vec![],
                 OperationKind::Store {
-                    pointer: ValueId(70),
+                    pointer: ValueId(if restored_alias { 74 } else { 70 }),
                     value: ValueId(80),
                     access: MemoryAccess::new(AddressSpace::Private, 4),
                 },
