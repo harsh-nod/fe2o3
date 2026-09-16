@@ -49,13 +49,16 @@ edges and calls. `&mut KernelContext` is a real reference, and `WorkgroupCapabil
 is not an ignored ZST. Workgroup derivation binds exact producer and call/SSA
 occurrences; equal nominal types do not make separate issuances interchangeable.
 `load_masked`, `into_fragment` and `into_parts` remain distinct operations.
-Proposed `WorkgroupDerive` exclusively acquires the actual mutable context borrow.
-Proposed `ScopeEnd` in that same canonical CFG closes the exact scope/epoch on every
+The #272 owner contract makes `WorkgroupDerive` exclusively acquire the actual
+mutable context borrow. `ScopeEnd` in that same canonical CFG closes the exact scope/epoch on every
 admitted callback exit before another derive. It invalidates branded descendants
 and releases the borrow, but is not a memory barrier. Ordinary returned values
-survive. Reject overlapping scopes, escaping authority, stale epochs, capability
-joins and active-scope backedges. Ordinary joins require matching lifecycle states.
-Known terminal traps need scope end before the trap; unsupported unwind/drop/tail
+survive. Tiles/fragments are affine: unused values may be discarded. ScopeEnd
+explicitly lists exactly the remaining live descendants, without duplicates or
+foreign values, and consumes its workgroup. Reject overlapping scopes, escaping
+authority, stale epochs, capability phis and active-scope backedges. Acyclic joins
+require matching lifecycle states; exclusive branches may each consume an incoming
+value. Check trapping operations, not only terminators; unsupported unwind/drop/tail
 call and other exceptional exits reject. Shared tile receiver borrows remain short.
 
 Choose checked generic callback materialization into the sole graph, retaining
@@ -144,15 +147,21 @@ and complete ranked/formal coverage. Reduction additionally requires owner-appro
 same-graph scoped materialization or complete call-qualified LDS-write/barrier
 coverage. Removing helper-purity or proof checks is not an implementation strategy.
 
-## Decisions required before implementation
+## Owner decisions and remaining work
 
-The scope, callback and schedule choices above are proposed integration contracts,
-not allocated operations or implemented execution. Private entry-receipt custody
-does not authorize logical-root selection, a new role, or a new accepted program.
+The [capability-owner decisions](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5699273088)
+and [numeric reservations](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5699301299)
+agree the first scope/load/parts contract. MIR V29, canonical KIR V15 and registered
+semantic-operation V3 are independent namespaces, not one shared version. MIR
+intrinsics81-86, KIR operations32-37 and KIR role types9-12 are reserved;
+[MIR role types14-17](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5700545180)
+are separately allocated. Historical incompatible versions remain rejected.
+These decisions are not implemented codec admission or M0/M1 approval.
+Private entry-receipt custody alone does not authorize logical-root selection,
+a new role, or a new accepted program.
 
-- #271/#272: coordinated semantic-MIR and canonical-KIR operation/type,
-  verification and encoding contracts. Their version spaces are independent;
-  exact allocations remain owner decisions, not one shared numeric version.
+- #271/#272: implement and qualify the coordinated semantic-MIR and canonical-KIR
+  operation/type, verification and encoding contracts.
 - #272: sealed producer ownership, logical-root selection, capability borrowing,
   epoch and convergence rules.
 - #271/#134/#272: immutable schedule representation, transformation/source lineage,
@@ -160,6 +169,33 @@ does not authorize logical-root selection, a new role, or a new accepted program
 - #272/#134: scoped scratch policy and complete reduction-effect handling.
 - #275: consume exact released adapter/read dependencies and freeze their source,
   simulator, verifier, generated-host and target-specific acceptance commands.
+
+## Displayed source contracts
+
+Curriculum V2 fills the existing tab `sourceItem` field with a closed source-driver
+contract. V1 remains strict and does not accept V2 items. The contract binds the
+package/lock/source closure, exact displayed byte ranges, complete ordered kernel
+declarations, selected features, existing ignored test, target, bundle version,
+and expected export or precise refusal. A domain-separated digest includes the
+lesson and displayed tab metadata. The site independently checks actual rendered
+bytes; it does not accept a current-site HEAD as a substitute for source evidence.
+
+The existing driver retains its own expected tuples and numerical assertions.
+Successful exports additionally check the sole decoded kernel and target;
+refusals retain exact diagnostics and pre/post artifact-absence checks.
+Manifest rows do not choose the test's expected outcome. Only unconditional
+top-level ignored tests with an enabled ordinary Cargo test target are bindable.
+Actual execution must still show that the selected test ran.
+
+Expected-source scanning may exclude an include only inside a demonstrably
+disabled, literal-feature-gated top-level module. That V2-only rule requires
+explicit local features, resolved local/default feature closure, no active build
+script, and no unsupported dependency-feature edges. Unknown cases keep strict
+include rejection. It is not a replacement for rustc input custody or execution.
+
+`contract-bound` closes a source/test association, not a qualification obligation.
+The 48 compiler fixtures, SIMT/tile/mixed variants and hardware gates remain
+pending; the historical GEMM and GPT source-binding gaps remain explicit.
 
 ## Qualification matrix
 

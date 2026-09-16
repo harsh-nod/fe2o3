@@ -759,8 +759,27 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             outside.write_text('[package]\nname = "test-driver"\nversion = "0.1.0"\n')
             path.unlink()
             path.symlink_to(outside)
-            with self.assertRaisesRegex(SystemExit, "symlink"):
+            with self.assertRaisesRegex(SystemExit, "regular repository input"):
                 self.validator.validate_source_item(root, "cpu-semantic-simulation", tab, {})
+
+    def test_source_driver_requires_unconditional_top_level_ignored_tests(self):
+        source = '#[test] #[ignore = "source compilation"] fn selected() {}'
+        scan = self.validator.source_driver_test_names
+        self.assertEqual(scan(source), ["selected"])
+        self.assertEqual(scan("#[allow(dead_code)] " + source), ["selected"])
+        self.assertEqual(scan('#![allow(dead_code)]\n' + source), ["selected"])
+        for candidate in (
+            source.replace('#[ignore = "source compilation"]', ""),
+            "#[cfg(any())] " + source, source.replace("#[test]", "#[test] #[cfg(any())]"),
+            "#[cfg_attr(feature = \"hidden\", cfg(any()))] " + source,
+            "#[custom_attribute] " + source,
+            "#![cfg(any())]\n" + source,
+            "mod hidden { " + source + " }",
+            "fn helper() { " + source + " }",
+            "macro_rules! hidden { () => {" + source + "}; }",
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertEqual(scan(candidate), [])
 
     def test_source_ranges_reject_utf8_splits_and_are_bound_to_fragment_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:

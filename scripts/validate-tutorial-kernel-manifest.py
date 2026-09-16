@@ -1213,6 +1213,42 @@ def source_item_fragments(repo_root: Path, tab: dict[str, Any], label: str) -> l
     return fragments
 
 
+def source_driver_test_names(source: str) -> list[str]:
+    code = _rust_code_without_comments_and_literals(source)
+    pairs = _rust_delimiters(code)
+
+    def top_level(start: int) -> bool:
+        return not any(opening < start < closing for opening, closing in pairs.items())
+
+    def harmless(body: str) -> bool:
+        return re.match(r"\s*(?:test|ignore|doc|allow|warn|deny|forbid|expect)\b(?!\s*::)", body) is not None
+
+    for attribute in re.finditer(r"#\s*!\s*\[", code):
+        if top_level(attribute.start()) and not harmless(_rust_attribute(code, attribute.start(), pairs)[1]):
+            return []
+    attributes = [(match.start(), *_rust_attribute(code, match.start(), pairs))
+                  for match in ATTRIBUTE_START.finditer(code)]
+    admitted = set()
+    for index, (start, _, body) in enumerate(attributes):
+        if body.strip() != "test" or not top_level(start):
+            continue
+        first = last = index
+        while first > 0 and not code[attributes[first - 1][1]:attributes[first][0]].strip():
+            first -= 1
+        while last + 1 < len(attributes) and not code[attributes[last][1]:attributes[last + 1][0]].strip():
+            last += 1
+        bodies = [entry[2] for entry in attributes[first:last + 1]]
+        # The production gate runs --ignored --exact; conditional or custom
+        # attributes cannot establish that this ordinary test will be registered.
+        if not all(harmless(value) for value in bodies) or not any(re.match(r"\s*ignore\b", value) for value in bodies):
+            continue
+        declaration = RUST_FUNCTION_NAME.match(code[attributes[last][1]:])
+        if declaration is not None:
+            admitted.add(declaration[1])
+    return [name for name in ordinary_attributed_function_names(source, lambda body: body.strip() == "test")
+            if name in admitted]
+
+
 def validate_source_item(
     repo_root: Path, lesson_id: str, tab: dict[str, Any],
     cache: dict[str, dict[str, Any]],
@@ -1254,9 +1290,7 @@ def validate_source_item(
             fail(f"{label} driver Cargo test target differs")
     elif driver_cargo["package"].get("autotests", True) is not True:
         fail(f"{label} driver Cargo test target is disabled")
-    driver_names = ordinary_attributed_function_names(
-        (repo_root / driver_path).read_text(encoding="utf-8"), lambda body: body.strip() == "test",
-    )
+    driver_names = source_driver_test_names((repo_root / driver_path).read_text(encoding="utf-8"))
     fragments = source_item_fragments(repo_root, tab, label)
     expected = [(ordinal, symbol) for ordinal, fragment in enumerate(fragments)
                 for symbol in ordinary_attributed_kernel_names(fragment)]
