@@ -511,6 +511,7 @@ impl SemanticKirSyntheticOperationSpanV1 {
 /// and trace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticKirCorrespondenceV1 {
+    source_store_value_uses: Vec<SemanticKirSourceStoreValueUseV1>,
     private_arrays: PrivateArrayCorrespondenceV1,
     semantic_sha256: [u8; 32],
     function_count: usize,
@@ -9586,6 +9587,7 @@ fn lower_one_semantic_function_v1(
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+    source_store_emission: &mut SourceStoreEmissionV1,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -9656,6 +9658,7 @@ fn lower_one_semantic_function_v1(
         launch_rank,
         authenticated_ranked_control,
         max_operations,
+        Some(source_store_emission),
         PrivateArrayRecorderWorkV1::Shared(private_array_work),
         private_array_sources,
     )?;
@@ -9818,6 +9821,11 @@ fn lower_one_semantic_function_v1(
         block.terminator = Some(Terminator::Unreachable);
         target_blocks.push(block);
     }
+    lowering.source_stores.finish(
+        &plan.parameter_values,
+        &plan.parameter_types,
+        &target_blocks,
+    )?;
     let emitted_operations = lowering.emitted_operations;
     let generated_terminator_values = lowering.generated_terminator_values;
     let private_arrays = lowering.private_arrays.into_rows()?;
@@ -9950,6 +9958,7 @@ fn lower_module_with_assert_origins_v1(
     let semantic = owner.source_semantic();
     let mut result_work =
         fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limits.max_operations);
+    let mut source_store_emission = SourceStoreEmissionV1::new(limits.max_operations);
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
         let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
             unsupported(
@@ -9968,6 +9977,7 @@ fn lower_module_with_assert_origins_v1(
             None,
             &mut closure_budget,
             &mut result_work,
+            &mut source_store_emission,
             true,
             assert_origins,
             &mut private_array_work,
@@ -9979,6 +9989,7 @@ fn lower_module_with_assert_origins_v1(
                 &mut private_array_work,
             )?;
         }
+        correspondence.source_store_value_uses = source_store_emission.rows;
         return Ok((module, correspondence));
     };
     if authenticated_launch_roots.is_empty()
@@ -10035,6 +10046,7 @@ fn lower_module_with_assert_origins_v1(
             Some(launch),
             &mut closure_budget,
             &mut result_work,
+            &mut source_store_emission,
             false,
             assert_origins.as_deref_mut(),
             &mut private_array_work,
@@ -10402,6 +10414,7 @@ fn lower_module_with_assert_origins_v1(
         private_array_order_correspondence_v1(&mut private_arrays, &mut private_array_work)?;
     }
     let correspondence = SemanticKirCorrespondenceV1 {
+        source_store_value_uses: source_store_emission.rows,
         private_arrays,
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
         function_count: semantic.functions().len(),
@@ -10479,6 +10492,7 @@ fn lower_single_root_module(
     authenticated_launch: Option<RetainedRankedLaunchRootV1>,
     closure_budget: &mut ReachableClosureBlockBudgetV1,
     result_work: &mut fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1,
+    source_store_emission: &mut SourceStoreEmissionV1,
     validate_correspondence: bool,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
@@ -10851,6 +10865,7 @@ fn lower_single_root_module(
             assert_origins.as_deref_mut(),
             private_array_work,
             Some((&private_arrays, outer_private_arrays)),
+            source_store_emission,
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
@@ -10996,6 +11011,7 @@ fn lower_single_root_module(
     let (private_arrays, private_payload) =
         private_arrays.into_correspondence(private_array_work)?;
     let correspondence = SemanticKirCorrespondenceV1 {
+        source_store_value_uses: Vec::new(),
         private_arrays,
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
         function_count: semantic.functions().len(),
@@ -11068,8 +11084,10 @@ include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
+include!("production_source_store_value_uses_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
+    source_stores: SourceStoreFunctionCaptureV1<'a>,
     private_arrays: PrivateArrayFunctionRecorderV1<'a>,
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
@@ -11164,6 +11182,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             launch_rank,
             authenticated_ranked_control,
             max_operations,
+            None,
             PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, max_operations)),
             None,
         )
@@ -11187,6 +11206,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         launch_rank: u8,
         authenticated_ranked_control: bool,
         max_operations: usize,
+        source_store_emission: Option<&'a mut SourceStoreEmissionV1>,
         mut private_array_work: PrivateArrayRecorderWorkV1<'a>,
         private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
@@ -11351,6 +11371,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         }
         Ok(Self {
+            source_stores: SourceStoreFunctionCaptureV1::new(source_store_emission),
             private_arrays: PrivateArrayFunctionRecorderV1::new(
                 private_array_work,
                 private_array_enabled,
@@ -11405,6 +11426,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         target: &mut BasicBlock,
     ) -> Result<SemanticBlockPrologueSpansV1, ProductionSemanticKirErrorV1> {
         self.private_arrays.begin_block(block, target.id)?;
+        self.source_stores.block = Some(target.id);
         self.retained_local_initialized = self
             .control_flow_ssa
             .retained_initialized_at_entry
@@ -12043,12 +12065,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     operations,
                 );
                 let result = match result {
-                    Ok(value) => self.assign_place(
+                    Ok(value) => self.assign_source_place_v1(
                         block,
                         statement,
                         assignment.destination(),
                         value,
                         SemanticVolatilityV1::NonVolatile,
+                        SemanticKirSourceStoreOperandV1::AssignmentRvalue,
+                        assignment.value().result_type(),
                         operations,
                     ),
                     Err(error) => Err(error),
@@ -12065,12 +12089,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticStatementKindV1::Store(store) if store.atomic().is_none() => {
                 let value = self.lower_operand(block, statement, store.value(), operations)?;
-                self.assign_place(
+                self.assign_source_place_v1(
                     block,
                     statement,
                     store.destination(),
                     value,
                     store.volatility(),
+                    SemanticKirSourceStoreOperandV1::StoreValue,
+                    store.destination().ty(),
                     operations,
                 )
             }
@@ -28723,6 +28749,7 @@ mod resource_tests {
             }] if allocation.parameter_index() == 0
         ));
         let correspondence = SemanticKirCorrespondenceV1 {
+            source_store_value_uses: Vec::new(),
             private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [7; 32],
             function_count: 1,
@@ -28833,6 +28860,7 @@ mod resource_tests {
         let correspondence_owner = SemanticFunctionIdV1::from_index(0);
         let semantic_function = SemanticFunctionIdV1::from_index(0);
         let correspondence = SemanticKirCorrespondenceV1 {
+            source_store_value_uses: Vec::new(),
             private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [8; 32],
             function_count: 1,
@@ -29951,6 +29979,7 @@ mod resource_tests {
             },
         ));
         let correspondence = SemanticKirCorrespondenceV1 {
+            source_store_value_uses: Vec::new(),
             private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [10; 32],
             function_count: 1,
@@ -30189,6 +30218,7 @@ mod resource_tests {
         );
         let body = function.body.as_ref().unwrap();
         let correspondence = SemanticKirCorrespondenceV1 {
+            source_store_value_uses: Vec::new(),
             private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [9; 32],
             function_count: 1,
@@ -30486,6 +30516,7 @@ mod resource_tests {
         ));
         verify_module(&module).expect("value translation Kernel IR must verify");
         let correspondence = SemanticKirCorrespondenceV1 {
+            source_store_value_uses: Vec::new(),
             private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [8; 32],
             function_count: 1,
@@ -31113,6 +31144,7 @@ mod resource_tests {
         .body
         .expect("the neutral recipe fixture has a body");
         let correspondence = SemanticKirCorrespondenceV1 {
+            source_store_value_uses: Vec::new(),
             private_arrays: PrivateArrayCorrespondenceV1::default(),
             semantic_sha256: [191; 32],
             function_count: 1,

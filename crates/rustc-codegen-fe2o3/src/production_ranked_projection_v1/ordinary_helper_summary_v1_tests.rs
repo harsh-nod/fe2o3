@@ -814,4 +814,7 @@ mod ordinary_helper_effect_only_tests_v1 {
                 .unwrap()
         );
     }
+
+    include!("retained_ordinary_calls_v1_tests.rs");
+    include!("ordinary_helper_result_store_v1_tests.rs");
 }

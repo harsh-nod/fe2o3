@@ -415,6 +415,25 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         access_sources: &[ProductionRankedAccessSourceV1],
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<(), ProductionSourceOutputErrorV1> {
+        self.check_ranked_global_allocation_values_inner_v1(
+            owner,
+            function,
+            lowering,
+            access_sources,
+            SourceOutputRankedValueModeV1::Expression,
+            budget,
+        )
+    }
+
+    fn check_ranked_global_allocation_values_inner_v1(
+        &self,
+        owner: SemanticFunctionIdV1,
+        function: SemanticFunctionIdV1,
+        lowering: &ProductionRankedKernelLoweringInputV1,
+        access_sources: &[ProductionRankedAccessSourceV1],
+        mode: SourceOutputRankedValueModeV1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<(), ProductionSourceOutputErrorV1> {
         use ProductionSourceOutputErrorV1 as Error;
         budget.charge_work(4).map_err(Error::Resource)?;
         let minimum = self
@@ -507,7 +526,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 access_sources,
                 &mut context,
             )?;
-            source_output_ranked_global_check_v1(self, owner, function, &mut context)
+            source_output_ranked_global_check_v1(self, owner, function, mode, &mut context)
         })
     }
 }
@@ -641,10 +660,17 @@ fn source_output_ranked_global_index_v1(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum SourceOutputRankedValueModeV1 {
+    Expression,
+    CanonicalSourceUse,
+}
+
 fn source_output_ranked_global_check_v1(
     view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
     owner: SemanticFunctionIdV1,
     function: SemanticFunctionIdV1,
+    mode: SourceOutputRankedValueModeV1,
     context: &mut SourceOutputScalarNormalizationV1<'_, '_, '_, '_, '_>,
 ) -> Result<(), ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
@@ -806,6 +832,41 @@ fn source_output_ranked_global_check_v1(
                     .ok_or_else(|| context.failure())?
                 {
                     return Err(Error::Invalid("global ranked write value mismatch"));
+                }
+            }
+            (
+                OperationKind::Store { value, .. },
+                OperationKind::Store { .. },
+                dialect_kernel::AccessKindAttr::Write,
+                None,
+                Some(output_use),
+            ) if source.atomic.is_none()
+                && matches!(mode, SourceOutputRankedValueModeV1::CanonicalSourceUse) =>
+            {
+                // This closed mode is available only to the scoped consumer.
+                // It joins an immutable source/N operand to this exact O use;
+                // it never manufactures a ranked expression or numerical proof.
+                let relation = view
+                    .source_output_store_value_for_output_v1(
+                        owner,
+                        function,
+                        output_use.coordinate,
+                        context.budget,
+                    )?
+                    .ok_or(Error::Invalid("canonical Store operand relation absent"))?;
+                context.budget.charge_work(9).map_err(Error::Resource)?;
+                if relation.row.original != expected_original
+                    || relation.source().correspondence_owner() != owner
+                    || relation.source().semantic_function() != function
+                    || relation.source().source_statement().0.index() != site.block
+                    || Some(relation.source().source_statement().1) != site.statement
+                    || relation.source().value() != *value
+                    || relation.output_use() != Some(output_use)
+                    || !relation.executable()
+                {
+                    return Err(Error::Invalid(
+                        "canonical Store source/use relation mismatch",
+                    ));
                 }
             }
             _ => {

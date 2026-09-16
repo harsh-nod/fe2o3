@@ -570,103 +570,18 @@ fn source_output_global_placement_v1(
 ) -> Result<ProductionSourceOutputGlobalAccessV1, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
     use ProductionSourceOutputGlobalAccessV1 as Placement;
-    use fe2o3_kernel_ir::{
-        CanonicalKirDefinitionCoordinateV1::Result as ResultCoordinate,
-        CanonicalKirUseCoordinateV1::OperationOperand,
-    };
-    let state = control
-        .block(original.coordinate.block, budget)
-        .map_err(Error::Transition)?;
-    let pointer_use = control
-        .operand(
-            OperationOperand {
-                operation: original.coordinate,
-                operand: 0,
-            },
-            budget,
-        )
-        .map_err(Error::Transition)?;
-    budget.charge_work(1).map_err(Error::Resource)?;
-    let value_use = if value.is_some() {
-        control
-            .operand(
-                OperationOperand {
-                    operation: original.coordinate,
-                    operand: 1,
-                },
-                budget,
-            )
-            .map_err(Error::Transition)?
-    } else {
-        None
-    };
-    budget.charge_work(3).map_err(Error::Resource)?;
-    let Some(pointer_use) = pointer_use else {
-        if value_use.is_none() && !state.reachable {
-            return Ok(Placement::OmittedUnreachable {
-                original: original.coordinate,
-            });
-        }
-        return Err(Error::Invalid("global reachable access operand omitted"));
-    };
-    let OperationOperand {
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result as ResultCoordinate;
+    let SourceOutputMemoryOperandsV1::Retained {
         operation: output_coordinate,
-        operand: 0,
-    } = pointer_use.coordinate
+        pointer: pointer_use,
+        value: value_use,
+        executable,
+    } = source_output_memory_operands_v1(control, original, value, budget)?
     else {
-        return Err(Error::Invalid("global pointer occurrence changed"));
+        return Ok(Placement::OmittedUnreachable {
+            original: original.coordinate,
+        });
     };
-    if value.is_some() != value_use.is_some()
-        || value_use.is_some_and(|used| {
-            used.coordinate
-                != OperationOperand {
-                    operation: output_coordinate,
-                    operand: 1,
-                }
-        })
-    {
-        return Err(Error::Invalid("global Store value occurrence changed"));
-    }
-    let output_operation =
-        source_output_operation_v1(control.output().owner(), output_coordinate, budget)?;
-    budget.charge_work(4).map_err(Error::Resource)?;
-    let actual_pointer = match (&original.operation.kind, &output_operation.kind) {
-        (OperationKind::Load { access: a, .. }, OperationKind::Load { pointer, access: b })
-            if a == b
-                && original.operation.results.len() == 1
-                && output_operation.results.len() == 1 =>
-        {
-            *pointer
-        }
-        (
-            OperationKind::Store { access: a, .. },
-            OperationKind::Store {
-                pointer,
-                value,
-                access: b,
-            },
-        ) if a == b
-            && original.operation.results.is_empty()
-            && output_operation.results.is_empty() =>
-        {
-            let (actual, _) = source_output_definition_v1(
-                control.output().owner(),
-                value_use.unwrap().definition,
-                budget,
-            )?;
-            if actual != *value {
-                return Err(Error::Invalid("global Store value binding changed"));
-            }
-            *pointer
-        }
-        _ => return Err(Error::Invalid("global memory operation payload changed")),
-    };
-    let (actual, _) =
-        source_output_definition_v1(control.output().owner(), pointer_use.definition, budget)?;
-    budget.charge_work(1).map_err(Error::Resource)?;
-    if actual != actual_pointer {
-        return Err(Error::Invalid("global pointer binding changed"));
-    }
     budget.charge_work(1).map_err(Error::Resource)?;
     if scratch.is_none() {
         *scratch = Some(source_output_allocation_scratch_v1(
@@ -728,6 +643,6 @@ fn source_output_global_placement_v1(
         pointer: pointer_use,
         value: value_use,
         result,
-        executable: state.reachable,
+        executable,
     })
 }

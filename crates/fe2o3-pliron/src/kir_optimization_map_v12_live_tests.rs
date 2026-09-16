@@ -8,6 +8,7 @@ fn mapped_block_argument_node(map: &KirOptimizationMapV12, block: u32, argument:
         argument,
     };
     let matches = map
+        .data
         .nodes
         .iter()
         .enumerate()
@@ -177,8 +178,9 @@ fn closed_policy_dce_cascading_duplicate_edges_preserves_abi_and_exact_map() {
 
     for block in [3, 4] {
         let removed = mapped_block_argument_node(&map, block, 0);
-        assert_eq!(map.terminal[removed], None);
+        assert_eq!(map.data.terminal[removed], None);
         let erased = map
+            .data
             .events
             .iter()
             .filter(|event| matches!(event.change, Change::Erase(id) if id as usize == removed))
@@ -189,7 +191,7 @@ fn closed_policy_dce_cascading_duplicate_edges_preserves_abi_and_exact_map() {
             "each stable argument is erased exactly once"
         );
         assert_eq!(erased[0].pass, 3);
-        assert!(!map.events.iter().any(|event| {
+        assert!(!map.data.events.iter().any(|event| {
             matches!(event.change, Change::Replace(old, _) if old as usize == removed)
         }));
     }
@@ -199,15 +201,16 @@ fn closed_policy_dce_cascading_duplicate_edges_preserves_abi_and_exact_map() {
             argument,
         };
         let nodes = map
+            .data
             .nodes
             .iter()
             .enumerate()
             .filter_map(|(index, node)| (node.input == Some(endpoint)).then_some(index))
             .collect::<Vec<_>>();
         assert_eq!(nodes.len(), 1);
-        assert_eq!(map.terminal[nodes[0]], Some(endpoint));
+        assert_eq!(map.data.terminal[nodes[0]], Some(endpoint));
         assert!(
-            !map.events.iter().any(|event| {
+            !map.data.events.iter().any(|event| {
                 matches!(event.change, Change::Erase(id) if id as usize == nodes[0])
             })
         );
@@ -340,14 +343,16 @@ fn actual_zero_result_conditional_replacement_maps_to_the_surviving_branch() {
             [Endpoint::Operation(source_terminator)]
         );
         let old = map
+            .data
             .nodes
             .iter()
             .position(|node| node.input == Some(Endpoint::Operation(source_terminator)))
             .unwrap();
-        assert_eq!(map.nodes[old].kind, Kind::Operation);
-        assert!(!map.nodes.iter().any(|node| matches!(node.input,
+        assert_eq!(map.data.nodes[old].kind, Kind::Operation);
+        assert!(!map.data.nodes.iter().any(|node| matches!(node.input,
             Some(Endpoint::Result { operation, .. }) if operation == source_terminator)));
         let replacements = map
+            .data
             .events
             .iter()
             .enumerate()
@@ -359,19 +364,20 @@ fn actual_zero_result_conditional_replacement_maps_to_the_surviving_branch() {
         assert_eq!(replacements.len(), 1);
         let (replacement_index, pass, new) = replacements[0];
         assert_eq!(pass, 1, "BranchOpFoldInterface is executed by SimplifyCFG");
-        assert_eq!(map.nodes[new].kind, Kind::Operation);
-        assert!(map.nodes[new].input.is_none());
+        assert_eq!(map.data.nodes[new].kind, Kind::Operation);
+        assert!(map.data.nodes[new].input.is_none());
         assert_eq!(
-            map.terminal[new],
+            map.data.terminal[new],
             Some(Endpoint::Operation(source_terminator))
         );
         let erased_index = map
+            .data
             .events
             .iter()
             .position(|event| matches!(event.change, Change::Erase(id) if id as usize == old))
             .unwrap();
         assert!(replacement_index < erased_index);
-        assert_eq!(map.events[erased_index].pass, 1);
+        assert_eq!(map.data.events[erased_index].pass, 1);
         assert!(!map.synthesized_operations().contains(&source_terminator));
     }
 }
@@ -483,18 +489,18 @@ fn sccp_join_argument_materialization_and_dce_preserve_shifted_value_identities(
         mapped_block_argument_node(&map, 3, 2),
         mapped_block_argument_node(&map, 3, 3),
     ];
-    assert_eq!(map.terminal[nodes[0]], None);
+    assert_eq!(map.data.terminal[nodes[0]], None);
     assert_eq!(
-        map.terminal[nodes[1]],
+        map.data.terminal[nodes[1]],
         Some(Endpoint::BlockArgument {
             function: 0,
             block: join_index,
             argument: 0
         })
     );
-    assert_eq!(map.terminal[nodes[2]], None);
+    assert_eq!(map.data.terminal[nodes[2]], None);
     assert_eq!(
-        map.terminal[nodes[3]],
+        map.data.terminal[nodes[3]],
         Some(Endpoint::BlockArgument {
             function: 0,
             block: join_index,
@@ -503,6 +509,7 @@ fn sccp_join_argument_materialization_and_dce_preserve_shifted_value_identities(
     );
     for removed in [nodes[0], nodes[2]] {
         let erased = map
+            .data
             .events
             .iter()
             .filter(|event| matches!(event.change, Change::Erase(id) if id as usize == removed))
@@ -512,7 +519,8 @@ fn sccp_join_argument_materialization_and_dce_preserve_shifted_value_identities(
     }
     for retained in [nodes[1], nodes[3]] {
         assert!(
-            !map.events
+            !map.data
+                .events
                 .iter()
                 .any(|event| matches!(event.change, Change::Erase(id) if id as usize == retained))
         );
@@ -536,6 +544,7 @@ fn sccp_join_argument_materialization_and_dce_preserve_shifted_value_identities(
     assert_eq!(constants.len(), 1);
     let materialized = constants[0];
     let replacement = map
+        .data
         .events
         .iter()
         .find_map(|event| match event.change {
@@ -546,9 +555,9 @@ fn sccp_join_argument_materialization_and_dce_preserve_shifted_value_identities(
         })
         .unwrap();
     assert_eq!(replacement.0, 0);
-    assert!(map.nodes[replacement.1].input.is_none());
+    assert!(map.data.nodes[replacement.1].input.is_none());
     assert_eq!(
-        map.terminal[replacement.1],
+        map.data.terminal[replacement.1],
         Some(Endpoint::Result {
             operation: materialized,
             result: 0
@@ -559,7 +568,7 @@ fn sccp_join_argument_materialization_and_dce_preserve_shifted_value_identities(
         "block-argument facts are not fabricated source-operation provenance"
     );
     assert!(
-        !map.events.iter().any(
+        !map.data.events.iter().any(
             |event| matches!(event.change, Change::Replace(old, _) if old as usize == nodes[2])
         )
     );

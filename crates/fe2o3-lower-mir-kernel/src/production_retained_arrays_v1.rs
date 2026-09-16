@@ -524,16 +524,9 @@ impl SemanticFunctionLoweringV1<'_> {
             let pointer = self.emit_retained_array_pointer_v1(&slot, offset, operations)?;
             let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
-            self.push_operation(operations, || {
-                Operation::new(
-                    Vec::new(),
-                    OperationKind::Store {
-                        pointer,
-                        value,
-                        access,
-                    },
-                )
-            })?;
+            self.source_stores.component = u32::try_from(index)
+                .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            self.push_memory_store_v1(operations, pointer, value, access, None)?;
         }
         self.retained_local_initialized
             .insert(place.local().index());

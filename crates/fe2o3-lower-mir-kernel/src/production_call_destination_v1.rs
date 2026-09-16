@@ -132,6 +132,7 @@ impl SemanticFunctionLoweringV1<'_> {
         access: MemoryAccess,
         predicate: Option<ValueId>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.source_stores.record(operations.len(), value, predicate)?;
         self.push_operation(operations, || {
             let kind = match predicate {
                 Some(predicate) => OperationKind::GuardedStore {

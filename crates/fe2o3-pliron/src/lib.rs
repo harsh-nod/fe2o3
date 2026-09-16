@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod canonical_analysis_scope_v1;
+mod fixed_policy_v3;
 mod graph_analysis_v1;
 mod kir_bridge_v1;
 mod kir_optimization_map_v12;
@@ -11,11 +12,15 @@ mod production;
 mod production_analysis;
 
 pub use canonical_analysis_scope_v1::*;
+pub use fixed_policy_v3::{
+    POLICY3_EXECUTION_RECORD_BYTES_V1, Policy3ExecutionWitnessV1,
+    policy3_execution_receipt_digest_v1,
+};
 pub use graph_analysis_v1::*;
 pub use kir_bridge_v1::*;
 pub use kir_optimization_map_v12::{
     KirOptimizationDispositionV12, KirOptimizationEndpointV12, KirOptimizationMapErrorV12,
-    KirOptimizationMapV12, KirOptimizationRelationV12,
+    KirOptimizationMapPolicy3V12, KirOptimizationMapV12, KirOptimizationRelationV12,
 };
 pub use optimization_v1::*;
 pub use optimization_v12::*;
@@ -1937,8 +1942,10 @@ mod kir_occurrence_capture_v1;
 mod neutral_optimization_v1;
 pub use kir_occurrence_capture_v1::KirNeutralOccurrenceRowsV1;
 pub use neutral_optimization_v1::{
-    CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
-    KirCheckedNeutralOptimizationStorageV1, KirNeutralOptimizationErrorV1,
-    KirNeutralOptimizationLeaseV1, KirNeutralOptimizationOutputV1, KirNeutralOptimizationStorageV1,
-    KirNeutralOwnedOriginStorageV1, optimize_native_neutral_kernel_ir_v1,
+    CheckedNeutralKernelIrOwnerPolicy3V1, CheckedNeutralKernelIrOwnerV1,
+    KirCheckedNeutralOptimizationErrorV1, KirCheckedNeutralOptimizationStorageV1,
+    KirNeutralOptimizationErrorV1, KirNeutralOptimizationLeaseV1,
+    KirNeutralOptimizationOutputPolicy3V1, KirNeutralOptimizationOutputV1,
+    KirNeutralOptimizationStorageV1, KirNeutralOwnedOriginStorageV1,
+    optimize_native_neutral_kernel_ir_policy3_v1, optimize_native_neutral_kernel_ir_v1,
 };

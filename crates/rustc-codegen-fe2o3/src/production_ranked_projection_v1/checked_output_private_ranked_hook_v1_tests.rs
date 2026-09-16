@@ -623,7 +623,10 @@ mod private_ranked_hook_tests {
                 let trap_lookup_visits = (output_operations + 1).ilog2() as usize;
                 // Call branch5, row access1+3, graph6, one source span4+5+1,
                 // roles2, payload8+4, byte equality1+callee.len():40+len.
-                let trap_work = 40 + callee.as_str().len() + 4 * trap_lookup_visits;
+                // The new ordinary-call dispatch has one non-defined Call:
+                // entry/floor6 + one index search(1+3) + classification4.
+                // It adds no allocation and leaves the exact trap rule intact.
+                let trap_work = 14 + 40 + callee.as_str().len() + 4 * trap_lookup_visits;
                 let query_work = FIXED + ranked.len() + 2 * ranked_operations
                     + output.blocks.len() + 2 * output_operations + trap_work;
                 let floor = inherited.storage();

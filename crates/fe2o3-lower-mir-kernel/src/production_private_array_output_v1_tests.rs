@@ -633,10 +633,16 @@ fn array_header_and_rows_remain_reserved_across_real_catalog_success_and_failure
             assert_eq!(view.global_spans.len(), 3);
             assert!(view.global_accesses.is_empty());
             assert_eq!(view.global_accesses.capacity(), 0);
+            assert_eq!(view.checked_control_rows.edges.capacity(), 0);
+            assert_eq!(view.checked_control_rows.uses.capacity(), 0);
+            assert_eq!(view.checked_control_rows.arguments.capacity(), 0);
+            assert_eq!(view.checked_control_rows.compare_uses.capacity(), 0);
             let expected = std::mem::size_of::<ProductionSourceOutputOccurrencesV1<'_, '_>>()
                 + std::mem::size_of::<SourceOutputBlockRowV1>()
                 + std::mem::size_of::<SourceOutputArrayRowV1>()
                 + 3 * std::mem::size_of::<SourceOutputGlobalSpanV1>()
+                + single_function_zero_return_payload(view)
+                + single_private_store_value_payload(view)
                 + 2 * EMPTY_CATALOG_CANONICAL_BYTES;
             assert_eq!(view.storage.retained_storage(), expected);
             with_control(view, live_budget, |control, transition, floor| {
@@ -797,6 +803,7 @@ fn memory_free_source_reserves_no_global_effect_rows() {
         let expected = std::mem::size_of::<ProductionSourceOutputOccurrencesV1<'_, '_>>()
             + std::mem::size_of::<SourceOutputBlockRowV1>()
             + std::mem::size_of::<SourceOutputGlobalSpanV1>()
+            + single_function_zero_return_payload(view)
             + 2 * 56;
         assert_eq!(view.storage.retained_storage(), expected);
         assert!(matches!(
@@ -808,5 +815,45 @@ fn memory_free_source_reserves_no_global_effect_rows() {
     });
 }
 
+fn single_private_store_value_payload(view: &ProductionSourceOutputOccurrencesV1<'_, '_>) -> usize {
+    // One retained write has a source row and its independently indexed O use.
+    // Both append-only vectors start at four slots; count allocator excess too.
+    let rows = &view.store_values;
+    assert_eq!(rows.rows.len(), 1);
+    assert_eq!(rows.by_output.len(), 1);
+    assert!(rows.rows.capacity() >= 4);
+    assert!(rows.by_output.capacity() >= 4);
+    rows.rows.capacity() * std::mem::size_of::<SourceOutputStoreValueRowV1>()
+        + rows.by_output.capacity() * std::mem::size_of::<SourceOutputStoreValueOutputRowV1>()
+}
+
+fn single_function_zero_return_payload(
+    view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+) -> usize {
+    // The ordinary-call index records each actual function and Return even when
+    // there are no Calls. Its first push requests four slots per nonempty Vec;
+    // any allocator excess remains part of the independently counted payload.
+    let rows = &view.ordinary_calls;
+    assert_eq!(view.output().module().functions.len(), 1);
+    assert_eq!(rows.functions.len(), 1);
+    assert_eq!(rows.returns.len(), 1);
+    assert!(rows.returns[0].value.is_none());
+    assert_eq!(rows.functions[0].returns, 0..1);
+    assert_eq!(rows.functions[0].return_occurrences, 1);
+    assert_eq!(rows.functions[0].return_values, 0);
+    assert_eq!(rows.functions[0].calls, 0..0);
+    assert_eq!((rows.calls.len(), rows.calls.capacity()), (0, 0));
+    assert_eq!((rows.arguments.len(), rows.arguments.capacity()), (0, 0));
+    assert_eq!((rows.results.len(), rows.results.capacity()), (0, 0));
+    assert_eq!((rows.aliases.len(), rows.aliases.capacity()), (0, 0));
+    assert!(rows.functions.capacity() >= 4);
+    assert!(rows.returns.capacity() >= 4);
+    rows.functions.capacity() * std::mem::size_of::<SourceOutputOrdinaryFunctionV1>()
+        + rows.returns.capacity() * std::mem::size_of::<ProductionSourceOutputOrdinaryReturnV1>()
+}
+
 #[path = "production_source_output_selected_successor_v1_tests.rs"]
 mod selected_successor_v1_tests;
+
+#[path = "production_source_output_policy3_v1_tests.rs"]
+mod policy3_endpoint_v1_tests;

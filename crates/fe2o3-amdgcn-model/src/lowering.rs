@@ -38,6 +38,8 @@ use sha2::{Digest, Sha256};
 mod v12_preflight;
 use v12_preflight::reject_unsupported_v12_module;
 
+include!("lowering_native_v12.rs");
+
 use crate::{
     AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim, MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
     MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
@@ -537,7 +539,7 @@ pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
         module,
         kernel_id,
         LoweringTarget::Gfx942XnackMinusV1,
-        Some(target_kir_identity),
+        Some(SemanticAnchorInputV1::Historical(target_kir_identity)),
         MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
     )
 }
@@ -571,7 +573,7 @@ pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
         module,
         kernel_id,
         LoweringTarget::Gfx950XnackMinusV1,
-        Some(target_kir_identity),
+        Some(SemanticAnchorInputV1::Historical(target_kir_identity)),
         MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1,
     )
 }
@@ -606,7 +608,7 @@ fn lower_kernel_to_llvm_ir_for_target(
     module: &Module,
     kernel_id: &KernelId,
     target: LoweringTarget,
-    semantic_anchor_identity: Option<ProductionSemanticAnchorKirIdentityV1>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
     max_text_bytes: usize,
 ) -> Result<String, LoweringErrors> {
     verify_module(module).map_err(LoweringErrors::verification)?;
@@ -775,9 +777,9 @@ fn prepare_semantic_anchor_emission_v1(
     kernel: &Kernel,
     entry: &Function,
     target: LoweringTarget,
-    identity: ProductionSemanticAnchorKirIdentityV1,
+    input: SemanticAnchorInputV1<'_>,
 ) -> Result<SemanticAnchorEmissionV1, LoweringErrors> {
-    validate_semantic_anchor_identity_v1(module, identity)?;
+    let identity = input.validate(module)?;
     let location = LoweringLocation::function(module, kernel, entry);
     let target = target.exact_target_binding().ok_or_else(|| {
         LoweringErrors::one(
@@ -879,6 +881,7 @@ fn validate_semantic_anchor_identity_v1(
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v9(&owner) == expected),
         11 => VerifiedCanonicalKernelIrV11::from_module(module.clone())
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v11(&owner) == expected),
+        12 => false,
         _ => unreachable!("semantic anchor identities have a closed version constructor"),
     };
     if !matches {
@@ -951,7 +954,7 @@ pub fn lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors
         module,
         LoweringTarget::Gfx942XnackMinusV1,
         None,
-        Some(target_kir_identity),
+        Some(SemanticAnchorInputV1::Historical(target_kir_identity)),
         true,
     )
 }
@@ -979,7 +982,7 @@ pub fn lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors
         module,
         LoweringTarget::Gfx950XnackMinusV1,
         None,
-        Some(target_kir_identity),
+        Some(SemanticAnchorInputV1::Historical(target_kir_identity)),
         true,
     )
 }
@@ -1059,7 +1062,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     module: &Module,
     target: LoweringTarget,
     launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
-    semantic_anchor_identity: Option<ProductionSemanticAnchorKirIdentityV1>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
     require_kernel: bool,
 ) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {

@@ -1,10 +1,11 @@
-//! Private occurrence custody for the fixed neutral seven-pass executor.
+//! Private occurrence custody for the closed neutral executors.
 //! These are observations, not semantic-preservation or artifact authority.
 
+use crate::fixed_policy_v3::FixedPolicy;
 use crate::{
-    KIR_PLIRON_PRODUCTION_PASSES_V12, KirBridgeCoordinateV1 as Coordinate,
-    KirOptimizationEndpointV12 as Endpoint, KirOptimizationMapErrorV12 as E, KirOptimizationMapV12,
-    OperationGraphEpochV1, PlironOptimizationPassV1,
+    KirBridgeCoordinateV1 as Coordinate, KirOptimizationEndpointV12 as Endpoint,
+    KirOptimizationMapErrorV12 as E, KirOptimizationMapV12, OperationGraphEpochV1,
+    PlironOptimizationPassV1,
     kir_optimization_map_v12::{LiveKeyV12, LiveRosterV12},
 };
 use fe2o3_kernel_ir::{
@@ -68,6 +69,14 @@ pub(crate) struct StructuralCensus {
 }
 
 impl Limits {
+    pub(crate) fn for_policy3(self) -> Result<Self> {
+        let events = self.nodes.checked_mul(10).ok_or(E::Arithmetic)?;
+        Ok(Self {
+            nodes: self.nodes,
+            events,
+            targets: events,
+        })
+    }
     pub(crate) fn for_structure(census: StructuralCensus) -> Result<Self> {
         // Initial registration claims F+2B+O+2V+R+2U+2E+D. The one SCCP
         // invocation can materialize at most one constant (three claims) per
@@ -1357,6 +1366,7 @@ impl State {
 #[derive(Clone)]
 pub(crate) struct Capture(Arc<Shared>);
 struct Shared {
+    policy: FixedPolicy,
     state: Mutex<State>,
     poisoned: std::sync::atomic::AtomicBool,
 }
@@ -1369,7 +1379,27 @@ impl Capture {
         limits: Limits,
         roster_work: usize,
     ) -> Result<Self> {
+        Self::new_for_policy(
+            ctx,
+            root,
+            source,
+            roster,
+            limits,
+            roster_work,
+            FixedPolicy::Historical2,
+        )
+    }
+    pub(crate) fn new_for_policy(
+        ctx: &Context,
+        root: Ptr<Operation>,
+        source: &Module,
+        roster: &LiveRosterV12,
+        limits: Limits,
+        roster_work: usize,
+        policy: FixedPolicy,
+    ) -> Result<Self> {
         Ok(Self(Arc::new(Shared {
+            policy,
             state: Mutex::new(State::new(ctx, root, source, roster, limits, roster_work)?),
             poisoned: std::sync::atomic::AtomicBool::new(false),
         })))
@@ -1410,8 +1440,8 @@ impl Capture {
     ) -> bool {
         self.apply(|s| {
             if s.current.is_some()
-                || s.completed >= 7
-                || KIR_PLIRON_PRODUCTION_PASSES_V12[s.completed] != pass
+                || s.completed >= self.0.policy.passes().len()
+                || self.0.policy.passes()[s.completed] != pass
                 || s.epoch.is_some_and(|last| last != epoch.sequence())
             {
                 return Err(E::Passes);
@@ -1528,18 +1558,53 @@ impl Capture {
         map: &KirOptimizationMapV12,
         output: &Module,
     ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_data(
+            ctx,
+            roster,
+            map.neutral_data_v1(),
+            output,
+            FixedPolicy::Historical2,
+        )
+    }
+    pub(crate) fn finish_policy3(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapPolicy3V12,
+        output: &Module,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_data(
+            ctx,
+            roster,
+            map.neutral_data_v1(),
+            output,
+            FixedPolicy::Checked3,
+        )
+    }
+    fn finish_data(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::kir_optimization_map_v12::MapData,
+        output: &Module,
+        policy: FixedPolicy,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
         if let Some(error) = self.failure() {
             return Err(error);
         }
         let mut state = self.0.state.try_lock().map_err(|_| E::Lifecycle)?;
         let result = (|| {
-            if state.completed != 7
+            if self.0.policy != policy
+                || state.completed != policy.passes().len()
                 || state.current.is_some()
                 || output.functions.len() != state.functions.len()
             {
                 return Err(E::Passes);
             }
-            state.census(ctx, 9)?;
+            state.census(
+                ctx,
+                u8::try_from(policy.passes().len() + 2).map_err(|_| E::Arithmetic)?,
+            )?;
             state.step(roster.len())?;
             let mut rows = KirNeutralOccurrenceRowsV1 {
                 functions: vector(state.functions.len())?,
@@ -1661,7 +1726,7 @@ impl Capture {
 /// witness. This does not infer operands from that map or alter its wire bytes.
 fn derive_definition_rows(
     state: &mut State,
-    map: &KirOptimizationMapV12,
+    map: &crate::kir_optimization_map_v12::MapData,
     rows: &mut KirNeutralOccurrenceRowsV1,
 ) -> Result<()> {
     let count = map.neutral_node_count_v1();

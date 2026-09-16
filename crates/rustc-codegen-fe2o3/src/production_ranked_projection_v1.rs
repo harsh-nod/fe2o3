@@ -3371,7 +3371,120 @@ fn project_and_verify_ranked_root_control_inner_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    let PreparedProjectedRankedGeometryV1 {
+        mut blocks,
+        sources,
+        executable_effect_sources,
+        argument_count,
+        reserved_reference_values,
+        intrinsic,
+        semantic_u32_induction,
+        kernel_binding,
+        incomplete,
+    } = prepare_projected_ranked_geometry_v1(
+        semantic_ssa,
+        callable_effects,
+        selection,
+        input,
+        source_root,
+        reference_bindings,
+        assertion_facts,
+        ProjectedGlobalWriteValuesV1::Expression,
+        None,
+    )?;
     let logical_name = input.logical_name.as_str();
+    let source_launch = &input.source_launch;
+    let semantic = semantic_ssa.source_semantic();
+    let root_function = &semantic.functions()[selection.root().index() as usize];
+    let function = &semantic.functions()[selection.body().index() as usize];
+    let reference_writes =
+        projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
+    attach_projected_global_write_values_v1(
+        &mut blocks,
+        &sources,
+        &reference_writes,
+        assertion_facts,
+    )?;
+    let access_sources = production_access_sources(&blocks, &sources, assertion_facts)?;
+    let system_coherent_allocations = intrinsic
+        .local_contracts
+        .allocations
+        .iter()
+        .flatten()
+        .filter(|contract| contract.singleton_object)
+        .map(|contract| contract.allocation_origin)
+        .collect::<Vec<_>>();
+    let kernel =
+        ProductionRankedKernelV1::new(function_name(root_function)?, argument_count, blocks)
+            .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
+    if let Some(error) = incomplete {
+        return Err(error);
+    }
+    let lowering = if reference_bindings.as_slice().is_empty() {
+        let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
+        let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
+            .map_err(ProductionRankedProjectionErrorV1::Construction)?;
+        compile_ranked_kernel_for_gfx942_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+            system_coherent_allocations,
+        )
+        .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
+            error: Box::new(error),
+            ranked_ir,
+            access_sources: sources,
+        })?
+    } else {
+        let reserved_reference_values =
+            reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "reference-effect scalar reservations were not retained",
+            ))?;
+        crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
+            kernel,
+            reference_bindings,
+            &reference_writes,
+            reserved_reference_values,
+        )
+        .and_then(|request| request.prove_and_compile())
+        .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
+    };
+    let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
+    let export_symbol = root_function
+        .kernel_entry()
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a semantic KernelRoot without an authenticated kernel entry",
+        ))?
+        .export_symbol()
+        .as_bytes()
+        .to_vec()
+        .into_boxed_slice();
+    Ok(ProductionRankedRootProgramV1 {
+        logical_name: logical_name.to_owned(),
+        export_symbol,
+        semantic_root: selection.root(),
+        semantic_root_identity: root_function.identity(),
+        kernel_binding,
+        source_rank: source_launch.rank(),
+        semantic_u32_induction,
+        lowering,
+        ranked_ir,
+        access_sources,
+        executable_effect_sources,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_projected_ranked_geometry_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    write_values: ProjectedGlobalWriteValuesV1,
+    mut recorder: Option<&mut canonical_memory_control_v1::CanonicalMemoryControlRecorderV1>,
+) -> Result<PreparedProjectedRankedGeometryV1, ProductionRankedProjectionErrorV1> {
     let source_launch = &input.source_launch;
     let semantic = semantic_ssa.source_semantic();
     let plan = semantic_ssa.plan_for_function(selection.body()).ok_or(
@@ -3460,17 +3573,32 @@ fn project_and_verify_ranked_root_control_inner_v1(
     let mut incomplete = None;
     let mut projected_views = vec![None; function.locals().len()];
     let mut discarded_ir = String::new();
-    let intrinsic = project_intrinsic_contracts(
-        semantic.callables(),
-        callable_effects,
-        semantic.types(),
-        function,
-        bounded_linear_launch_extent_v1(source_launch),
-        &constants,
-        &mut entry_operations,
-        &mut next_value,
-        &mut discarded_ir,
-    )?;
+    let intrinsic = if let Some(recorder) = recorder.as_deref_mut() {
+        project_intrinsic_contracts_with_recording_v1(
+            semantic.callables(),
+            callable_effects,
+            semantic.types(),
+            function,
+            bounded_linear_launch_extent_v1(source_launch),
+            &constants,
+            &mut entry_operations,
+            &mut next_value,
+            &mut discarded_ir,
+            |scalars, lengths| recorder.arguments(scalars, lengths, assertion_facts),
+        )?
+    } else {
+        project_intrinsic_contracts(
+            semantic.callables(),
+            callable_effects,
+            semantic.types(),
+            function,
+            bounded_linear_launch_extent_v1(source_launch),
+            &constants,
+            &mut entry_operations,
+            &mut next_value,
+            &mut discarded_ir,
+        )?
+    };
     let mut bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
         function,
         intrinsic.extent_argument_count,
@@ -3751,7 +3879,10 @@ fn project_and_verify_ranked_root_control_inner_v1(
         &mut bounds_checks.checks,
         &projected_blocks,
         &projected_views,
-        &intrinsic.local_contracts.checked_references.enum_payload_dominance,
+        &intrinsic
+            .local_contracts
+            .checked_references
+            .enum_payload_dominance,
         checked_control.as_ref(),
         assertion_facts,
     )?;
@@ -3775,7 +3906,10 @@ fn project_and_verify_ranked_root_control_inner_v1(
             "a concurrent memory effect without its exact source-owned execution domain",
         ));
     }
-    let (mut blocks, sources, executable_effect_sources) = build_ranked_cfg_with_control(
+    if let Some(recorder) = recorder.as_deref_mut() {
+        recorder.bounds(&bounds_checks.checks, assertion_facts)?;
+    }
+    let (blocks, sources, executable_effect_sources) = build_ranked_cfg_with_control(
         semantic.types(),
         function,
         semantic.callables(),
@@ -3788,84 +3922,21 @@ fn project_and_verify_ranked_root_control_inner_v1(
             uniform_inductions: &intrinsic.uniform_inductions,
             checked_control,
             checked_bounds: &bounds_checks.checks,
+            write_values,
+            recorder,
         },
     )?;
-    let reference_writes =
-        projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
-    attach_projected_global_write_values_v1(
-        &mut blocks,
-        &sources,
-        &reference_writes,
-        assertion_facts,
-    )?;
-    let access_sources = production_access_sources(&blocks, &sources, assertion_facts)?;
-    let system_coherent_allocations = intrinsic
-        .local_contracts
-        .allocations
-        .iter()
-        .flatten()
-        .filter(|contract| contract.singleton_object)
-        .map(|contract| contract.allocation_origin)
-        .collect::<Vec<_>>();
-    let kernel = ProductionRankedKernelV1::new(
-        function_name(root_function)?,
-        bounds_checks.argument_count,
+
+    Ok(PreparedProjectedRankedGeometryV1 {
         blocks,
-    )
-    .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
-    if let Some(error) = incomplete {
-        return Err(error);
-    }
-    let lowering = if reference_bindings.as_slice().is_empty() {
-        let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
-        let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
-            .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-        compile_ranked_kernel_for_gfx942_lowering_v1(
-            construction,
-            ProductionSessionLimitsV1::default(),
-            system_coherent_allocations,
-        )
-        .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-            error: Box::new(error),
-            ranked_ir,
-            access_sources: sources,
-        })?
-    } else {
-        let reserved_reference_values =
-            reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "reference-effect scalar reservations were not retained",
-            ))?;
-        crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
-            kernel,
-            reference_bindings,
-            &reference_writes,
-            reserved_reference_values,
-        )
-        .and_then(|request| request.prove_and_compile())
-        .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
-    };
-    let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
-    let export_symbol = root_function
-        .kernel_entry()
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "a semantic KernelRoot without an authenticated kernel entry",
-        ))?
-        .export_symbol()
-        .as_bytes()
-        .to_vec()
-        .into_boxed_slice();
-    Ok(ProductionRankedRootProgramV1 {
-        logical_name: logical_name.to_owned(),
-        export_symbol,
-        semantic_root: selection.root(),
-        semantic_root_identity: root_function.identity(),
-        kernel_binding,
-        source_rank: source_launch.rank(),
-        semantic_u32_induction,
-        lowering,
-        ranked_ir,
-        access_sources,
+        sources,
         executable_effect_sources,
+        argument_count: bounds_checks.argument_count,
+        reserved_reference_values,
+        intrinsic,
+        semantic_u32_induction,
+        kernel_binding,
+        incomplete,
     })
 }
 
@@ -7503,6 +7574,33 @@ fn project_intrinsic_contracts(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
+    project_intrinsic_contracts_with_recording_v1(
+        callables,
+        callable_effects,
+        types,
+        function,
+        linear_launch_upper_bound,
+        constants,
+        operations,
+        next_value,
+        ranked_ir,
+        |_, _| Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_intrinsic_contracts_with_recording_v1(
+    callables: &[SemanticCallableDeclV1],
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    linear_launch_upper_bound: Option<u64>,
+    constants: &[Option<u64>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+    record: impl FnOnce(&[Option<u32>], &[Option<u32>]) -> Result<(), ProductionRankedProjectionErrorV1>,
+) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
     reject_retired_production_intrinsics_v1(callables)?;
     let local_count = function.locals().len();
     let mut index_values = vec![None; local_count];
@@ -9279,6 +9377,7 @@ fn project_intrinsic_contracts(
     };
     let generated_terminator_effects =
         project_generated_terminator_effects_v1(types, function, callables)?;
+    record(&runtime_index_arguments, &runtime_slice_extent_arguments)?;
     Ok(IntrinsicProjectionV1 {
         index_values,
         ordinary_index_values,
@@ -19820,6 +19919,8 @@ struct ProjectedCfgControlInputsV1<'a> {
     uniform_inductions: &'a [ProjectedUniformInductionV1],
     checked_control: Option<checked_control_v1::CheckedControlFrameV1>,
     checked_bounds: &'a [ProjectedBoundsCheckV1],
+    write_values: ProjectedGlobalWriteValuesV1,
+    recorder: Option<&'a mut canonical_memory_control_v1::CanonicalMemoryControlRecorderV1>,
 }
 
 #[cfg(test)]
@@ -19854,6 +19955,8 @@ fn build_ranked_cfg(
             uniform_inductions,
             checked_control: None,
             checked_bounds: &[],
+            write_values: ProjectedGlobalWriteValuesV1::Expression,
+            recorder: None,
         },
     )
 }
@@ -19873,6 +19976,8 @@ fn build_ranked_cfg_with_control(
         uniform_inductions,
         checked_control,
         checked_bounds,
+        write_values,
+        mut recorder,
     } = control;
     if projected_blocks.len() != function.blocks().len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -19915,7 +20020,9 @@ fn build_ranked_cfg_with_control(
             })
             .collect::<Result<Vec<_>, _>>()?;
         bounds_cfg_v1::retain_all_live_source_guards(
-            &mut terminators, checked_bounds, assertion_facts,
+            &mut terminators,
+            checked_bounds,
+            assertion_facts,
         )?;
         let entry = function.entry().index() as usize;
         let reachable = reachable_projected_blocks(entry, &terminators)?;
@@ -19969,7 +20076,9 @@ fn build_ranked_cfg_with_control(
         ));
     }
     let mut ordinary_value_count = 0usize;
-    if assertion_facts.checked_control_enabled_v1() {
+    if matches!(write_values, ProjectedGlobalWriteValuesV1::Expression)
+        && assertion_facts.checked_control_enabled_v1()
+    {
         for item in projected_blocks.iter().flat_map(|block| &block.items) {
             assertion_facts.charge_private_array_work(2)?;
             let ordinary = match item {
@@ -20063,14 +20172,16 @@ fn build_ranked_cfg_with_control(
                     source,
                 } => {
                     if let Some(source) = source {
-                        reserve_projected_global_write_value_v1(
-                            &mut operations,
-                            &mut operation,
-                            source.memory_space,
-                            source.semantic_site,
-                            &mut next_value,
-                            assertion_facts,
-                        )?;
+                        if matches!(write_values, ProjectedGlobalWriteValuesV1::Expression) {
+                            reserve_projected_global_write_value_v1(
+                                &mut operations,
+                                &mut operation,
+                                source.memory_space,
+                                source.semantic_site,
+                                &mut next_value,
+                                assertion_facts,
+                            )?;
+                        }
                         sources.push(ProjectedAccessSourceV1 {
                             private_array_role: source.private_array_role,
                             block: current,
@@ -20134,14 +20245,16 @@ fn build_ranked_cfg_with_control(
                     };
                     let mut access_operation = access_operation;
                     let mut access_operations = Vec::new();
-                    reserve_projected_global_write_value_v1(
-                        &mut access_operations,
-                        &mut access_operation,
-                        access.memory_space,
-                        access.semantic_site,
-                        &mut next_value,
-                        assertion_facts,
-                    )?;
+                    if matches!(write_values, ProjectedGlobalWriteValuesV1::Expression) {
+                        reserve_projected_global_write_value_v1(
+                            &mut access_operations,
+                            &mut access_operation,
+                            access.memory_space,
+                            access.semantic_site,
+                            &mut next_value,
+                            assertion_facts,
+                        )?;
+                    }
                     let access_operation_index = access_operations.len();
                     access_operations.push(access_operation);
                     if !live.is_empty() {
@@ -20263,6 +20376,22 @@ fn build_ranked_cfg_with_control(
                     operations.push(effect.operation);
                 }
             }
+        }
+        if let Some(recorder) = recorder.as_deref_mut() {
+            let mut end = block_count;
+            for next in &base_blocks[semantic_index + 1..] {
+                assertion_facts.charge_private_array_work(1)?;
+                if let Some(next) = next {
+                    end = *next;
+                    break;
+                }
+            }
+            let first = base_blocks[semantic_index].ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "canonical control source base absent",
+                ),
+            )?;
+            recorder.block(semantic_index, first, current, end, assertion_facts)?;
         }
         if let Some((induction_index, induction)) = uniform_inductions
             .iter()
@@ -20591,20 +20720,34 @@ fn build_ranked_cfg_with_control(
                     "a projected CFG reaches a source block absent from the materialized graph",
                 ));
             }
-            ProjectedCfgTerminatorV1::BoundsAssert { index, extent, success } => {
+            ProjectedCfgTerminatorV1::BoundsAssert {
+                index,
+                extent,
+                success,
+            } => {
                 assertion_facts.charge_private_array_work(6)?;
                 let failure = current.checked_add(1).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported("source bounds failure block overflow"),
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "source bounds failure block overflow",
+                    ),
                 )?;
                 push_block_at(
-                    &mut blocks, current, operations,
+                    &mut blocks,
+                    current,
+                    operations,
                     ProductionRankedTerminatorV1::IndexLessThan {
-                        lhs: index, rhs: extent,
+                        lhs: index,
+                        rhs: extent,
                         true_block: ranked_block_id(projected_target(&base_blocks, success)?)?,
                         false_block: ranked_block_id(failure)?,
                     },
                 )?;
-                push_block_at(&mut blocks, failure, Vec::new(), ProductionRankedTerminatorV1::Trap)?;
+                push_block_at(
+                    &mut blocks,
+                    failure,
+                    Vec::new(),
+                    ProductionRankedTerminatorV1::Trap,
+                )?;
             }
             ProjectedCfgTerminatorV1::Branch(target) => push_block_at(
                 &mut blocks,
@@ -20940,7 +21083,9 @@ fn reachable_projected_blocks(
                 ));
             }
             ProjectedCfgTerminatorV1::Branch(target)
-            | ProjectedCfgTerminatorV1::BoundsAssert { success: target, .. } => pending.push(*target),
+            | ProjectedCfgTerminatorV1::BoundsAssert {
+                success: target, ..
+            } => pending.push(*target),
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block,
@@ -39831,3 +39976,8 @@ mod tests {
         }
     }
 }
+
+mod canonical_memory_control_v1 {
+    include!("production_ranked_projection_v1/canonical_memory_control_v1.rs");
+}
+include!("production_ranked_projection_v1/canonical_memory_analysis_v1.rs");

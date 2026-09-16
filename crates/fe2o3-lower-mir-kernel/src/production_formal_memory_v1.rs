@@ -399,36 +399,54 @@ fn derive_checked_output_formal_obligation_rows_v1(
         return Err(ProductionFormalMemoryErrorV1::KernelCount { actual: 0 });
     }
     let mut kernels = Vec::with_capacity(module.kernels.len());
-    for kernel in &module.kernels {
-        let analysis = derive_kernel_memory_obligations_for_launch(
-            module,
-            &kernel.id,
-            ExplicitLaunchExtent::Exact {
-                rank: kernel.domain.rank(),
-                extents: witness_extents(&kernel.domain),
-            },
-            FormalIndexWidth::Bits64,
-        )
-        .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
-        let obligations = match analysis {
-            FormalMemoryObligationAnalysis::Complete(obligations) => obligations,
-            FormalMemoryObligationAnalysis::Incomplete { reasons, .. } => {
-                return Err(ProductionFormalMemoryErrorV1::Incomplete {
-                    reasons: reasons.into_boxed_slice(),
-                });
-            }
-        };
-        if !obligations.inter_invocation_conflicts().is_empty() {
-            return Err(ProductionFormalMemoryErrorV1::InterInvocationConflicts {
-                conflicts: obligations
-                    .inter_invocation_conflicts()
-                    .to_vec()
-                    .into_boxed_slice(),
-            });
-        }
+    for (index, _) in module.kernels.iter().enumerate() {
+        let obligations = derive_complete_output_formal_kernel_v1(checked.owner(), index)?
+            .ok_or(ProductionFormalMemoryErrorV1::ObligationMismatch)?;
         kernels.push(obligations);
     }
     Ok(kernels.into_boxed_slice())
+}
+
+/// Fresh inert data for one actual output kernel; an absent index returns None.
+/// The kernel and witness domain are borrowed from the same owner in O(1).
+/// This neither binds a source/ranked result nor grants formal admission.
+/// Formal work, scratch and obligation storage retain the engine's existing
+/// separate resource domain; no canonical-ledger coverage is implied.
+pub(crate) fn derive_complete_output_formal_kernel_v1(
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    kernel_index: usize,
+) -> Result<Option<FormalMemoryObligations>, ProductionFormalMemoryErrorV1> {
+    let module = output.module();
+    let Some(kernel) = module.kernels.get(kernel_index) else {
+        return Ok(None);
+    };
+    let analysis = derive_kernel_memory_obligations_for_launch(
+        module,
+        &kernel.id,
+        ExplicitLaunchExtent::Exact {
+            rank: kernel.domain.rank(),
+            extents: witness_extents(&kernel.domain),
+        },
+        FormalIndexWidth::Bits64,
+    )
+    .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
+    let obligations = match analysis {
+        FormalMemoryObligationAnalysis::Complete(obligations) => obligations,
+        FormalMemoryObligationAnalysis::Incomplete { reasons, .. } => {
+            return Err(ProductionFormalMemoryErrorV1::Incomplete {
+                reasons: reasons.into_boxed_slice(),
+            });
+        }
+    };
+    if !obligations.inter_invocation_conflicts().is_empty() {
+        return Err(ProductionFormalMemoryErrorV1::InterInvocationConflicts {
+            conflicts: obligations
+                .inter_invocation_conflicts()
+                .to_vec()
+                .into_boxed_slice(),
+        });
+    }
+    Ok(Some(obligations))
 }
 
 fn derive_admitted_obligations(
@@ -582,7 +600,15 @@ fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {
 
 #[cfg(test)]
 mod tests {
-    use fe2o3_kernel_ir::{BlockId, FunctionOperationLocation, ValueId};
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, BasicBlock, BlockId,
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work, Constant, Function, FunctionId,
+        FunctionOperationLocation, Kernel, MemoryAccess, Module, Operation, OperationKind,
+        Signature, Terminator, Type, ValueDef, ValueId,
+        VerifiedCanonicalKernelIrModuleV12 as Output,
+    };
+    use fe2o3_pliron::{CheckedNeutralKernelIrOwnerV1, KirPlironGraphV12};
 
     use super::*;
 
@@ -629,5 +655,438 @@ mod tests {
         assert!(diagnostic.contains("semantic memory access site has no ranked access receipt"));
         assert!(diagnostic.contains("block: BlockId(5)"));
         assert!(diagnostic.contains("operation_index: 8"));
+    }
+
+    // Canonical KIR components, not admitted source/Store/control capabilities.
+    fn formal_component(parameters: Vec<Type>, operations: Vec<Operation>) -> Module {
+        let values = (0..parameters.len())
+            .map(|index| ValueId(u32::try_from(index).unwrap()))
+            .collect();
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = operations;
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("formal-helper-component");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(parameters, vec![]),
+            values,
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "kernel",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        module
+    }
+
+    fn global_pointer(writable: bool) -> Type {
+        Type::pointer(
+            Type::F32,
+            AddressSpace::Global,
+            if writable {
+                AccessMode::ReadWrite
+            } else {
+                AccessMode::ReadOnly
+            },
+        )
+    }
+
+    fn with_formal_component(module: &Module, test: impl FnOnce(&Output, &mut Budget<'_>)) {
+        let mut work = Work::new(1_000_000_000_000);
+        let mut budget = Budget::new(&mut work, 1_000_000_000);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(29).unwrap();
+        let (output, storage) =
+            Output::from_module_ref_with_verification_budget_v12(module, &mut budget).unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        let floor = budget.storage();
+        let before = budget.work();
+        test(&output, &mut budget);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.work(), before);
+        assert_eq!(budget.failed_storage(), None);
+        drop(output);
+        budget.release_storage(storage.retained_storage()).unwrap();
+        assert_eq!(budget.storage(), 29);
+        assert_eq!(work.failed_work(), None);
+    }
+
+    #[test]
+    fn complete_helper_retains_exact_runtime_obligations_and_rejects_absent_indices() {
+        let mut module = formal_component(
+            vec![global_pointer(true), global_pointer(false), Type::F32],
+            vec![
+                Operation::effect_free(
+                    ValueDef::new(ValueId(3), Type::F32),
+                    OperationKind::Load {
+                        pointer: ValueId(1),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+                Operation::new(
+                    vec![],
+                    OperationKind::Store {
+                        pointer: ValueId(0),
+                        value: ValueId(2),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+            ],
+        );
+        module.kernels[0].domain = LaunchDomain::D1 {
+            x: LaunchExtent::Static(1),
+        };
+        with_formal_component(&module, |output, _| {
+            let actual = derive_complete_output_formal_kernel_v1(output, 0)
+                .unwrap()
+                .unwrap();
+            let fresh = derive_kernel_memory_obligations_for_launch(
+                output.module(),
+                &output.module().kernels[0].id,
+                ExplicitLaunchExtent::Exact {
+                    rank: 1,
+                    extents: [1, 1, 1],
+                },
+                FormalIndexWidth::Bits64,
+            )
+            .unwrap();
+            assert!(matches!(fresh, FormalMemoryObligationAnalysis::Complete(_)));
+            assert_eq!(&actual, fresh.obligations());
+            assert_eq!(actual.accesses().len(), 2);
+            assert_eq!(actual.bounds_requirements().len(), 2);
+            assert_eq!(actual.runtime_alias_requirements().len(), 1);
+            assert!(actual.inter_invocation_conflicts().is_empty());
+            for absent in [1, usize::MAX] {
+                assert!(
+                    derive_complete_output_formal_kernel_v1(output, absent)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        });
+        with_formal_component(&Module::new("empty-formal-component"), |output, _| {
+            assert!(
+                derive_complete_output_formal_kernel_v1(output, 0)
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
+
+    fn conflict_component(external: bool) -> Module {
+        let mut module = formal_component(
+            vec![global_pointer(true), Type::F32],
+            vec![Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(0),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            )],
+        );
+        if external {
+            module.functions[0].body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::new(
+                    vec![],
+                    OperationKind::Call {
+                        callee: FunctionId::new("external"),
+                        arguments: vec![],
+                    },
+                ));
+            module.functions.push(Function::declaration(
+                "external",
+                Signature::new(vec![], vec![]),
+            ));
+        }
+        module
+    }
+
+    #[test]
+    fn complete_helper_preserves_incomplete_before_partial_conflict_error_order() {
+        for external in [false, true] {
+            with_formal_component(&conflict_component(external), |output, _| {
+                let fresh = derive_kernel_memory_obligations_for_launch(
+                    output.module(),
+                    &output.module().kernels[0].id,
+                    ExplicitLaunchExtent::Exact {
+                        rank: 1,
+                        extents: [2, 1, 1],
+                    },
+                    FormalIndexWidth::Bits64,
+                )
+                .unwrap();
+                assert_eq!(fresh.obligations().inter_invocation_conflicts().len(), 1);
+                let error = derive_complete_output_formal_kernel_v1(output, 0).unwrap_err();
+                if external {
+                    let FormalMemoryObligationAnalysis::Incomplete {
+                        reasons: expected, ..
+                    } = fresh
+                    else {
+                        panic!("external memory effects must remain incomplete")
+                    };
+                    let ProductionFormalMemoryErrorV1::Incomplete { reasons } = error else {
+                        panic!("incompleteness must precede the partial conflict")
+                    };
+                    assert_eq!(reasons.as_ref(), expected.as_slice());
+                    assert!(
+                        matches!(reasons.as_ref(), [FormalMemoryIncompleteReason::CallEffectsUnavailable { location, callee }]
+                        if location.operation_index == 1 && callee.as_str() == "external")
+                    );
+                } else {
+                    assert!(matches!(fresh, FormalMemoryObligationAnalysis::Complete(_)));
+                    let ProductionFormalMemoryErrorV1::InterInvocationConflicts { conflicts } =
+                        error
+                    else {
+                        panic!("complete extraction must still reject inherent conflicts")
+                    };
+                    assert_eq!(
+                        conflicts.as_ref(),
+                        fresh.obligations().inter_invocation_conflicts()
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn complete_helper_does_not_discharge_an_unsupported_physical_index() {
+        let pointer = global_pointer(false);
+        let module = formal_component(
+            vec![pointer.clone(), Type::INDEX],
+            vec![
+                Operation::effect_free(
+                    ValueDef::new(ValueId(2), pointer),
+                    OperationKind::GetElementPointer {
+                        base: ValueId(0),
+                        offset: ValueId(1),
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(3), Type::F32),
+                    OperationKind::Load {
+                        pointer: ValueId(2),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+            ],
+        );
+        with_formal_component(&module, |output, _| {
+            let ProductionFormalMemoryErrorV1::Incomplete { reasons } =
+                derive_complete_output_formal_kernel_v1(output, 0).unwrap_err()
+            else {
+                panic!("an unknown actual offset has no discharge")
+            };
+            assert!(
+                matches!(reasons.as_ref(), [FormalMemoryIncompleteReason::UnsupportedIndexExpression { location, index, allocation }]
+                if location.block == BlockId(0) && location.operation_index == 0
+                    && *index == ValueId(1) && allocation.parameter_index() == 0)
+            );
+        });
+    }
+
+    fn ordered_read_roots() -> Module {
+        let mut module = Module::new("ordered-formal-roots");
+        for (kernel, entry, domain) in [
+            (
+                "z_root",
+                "z_entry",
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                "a_root",
+                "a_entry",
+                LaunchDomain::D2 {
+                    x: LaunchExtent::Static(3),
+                    y: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                "m_root",
+                "m_entry",
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Dynamic,
+                    y: LaunchExtent::Static(3),
+                    z: LaunchExtent::Static(5),
+                },
+            ),
+        ] {
+            let mut block = BasicBlock::new(BlockId(40));
+            block.operations = vec![
+                Operation::effect_free(
+                    ValueDef::new(ValueId(17), Type::F32),
+                    OperationKind::Constant(Constant::F32Bits(0)),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(18), Type::F32),
+                    OperationKind::Load {
+                        pointer: ValueId(0),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+            ];
+            block.terminator = Some(Terminator::Return { values: vec![] });
+            module.functions.push(Function::kernel_entry(
+                entry,
+                Signature::new(vec![global_pointer(false)], vec![]),
+                vec![ValueId(0)],
+                vec![block],
+            ));
+            module.kernels.push(Kernel::new(kernel, entry, domain));
+        }
+        module
+    }
+
+    fn with_checked_formal_component(
+        module: &Module,
+        test: impl FnOnce(&CheckedNeutralKernelIrOwnerV1),
+    ) {
+        let mut work = Work::new(1_000_000_000_000);
+        let mut budget = Budget::new(&mut work, 1_000_000_000);
+        budget.charge_work(7).unwrap();
+        budget.reserve_storage(29).unwrap();
+        let (input, input_storage) =
+            Output::from_module_ref_with_verification_budget_v12(module, &mut budget).unwrap();
+        budget
+            .reserve_storage(input_storage.retained_storage())
+            .unwrap();
+        let (mut graph, graph_storage) = KirPlironGraphV12::import(&input, &mut budget).unwrap();
+        budget
+            .reserve_storage(graph_storage.retained_storage())
+            .unwrap();
+        let observed = graph
+            .execute_production_neutral_optimization_v1(&mut budget)
+            .unwrap()
+            .extract()
+            .unwrap();
+        budget
+            .reserve_storage(observed.storage().retained_storage())
+            .unwrap();
+        let graph_storage = graph.retained_storage();
+        drop(graph);
+        budget.release_storage(graph_storage).unwrap();
+        let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
+        budget
+            .reserve_storage(checked.storage().retained_storage())
+            .unwrap();
+        let floor = budget.storage();
+        let before = budget.work();
+        test(&checked);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.work(), before);
+        assert_eq!(budget.failed_storage(), None);
+        let retained = checked.storage().retained_storage();
+        drop(checked);
+        budget.release_storage(retained).unwrap();
+        drop(input);
+        budget
+            .release_storage(input_storage.retained_storage())
+            .unwrap();
+        assert_eq!(budget.storage(), 29);
+        assert_eq!(work.failed_work(), None);
+    }
+
+    #[test]
+    fn legacy_collector_keeps_actual_changed_output_order_and_per_axis_witness() {
+        let source = ordered_read_roots();
+        with_checked_formal_component(&source, |checked| {
+            let output = checked.owner();
+            assert_ne!(
+                checked.native_input_audit_bytes(),
+                output.canonical().canonical_bytes()
+            );
+            let rows = derive_checked_output_formal_obligation_rows_v1(checked).unwrap();
+            assert_eq!(rows.len(), 3);
+            for (index, (name, rank, extents, count)) in [
+                ("z_root", 1, [2, 1, 1], 2),
+                ("a_root", 2, [3, 2, 1], 6),
+                ("m_root", 3, [2, 3, 5], 30),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_eq!(rows[index].kernel().as_str(), name);
+                assert_eq!(rows[index].accesses().len(), 1);
+                let invocations = rows[index].invocations().unwrap();
+                assert_eq!(invocations.end_exclusive() - invocations.start(), count);
+                let direct = derive_kernel_memory_obligations_for_launch(
+                    output.module(),
+                    &output.module().kernels[index].id,
+                    ExplicitLaunchExtent::Exact { rank, extents },
+                    FormalIndexWidth::Bits64,
+                )
+                .unwrap();
+                assert!(matches!(
+                    direct,
+                    FormalMemoryObligationAnalysis::Complete(_)
+                ));
+                assert_eq!(&rows[index], direct.obligations());
+                assert_eq!(
+                    derive_complete_output_formal_kernel_v1(output, index)
+                        .unwrap()
+                        .as_ref(),
+                    Some(&rows[index])
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn legacy_collector_preserves_empty_roster_and_first_kernel_failure() {
+        with_checked_formal_component(&Module::new("empty-formal-roster"), |checked| {
+            assert!(matches!(
+                derive_checked_output_formal_obligation_rows_v1(checked),
+                Err(ProductionFormalMemoryErrorV1::KernelCount { actual: 0 })
+            ));
+        });
+        let mut source = conflict_component(true);
+        let mut conflict = source.functions[0].clone();
+        conflict.id = FunctionId::new("conflict_entry");
+        assert!(matches!(
+            conflict.body.as_mut().unwrap().blocks[0]
+                .operations
+                .pop()
+                .unwrap()
+                .kind,
+            OperationKind::Call { .. }
+        ));
+        source.functions.push(conflict);
+        source.kernels.push(Kernel::new(
+            "conflict_kernel",
+            "conflict_entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        for conflict_first in [false, true] {
+            if conflict_first {
+                source.kernels.swap(0, 1);
+            }
+            with_checked_formal_component(&source, |checked| {
+                let error = derive_checked_output_formal_obligation_rows_v1(checked).unwrap_err();
+                if conflict_first {
+                    assert_eq!(
+                        checked.owner().module().kernels[0].id.as_str(),
+                        "conflict_kernel"
+                    );
+                    assert!(matches!(
+                        error,
+                        ProductionFormalMemoryErrorV1::InterInvocationConflicts { .. }
+                    ));
+                } else {
+                    assert_eq!(checked.owner().module().kernels[0].id.as_str(), "kernel");
+                    assert!(matches!(
+                        error,
+                        ProductionFormalMemoryErrorV1::Incomplete { .. }
+                    ));
+                }
+            });
+        }
     }
 }

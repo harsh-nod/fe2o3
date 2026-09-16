@@ -67,6 +67,20 @@ pub struct ProductionPreRankedKirOwnerV1 {
 }
 
 impl ProductionPreRankedKirOwnerV1 {
+    /// Borrow the source-to-N ordinary Store trace owned by this materialization.
+    /// These numeric rows are source-replayed importer correspondence only;
+    /// they grant no numerical, optimized-output, or artifact authority.
+    pub fn source_store_value_uses_v1(&self) -> &[SemanticKirSourceStoreValueUseV1] {
+        &self.correspondence.source_store_value_uses
+    }
+
+    /// Replay the existing source-to-N materialization and compare the complete
+    /// executable and correspondence, including each Store-use row.
+    /// This uses the existing source-phase limits, not a canonical byte receipt.
+    pub fn replay_source_store_value_uses_v1(&self) -> Result<(), ProductionSemanticKirErrorV1> {
+        source_output_replay_v1(self)
+    }
+
     /// Materializes the retained SSA plans once, using the full source launch
     /// roster. No ranked verification receipt is accepted at this stage.
     ///
@@ -74,6 +88,8 @@ impl ProductionPreRankedKirOwnerV1 {
     /// sealing scratch, and retained payload, including their coexistence.
     /// Retained source MIR, SSA plans, launch rows, legacy correspondence/bytes
     /// and other lowering scratch keep their existing limits and are excluded.
+    /// This includes Store-use rows and definition scratch: their module-shared
+    /// source-phase work and actual-capacity row caps are not receipt bytes.
     /// The incoming live floor is restored after failure drops or success transfer.
     /// Before another allocation, reserve BOTH `executable_storage()` and
     /// `assert_origin_storage()` while this owner or its attached successor lives.

@@ -786,4 +786,6 @@ mod admitted_source_transport_v1 {
         // This source cannot reach call emission: retained aggregate storage is
         // an earlier unsupported prerequisite, not permission to flatten memory.
     }
+
+    include!("production_source_store_value_uses_v1_tests.rs");
 }

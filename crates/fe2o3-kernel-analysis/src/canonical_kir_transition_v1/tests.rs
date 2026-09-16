@@ -20,6 +20,8 @@ use fe2o3_kernel_ir::{
 mod catalog_transport;
 mod control;
 mod control_index;
+mod dominance_cse;
+mod integer_identities;
 mod receipt_wire;
 mod resources;
 mod scalar;

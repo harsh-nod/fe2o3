@@ -141,12 +141,7 @@ struct LocalCseKey {
 
 impl LocalCseKey {
     fn from_operation(operation: Ptr<Operation>, context: &Context) -> Option<Self> {
-        let dynamic = Operation::get_op_dyn(operation, context);
-        let effects = op_cast::<dyn SideEffects>(&*dynamic)?;
-        if effects.has_side_effects(context) {
-            return None;
-        }
-        let kind = verified_kind(operation, context)?;
+        let kind = BorrowedPureCseKeyV1::from_operation(operation, context)?.kind;
         let operation = operation.deref(context);
         Some(Self {
             kind,
@@ -178,4 +173,68 @@ fn verified_kind(operation: Ptr<Operation>, context: &Context) -> Option<LocalCs
     verified!(SliceLengthOp, SliceLength);
     verified!(SliceDataOp, SliceData);
     None
+}
+
+/// A verified borrowed form of exactly the existing local CSE key. It owns no
+/// attribute or operand storage. Retained keys are only valid while their
+/// operations remain live; dominance CSE never removes an available operation.
+#[derive(Clone, Copy)]
+pub(super) struct BorrowedPureCseKeyV1 {
+    operation: Ptr<Operation>,
+    kind: LocalCseOperationKind,
+}
+
+impl BorrowedPureCseKeyV1 {
+    pub(super) fn from_operation(operation: Ptr<Operation>, context: &Context) -> Option<Self> {
+        let dynamic = Operation::get_op_dyn(operation, context);
+        let effects = op_cast::<dyn SideEffects>(&*dynamic)?;
+        if effects.has_side_effects(context) {
+            return None;
+        }
+        Some(Self {
+            operation,
+            kind: verified_kind(operation, context)?,
+        })
+    }
+
+    pub(super) fn operation(self) -> Ptr<Operation> {
+        self.operation
+    }
+
+    pub(super) fn structured_width(operation: Ptr<Operation>, context: &Context) -> Option<usize> {
+        let operation = operation.deref(context);
+        operation
+            .get_num_results()
+            .checked_add(operation.get_num_operands())?
+            .checked_add(operation.attributes.0.len())
+    }
+
+    pub(super) fn exactly_equal(self, other: Self, context: &Context) -> bool {
+        if self.kind != other.kind {
+            return false;
+        }
+        let left = self.operation.deref(context);
+        let right = other.operation.deref(context);
+        left.attributes == right.attributes
+            && left.result_types().eq(right.result_types())
+            && left.operands().eq(right.operands())
+    }
+
+    pub(super) fn hash_non_attribute_fields(
+        self,
+        context: &Context,
+        hasher: &mut impl std::hash::Hasher,
+    ) {
+        use std::hash::Hash;
+        self.kind.hash(hasher);
+        let operation = self.operation.deref(context);
+        operation.get_num_results().hash(hasher);
+        for result_type in operation.result_types() {
+            result_type.hash(hasher);
+        }
+        operation.get_num_operands().hash(hasher);
+        for operand in operation.operands() {
+            operand.hash(hasher);
+        }
+    }
 }

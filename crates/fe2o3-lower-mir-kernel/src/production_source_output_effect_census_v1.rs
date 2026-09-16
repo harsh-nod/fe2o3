@@ -460,12 +460,6 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                     budget.charge_work(2).map_err(Error::Resource)?;
                     if matches!(operation.kind, OperationKind::Call { .. }) {
                         budget.charge_work(5).map_err(Error::Resource)?;
-                        // The replayed lowerer emits at most one shared runtime
-                        // failure block per function, outside all source blocks.
-                        // A second Call cannot use that rule, even with its name.
-                        if runtime_failure_seen {
-                            return Err(Error::Invalid("duplicate runtime failure trap Call"));
-                        }
                         let coordinate = Coordinate {
                             block: BlockCoordinate {
                                 function: canonical,
@@ -476,6 +470,14 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                             operation: u32::try_from(operation_index)
                                 .map_err(|_| Error::Resource(AssertOriginResourceV1::Arithmetic))?,
                         };
+                        if self.retained_ordinary_call_v1(owner, function, coordinate, budget)?.is_some() {
+                            continue;
+                        }
+                        // Only a non-defined Call can reach the unchanged,
+                        // exact source-generated runtime-failure exception.
+                        if runtime_failure_seen {
+                            return Err(Error::Invalid("duplicate runtime failure trap Call"));
+                        }
                         self.census_runtime_failure_trap_v1(owner, function, coordinate, budget)?;
                         runtime_failure_seen = true;
                         continue;

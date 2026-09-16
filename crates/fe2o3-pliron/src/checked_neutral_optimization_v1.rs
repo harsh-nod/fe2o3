@@ -235,85 +235,44 @@ impl KirNeutralOptimizationOutputV1<'_> {
         )
             -> Result<(T, usize), E>,
     {
-        let observed_storage = self.storage.retained_storage();
-        let Some(floor) = budget.storage().checked_sub(observed_storage) else {
-            drop(self);
-            return Err(Resource::Accounting.into());
-        };
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            budget.charge_work(1)?;
-            let scratch_floor = budget.storage();
-            let (origin_owner, origin_storage) = {
-                let (input, input_storage) = CanonicalKirInventoryV1::derive(self.input, budget)
-                    .map_err(KirCheckedNeutralOptimizationErrorV1::Inventory)?;
-                budget.reserve_storage(input_storage.retained_storage())?;
-                let (output, output_storage) = CanonicalKirInventoryV1::derive(&self.owner, budget)
-                    .map_err(KirCheckedNeutralOptimizationErrorV1::Inventory)?;
-                budget.reserve_storage(output_storage.retained_storage())?;
-                let (checked, checked_storage) = check_canonical_kir_transition_v1(
-                    &input,
-                    &output,
-                    self.occurrences.candidate(),
-                    budget,
-                )
-                .map_err(KirCheckedNeutralOptimizationErrorV1::Transition)?;
-                budget.reserve_storage(checked_storage.retained_storage())?;
-                let callback_floor = budget.storage();
-                let callback = origins(&checked, budget);
-                if budget.storage() != callback_floor {
-                    drop(callback);
-                    return Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting);
-                }
-                let (owner, retained) =
-                    callback.map_err(KirCheckedNeutralOptimizationErrorV1::Origin)?;
-                if retained < size_of::<T>() {
-                    drop(owner);
-                    return Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting);
-                }
-                budget.reserve_storage(retained)?;
-                (owner, retained)
-            };
-            // Inventories and the checked borrow have ended, but the callback's
-            // owned transfer stays reserved throughout subsequent allocation.
-            let scratch = budget
-                .storage()
-                .checked_sub(scratch_floor)
-                .and_then(|live| live.checked_sub(origin_storage))
-                .ok_or(Resource::Accounting)?;
-            budget.release_storage(scratch)?;
-            budget.reserve_storage(size_of::<KirNeutralOwnedOriginStorageV1>())?;
-            let origin_storage = origin_storage
-                .checked_add(size_of::<KirNeutralOwnedOriginStorageV1>())
-                .ok_or(Resource::Arithmetic)?;
-            let wrapper = checked_wrapper_storage_v1().ok_or(Resource::Arithmetic)?;
-            // The old observed wrapper still coexists until its fields move.
-            budget.reserve_storage(wrapper)?;
-            let bytes = self.input.canonical().canonical_bytes();
-            budget.charge_work(bytes.len())?;
-            budget.reserve_storage(bytes.len())?;
-            let mut input_history = Vec::new();
-            input_history
-                .try_reserve_exact(bytes.len())
-                .map_err(|_| Resource::Allocation)?;
-            if input_history.capacity() != bytes.len() {
-                return Err(Resource::Accounting.into());
-            }
-            input_history.extend_from_slice(bytes);
-            let retained = observed_storage
-                .checked_sub(output_wrapper_storage_v1().ok_or(Resource::Arithmetic)?)
-                .and_then(|amount| amount.checked_add(wrapper))
-                .and_then(|amount| amount.checked_add(input_history.capacity()))
-                .ok_or(Resource::Arithmetic)?;
-            let KirNeutralOptimizationOutputV1 {
-                input: _,
+        let KirNeutralOptimizationOutputV1 {
+            input,
+            owner,
+            report,
+            bridge,
+            map,
+            occurrences,
+            storage,
+        } = self;
+        check_and_finish_parts(
+            ObservedParts {
+                input,
                 owner,
                 report,
                 bridge,
                 map,
                 occurrences,
-                storage: _,
-            } = self;
-            Ok((
+                storage,
+                extra: (),
+            },
+            budget,
+            origins,
+            output_wrapper_storage_v1,
+            checked_wrapper_storage_v1,
+            crate::fixed_policy_v3::FixedPolicy::Historical2,
+        )
+        .map(|(parts, origin, receipt)| {
+            let CheckedParts {
+                owner,
+                report,
+                bridge,
+                map,
+                occurrences,
+                input_history,
+                storage,
+                extra: (),
+            } = parts;
+            (
                 CheckedNeutralKernelIrOwnerV1 {
                     owner,
                     report,
@@ -321,29 +280,174 @@ impl KirNeutralOptimizationOutputV1<'_> {
                     map,
                     occurrences,
                     input_history,
-                    storage: KirCheckedNeutralOptimizationStorageV1 { retained },
+                    storage,
                 },
-                origin_owner,
-                KirNeutralOwnedOriginStorageV1 {
-                    retained: origin_storage,
-                },
-            ))
-        }));
-        let result = match result {
-            Ok(result) => result,
-            Err(payload) => {
-                drop(payload);
-                Err(KirCheckedNeutralOptimizationErrorV1::Panicked)
-            }
-        };
-        // No allocation or callback may intervene after this explicit output
-        // transfer. Rejected owners were dropped by the unwound/returned scope.
-        if let Err(error) = restore_floor(budget, floor) {
-            drop(result);
-            return Err(error.into());
-        }
-        result
+                origin,
+                receipt,
+            )
+        })
     }
+}
+
+// Private owned fields shared by two distinct public owner types. The unit
+// historical extra never carries a policy-3 execution record through V1 custody.
+pub(super) struct ObservedParts<'input, M, X> {
+    pub(super) input: &'input Owner,
+    pub(super) owner: Owner,
+    pub(super) report: PlironOptimizationReportV1,
+    pub(super) bridge: KirBridgeOptimizedReceiptV1,
+    pub(super) map: M,
+    pub(super) occurrences: KirNeutralOccurrenceRowsV1,
+    pub(super) storage: super::KirNeutralOptimizationStorageV1,
+    pub(super) extra: X,
+}
+pub(super) struct CheckedParts<M, X> {
+    pub(super) owner: Owner,
+    pub(super) report: PlironOptimizationReportV1,
+    pub(super) bridge: KirBridgeOptimizedReceiptV1,
+    pub(super) map: M,
+    pub(super) occurrences: KirNeutralOccurrenceRowsV1,
+    pub(super) input_history: Vec<u8>,
+    pub(super) storage: KirCheckedNeutralOptimizationStorageV1,
+    pub(super) extra: X,
+}
+pub(super) fn check_and_finish_parts<M, X, T: 'static, E: 'static, F>(
+    parts: ObservedParts<'_, M, X>,
+    budget: &mut Budget<'_>,
+    origins: F,
+    observed_wrapper: fn() -> Option<usize>,
+    checked_wrapper: fn() -> Option<usize>,
+    policy: crate::fixed_policy_v3::FixedPolicy,
+) -> Result<
+    (CheckedParts<M, X>, T, KirNeutralOwnedOriginStorageV1),
+    KirCheckedNeutralOptimizationErrorV1<E>,
+>
+where
+    F: for<'view, 'inventory, 'input, 'output, 'rows, 'work> FnOnce(
+        &'view CheckedCanonicalKirTransitionV1<'inventory, 'input, 'output, 'rows>,
+        &mut Budget<'work>,
+    ) -> Result<(T, usize), E>,
+{
+    let observed_storage = parts.storage.retained_storage();
+    let Some(floor) = budget.storage().checked_sub(observed_storage) else {
+        drop(parts);
+        return Err(Resource::Accounting.into());
+    };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        budget.charge_work(1)?;
+        let scratch_floor = budget.storage();
+        let (origin_owner, origin_storage) = {
+            let (input, input_storage) = CanonicalKirInventoryV1::derive(parts.input, budget)
+                .map_err(KirCheckedNeutralOptimizationErrorV1::Inventory)?;
+            budget.reserve_storage(input_storage.retained_storage())?;
+            let (output, output_storage) = CanonicalKirInventoryV1::derive(&parts.owner, budget)
+                .map_err(KirCheckedNeutralOptimizationErrorV1::Inventory)?;
+            budget.reserve_storage(output_storage.retained_storage())?;
+            let (checked, checked_storage) = check_canonical_kir_transition_v1(
+                &input,
+                &output,
+                parts.occurrences.candidate(),
+                budget,
+            )
+            .map_err(KirCheckedNeutralOptimizationErrorV1::Transition)?;
+            budget.reserve_storage(checked_storage.retained_storage())?;
+            let callback_floor = budget.storage();
+            let callback = origins(&checked, budget);
+            if budget.storage() != callback_floor {
+                drop(callback);
+                return Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting);
+            }
+            let (owner, retained) =
+                callback.map_err(KirCheckedNeutralOptimizationErrorV1::Origin)?;
+            if retained < size_of::<T>() {
+                drop(owner);
+                return Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting);
+            }
+            budget.reserve_storage(retained)?;
+            (owner, retained)
+        };
+        // Inventories and the checked borrow have ended, but the callback's
+        // owned transfer stays reserved throughout subsequent allocation.
+        let scratch = budget
+            .storage()
+            .checked_sub(scratch_floor)
+            .and_then(|live| live.checked_sub(origin_storage))
+            .ok_or(Resource::Accounting)?;
+        budget.release_storage(scratch)?;
+        budget.reserve_storage(size_of::<KirNeutralOwnedOriginStorageV1>())?;
+        let origin_storage = origin_storage
+            .checked_add(size_of::<KirNeutralOwnedOriginStorageV1>())
+            .ok_or(Resource::Arithmetic)?;
+        let wrapper = checked_wrapper().ok_or(Resource::Arithmetic)?;
+        // The old observed wrapper still coexists until its fields move.
+        budget.reserve_storage(wrapper)?;
+        let bytes = parts.input.canonical().canonical_bytes();
+        budget.charge_work(bytes.len())?;
+        budget.reserve_storage(bytes.len())?;
+        let mut input_history = Vec::new();
+        if policy == crate::fixed_policy_v3::FixedPolicy::Checked3 {
+            budget.charge_work(2)?;
+        }
+        input_history
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| Resource::Allocation)?;
+        if input_history.capacity() != bytes.len() {
+            if policy == crate::fixed_policy_v3::FixedPolicy::Checked3 {
+                let excess = input_history
+                    .capacity()
+                    .checked_sub(bytes.len())
+                    .ok_or(Resource::Accounting)?;
+                budget.reserve_storage(excess)?;
+            }
+            return Err(Resource::Accounting.into());
+        }
+        input_history.extend_from_slice(bytes);
+        let retained = observed_storage
+            .checked_sub(observed_wrapper().ok_or(Resource::Arithmetic)?)
+            .and_then(|amount| amount.checked_add(wrapper))
+            .and_then(|amount| amount.checked_add(input_history.capacity()))
+            .ok_or(Resource::Arithmetic)?;
+        let ObservedParts {
+            input: _,
+            owner,
+            report,
+            bridge,
+            map,
+            occurrences,
+            storage: _,
+            extra,
+        } = parts;
+        Ok((
+            CheckedParts {
+                owner,
+                extra,
+                report,
+                bridge,
+                map,
+                occurrences,
+                input_history,
+                storage: KirCheckedNeutralOptimizationStorageV1 { retained },
+            },
+            origin_owner,
+            KirNeutralOwnedOriginStorageV1 {
+                retained: origin_storage,
+            },
+        ))
+    }));
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => {
+            drop(payload);
+            Err(KirCheckedNeutralOptimizationErrorV1::Panicked)
+        }
+    };
+    // No allocation or callback may intervene after this explicit output
+    // transfer. Rejected owners were dropped by the unwound/returned scope.
+    if let Err(error) = restore_floor(budget, floor) {
+        drop(result);
+        return Err(error.into());
+    }
+    result
 }
 
 #[cfg(test)]

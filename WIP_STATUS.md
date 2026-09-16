@@ -1,75 +1,92 @@
 # Issue 271 WIP Snapshot
 
-This branch shares the unpublished canonical mixed-SSA integration for review
-and coordination. It is not merge-ready, a release, or completion of issue #271.
-No public main branch is changed by publishing this snapshot.
+Review and coordination snapshot, not merge-ready, release-qualified, or completion
+of issue #271. This fast-forward refresh changes neither public main nor #272.
 
 ## Source Identity
 
 - Source host: `XSJHARMENON01`.
 - Source checkout: `/home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913`.
 - Source HEAD: `10b190b8267c0c4011b4ef6bbb52680a3c44b391`, plus its dirty working tree.
-- Captured Git-visible source: 5,011 files.
-- Source manifest SHA-256: `236e16c2d5ff5cfc3f63c04ec658951b96943b965a1365f6a6130f914ecc4a68`.
+- Git-visible source files: 5,047, excluding this status file.
+- Source manifest SHA-256: `d469d73a6b873243f7f47dcf5a4cf669e8765c8ddfd702b507d898acb7df49d6`.
 - Branch: `wip/issue271-canonical-mixed-ssa-20260915` on both compiler remotes.
+- Previous snapshot: `1cd6971aceecd8cd00e35e9a802ac6eb9ddc7fb7`.
 
-The source manifest precedes this status file. Its hash binds the recorded
-source root, HEAD, sorted paths and file bytes or symlink targets; it is not a
-Git tree ID or a complete toolchain/runtime identity. The commit tree is the
-fetchable source snapshot. The live checkout, its index and HEAD are preserved.
-
-This branch starts from the integration checkout's own base, not current main.
-It contains changes that have already landed independently and other unfinished
-work. Main advanced to `2585ce64fa101f21d8b22c626955a5f3c75fa76e` during the latest
-validation. Its new integer/launch correspondence changes are not yet reconciled
-into this integration. Do not merge or stack the entire snapshot blindly.
+The manifest binds source root, HEAD, paths and file bytes or symlink targets;
+it is not a complete toolchain/runtime identity. This branch preserves the old
+WIP history. It does not rebase the integration onto current main. Both mains
+were independently read at `179340e30877b5691c1e7643bc64230f8a617429` before
+refresh. Some changes here already landed independently; newer main changes
+still require reconciliation. Do not merge the full snapshot blindly.
 
 ## Tested Scope
 
-On this exact 5,011-file source snapshot, the following command passed with
-nightly-2026-04-03, locked/offline dependencies, HIP/HSA disabled, one build job
-and unchanged source/helper inputs:
+On this exact source snapshot, nightly-2026-04-03 with locked/offline dependencies,
+HIP/HSA disabled, one build job, and source/helper before/after guards passed:
 
 ```sh
-cargo +nightly-2026-04-03 test --locked --offline --no-fail-fast \
-  -p fe2o3-mir-model -p fe2o3-amdgcn-model \
-  -p fe2o3-lower-mir-kernel -p rustc-codegen-fe2o3
+cargo +nightly-2026-04-03 test --locked --lib -p fe2o3-lower-mir-kernel
+cargo +nightly-2026-04-03 test --locked --doc \
+  -p fe2o3-lower-mir-kernel -p fe2o3-kernel-opt -p fe2o3-pliron
 ```
 
-Result: 1,836 passed, zero failed, 94 explicitly ignored, across 79 suites.
-The observed cross-crate build scratch directory was independently confirmed
-absent after the test. Lowerer all-target Clippy with `-D warnings` also passed.
-These are compiler/component results, not all-feature repository CI, all-48
-tutorial qualification, GPU execution, formal compiler verification or release
-approval. Ignored tests remain unexecuted.
+- Lowerer library: 362 passed, zero failed or ignored.
+- Documentation: 42 passed, zero failed or ignored, including compile-fail
+  lifetime and invalid-admission cases.
 
-## Implemented And Remaining
+The immediately preceding seven-package library run had 2,595 passed, 16 failed,
+zero ignored. One failure was a resource-test assertion corrected in this
+snapshot and covered by the complete lowerer rerun. **Fifteen backend failures
+remain unresolved here.** No fully green integrated suite is claimed.
 
-The snapshot contains canonical graph/correspondence infrastructure, bounded
-ordinary helper result transport, checked-output analysis work, and the reviewed
-enum downcast and simultaneous SSA edge-fact repairs. The current critical path
-is M5 exact optimized-graph verification and M7 production integration.
+## New Integration And Open Failures
 
-Retained ordinary helper-call checked-output binding has a reviewed follow-up
-proposal but is not included here. Dominance-aware CSE and its versioned fixed
-policy integration are in development. SROA, expanded scalar/interprocedural,
-loop, memory and target optimization scope remains governed by the full issue;
-an additive library API does not complete a production milestone.
+The snapshot now includes scoped canonical Store-value/control analysis, exact
+source-rooted literal guard associations, retained ordinary-call checks, and a
+Complete-only formal-memory callback borrowing the same actual optimized output.
+Dominance-aware CSE, exact integer identity checks and native V12 lowering are
+also present; those independent primitives already landed on both mains.
 
-All tutorial compilation/reference/simulator/hardware gates, final optimized
-program admission and publication/documentation work must still be completed.
-Approved final Verus qualification is deferred, not passed. KFD is not a
-substitute for that proof runtime. Keep issues #271 and #277 open.
+The fifteen failures fall into three shared integration gaps:
+
+1. Ordinary guarded slice projection splits source blocks into generated guard,
+   access and continuation blocks; the new exact control checker intentionally
+   refuses this unsupported partition. The proposed repair retains the source
+   assertion and normalizes only exactly authorized ordinary accesses.
+2. Literal capture expects the predicate at the source segment tail, while the
+   projector currently relocates it to a generated access segment. The same
+   source-assertion retention repair is expected to address this without relaxing
+   actual N/O Compare or source SSA checks.
+3. The older partial-control frame refuses ordinary calls before the new exact
+   retained-Call analysis runs. A recorder-only conditional-return state is being
+   implemented; legacy grammar and no-return/cleanup refusals remain explicit.
+
+Those repairs are **not included**. Physical-address correspondence and a scoped
+whole-output formal/native-lowering continuation are also unfinished. This branch
+does not replace the default production pipeline or discharge missing physical
+address, functional, reference, convergence or final-publication obligations.
+
+## Remaining Milestones
+
+The critical path remains M5 exact optimized-graph verification and M7 production
+integration. M3's broader scalar/interprocedural policy, M4 loops/memory, M6 target
+optimization, M8 tutorial qualification and M9 scale/release gates remain open.
+Library APIs and independently tested batches do not complete those milestones.
+
+Approved final Verus runtime qualification is deferred, not passed. This snapshot
+claims no all-feature repository CI, complete tutorial compilation/simulation,
+GPU execution, universal compiler verification, or release approval. KFD is not
+a substitute for proof-runtime admission.
 
 ## Coordination
 
 - Roadmap: https://github.com/harsh-nod/fe2o3/issues/271
 - Canonical branch: https://github.com/harsh-nod/fe2o3/tree/wip/issue271-canonical-mixed-ssa-20260915
 - Mirror branch: https://github.com/powderluv/fe2o3/tree/wip/issue271-canonical-mixed-ssa-20260915
-- Separate capability/schema snapshot: https://github.com/harsh-nod/fe2o3/tree/wip/issue272-semantic-mir-v15-v16-20260915
+- Separate #272: https://github.com/harsh-nod/fe2o3/tree/wip/issue272-semantic-mir-v15-v16-20260915
 
-The #272 snapshot has a separate base and owner. Its semantic-MIR V15/V16
-changes must not be confused with canonical KIR versions or silently combined
-with this branch. Coordinate shared-schema allocation and source custody before
-integrating either snapshot. Reviewers should work in their own worktrees and
-link findings or bounded follow-up commits in the owning issue.
+The #272 snapshot remains separate at `a9559337915285ceed881bb2bef59437c5112eda`;
+its foreign source checkout is untouched. Semantic-MIR V15/V16 versions are not
+canonical KIR versions. Use independent worktrees and coordinate shared schema,
+source custody and bounded follow-up commits in the owning issue.

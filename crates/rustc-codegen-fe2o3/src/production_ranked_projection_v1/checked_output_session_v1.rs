@@ -59,6 +59,27 @@ impl CheckedOutputAssertionSessionV1<'_, '_, '_, '_, '_> {
         }
     }
 
+    // The callback owns every memory projection and inert recorder until it
+    // finishes. Unlike a per-root scratch scope, no retained recorder escapes
+    // this floor. Roots/candidate vectors drop before storage is released.
+    pub(super) fn with_canonical_memory_scope_v1<T>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, ProjectionError>,
+    ) -> Result<T, ProjectionError> {
+        let floor = self.budget.storage();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+        let released = self
+            .budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or_else(|| resource(Resource::Accounting))?;
+        self.budget.release_storage(released).map_err(resource)?;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
     pub(super) fn with_output_occurrences_v1<T>(
         &mut self,
         body: impl FnOnce(
@@ -363,15 +384,7 @@ pub(super) fn with_checked_output_assertions_budget_v1<'owners, T>(
             budget
                 .reserve_storage(occurrence_storage.retained_storage())
                 .map_err(resource)?;
-            let result = with_canonical_analysis_scope_v1(checked.owner(), budget, |scope| {
-                scope.with_sparse_v1(|report, budget| {
-                    body(&mut CheckedOutputAssertionSessionV1 {
-                        occurrences: &occurrences,
-                        report,
-                        budget,
-                    })
-                })
-            });
+            let result = with_checked_output_assertions_view_budget_v1(&occurrences, budget, body);
             drop(occurrences);
             budget
                 .release_storage(occurrence_storage.retained_storage())
@@ -392,4 +405,24 @@ pub(super) fn with_checked_output_assertions_budget_v1<'owners, T>(
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     }
+}
+
+// The view already owns source/binding/checked-output custody. This private
+// continuation borrows that same O and ledger; it creates no alternate owner.
+pub(super) fn with_checked_output_assertions_view_budget_v1<'owners, T>(
+    occurrences: &ProductionSourceOutputOccurrencesV1<'owners, 'owners>,
+    budget: &mut Budget<'_>,
+    body: impl FnOnce(
+        &mut CheckedOutputAssertionSessionV1<'_, '_, 'owners, '_, '_>,
+    ) -> Result<T, ProjectionError>,
+) -> Result<T, ProjectionError> {
+    with_canonical_analysis_scope_v1(occurrences.output(), budget, |scope| {
+        scope.with_sparse_v1(|report, budget| {
+            body(&mut CheckedOutputAssertionSessionV1 {
+                occurrences,
+                report,
+                budget,
+            })
+        })
+    })
 }

@@ -37,6 +37,9 @@ pub struct ProductionSourceOutputOccurrencesV1<'source, 'output> {
     private_arrays: Vec<SourceOutputArrayRowV1>,
     global_spans: Vec<SourceOutputGlobalSpanV1>,
     global_accesses: Vec<SourceOutputGlobalRowV1>,
+    ordinary_calls: SourceOutputOrdinaryCallIndexV1,
+    store_values: SourceOutputStoreValueIndexV1,
+    checked_control_rows: SourceOutputCheckedControlRowsV1,
     storage: ProductionSourceOutputStorageV1,
     assertions: SemanticKirOptimizedAssertOriginOwnerV1,
     catalogs: SourceOutputCatalogsV1,
@@ -330,9 +333,8 @@ fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
         }
         let bound = coordinates.output();
         budget.charge_work(1).map_err(Error::Resource)?;
-        if let SourceOutputCheckedEndpointV1::Optimizer(checked) = checked_output {
+        if let Some(historical) = checked_output.native_input_audit_bytes() {
             let input_bytes = bound.canonical().canonical_bytes();
-            let historical = checked.native_input_audit_bytes();
             budget.charge_work(2).map_err(Error::Resource)?;
             let bytes = input_bytes
                 .len()
@@ -359,7 +361,8 @@ fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
             .map_err(Error::Resource)?;
         budget.charge_work(1).map_err(Error::Resource)?;
         let (transition, transition_storage) = match checked_output {
-            SourceOutputCheckedEndpointV1::Optimizer(_) => {
+            SourceOutputCheckedEndpointV1::Optimizer(_)
+            | SourceOutputCheckedEndpointV1::OptimizerPolicy3(_) => {
                 fe2o3_kernel_analysis::check_canonical_kir_transition_v1(
                     &input,
                     &output,
@@ -406,6 +409,27 @@ fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
 
         let (global_spans, global_accesses, global_payload, global_header) =
             source_output_global_rows_v1(source, &transition, &control, budget)?;
+        let (ordinary_calls, ordinary_payload, ordinary_header) =
+            source_output_ordinary_calls_v1(source, &transition, budget)?;
+        let (store_values, store_payload, store_header) =
+            source_output_store_values_v1(source, coordinates, &transition, &control, budget)?;
+        let (checked_control_rows, checked_control_storage) =
+            source_output_checked_control_rows_v1(
+                source,
+                coordinates,
+                &transition,
+                &control,
+                budget,
+            )?;
+        budget
+            .reserve_storage(checked_control_storage.retained_storage())
+            .map_err(Error::Resource)?;
+        budget.charge_work(1).map_err(Error::Resource)?;
+        let checked_control_header = std::mem::size_of::<SourceOutputCheckedControlRowsV1>();
+        let checked_control_payload = checked_control_storage
+            .retained_storage()
+            .checked_sub(checked_control_header)
+            .ok_or(Error::Resource(AssertOriginResourceV1::Accounting))?;
 
         budget.charge_work(4).map_err(Error::Resource)?;
         let count = source.correspondence.blocks.len();
@@ -419,10 +443,13 @@ fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
         let own = header
             .checked_add(bytes)
             .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
-        budget.charge_work(2).map_err(Error::Resource)?;
+        budget.charge_work(5).map_err(Error::Resource)?;
         let remaining_own = own
             .checked_sub(array_header)
             .and_then(|n| n.checked_sub(global_header))
+            .and_then(|n| n.checked_sub(ordinary_header))
+            .and_then(|n| n.checked_sub(store_header))
+            .and_then(|n| n.checked_sub(checked_control_header))
             .ok_or(Error::Resource(AssertOriginResourceV1::Accounting))?;
         budget
             .reserve_storage(remaining_own)
@@ -490,12 +517,15 @@ fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
                 return Err(Error::Invalid("duplicate source block alias"));
             }
         }
-        budget.charge_work(4).map_err(Error::Resource)?;
+        budget.charge_work(7).map_err(Error::Resource)?;
         let retained = own
             .checked_add(assertion_storage.retained_storage())
             .and_then(|n| n.checked_add(catalog_storage))
             .and_then(|bytes| bytes.checked_add(array_payload))
             .and_then(|bytes| bytes.checked_add(global_payload))
+            .and_then(|bytes| bytes.checked_add(ordinary_payload))
+            .and_then(|bytes| bytes.checked_add(store_payload))
+            .and_then(|bytes| bytes.checked_add(checked_control_payload))
             .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
         drop(control);
         budget
@@ -526,6 +556,9 @@ fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
                 private_arrays,
                 global_spans,
                 global_accesses,
+                ordinary_calls,
+                store_values,
+                checked_control_rows,
                 storage: ProductionSourceOutputStorageV1(retained),
                 assertions,
                 catalogs,
@@ -613,3 +646,12 @@ include!("production_source_output_block_coverage_v1.rs");
 include!("production_source_output_checked_endpoint_v1.rs");
 
 include!("production_source_output_effect_census_v1.rs");
+
+include!("production_source_output_ordinary_calls_v1.rs");
+
+include!("production_source_output_memory_operands_v1.rs");
+include!("production_source_output_store_values_v1.rs");
+include!("production_source_output_control_rows_v1.rs");
+include!("production_source_output_control_coverage_v1.rs");
+include!("production_source_output_canonical_store_analysis_v1.rs");
+include!("production_source_output_formal_complete_v1.rs");
