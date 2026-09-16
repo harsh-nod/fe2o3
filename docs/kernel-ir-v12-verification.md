@@ -198,6 +198,44 @@ not discharge bounds or alias requirements, remove detected conflicts, prove
 source refinement, or grant production admission. Unsupported index widths and
 unmodeled address ancestry remain explicitly incomplete.
 
+## Native Text/Descriptor Replay
+
+[`check_native_v12_text_descriptor_relation_v1`](../crates/fe2o3-amdgcn-model/src/native_v12_text_descriptor_replay_v1.rs)
+borrows an admitted, target-bound V12 output O and compares its complete canonical
+bytes with the supplied published O bytes. It checks the inert catalog against
+that same graph, lowers that O through native lowering and the LLVM22 text-layout
+binder, and compares every byte of the resulting prefix and canonical descriptor
+assembly suffix with the entire supplied LLVM text. It does not rebind targets,
+rerun an optimizer, reconstruct a checked execution owner, normalize text, or
+accept extra LLVM material.
+
+The descriptor table must use the exact profile target, COV6 and a zero
+pre-finalization code-object digest. Its complete entry roster must match O's
+kernel exports, and each row must pair its entry with exactly `entry + ".kd"`.
+The [compiler producer](../crates/rustc-codegen-fe2o3/src/kernel_ir_codegen.rs)
+also checks this pairwise invariant after its existing closure checks and before
+embedding; matching two independent name sets cannot authorize swapped symbols.
+
+The move-only result borrows O, catalog, descriptor table and LLVM text. It is
+only an exact text/descriptor relation: inert descriptor fields and their matching
+embedded bytes are not authenticated source ABI, capabilities, functional/formal
+proof, optimizer execution evidence, or protected publication authority.
+
+Comparison work, roster scratch, visible returned engine buffers and the fixed
+result header use the caller's cumulative canonical ledger. Visible capacities
+are reconciled before further controlled work; scratch is dropped before release,
+and the caller reserves the returned header receipt while retaining the result.
+Native lowering, layout binding and descriptor encoding keep their existing
+separate internal resource domains. These charges are not whole-compiler work,
+allocator-peak or RSS bounds; work and failure history are not reset on cleanup.
+
+Existing native preflight and anchor limits remain unchanged. Multiple defined
+bodies retain the explicit `multiple_defined_bodies` semantic-anchor absence
+record, not active per-operation probes. This additive API changes neither the
+historical V3 replay contract nor default production or host admission. The local
+LLVM22 text-layout binder is not LLVM22 object-toolchain, hardware, LLVM-to-machine
+refinement or final qualification; those obligations remain separate.
+
 ## Canonical Transition Receipts
 
 The [transition receipt codec](../crates/fe2o3-kernel-ir/src/canonical_kir_transition_receipt_v1.rs)
