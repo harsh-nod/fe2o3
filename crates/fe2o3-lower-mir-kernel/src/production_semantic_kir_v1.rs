@@ -32,23 +32,24 @@ use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
     SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
-    SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
-    SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
-    SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
-    SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
-    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
-    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
-    SemanticProjectionV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1,
+    SemanticAtomicScopeV1, SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
+    SemanticBackendScalarV1, SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1,
+    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1,
+    SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1,
+    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
+    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
+    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticProjectionV1,
+    SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
+    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
@@ -12781,6 +12782,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 result
             }
+            SemanticStatementKindV1::Store(store) if store.atomic().is_some() => {
+                let (atomic, _) = self.prepare_atomic_load_store_v1(
+                    block,
+                    statement,
+                    store.destination(),
+                    Some(store.value()),
+                    store.volatility(),
+                    store.atomic().expect("guard requires atomic"),
+                    operations,
+                )?;
+                self.emit_results(operations, Vec::new(), OperationKind::Atomic(atomic))?;
+                Ok(())
+            }
             SemanticStatementKindV1::Store(store) if store.atomic().is_none() => {
                 let value = self.lower_operand(block, statement, store.value(), operations)?;
                 self.assign_place(
@@ -12838,6 +12852,94 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .unwrap_or("semantic statement has no exact Kernel IR lowering rule"),
             )),
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_atomic_load_store_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        place: &SemanticPlaceV1,
+        value: Option<&SemanticOperandV1>,
+        volatility: SemanticVolatilityV1,
+        atomic_access: SemanticAtomicAccessV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(Atomic, Type), ProductionSemanticKirErrorV1> {
+        let store = value.is_some();
+        let invalid = || {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic load/store has no exact scalar memory contract",
+            )
+        };
+        let valid_ordering = matches!(
+            atomic_access.ordering(),
+            SemanticAtomicOrderingV1::Relaxed | SemanticAtomicOrderingV1::SequentiallyConsistent
+        ) || matches!(
+            (store, atomic_access.ordering()),
+            (false, SemanticAtomicOrderingV1::Acquire) | (true, SemanticAtomicOrderingV1::Release)
+        );
+        if volatility != SemanticVolatilityV1::NonVolatile || !valid_ordering {
+            return Err(invalid());
+        }
+        let address = if place.projections().is_empty()
+            && self
+                .retained_local_slots
+                .contains_key(&place.local().index())
+        {
+            self.retained_local_pointer_binding_v1(
+                place.local(),
+                AccessMode::ReadWrite,
+                operations,
+            )?
+        } else {
+            self.resolve_place(block, statement, place, operations)?
+        };
+        let (pointer, pointer_ty) = address.value().map_err(|_| invalid())?;
+        let Type::Pointer(pointer_ty) = pointer_ty else {
+            return Err(invalid());
+        };
+        let pointee = (*pointer_ty.pointee).clone();
+        if !matches!(
+            pointee.as_scalar(),
+            Some(ScalarType::I32 | ScalarType::U32 | ScalarType::I64 | ScalarType::U64)
+        ) || (store && pointer_ty.access != AccessMode::ReadWrite)
+            || lower_memory_element_type(self.types, place.ty())? != pointee
+        {
+            return Err(invalid());
+        }
+        let value = match value {
+            Some(value) => {
+                let binding = self.lower_operand(block, statement, value, operations)?;
+                let (id, ty) = binding.value().map_err(|_| invalid())?;
+                if ty != pointee {
+                    return Err(invalid());
+                }
+                Some(id)
+            }
+            None => None,
+        };
+        let scope = lower_atomic_scope(atomic_access.scope()).ok_or_else(invalid)?;
+        let access = memory_access_for_type(self.types, place.ty(), pointer_ty.address_space)?;
+        Ok((
+            Atomic {
+                kind: if store {
+                    AtomicKind::Store
+                } else {
+                    AtomicKind::Load
+                },
+                pointer,
+                value,
+                compare: None,
+                access,
+                scope,
+                ordering: lower_atomic_ordering(atomic_access.ordering()),
+                failure_ordering: None,
+            },
+            pointee,
+        ))
     }
 
     fn lower_atomic_rmw(
@@ -13625,6 +13727,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         ty: input_ty,
                     });
                 }
+                if pointer_access_restriction_v1(*kind, &input_ty, &target) {
+                    return self.emit(
+                        operations,
+                        target.clone(),
+                        OperationKind::Cast {
+                            kind: CastKind::RestrictPointerAccess,
+                            value: input,
+                            to: target,
+                        },
+                    );
+                }
                 let Some(path) = lower_cast_path(*kind, &input_ty, &target) else {
                     return Err(unsupported(
                         0,
@@ -13655,6 +13768,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .0;
                 }
                 Ok(result)
+            }
+            SemanticRvalueKindV1::Load(load) if load.atomic().is_some() => {
+                let (atomic, pointee) = self.prepare_atomic_load_store_v1(
+                    block,
+                    statement,
+                    load.source(),
+                    None,
+                    load.volatility(),
+                    load.atomic().expect("guard requires atomic"),
+                    operations,
+                )?;
+                if lower_memory_element_type(self.types, result_type)? != pointee {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic atomic load result type differs from its pointee",
+                    ));
+                }
+                self.emit(operations, pointee, OperationKind::Atomic(atomic))
             }
             SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
                 if self.retained_array_slot_v1(load.source().local()).is_some() {
@@ -25456,6 +25589,54 @@ const fn lower_binary(operation: SemanticBinaryOpV1) -> Option<BinaryOp> {
         | SemanticBinaryOpV1::GreaterOrEqual
         | SemanticBinaryOpV1::GreaterThan
         | SemanticBinaryOpV1::Offset => None,
+    }
+}
+
+fn pointer_access_restriction_v1(kind: SemanticCastKindV1, from: &Type, to: &Type) -> bool {
+    matches!((kind, from, to), (SemanticCastKindV1::Pointer, Type::Pointer(from), Type::Pointer(to))
+        if from.access == AccessMode::ReadWrite && to.access == AccessMode::ReadOnly
+            && from.address_space == to.address_space && from.pointee == to.pointee)
+}
+
+#[cfg(test)]
+mod atomic_pointer_restriction_tests {
+    use super::*;
+
+    #[test]
+    fn pointer_restriction_cannot_widen_access_or_change_identity() {
+        let pointer = |element, space, access| Type::pointer(Type::Scalar(element), space, access);
+        let writable = pointer(ScalarType::U32, AddressSpace::Global, AccessMode::ReadWrite);
+        let read_only = pointer(ScalarType::U32, AddressSpace::Global, AccessMode::ReadOnly);
+        assert!(pointer_access_restriction_v1(
+            SemanticCastKindV1::Pointer,
+            &writable,
+            &read_only
+        ));
+        assert!(!pointer_access_restriction_v1(
+            SemanticCastKindV1::Pointer,
+            &read_only,
+            &writable
+        ));
+        assert!(!pointer_access_restriction_v1(
+            SemanticCastKindV1::Transmute,
+            &writable,
+            &read_only
+        ));
+        for target in [
+            pointer(ScalarType::U64, AddressSpace::Global, AccessMode::ReadOnly),
+            pointer(
+                ScalarType::U32,
+                AddressSpace::Workgroup,
+                AccessMode::ReadOnly,
+            ),
+            pointer(ScalarType::U32, AddressSpace::Global, AccessMode::WriteOnly),
+        ] {
+            assert!(!pointer_access_restriction_v1(
+                SemanticCastKindV1::Pointer,
+                &writable,
+                &target
+            ));
+        }
     }
 }
 

@@ -2577,7 +2577,9 @@ impl<'tcx> DeviceCollector<'tcx> {
         caller: &Instance<'tcx>,
     ) -> Result<(), CollectError> {
         match terminator {
-            TerminatorKind::Call { func, unwind, .. } => {
+            TerminatorKind::Call {
+                func, args, unwind, ..
+            } => {
                 // `Continue` has no executable cleanup target to traverse. Its
                 // no-unwind obligation is discharged by walking the resolved
                 // direct callee below and rejecting panic/unwind MIR there.
@@ -2590,7 +2592,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                         None,
                     ));
                 }
-                self.process_call_operand(func, caller)
+                self.process_call_operand(func, args, caller)
             }
             TerminatorKind::InlineAsm {
                 asm_macro,
@@ -2992,6 +2994,11 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ) {
                         continue;
                     }
+                    if crate::production_rustc_intrinsic_v1::authenticate_reviewed_branch_hint_origin_v1(
+                        self.tcx, instance,
+                    ) {
+                        continue;
+                    }
                     if crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                         self.tcx, instance,
                     ) {
@@ -3080,6 +3087,7 @@ impl<'tcx> DeviceCollector<'tcx> {
     fn process_call_operand(
         &mut self,
         func: &Operand<'tcx>,
+        arguments: &[rustc_span::Spanned<Operand<'tcx>>],
         caller: &Instance<'tcx>,
     ) -> Result<(), CollectError> {
         let Operand::Constant(const_op) = func else {
@@ -3158,15 +3166,14 @@ impl<'tcx> DeviceCollector<'tcx> {
             if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
                 .is_none()
             {
-                crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved).map_err(
-                    |error| {
-                        self.reachable_error(
-                            caller,
-                            &format!("unsupported rustc compiler intrinsic: {error}"),
-                            Some(self.instance_label(resolved)),
-                        )
-                    },
-                )?
+                crate::production_rustc_intrinsic_v1::classify_call(self.tcx, resolved, arguments)
+                    .map_err(|error| {
+                    self.reachable_error(
+                        caller,
+                        &format!("unsupported rustc compiler intrinsic: {error}"),
+                        Some(self.instance_label(resolved)),
+                    )
+                })?
             } else {
                 None
             };

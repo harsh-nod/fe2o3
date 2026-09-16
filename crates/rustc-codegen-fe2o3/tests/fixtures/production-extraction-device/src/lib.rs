@@ -1,10 +1,18 @@
 #![no_std]
 
-#[cfg(feature = "atomic-rmw")]
+#[cfg(any(
+    feature = "atomic-rmw",
+    feature = "atomic-load-store",
+    feature = "atomic-load-store-wide"
+))]
 use fe2o3_device::DeviceGlobalMutPtr;
 #[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
 use fe2o3_device::WriteOnlyDisjointSlice;
-#[cfg(feature = "atomic-rmw")]
+#[cfg(any(
+    feature = "atomic-rmw",
+    feature = "atomic-load-store",
+    feature = "atomic-load-store-wide"
+))]
 use fe2o3_device::atomic::Ordering;
 #[cfg(feature = "volatile-load-f32")]
 use fe2o3_device::memory;
@@ -12,6 +20,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(not(any(
     feature = "atomic-rmw",
+    feature = "atomic-load-store",
+    feature = "atomic-load-store-wide",
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "three-root-ownership",
@@ -120,6 +130,32 @@ pub fn core_atomic_rmw_v1(unsigned: DeviceGlobalMutPtr<u32>, signed: DeviceGloba
     let signed = signed.as_atomic();
     let _ = signed.fetch_min(-9, Ordering::Release);
     let _ = signed.fetch_max(10, Ordering::AcqRel);
+}
+
+#[cfg(feature = "atomic-load-store")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn core_atomic_load_store_v1(
+    unsigned: DeviceGlobalMutPtr<u32>,
+    signed: DeviceGlobalMutPtr<i32>,
+) {
+    let unsigned = unsigned.as_atomic();
+    unsigned.store(unsigned.load(Ordering::Relaxed), Ordering::Relaxed);
+    unsigned.store(unsigned.load(Ordering::Acquire), Ordering::Release);
+    unsigned.store(unsigned.load(Ordering::SeqCst), Ordering::SeqCst);
+    let signed = signed.as_atomic();
+    signed.store(signed.load(Ordering::Acquire), Ordering::Release);
+}
+
+#[cfg(feature = "atomic-load-store-wide")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn core_atomic_load_store_wide_v1(
+    wide_unsigned: DeviceGlobalMutPtr<u64>,
+    wide_signed: DeviceGlobalMutPtr<i64>,
+) {
+    let wide_unsigned = wide_unsigned.as_atomic();
+    wide_unsigned.store(wide_unsigned.load(Ordering::Acquire), Ordering::Release);
+    let wide_signed = wide_signed.as_atomic();
+    wide_signed.store(wide_signed.load(Ordering::SeqCst), Ordering::SeqCst);
 }
 
 #[cfg(feature = "write-only-output")]

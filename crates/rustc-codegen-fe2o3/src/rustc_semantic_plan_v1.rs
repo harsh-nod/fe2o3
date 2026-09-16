@@ -776,7 +776,9 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                             );
                         }
                         None => {
-                            match crate::production_rustc_intrinsic_v1::classify(tcx, resolved) {
+                            match crate::production_rustc_intrinsic_v1::classify_call(
+                                tcx, resolved, args,
+                            ) {
                                 Ok(Some(classification)) => {
                                     if classification.operation
                                         == ProductionRustcIntrinsicOperationV1::FabsF32
@@ -802,7 +804,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                                         });
                                         continue;
                                     }
-                                    if args.len() != 2 {
+                                    if args.len() != classification.source_call_arity {
                                         remember_rejection(
                                             &mut first_rejection,
                                             "normalized atomic intrinsic with unexpected call arity",
@@ -1286,6 +1288,7 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.charge(SemanticMirResourceV1::SwitchTargets, targets.iter().count())
             }
             TerminatorKind::Call {
+                func,
                 args,
                 destination,
                 unwind,
@@ -1298,7 +1301,38 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 // Its FnDef is retained by the callable owner, not as a
                 // zero-sized value in the layout-reachable type catalog.
                 self.charge(SemanticMirResourceV1::Operands, 1)?;
-                for argument in args {
+                let callee = resolve_direct_call_v1(self.tcx, self.instance, self.body, func)
+                    .map_err(|detail| reject(detail, site))?;
+                let classification =
+                    if crate::production_semantic_terminal_v1::classify(self.tcx, callee.def_id())
+                        .is_some()
+                    {
+                        None
+                    } else {
+                        crate::production_rustc_intrinsic_v1::classify_call(self.tcx, callee, args)
+                            .map_err(|_| {
+                                reject(
+                                    "normalized atomic call failed type-closure authentication",
+                                    site,
+                                )
+                            })?
+                    };
+                let semantic_arguments = classification
+                    .filter(|operation| {
+                        matches!(
+                            operation.operation,
+                            ProductionRustcIntrinsicOperationV1::AtomicLoad { .. }
+                                | ProductionRustcIntrinsicOperationV1::AtomicStore { .. }
+                        )
+                    })
+                    .map_or(args.len(), |operation| operation.operation.call_arity());
+                // A reviewed wrapper's constant ordering is committed in the
+                // atomic recipe, not emitted as a dead enum type/value.
+                self.charge(
+                    SemanticMirResourceV1::Operands,
+                    args.len() - semantic_arguments,
+                )?;
+                for argument in &args[..semantic_arguments] {
                     self.inspect_operand(&argument.node, site)?;
                 }
                 self.inspect_place(*destination, site)
@@ -3419,11 +3453,13 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(&recipe.caller.index().to_le_bytes())?;
         section.field(&recipe.block.to_le_bytes())?;
         section.field(&[recipe.operation.operation_tag()])?;
-        let (operation, access) = recipe
+        let access = recipe
             .operation
-            .atomic_rmw()
+            .atomic_access()
             .expect("preflight retains only normalized atomic intrinsics");
-        section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
+        if let Some((operation, _)) = recipe.operation.atomic_rmw() {
+            section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
+        }
         section.field(&[atomic_ordering_tag_v1(access.ordering())])?;
         section.field(&[atomic_scope_tag_v1(access.scope())])?;
         section.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes())?;

@@ -9,6 +9,8 @@ publish = false
 
 [features]
 atomic-rmw = []
+atomic-load-store = []
+atomic-load-store-wide = []
 multi-root-ownership = []
 multi-root-target-lineage = []
 three-root-ownership = []

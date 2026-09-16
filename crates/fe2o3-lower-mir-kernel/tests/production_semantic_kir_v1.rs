@@ -1444,6 +1444,10 @@ fn retained_scalar_argument_owner() -> ProductionSemanticMirOwnerV1 {
 }
 
 fn retained_pointer_atomic_rmw_owner() -> ProductionSemanticMirOwnerV1 {
+    retained_pointer_atomic_owner(None)
+}
+
+fn retained_pointer_atomic_owner(load: Option<bool>) -> ProductionSemanticMirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let pointer_ty = SemanticTypeIdV1::from_index(2);
@@ -1516,16 +1520,41 @@ fn retained_pointer_atomic_rmw_owner() -> ProductionSemanticMirOwnerV1 {
                 ),
                 SemanticStatementV1::new(
                     source,
-                    SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
-                        local_place(2, u32_ty),
-                        atomic_address,
-                        scalar_constant(u32_ty, 1, 4),
-                        SemanticAtomicRmwOpV1::Add,
-                        SemanticAtomicAccessV1::new(
-                            SemanticAtomicOrderingV1::Relaxed,
-                            SemanticAtomicScopeV1::Agent,
-                        ),
-                    )),
+                    match load {
+                        Some(true) => SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            local_place(2, u32_ty),
+                            SemanticRvalueV1::new(
+                                u32_ty,
+                                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                                    atomic_address,
+                                    SemanticVolatilityV1::NonVolatile,
+                                    Some(SemanticAtomicAccessV1::new(
+                                        SemanticAtomicOrderingV1::Acquire,
+                                        SemanticAtomicScopeV1::Agent,
+                                    )),
+                                )),
+                            ),
+                        )),
+                        Some(false) => SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            atomic_address,
+                            scalar_constant(u32_ty, 1, 4),
+                            SemanticVolatilityV1::NonVolatile,
+                            Some(SemanticAtomicAccessV1::new(
+                                SemanticAtomicOrderingV1::Release,
+                                SemanticAtomicScopeV1::Agent,
+                            )),
+                        )),
+                        None => SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
+                            local_place(2, u32_ty),
+                            atomic_address,
+                            scalar_constant(u32_ty, 1, 4),
+                            SemanticAtomicRmwOpV1::Add,
+                            SemanticAtomicAccessV1::new(
+                                SemanticAtomicOrderingV1::Relaxed,
+                                SemanticAtomicScopeV1::Agent,
+                            ),
+                        )),
+                    },
                 ),
             ],
             SemanticTerminatorKindV1::Return,
@@ -1935,6 +1964,61 @@ fn retained_pointer_atomic_rmw_loads_the_pointer_value_from_its_private_slot() {
         OperationKind::Atomic(ref atomic)
             if atomic.pointer == loaded_pointer && atomic.pointer != slot
     )));
+}
+
+#[test]
+fn retained_pointer_atomic_load_store_preserve_exact_effects() {
+    use fe2o3_kernel_ir::{AtomicKind, MemoryOrdering, SynchronizationScope};
+    for load in [false, true] {
+        let lowered = ProductionSemanticKirOwnerV1::try_lower(
+            retained_pointer_atomic_owner(Some(load)),
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .unwrap();
+        lowered.verify_equivalence().unwrap();
+        verify_module(lowered.module()).unwrap();
+        let operations = &lowered.module().functions[0].body.as_ref().unwrap().blocks[0].operations;
+        let atomics = operations
+            .iter()
+            .filter(|operation| matches!(operation.kind, OperationKind::Atomic(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(atomics.len(), 1);
+        let OperationKind::Atomic(atomic) = &atomics[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            atomic.kind,
+            if load {
+                AtomicKind::Load
+            } else {
+                AtomicKind::Store
+            }
+        );
+        assert_eq!(
+            atomic.ordering,
+            if load {
+                MemoryOrdering::Acquire
+            } else {
+                MemoryOrdering::Release
+            }
+        );
+        assert_eq!(atomic.scope, SynchronizationScope::Device);
+        assert_eq!(
+            atomic.access.address_space,
+            fe2o3_kernel_ir::AddressSpace::Global
+        );
+        assert_eq!(atomics[0].results.len(), usize::from(load));
+        assert_eq!(atomic.value.is_some(), !load);
+        assert_eq!(atomic.compare, None);
+        assert_eq!(atomic.failure_ordering, None);
+        assert!(
+            operations.iter().any(
+                |operation| matches!(operation.kind, OperationKind::Load { .. })
+                    && operation.results[0].id == atomic.pointer
+            ),
+            "retained pointer must be loaded, not mistaken for its private slot"
+        );
+    }
 }
 
 #[test]
