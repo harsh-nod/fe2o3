@@ -35,7 +35,7 @@ mod identity_getter_physical_tests {
     }
 
     fn with_admitted_fixture(
-        mut ssa: ProductionSemanticSsaOwnerV1,
+        ssa: ProductionSemanticSsaOwnerV1,
         collected_modes: bool,
         profile: Profile,
         body: impl FnOnce(
@@ -43,6 +43,48 @@ mod identity_getter_physical_tests {
             &mut CanonicalMemoryProjectedRootV1,
             &mut Budget<'_>,
         ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        with_admitted_source_fixture(ssa, collected_modes, profile, |source, view, inputs, budget| {
+            let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            with_ranked_root_preparation_v1(&projection, inputs, &references, |effects, partition| {
+                checked_output_session_v1::with_checked_output_assertions_view_budget_v1(
+                    view,
+                    budget,
+                    |session| session.with_canonical_memory_scope_v1(|session| {
+                        let source_root = projection.source_launch().roots()[0];
+                        let selection = projection.semantic_ssa().source_semantic()
+                            .select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
+                        let mut root = {
+                            let mut facts = session.for_source(source_root.selected_root(), selection.body());
+                            project_canonical_memory_root_v1(
+                                projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                &partition[0], &mut facts,
+                            )?
+                        };
+                        session.with_output_occurrences_v1(|view, budget| {
+                            body(view, &mut root, budget).map_err(|error|
+                                ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                                    canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Output(error),
+                                ))
+                        })
+                    }),
+                )
+            })
+        })
+    }
+
+    fn with_admitted_source_fixture(
+        mut ssa: ProductionSemanticSsaOwnerV1,
+        collected_modes: bool,
+        profile: Profile,
+        body: impl FnOnce(
+            &ProductionPreRankedKirOwnerV1,
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &[ProductionRankedRootInputV1],
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionRankedProjectionErrorV1>,
     ) -> Result<(), ProductionRankedProjectionErrorV1> {
         let mut work = Work::new(LIMIT);
         let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
@@ -114,41 +156,8 @@ mod identity_getter_physical_tests {
                 let view_bytes = storage.retained_storage();
                 budget.reserve_storage(view_bytes).unwrap();
                 assert!(std::ptr::eq(view.output(), checked.owner()));
-                let projection = RankedProjectionSourceV1::from_legacy(&source).unwrap();
-                let references =
-                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
                 let floor = budget.storage();
-                result = with_ranked_root_preparation_v1(
-                    &projection,
-                    &inputs,
-                    &references,
-                    |effects, partition| {
-                        checked_output_session_v1::with_checked_output_assertions_view_budget_v1(
-                            &view,
-                            &mut budget,
-                            |session| {
-                                session.with_canonical_memory_scope_v1(|session| {
-                            let source_root = projection.source_launch().roots()[0];
-                            let selection = projection.semantic_ssa().source_semantic()
-                                .select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
-                            let mut root = {
-                                let mut facts = session.for_source(source_root.selected_root(), selection.body());
-                                project_canonical_memory_root_v1(
-                                    projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
-                                    &partition[0], &mut facts,
-                                )?
-                            };
-                            session.with_output_occurrences_v1(|view, budget| {
-                                body(view, &mut root, budget).map_err(|error|
-                                    ProductionRankedProjectionErrorV1::CanonicalAssertions(
-                                        canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Output(error),
-                                    ))
-                            })
-                        })
-                            },
-                        )
-                    },
-                );
+                result = body(&source, &view, &inputs, &mut budget);
                 assert_eq!(budget.storage(), floor);
                 drop(view);
                 budget.release_storage(view_bytes).unwrap();
@@ -165,6 +174,1379 @@ mod identity_getter_physical_tests {
         budget.release_storage(capture.retained_storage()).unwrap();
         assert_eq!(budget.storage(), PREFIX);
         result
+    }
+
+    mod full_expression_recorder_tests {
+        use super::*;
+        use canonical_memory_control_v1::CanonicalMemoryControlRecorderV1 as Recorder;
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        use fe2o3_lower_mir_kernel::ProductionProjectionArgumentComponentV1 as Component;
+
+        fn resource(error: Resource) -> ProductionRankedProjectionErrorV1 {
+            ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(error),
+            )
+        }
+
+        pub(super) fn with_full_roots(
+            source: &ProductionPreRankedKirOwnerV1,
+            view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            inputs: &[ProductionRankedRootInputV1],
+            budget: &mut Budget<'_>,
+            inspect: impl FnOnce(
+                ProductionRankedRootProgramV1,
+                &Recorder,
+                &mut Budget<'_>,
+            ) -> Result<(), ProductionRankedProjectionErrorV1>,
+        ) -> Result<(), ProductionRankedProjectionErrorV1> {
+            let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+            // This admitted factory declares no reference expression. Keep the
+            // actual original object and its derived partitions throughout.
+            let references =
+                crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+            assert!(references.as_slice().is_empty());
+            let result = with_ranked_root_preparation_v1(&projection, inputs, &references, |effects, partition| {
+                checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| {
+                    session.with_canonical_memory_scope_v1(|session| {
+                        let source_root = projection.source_launch().roots()[0];
+                        let selection = projection.semantic_ssa().source_semantic()
+                            .select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
+                        let (legacy, recorder, full) = {
+                            let mut facts = session.for_source(source_root.selected_root(), selection.body());
+                            let legacy = project_and_verify_ranked_root_control_inner_v1(
+                                projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                &partition[0], &mut facts,
+                            )?;
+                            let mut recorder = Recorder::new(&mut facts)?;
+                            let full = project_and_verify_ranked_root_control_with_address_claims_v1(
+                                projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                &partition[0], &mut facts, Some(&mut recorder),
+                            )?;
+                            (legacy, recorder, full)
+                        };
+                        assert_eq!(legacy.lowering.kernel(), full.lowering.kernel());
+                        assert_eq!(legacy.ranked_ir, full.ranked_ir);
+                        assert_eq!(legacy.access_sources, full.access_sources);
+                        assert_eq!(legacy.executable_effect_sources, full.executable_effect_sources);
+                        assert_eq!(legacy.logical_name, full.logical_name);
+                        assert_eq!(legacy.export_symbol, full.export_symbol);
+                        assert_eq!(legacy.semantic_root, full.semantic_root);
+                        assert_eq!(legacy.semantic_root_identity, full.semantic_root_identity);
+                        assert_eq!(legacy.kernel_binding, full.kernel_binding);
+                        assert_eq!(legacy.source_rank, full.source_rank);
+                        drop(legacy);
+                        session.with_output_occurrences_v1(|same_view, budget| {
+                            assert!(std::ptr::eq(same_view.source(), source));
+                            inspect(full, &recorder, budget)
+                        })
+                    })
+                })
+            });
+            assert!(references.as_slice().is_empty());
+            result
+        }
+
+        fn source_leaves(
+            function: &SemanticFunctionDeclV1,
+            callables: &[SemanticCallableDeclV1],
+        ) -> (SemanticLocalIdV1, SemanticLocalIdV1, usize) {
+            let calls = function.blocks().iter().filter_map(|block| {
+                let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else { return None; };
+                matches!(callables.get(call.callee().index() as usize), Some(
+                    SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }, ..
+                    }
+                )).then_some(call)
+            }).collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1);
+            let [receiver, witness] = calls[0].arguments() else { panic!("exact getter operands"); };
+            let receiver = raw_operand_place(receiver).unwrap();
+            let witness = raw_operand_place(witness).unwrap();
+            assert!(receiver.projections().is_empty() && witness.projections().is_empty());
+            let slices = function.blocks().iter().flat_map(|block| block.statements()).filter_map(|statement| {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else { return None; };
+                if assignment.destination().local() != receiver.local() { return None; }
+                let SemanticRvalueKindV1::Borrow { place, .. } = assignment.value().kind() else { panic!("receiver borrow"); };
+                assert!(place.projections().is_empty());
+                assert!(matches!(function.locals()[place.local().index() as usize].role(), SemanticLocalRoleV1::Argument(_)));
+                Some(place.local())
+            }).collect::<Vec<_>>();
+            assert_eq!(slices.len(), 1);
+            (witness.local(), slices[0], calls[0].arguments().len())
+        }
+
+        #[test]
+        fn full_identity_expression_has_typed_parity_own_claims_and_genuine_same_n_r1() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for (value, collected_modes) in [(17, false), (29, true)] {
+                    for stores in [1, 2] {
+                        let ssa = identity_getter_shape_tests::source_ssa_options(value, collected_modes, stores);
+                        let mut completed = false;
+                        with_admitted_source_fixture(ssa, collected_modes, profile, |source, view, inputs, budget| {
+                            let semantic = source.semantic_ssa().source_semantic();
+                            let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                            let selected = semantic.select_kernel_body_for_root_v1(projection.source_launch().roots()[0].selected_root()).unwrap();
+                            let function = &semantic.functions()[selected.body().index() as usize];
+                            let (witness, slice, _) = source_leaves(function, semantic.callables());
+                            with_full_roots(source, view, inputs, budget, |full, recorder, budget| {
+                                assert_eq!(full.access_sources.len(), stores);
+                                let arguments = &recorder.candidate().arguments;
+                                let index_rows = arguments.iter().filter(|row| row.source_local == witness && row.component == Component::Scalar).collect::<Vec<_>>();
+                                let extent_rows = arguments.iter().filter(|row| row.source_local == slice && row.component == Component::SliceLength).collect::<Vec<_>>();
+                                assert_eq!(index_rows.len(), 1);
+                                assert_eq!(extent_rows.len(), 1);
+                                let index = index_rows[0].ranked_value;
+                                let extent = extent_rows[0].ranked_value;
+                                let operations = full.lowering.kernel().blocks().iter().flat_map(|block| block.operations());
+                                assert_eq!(operations.clone().filter(|operation| matches!(operation,
+                                    ProductionRankedOperationV1::InvocationIndex { result, dimension: 0, launch_extent: 0 }
+                                    if index == ProductionRankedValueV1::Local(*result))).count(), 1);
+                                let views = operations.clone().filter_map(|operation| match operation {
+                                    ProductionRankedOperationV1::ViewInSpace { result, dynamic_extents, writable: true, memory_space: MemorySpaceAttr::Global, .. }
+                                        if dynamic_extents.as_slice() == [extent] => Some(*result),
+                                    _ => None,
+                                }).collect::<Vec<_>>();
+                                assert_eq!(views.len(), 1);
+                                assert_eq!(operations.filter(|operation| matches!(operation,
+                                    ProductionRankedOperationV1::ValueAccess { kind: AccessKindAttr::Write, view, indices, .. }
+                                    if *view == ProductionRankedValueV1::Local(views[0]) && indices.as_slice() == [index])).count(), stores);
+                                let floor = budget.storage();
+                                with_authenticated_borrowed_ranked_source_roster_v1(source, vec![full].into_boxed_slice(), budget, |original, verification, budget| {
+                                    completed = true;
+                                    assert!(std::ptr::eq(original.materialized(), source));
+                                    assert_eq!(original.root_count(), 1);
+                                    assert_eq!(verification.roots().len(), 1);
+                                    assert!(!verification.roots()[0].verification().has_authenticated_functional_verification());
+                                    assert!(verification.roots()[0].verification().aggregate_verus_execution().is_none());
+                                    assert!(budget.storage() >= floor);
+                                    Ok(())
+                                }).expect("actual full Expression must satisfy genuine same-N R1; no D-root substitute");
+                                assert_eq!(budget.storage(), floor);
+                                Ok(())
+                            })
+                        }).expect("actual recorded and unrecorded full Expression prerequisite");
+                        assert!(completed);
+                    }
+                }
+            }
+        }
+
+        // Meter-only adapter: unexpected semantic queries panic. It cannot
+        // create checked output/control or supply source-proof authority.
+        struct Facts<'a, 'w> {
+            budget: &'a mut Budget<'w>,
+            work_calls: Vec<usize>,
+            reservations: Vec<usize>,
+        }
+        impl ProjectedAssertionFactsV1 for Facts<'_, '_> {
+            fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
+                self.work_calls.push(amount);
+                self.budget.charge_work(amount).map_err(resource)
+            }
+            fn reserve_checked_control_storage_v1(&mut self, bytes: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
+                self.reservations.push(bytes);
+                self.budget.reserve_storage(bytes).map_err(resource)
+            }
+            fn private_array_access(&mut self, _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1, _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1) -> Result<bool, ProductionRankedProjectionErrorV1> { panic!("meter-only recorder component"); }
+            fn private_array_constant_index(&mut self, _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1, _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> { panic!("meter-only recorder component"); }
+            fn is_materialized_block(&mut self, _: usize) -> Result<bool, ProductionRankedProjectionErrorV1> { panic!("meter-only recorder component"); }
+            fn condition(&mut self, _: usize, _: bool, _: SemanticBlockIdV1) -> Result<canonical_assertion_facts_v1::ProjectedAssertionConditionV1, ProductionRankedProjectionErrorV1> { panic!("meter-only recorder component"); }
+        }
+
+        fn with_geometry(body: impl FnOnce(&SemanticFunctionDeclV1, &[SemanticCallableDeclV1], &mut IntrinsicProjectionV1)) {
+            let ssa = identity_getter_shape_tests::source_ssa_options(17, false, 1);
+            with_admitted_source_fixture(ssa, false, Profile::Gfx942, |source, view, inputs, budget| {
+                let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                let references = crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+                with_ranked_root_preparation_v1(&projection, inputs, &references, |effects, partition| {
+                    checked_output_session_v1::with_checked_output_assertions_view_budget_v1(view, budget, |session| session.with_canonical_memory_scope_v1(|session| {
+                        let root = projection.source_launch().roots()[0];
+                        let semantic = projection.semantic_ssa().source_semantic();
+                        let selection = semantic.select_kernel_body_for_root_v1(root.selected_root()).unwrap();
+                        let mut facts = session.for_source(root.selected_root(), selection.body());
+                        let mut geometry = prepare_projected_ranked_geometry_v1(projection.semantic_ssa(), effects, selection, &inputs[0], root, &partition[0], &mut facts, ProjectedGlobalWriteValuesV1::Expression, None)?;
+                        assert!(geometry.incomplete.is_none());
+                        assert_eq!(geometry.intrinsic.guarded_accesses.len(), 1);
+                        body(&semantic.functions()[selection.body().index() as usize], semantic.callables(), &mut geometry.intrinsic);
+                        Ok(())
+                    }))
+                })
+            }).unwrap();
+        }
+
+        fn scan_schedule(function: &SemanticFunctionDeclV1, arguments: usize) -> Vec<usize> {
+            let mut schedule = vec![8];
+            schedule.extend(std::iter::repeat_n(4, function.blocks().len()));
+            schedule.push(arguments + 8);
+            for block in function.blocks() {
+                schedule.push(5);
+                schedule.extend(std::iter::repeat_n(14, block.statements().len()));
+            }
+            schedule
+        }
+
+        #[test]
+        fn full_identity_recorder_unsupported_components_add_no_claims() {
+            with_geometry(|function, callables, intrinsic| {
+                let (witness, _, _) = source_leaves(function, callables);
+                let access = intrinsic.guarded_accesses[0].clone();
+                let projected = intrinsic.index_values[witness.index() as usize].unwrap();
+                for case in 0..9 {
+                    intrinsic.guarded_accesses = vec![access.clone()];
+                    intrinsic.index_values[witness.index() as usize] = Some(projected);
+                    match case {
+                        0 => intrinsic.guarded_accesses.clear(),
+                        1 => intrinsic.guarded_accesses.push(access.clone()),
+                        2 => intrinsic.guarded_accesses[0].comparisons.push(access.comparisons[0]),
+                        3 => intrinsic.guarded_accesses[0].checked_success = Some(projected.value),
+                        4 => intrinsic.guarded_accesses[0].access = AccessKindAttr::Read,
+                        5 => intrinsic.index_values[witness.index() as usize] = None,
+                        6 => intrinsic.index_values[witness.index() as usize].as_mut().unwrap().precondition = Some((projected.value, projected.value)),
+                        7 => intrinsic.guarded_accesses[0].memory_space = MemorySpaceAttr::Private,
+                        8 => intrinsic.guarded_accesses[0].indices.clear(),
+                        _ => unreachable!(),
+                    }
+                    let mut work = Work::new(LIMIT);
+                    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                    {
+                        let mut facts = Facts { budget: &mut budget, work_calls: Vec::new(), reservations: Vec::new() };
+                        let mut recorder = Recorder::new(&mut facts).unwrap();
+                        recorder.arguments(&[Some(u32::MAX)], &[], &mut facts).unwrap();
+                        let before = recorder.candidate().arguments.clone();
+                        let reservations = facts.reservations.clone();
+                        recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts).unwrap();
+                        assert_eq!(recorder.candidate().arguments, before, "unsupported component {case}");
+                        assert_eq!(facts.reservations, reservations);
+                    }
+                    budget.release_storage(budget.storage()).unwrap();
+                }
+            });
+        }
+
+        #[test]
+        fn full_identity_recorder_reuses_exact_claims_and_rejects_conflicts() {
+            with_geometry(|function, callables, intrinsic| {
+                let (_, _, arguments) = source_leaves(function, callables);
+                let scan = scan_schedule(function, arguments).into_iter().sum::<usize>();
+                let mut work = Work::new(LIMIT);
+                let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                {
+                    let mut facts = Facts { budget: &mut budget, work_calls: Vec::new(), reservations: Vec::new() };
+                    let mut recorder = Recorder::new(&mut facts).unwrap();
+                    recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts).unwrap();
+                    assert_eq!(recorder.candidate().arguments.len(), 2);
+                    let rows = recorder.candidate().arguments.clone();
+                    let storage = facts.budget.storage();
+                    let before = facts.budget.work();
+                    recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts).unwrap();
+                    assert_eq!(recorder.candidate().arguments, rows);
+                    assert_eq!(facts.budget.storage(), storage);
+                    assert_eq!(facts.budget.work() - before, scan + 2 * (2 + 3));
+                    for index in 0..2 {
+                        recorder.candidate_mut().arguments[index].source_local = SemanticLocalIdV1::from_index(u32::MAX);
+                        let before = facts.budget.work();
+                        assert!(matches!(recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts), Err(ProductionRankedProjectionErrorV1::Incomplete("canonical identity anchor conflicts with another claim"))));
+                        assert_eq!(facts.budget.work() - before, scan + (index + 1) * (2 + 3));
+                        assert_eq!(facts.budget.storage(), storage);
+                        recorder.candidate_mut().arguments[index] = rows[index];
+                    }
+                    recorder.candidate_mut().arguments[0].component = Component::SliceLength;
+                    assert!(matches!(recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts), Err(ProductionRankedProjectionErrorV1::Incomplete("canonical identity anchor conflicts with another claim"))));
+                    assert_eq!(facts.budget.storage(), storage);
+                }
+                budget.release_storage(budget.storage()).unwrap();
+            });
+        }
+
+        #[test]
+        fn full_identity_recorder_prepays_every_scan_prefix_before_claims() {
+            with_geometry(|function, callables, intrinsic| {
+                let (_, _, arguments) = source_leaves(function, callables);
+                let mut schedule = scan_schedule(function, arguments);
+                schedule.extend([3, 6]);
+                let mut accepted = 1;
+                for (ordinal, charge) in schedule.iter().copied().enumerate() {
+                    let limit = accepted + charge - 1;
+                    let mut work = Work::new(limit);
+                    {
+                        let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                        {
+                        let mut facts = Facts { budget: &mut budget, work_calls: Vec::new(), reservations: Vec::new() };
+                        let mut recorder = Recorder::new(&mut facts).unwrap();
+                        let error = recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts).unwrap_err();
+                        assert!(matches!(error, ProductionRankedProjectionErrorV1::CanonicalAssertions(canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))) if error.actual() == accepted + charge && error.limit() == limit));
+                        assert_eq!(facts.budget.work(), accepted);
+                        assert_eq!(&facts.work_calls[1..], &schedule[..=ordinal]);
+                        assert!(recorder.candidate().arguments.is_empty());
+                        assert_eq!(facts.reservations, [std::mem::size_of::<Recorder>()]);
+                        }
+                        budget.release_storage(budget.storage()).unwrap();
+                    }
+                    assert_eq!(work.failed_work(), Some(accepted + charge));
+                    accepted += charge;
+                }
+            });
+        }
+
+        #[test]
+        fn full_identity_recorder_first_growth_and_post_allocation_denials_are_exact() {
+            with_geometry(|function, callables, intrinsic| {
+                let (_, _, arguments) = source_leaves(function, callables);
+                let scan = scan_schedule(function, arguments).into_iter().sum::<usize>();
+                let header = std::mem::size_of::<Recorder>();
+                let row = std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionProjectionArgumentCandidateV1>();
+                for storage_denial in [true, false] {
+                    // New recorder 1, scan, first join 3, push 6, empty-growth
+                    // relocation 0; second join 4 is denied after the first row.
+                    let accepted = 1 + scan + 3 + 6;
+                    let work_limit = if storage_denial { LIMIT } else { accepted + 4 - 1 };
+                    let storage_limit = if storage_denial { header + row - 1 } else { STORAGE_LIMIT };
+                    let mut work = Work::new(work_limit);
+                    let mut budget = Budget::new(&mut work, storage_limit);
+                    {
+                        let mut facts = Facts { budget: &mut budget, work_calls: Vec::new(), reservations: Vec::new() };
+                        let mut recorder = Recorder::new(&mut facts).unwrap();
+                        let error = recorder.identity_address_arguments_v1(function, callables, intrinsic, &[], &mut facts).unwrap_err();
+                        assert_eq!(facts.budget.work(), accepted);
+                        if storage_denial {
+                            assert!(matches!(error, ProductionRankedProjectionErrorV1::CanonicalAssertions(canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Storage(error))) if error.actual() == header + row && error.limit() == storage_limit));
+                            assert!(recorder.candidate().arguments.is_empty());
+                            assert_eq!(recorder.candidate().arguments.capacity(), 0);
+                            assert_eq!(facts.budget.failed_storage(), Some(header + row));
+                        } else {
+                            assert!(matches!(error, ProductionRankedProjectionErrorV1::CanonicalAssertions(canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error))) if error.actual() == accepted + 4 && error.limit() == work_limit));
+                            assert_eq!(recorder.candidate().arguments.len(), 1);
+                            assert!(recorder.candidate().arguments.capacity() >= 1);
+                            assert_eq!(facts.budget.storage(), header + recorder.candidate().arguments.capacity() * row);
+                        }
+                    }
+                    budget.release_storage(budget.storage()).unwrap();
+                }
+            });
+        }
+
+        #[test]
+        fn full_identity_recorder_balanced_callback_error_panic_and_reentry_keep_floor() {
+            let ssa = identity_getter_shape_tests::source_ssa_options(17, false, 1);
+            with_admitted_source_fixture(ssa, false, Profile::Gfx942, |source, view, inputs, budget| {
+                let floor = budget.storage();
+                let before = budget.work();
+                let mut error_entered = false;
+                let error = with_full_roots(source, view, inputs, budget, |full, recorder, _| {
+                    error_entered = true;
+                    assert!(!full.access_sources.is_empty());
+                    assert!(recorder.candidate().arguments.len() >= 2);
+                    Err(ProductionRankedProjectionErrorV1::Incomplete("full recorder callback error"))
+                });
+                assert!(error_entered);
+                assert!(matches!(error, Err(ProductionRankedProjectionErrorV1::Incomplete("full recorder callback error"))));
+                assert_eq!(budget.storage(), floor);
+                assert!(budget.work() > before);
+                let after_error = budget.work();
+                let mut panic_entered = false;
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    with_full_roots(source, view, inputs, budget, |full, recorder, _| {
+                        panic_entered = true;
+                        assert!(!full.access_sources.is_empty());
+                        assert!(recorder.candidate().arguments.len() >= 2);
+                        panic!("full recorder callback panic");
+                    })
+                })).expect_err("the completed full recorder callback must unwind");
+                assert!(panic_entered);
+                let message = panic.downcast_ref::<&'static str>().copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+                assert_eq!(message, Some("full recorder callback panic"));
+                assert_eq!(budget.storage(), floor);
+                assert!(budget.work() > after_error);
+                let after_panic = budget.work();
+                let mut reentered = false;
+                with_full_roots(source, view, inputs, budget, |full, recorder, _| {
+                    reentered = true;
+                    assert!(!full.access_sources.is_empty());
+                    assert!(recorder.candidate().arguments.len() >= 2);
+                    Ok(())
+                })?;
+                assert!(reentered);
+                assert_eq!(budget.storage(), floor);
+                assert!(budget.work() > after_panic);
+                Ok(())
+            }).expect("actual full Expression callback prerequisite, not D projection");
+        }
+    }
+
+    mod empty_default_coverage_tests {
+        use super::*;
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        use fe2o3_lower_mir_kernel::ProductionSourceOutputBlockCoverageV1 as Coverage;
+        use fe2o3_mir_model::semantic_mir_v1::{
+            SemanticBasicBlockV1, SemanticCallDestinationV1, SemanticControlFlowEdgeV1,
+            SemanticDirectCallV1, SemanticStatementV1, SemanticSwitchTargetV1,
+            SemanticSwitchTargetsV1, SemanticTerminatorV1, SemanticUnwindActionV1,
+        };
+
+        const MISMATCH: &str = "checked all-live source CFG and sealed block disposition disagree";
+
+        fn resource(error: Resource) -> ProductionRankedProjectionErrorV1 {
+            ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(error),
+            )
+        }
+
+        // Copies of genuinely queried records feed only this private numeric
+        // component. Its one-unit query is not the production query's tariff,
+        // and this adapter cannot construct a public checked owner or proof.
+        struct Facts<'a, 'w> {
+            budget: &'a mut Budget<'w>,
+            coverage: &'a [Coverage],
+            events: Vec<(&'static str, usize)>,
+            reservations: Vec<usize>,
+            scopes: usize,
+            floor: usize,
+            panic_after_allocation: bool,
+        }
+
+        impl<'a, 'w> Facts<'a, 'w> {
+            fn new(budget: &'a mut Budget<'w>, coverage: &'a [Coverage]) -> Self {
+                let floor = budget.storage();
+                Self {
+                    budget,
+                    coverage,
+                    events: Vec::new(),
+                    reservations: Vec::new(),
+                    scopes: 0,
+                    floor,
+                    panic_after_allocation: false,
+                }
+            }
+        }
+
+        impl ProjectedAssertionFactsV1 for Facts<'_, '_> {
+            fn checked_control_enabled_v1(&self) -> bool {
+                true
+            }
+            fn with_checked_control_scope_v1<T>(
+                &mut self,
+                body: impl FnOnce(&mut Self) -> Result<T, ProductionRankedProjectionErrorV1>,
+            ) -> Result<T, ProductionRankedProjectionErrorV1> {
+                self.scopes += 1;
+                let floor = self.budget.storage();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+                let retained = self
+                    .budget
+                    .storage()
+                    .checked_sub(floor)
+                    .ok_or_else(|| resource(Resource::Accounting))?;
+                self.budget.release_storage(retained).map_err(resource)?;
+                match result {
+                    Ok(result) => result,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            }
+            fn charge_private_array_work(
+                &mut self,
+                amount: usize,
+            ) -> Result<(), ProductionRankedProjectionErrorV1> {
+                self.events.push(("work", amount));
+                if self.panic_after_allocation && self.budget.storage() > self.floor {
+                    panic!("empty default initialized allocation panic");
+                }
+                self.budget.charge_work(amount).map_err(resource)
+            }
+            fn reserve_checked_control_storage_v1(
+                &mut self,
+                bytes: usize,
+            ) -> Result<(), ProductionRankedProjectionErrorV1> {
+                self.reservations.push(bytes);
+                self.budget.reserve_storage(bytes).map_err(resource)
+            }
+            fn checked_block_coverage_v1(
+                &mut self,
+                block: usize,
+            ) -> Result<Coverage, ProductionRankedProjectionErrorV1> {
+                self.events.push(("query", block));
+                self.budget.charge_work(1).map_err(resource)?;
+                Ok(self.coverage[block])
+            }
+            fn private_array_access(
+                &mut self,
+                _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+                _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+            ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+                panic!("numeric coverage component");
+            }
+            fn private_array_constant_index(
+                &mut self,
+                _: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+                _: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+            ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+                panic!("numeric coverage component");
+            }
+            fn is_materialized_block(
+                &mut self,
+                _: usize,
+            ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+                panic!("numeric coverage component");
+            }
+            fn condition(
+                &mut self,
+                _: usize,
+                _: bool,
+                _: SemanticBlockIdV1,
+            ) -> Result<
+                canonical_assertion_facts_v1::ProjectedAssertionConditionV1,
+                ProductionRankedProjectionErrorV1,
+            > {
+                panic!("numeric coverage component");
+            }
+        }
+
+        fn with_source_rows(body: impl FnOnce(&SemanticFunctionDeclV1, &[Coverage])) {
+            let ssa = identity_getter_shape_tests::source_ssa_options(17, false, 1);
+            with_admitted_source_fixture(ssa, false, Profile::Gfx942, |source, view, _, budget| {
+                let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                let root = projection.source_launch().roots()[0].selected_root();
+                let semantic = source.semantic_ssa().source_semantic();
+                let selected = semantic.select_kernel_body_for_root_v1(root).unwrap();
+                let function = &semantic.functions()[selected.body().index() as usize];
+                let mut coverage = Vec::new();
+                for index in 0..function.blocks().len() {
+                    coverage.push(
+                        view.block_coverage(
+                            root,
+                            selected.body(),
+                            SemanticBlockIdV1::from_index(index as u32),
+                            budget,
+                        )
+                        .unwrap(),
+                    );
+                }
+                body(function, &coverage);
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        // These are descriptive component inputs, not a constructed full root.
+        // Genuine full-Expression/R1 qualification remains in the six unchanged
+        // recorder tests and the captured-source positive below.
+        fn rows(
+            function: &SemanticFunctionDeclV1,
+        ) -> (
+            Vec<ProjectedSemanticBlockV1>,
+            Vec<ProjectedCfgTerminatorV1>,
+            Vec<bool>,
+            usize,
+            usize,
+        ) {
+            let mut switch = None;
+            let mut default = None;
+            let terminators = function
+                .blocks()
+                .iter()
+                .enumerate()
+                .map(|(index, block)| match block.terminator().kind() {
+                    SemanticTerminatorKindV1::Call(call) => ProjectedCfgTerminatorV1::Branch(
+                        call.destination().unwrap().edge().target().index() as usize,
+                    ),
+                    SemanticTerminatorKindV1::Goto(edge) => {
+                        ProjectedCfgTerminatorV1::Branch(edge.target().index() as usize)
+                    }
+                    SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
+                        assert!(switch.replace(index).is_none());
+                        default = Some(targets.otherwise().target().index() as usize);
+                        ProjectedCfgTerminatorV1::Predicate {
+                            predicate: GuardPredicateV1 {
+                                comparisons: vec![(
+                                    ProductionRankedValueV1::Argument(0),
+                                    ProductionRankedValueV1::Argument(1),
+                                )],
+                            },
+                            true_block: targets
+                                .values()
+                                .iter()
+                                .find(|row| row.value() == 1)
+                                .unwrap()
+                                .edge()
+                                .target()
+                                .index() as usize,
+                            false_block: targets
+                                .values()
+                                .iter()
+                                .find(|row| row.value() == 0)
+                                .unwrap()
+                                .edge()
+                                .target()
+                                .index() as usize,
+                        }
+                    }
+                    SemanticTerminatorKindV1::Return => ProjectedCfgTerminatorV1::Return,
+                    SemanticTerminatorKindV1::Unreachable => ProjectedCfgTerminatorV1::Trap,
+                    _ => panic!("unexpected actual fixture source terminator"),
+                })
+                .collect::<Vec<_>>();
+            let reachable =
+                reachable_projected_blocks(function.entry().index() as usize, &terminators)
+                    .unwrap();
+            let projected = vec![ProjectedSemanticBlockV1 { items: Vec::new() }; terminators.len()];
+            (
+                projected,
+                terminators,
+                reachable,
+                switch.unwrap(),
+                default.unwrap(),
+            )
+        }
+
+        fn replace_block(
+            function: &SemanticFunctionDeclV1,
+            index: usize,
+            statements: Vec<SemanticStatementV1>,
+            kind: SemanticTerminatorKindV1,
+        ) -> SemanticFunctionDeclV1 {
+            let mut blocks = function.blocks().to_vec();
+            let old = &blocks[index];
+            blocks[index] = SemanticBasicBlockV1::new(
+                old.identity(),
+                old.source(),
+                statements,
+                SemanticTerminatorV1::new(old.terminator().source(), kind),
+            )
+            .unwrap();
+            with_blocks(function, blocks)
+        }
+
+        fn with_blocks(
+            function: &SemanticFunctionDeclV1,
+            blocks: Vec<SemanticBasicBlockV1>,
+        ) -> SemanticFunctionDeclV1 {
+            let mut changed = SemanticFunctionDeclV1::new(
+                function.identity(),
+                function.role(),
+                function.item_definition_identity(),
+                function.monomorphization_identity(),
+                function.generic_type_arguments_identity(),
+                function.const_generic_arguments_identity(),
+                function.source(),
+                function.abi().clone(),
+                function.locals().to_vec(),
+                function.entry(),
+                blocks,
+            )
+            .unwrap();
+            if let Some(entry) = function.kernel_entry() {
+                changed = changed.with_kernel_entry(entry.clone());
+            }
+            changed
+        }
+
+        fn edge(role: SemanticEdgeRoleV1, target: usize) -> SemanticControlFlowEdgeV1 {
+            SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target as u32))
+        }
+
+        fn expect_mismatch(result: Result<(), ProductionRankedProjectionErrorV1>) {
+            assert!(
+                matches!(result, Err(ProductionRankedProjectionErrorV1::Incomplete(detail)) if detail == MISMATCH)
+            );
+        }
+
+        #[test]
+        fn empty_default_genuine_sealed_coverage_has_zero_operations_in_both_profiles() {
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for collected_modes in [false, true] {
+                    let ssa =
+                        identity_getter_shape_tests::source_ssa_options(29, collected_modes, 1);
+                    with_admitted_source_fixture(ssa, collected_modes, profile, |source, view, inputs, budget| {
+                        let projection = RankedProjectionSourceV1::from_legacy(source).unwrap();
+                        let root = projection.source_launch().roots()[0].selected_root();
+                        let semantic = source.semantic_ssa().source_semantic();
+                        let selected = semantic.select_kernel_body_for_root_v1(root).unwrap();
+                        let function = &semantic.functions()[selected.body().index() as usize];
+                        let (_, _, reachable, _, default) = rows(function);
+                        assert!(!reachable[default]);
+                        let coverage = view.block_coverage(root, selected.body(), SemanticBlockIdV1::from_index(default as u32), budget).unwrap();
+                        assert!(matches!(coverage.disposition(), fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized { executable: true, .. }));
+                        assert_eq!(coverage.source_statements(), 0);
+                        assert_eq!(coverage.original_operations(), Some(0));
+                        let floor = budget.storage();
+                        let mut entered = false;
+                        full_expression_recorder_tests::with_full_roots(source, view, inputs, budget, |full, recorder, _| {
+                            entered = true;
+                            assert_eq!(full.access_sources.len(), 1);
+                            assert_eq!(recorder.candidate().arguments.len(), 2);
+                            Ok(())
+                        })?;
+                        assert!(entered);
+                        assert_eq!(budget.storage(), floor);
+                        Ok(())
+                    }).unwrap();
+                }
+            }
+        }
+
+        #[test]
+        fn empty_default_actual_coverage_gate_all_matching_keeps_old_schedule() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, _, _, default) = rows(function);
+                let reachable = vec![true; coverage.len()];
+                assert!(matches!(
+                    terminators[default],
+                    ProjectedCfgTerminatorV1::Trap
+                ));
+                let mut work = Work::new(3 * coverage.len());
+                let mut budget = Budget::new(&mut work, PREFIX);
+                budget.reserve_storage(PREFIX).unwrap();
+                {
+                    let mut facts = Facts::new(&mut budget, coverage);
+                    bounds_cfg_v1::verify_all_live_coverage(
+                        function,
+                        &projected,
+                        &terminators,
+                        &reachable,
+                        &mut facts,
+                    )
+                    .unwrap();
+                    let expected = (0..coverage.len())
+                        .flat_map(|index| [("work", 2), ("query", index)])
+                        .collect::<Vec<_>>();
+                    assert_eq!(facts.events, expected);
+                    assert_eq!(facts.scopes, 0);
+                    assert!(facts.reservations.is_empty());
+                    assert_eq!(facts.budget.work(), 3 * coverage.len());
+                    assert_eq!(facts.budget.storage(), PREFIX);
+                }
+                budget.release_storage(PREFIX).unwrap();
+            });
+        }
+
+        #[test]
+        fn empty_default_component_exact_cost_one_roster_and_once_only_queries() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, _, default) = rows(function);
+                let count = coverage.len();
+                let edges = function
+                    .blocks()
+                    .iter()
+                    .map(|block| block.terminator().kind().edge_count())
+                    .sum::<usize>();
+                let suffix = count - default;
+                let expected = 3 * count + 18 + 13 * count + 4 * edges + 6 * suffix;
+                let mut work = Work::new(expected);
+                let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                budget.reserve_storage(PREFIX).unwrap();
+                {
+                    let mut facts = Facts::new(&mut budget, coverage);
+                    bounds_cfg_v1::verify_all_live_coverage(
+                        function,
+                        &projected,
+                        &terminators,
+                        &reachable,
+                        &mut facts,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        facts
+                            .events
+                            .iter()
+                            .filter_map(|(kind, value)| (*kind == "query").then_some(*value))
+                            .collect::<Vec<_>>(),
+                        (0..count).collect::<Vec<_>>()
+                    );
+                    assert_eq!(facts.scopes, 1);
+                    let minimum = std::mem::size_of::<Vec<bounds_cfg_v1::EmptyDefaultIncomingV1>>()
+                        + count * std::mem::size_of::<bounds_cfg_v1::EmptyDefaultIncomingV1>();
+                    assert_eq!(facts.reservations[0], minimum);
+                    assert!(facts.reservations.iter().sum::<usize>() >= minimum);
+                    assert_eq!(facts.budget.work(), expected);
+                    assert_eq!(facts.budget.storage(), PREFIX);
+                }
+                budget.release_storage(PREFIX).unwrap();
+            });
+        }
+
+        #[test]
+        fn empty_default_component_shared_and_two_defaults_build_only_once() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, switch, default) = rows(function);
+                let SemanticTerminatorKindV1::SwitchInt {
+                    discriminant,
+                    targets,
+                } = function.blocks()[switch].terminator().kind()
+                else {
+                    unreachable!();
+                };
+                let second = function
+                    .blocks()
+                    .iter()
+                    .position(|block| {
+                        matches!(block.terminator().kind(), SemanticTerminatorKindV1::Return)
+                    })
+                    .unwrap();
+                for shared in [true, false] {
+                    let mut blocks = function.blocks().to_vec();
+                    let mut projected = projected.clone();
+                    let mut terms = terminators.clone();
+                    let mut reached = reachable.clone();
+                    let mut reports = coverage.to_vec();
+                    let second_default = if shared { default } else { blocks.len() };
+                    if !shared {
+                        // Deliberate numeric component duplication, never source
+                        // admission or a claim about a second authenticated block.
+                        blocks.push(blocks[default].clone());
+                        projected.push(ProjectedSemanticBlockV1 { items: Vec::new() });
+                        terms.push(ProjectedCfgTerminatorV1::Trap);
+                        reached.push(false);
+                        reports.push(coverage[default]);
+                    }
+                    let old = &blocks[second];
+                    blocks[second] = SemanticBasicBlockV1::new(
+                        old.identity(),
+                        old.source(),
+                        old.statements().to_vec(),
+                        SemanticTerminatorV1::new(
+                            old.terminator().source(),
+                            SemanticTerminatorKindV1::SwitchInt {
+                                discriminant: discriminant.clone(),
+                                targets: SemanticSwitchTargetsV1::new(
+                                    targets.values().to_vec(),
+                                    edge(SemanticEdgeRoleV1::SwitchOtherwise, second_default),
+                                )
+                                .unwrap(),
+                            },
+                        ),
+                    )
+                    .unwrap();
+                    terms[second] = terms[switch].clone();
+                    assert!(reached[switch] && reached[second]);
+                    let changed = with_blocks(function, blocks);
+                    let count = reports.len();
+                    let edges = changed
+                        .blocks()
+                        .iter()
+                        .map(|block| block.terminator().kind().edge_count())
+                        .sum::<usize>();
+                    let expected = 3 * count + 18 + 13 * count + 4 * edges + 6 * (count - default);
+                    let mut work = Work::new(expected);
+                    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                    budget.reserve_storage(PREFIX).unwrap();
+                    {
+                        let mut facts = Facts::new(&mut budget, &reports);
+                        bounds_cfg_v1::verify_all_live_coverage(
+                            &changed, &projected, &terms, &reached, &mut facts,
+                        )
+                        .unwrap();
+                        assert_eq!(facts.scopes, 1);
+                        assert_eq!(
+                            facts
+                                .events
+                                .iter()
+                                .filter_map(|(kind, value)| (*kind == "query").then_some(*value))
+                                .collect::<Vec<_>>(),
+                            (0..count).collect::<Vec<_>>()
+                        );
+                        assert_eq!(facts.budget.work(), expected);
+                        assert_eq!(facts.budget.storage(), PREFIX);
+                    }
+                    budget.release_storage(PREFIX).unwrap();
+                }
+            });
+        }
+
+        #[test]
+        fn empty_default_component_non_candidates_keep_exact_refusal_without_allocation() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, _, default) = rows(function);
+                for case in 0..6 {
+                    let changed = match case {
+                        0 => replace_block(
+                            function,
+                            default,
+                            vec![SemanticStatementV1::new(
+                                function.source(),
+                                SemanticStatementKindV1::Nop,
+                            )],
+                            SemanticTerminatorKindV1::Unreachable,
+                        ),
+                        1 => replace_block(
+                            function,
+                            default,
+                            Vec::new(),
+                            SemanticTerminatorKindV1::Return,
+                        ),
+                        _ => function.clone(),
+                    };
+                    let mut projected = projected.clone();
+                    let mut reached = reachable.clone();
+                    let mut reports = coverage.to_vec();
+                    if case == 2 {
+                        reached[function.entry().index() as usize] = false;
+                    }
+                    if case == 3 {
+                        let nonempty = reports
+                            .iter()
+                            .copied()
+                            .find(|row| {
+                                row.source_statements() != 0 && row.original_operations() != Some(0)
+                            })
+                            .unwrap();
+                        reports[default] = nonempty;
+                    }
+                    if case == 4 {
+                        projected[default].items.push(ProjectedBlockItemV1::Effect {
+                            operation: ProductionRankedOperationV1::InvocationIndex {
+                                result: ProductionRankedValueIdV1::new(0),
+                                dimension: 0,
+                                launch_extent: 0,
+                            },
+                            source: None,
+                        });
+                    }
+                    if case == 5 {
+                        reports[default] = reports
+                            .iter()
+                            .copied()
+                            .find(|row| {
+                                row.source_statements() == 0
+                                    && row.original_operations().is_some_and(|count| count > 0)
+                            })
+                            .expect("actual source producer has operations without statements");
+                    }
+                    let first = if case == 2 {
+                        function.entry().index() as usize
+                    } else {
+                        default
+                    };
+                    let mut work = Work::new(LIMIT);
+                    let mut budget = Budget::new(&mut work, PREFIX);
+                    budget.reserve_storage(PREFIX).unwrap();
+                    {
+                        let mut facts = Facts::new(&mut budget, &reports);
+                        expect_mismatch(bounds_cfg_v1::verify_all_live_coverage(
+                            &changed,
+                            &projected,
+                            &terminators,
+                            &reached,
+                            &mut facts,
+                        ));
+                        assert_eq!(facts.budget.work(), 3 * (first + 1) + 6);
+                        assert_eq!(facts.scopes, 0);
+                        assert!(facts.reservations.is_empty());
+                    }
+                    budget.release_storage(PREFIX).unwrap();
+                }
+            });
+        }
+
+        #[test]
+        fn empty_default_component_requires_exact_reachable_predicate_and_edge_roles() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, switch, default) = rows(function);
+                let SemanticTerminatorKindV1::SwitchInt {
+                    discriminant,
+                    targets,
+                } = function.blocks()[switch].terminator().kind()
+                else {
+                    unreachable!();
+                };
+                for case in 0..8 {
+                    let mut terms = terminators.clone();
+                    let mut reached = reachable.clone();
+                    let mut changed = function.clone();
+                    match case {
+                        0 => {
+                            terms[switch] = ProjectedCfgTerminatorV1::AnalysisSplit {
+                                first_block: 3,
+                                second_block: 4,
+                            }
+                        }
+                        1 => {
+                            terms[switch] = ProjectedCfgTerminatorV1::AnalysisMultiSplit {
+                                blocks: vec![3, 4, default],
+                            }
+                        }
+                        2 => {
+                            terms[switch] = ProjectedCfgTerminatorV1::ExactSwitch(
+                                ProjectedDeterministicSwitchV1 {
+                                    source_discriminant: discriminant.clone(),
+                                    discriminant: ProductionRankedValueV1::Argument(0),
+                                    targets: Vec::new(),
+                                    otherwise: default,
+                                    lane_uniform: false,
+                                },
+                            )
+                        }
+                        3 => {
+                            if let ProjectedCfgTerminatorV1::Predicate {
+                                true_block,
+                                false_block,
+                                ..
+                            } = &mut terms[switch]
+                            {
+                                std::mem::swap(true_block, false_block);
+                            }
+                        }
+                        4 => reached[switch] = false,
+                        5..=7 => {
+                            let values = targets
+                                .values()
+                                .iter()
+                                .map(|target| {
+                                    SemanticSwitchTargetV1::new(
+                                        if case == 5 && target.value() == 1 {
+                                            2
+                                        } else {
+                                            target.value()
+                                        },
+                                        if case == 6 && target.value() == 0 {
+                                            edge(SemanticEdgeRoleV1::SwitchValue, default)
+                                        } else {
+                                            target.edge()
+                                        },
+                                    )
+                                })
+                                .collect();
+                            let otherwise = if case == 7 {
+                                edge(SemanticEdgeRoleV1::Goto, default)
+                            } else {
+                                targets.otherwise()
+                            };
+                            changed = replace_block(
+                                function,
+                                switch,
+                                function.blocks()[switch].statements().to_vec(),
+                                SemanticTerminatorKindV1::SwitchInt {
+                                    discriminant: discriminant.clone(),
+                                    targets: SemanticSwitchTargetsV1::new(values, otherwise)
+                                        .unwrap(),
+                                },
+                            );
+                            // Keep explicit-arm coordinates coherent in the alias
+                            // case: role, not target inequality, must veto it.
+                            if case == 6 {
+                                if let ProjectedCfgTerminatorV1::Predicate { false_block, .. } =
+                                    &mut terms[switch]
+                                {
+                                    *false_block = default;
+                                }
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                    let mut work = Work::new(LIMIT);
+                    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                    budget.reserve_storage(PREFIX).unwrap();
+                    {
+                        let mut facts = Facts::new(&mut budget, coverage);
+                        let incoming = bounds_cfg_v1::empty_default_incoming(
+                            &changed, &terms, &reached, &mut facts,
+                        )
+                        .unwrap();
+                        assert!(!incoming[default].eligible_only(), "component {case}");
+                        let actual =
+                            std::mem::size_of::<Vec<bounds_cfg_v1::EmptyDefaultIncomingV1>>()
+                                + incoming.capacity()
+                                    * std::mem::size_of::<bounds_cfg_v1::EmptyDefaultIncomingV1>();
+                        assert_eq!(facts.budget.storage(), PREFIX + actual);
+                        assert_eq!(facts.reservations.iter().sum::<usize>(), actual);
+                        drop(incoming);
+                    }
+                    budget.release_storage(budget.storage() - PREFIX).unwrap();
+                    if case != 4 {
+                        let mut facts = Facts::new(&mut budget, coverage);
+                        expect_mismatch(bounds_cfg_v1::verify_all_live_coverage(
+                            &changed, &projected, &terms, &reached, &mut facts,
+                        ));
+                        assert_eq!(facts.budget.storage(), PREFIX);
+                    }
+                    budget.release_storage(PREFIX).unwrap();
+                }
+            });
+        }
+
+        #[test]
+        fn empty_default_component_other_incoming_including_imaginary_unwind_vetoes() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, switch, default) = rows(function);
+                let source = switch - 1;
+                let SemanticTerminatorKindV1::Call(call) =
+                    function.blocks()[source].terminator().kind()
+                else {
+                    unreachable!();
+                };
+                for case in 0..4 {
+                    let kind = match case {
+                        0 => {
+                            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, default))
+                        }
+                        1 => SemanticTerminatorKindV1::FalseEdge {
+                            real_target: edge(SemanticEdgeRoleV1::FalseEdgeReal, switch),
+                            imaginary_target: edge(SemanticEdgeRoleV1::FalseEdgeImaginary, default),
+                        },
+                        2 | 3 => SemanticTerminatorKindV1::Call(
+                            SemanticDirectCallV1::new_callable_with_variadic_argument_abis(
+                                call.callee(),
+                                call.arguments().to_vec(),
+                                call.variadic_argument_abis().to_vec(),
+                                if case == 2 {
+                                    Some(SemanticCallDestinationV1::new(
+                                        call.destination().unwrap().place().clone(),
+                                        edge(SemanticEdgeRoleV1::CallReturn, default),
+                                    ))
+                                } else {
+                                    call.destination().cloned()
+                                },
+                                if case == 3 {
+                                    SemanticUnwindActionV1::Cleanup(edge(
+                                        SemanticEdgeRoleV1::CallUnwind,
+                                        default,
+                                    ))
+                                } else {
+                                    call.unwind()
+                                },
+                            )
+                            .unwrap(),
+                        ),
+                        _ => unreachable!(),
+                    };
+                    let changed = replace_block(
+                        function,
+                        source,
+                        function.blocks()[source].statements().to_vec(),
+                        kind,
+                    );
+                    let mut work = Work::new(LIMIT);
+                    let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                    budget.reserve_storage(PREFIX).unwrap();
+                    {
+                        let mut facts = Facts::new(&mut budget, coverage);
+                        expect_mismatch(bounds_cfg_v1::verify_all_live_coverage(
+                            &changed,
+                            &projected,
+                            &terminators,
+                            &reachable,
+                            &mut facts,
+                        ));
+                        assert_eq!(facts.scopes, 1);
+                        assert!(!facts.reservations.is_empty());
+                        assert_eq!(facts.budget.storage(), PREFIX);
+                    }
+                    {
+                        let mut unreachable_source = reachable.clone();
+                        unreachable_source[source] = false;
+                        let mut facts = Facts::new(&mut budget, coverage);
+                        let incoming = bounds_cfg_v1::empty_default_incoming(
+                            &changed,
+                            &terminators,
+                            &unreachable_source,
+                            &mut facts,
+                        )
+                        .unwrap();
+                        assert!(
+                            !incoming[default].eligible_only(),
+                            "unreachable incoming component {case}"
+                        );
+                        drop(incoming);
+                    }
+                    budget.release_storage(budget.storage() - PREFIX).unwrap();
+                    budget.release_storage(PREFIX).unwrap();
+                }
+            });
+        }
+
+        #[test]
+        fn empty_comparison_false_branch_is_not_an_elided_otherwise_default() {
+            with_source_rows(|function, coverage| {
+                let (projected, mut terminators, _, switch, default) = rows(function);
+                let ProjectedCfgTerminatorV1::Predicate {
+                    predicate,
+                    true_block,
+                    false_block,
+                } = &mut terminators[switch]
+                else {
+                    unreachable!();
+                };
+                predicate.comparisons.clear();
+                let (true_block, false_block) = (*true_block, *false_block);
+                assert_ne!(false_block, default);
+                // Inert component mutation: only the predicate's true path
+                // returns; its explicit false arm is a separate empty trap.
+                let changed = replace_block(
+                    function,
+                    true_block,
+                    function.blocks()[true_block].statements().to_vec(),
+                    SemanticTerminatorKindV1::Return,
+                );
+                let changed = replace_block(
+                    &changed,
+                    false_block,
+                    Vec::new(),
+                    SemanticTerminatorKindV1::Unreachable,
+                );
+                terminators[true_block] = ProjectedCfgTerminatorV1::Return;
+                terminators[false_block] = ProjectedCfgTerminatorV1::Trap;
+                let reachable =
+                    reachable_projected_blocks(function.entry().index() as usize, &terminators)
+                        .unwrap();
+                assert!(reachable[switch] && reachable[true_block]);
+                assert!(!reachable[false_block] && !reachable[default]);
+                assert_eq!(coverage[false_block].source_statements(), 0);
+                assert_eq!(coverage[false_block].original_operations(), Some(0));
+                let mut work = Work::new(LIMIT);
+                let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                budget.reserve_storage(PREFIX).unwrap();
+                {
+                    let mut facts = Facts::new(&mut budget, coverage);
+                    facts
+                        .with_checked_control_scope_v1(|facts| {
+                            let incoming = bounds_cfg_v1::empty_default_incoming(
+                                &changed,
+                                &terminators,
+                                &reachable,
+                                facts,
+                            )?;
+                            assert!(incoming[default].eligible_only());
+                            assert!(!incoming[false_block].eligible_only());
+                            drop(incoming);
+                            Ok(())
+                        })
+                        .unwrap();
+                    expect_mismatch(bounds_cfg_v1::verify_all_live_coverage(
+                        &changed,
+                        &projected,
+                        &terminators,
+                        &reachable,
+                        &mut facts,
+                    ));
+                    assert_eq!(facts.scopes, 2);
+                    assert_eq!(
+                        facts
+                            .events
+                            .iter()
+                            .filter_map(|(kind, value)| (*kind == "query").then_some(*value))
+                            .collect::<Vec<_>>(),
+                        (0..=false_block).collect::<Vec<_>>()
+                    );
+                    assert_eq!(facts.budget.storage(), PREFIX);
+                }
+                budget.release_storage(PREFIX).unwrap();
+            });
+        }
+
+        #[test]
+        fn empty_default_component_denial_prefixes_restore_original_floor() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, _, default) = rows(function);
+                let count = coverage.len();
+                let prefix = 3 * (default + 1);
+                let requested = std::mem::size_of::<Vec<bounds_cfg_v1::EmptyDefaultIncomingV1>>()
+                    + count * std::mem::size_of::<bounds_cfg_v1::EmptyDefaultIncomingV1>();
+                for (limit, accepted, attempted, scope, reserved) in [
+                    (1, 0, 2, 0, false),
+                    (prefix + 5, prefix, prefix + 6, 0, false),
+                    (prefix + 6 + 11, prefix + 6, prefix + 6 + 12, 1, false),
+                    (
+                        prefix + 6 + 12 + count - 1,
+                        prefix + 6 + 12,
+                        prefix + 6 + 12 + count,
+                        1,
+                        true,
+                    ),
+                ] {
+                    let mut work = Work::new(limit);
+                    {
+                        let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                        budget.reserve_storage(PREFIX).unwrap();
+                        {
+                            let mut facts = Facts::new(&mut budget, coverage);
+                            let result = bounds_cfg_v1::verify_all_live_coverage(
+                                function,
+                                &projected,
+                                &terminators,
+                                &reachable,
+                                &mut facts,
+                            );
+                            assert!(
+                                matches!(result, Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Work(error)))) if error.actual() == attempted && error.limit() == limit)
+                            );
+                            assert_eq!(facts.budget.work(), accepted);
+                            assert_eq!(facts.scopes, scope);
+                            assert_eq!(!facts.reservations.is_empty(), reserved);
+                            if reserved {
+                                assert_eq!(facts.reservations[0], requested);
+                            }
+                            assert_eq!(facts.budget.storage(), PREFIX);
+                        }
+                        budget.release_storage(PREFIX).unwrap();
+                    }
+                    assert_eq!(work.failed_work(), Some(attempted));
+                }
+                let mut work = Work::new(LIMIT);
+                let mut budget = Budget::new(&mut work, PREFIX + requested - 1);
+                budget.reserve_storage(PREFIX).unwrap();
+                {
+                    let mut facts = Facts::new(&mut budget, coverage);
+                    let result = bounds_cfg_v1::verify_all_live_coverage(
+                        function,
+                        &projected,
+                        &terminators,
+                        &reachable,
+                        &mut facts,
+                    );
+                    assert!(
+                        matches!(result, Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Resource(Resource::Storage(error)))) if error.actual() == PREFIX + requested && error.limit() == PREFIX + requested - 1)
+                    );
+                    assert_eq!(facts.budget.work(), prefix + 18);
+                    assert_eq!(facts.reservations, [requested]);
+                    assert_eq!(facts.budget.storage(), PREFIX);
+                    assert_eq!(facts.budget.failed_storage(), Some(PREFIX + requested));
+                }
+                budget.release_storage(PREFIX).unwrap();
+            });
+        }
+
+        #[test]
+        fn empty_default_component_post_allocation_panic_then_reentry_keeps_floor() {
+            with_source_rows(|function, coverage| {
+                let (projected, terminators, reachable, _, _) = rows(function);
+                let mut work = Work::new(LIMIT);
+                let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+                budget.reserve_storage(PREFIX).unwrap();
+                {
+                    let mut facts = Facts::new(&mut budget, coverage);
+                    facts.panic_after_allocation = true;
+                    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        bounds_cfg_v1::verify_all_live_coverage(
+                            function,
+                            &projected,
+                            &terminators,
+                            &reachable,
+                            &mut facts,
+                        )
+                    }))
+                    .expect_err("actual post-allocation component charge must panic");
+                    assert_eq!(
+                        panic.downcast_ref::<&'static str>().copied(),
+                        Some("empty default initialized allocation panic")
+                    );
+                    assert_eq!(facts.scopes, 1);
+                    assert!(!facts.reservations.is_empty());
+                    assert_eq!(facts.budget.storage(), PREFIX);
+                    let before = facts.budget.work();
+                    facts.panic_after_allocation = false;
+                    bounds_cfg_v1::verify_all_live_coverage(
+                        function,
+                        &projected,
+                        &terminators,
+                        &reachable,
+                        &mut facts,
+                    )
+                    .unwrap();
+                    assert_eq!(facts.scopes, 2);
+                    assert_eq!(facts.budget.storage(), PREFIX);
+                    assert!(facts.budget.work() > before);
+                }
+                budget.release_storage(PREFIX).unwrap();
+            });
+        }
     }
 
     fn candidate(root: &CanonicalMemoryProjectedRootV1) -> Candidate<'_> {

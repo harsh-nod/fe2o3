@@ -73,6 +73,174 @@ fn push<T>(
 }
 
 impl CanonicalMemoryControlRecorderV1 {
+    /// Record only this full projection's own leaves. Unsupported source shapes
+    /// add no identity claims; the lowerer still authenticates exact own uses.
+    pub(super) fn identity_address_arguments_v1(
+        &mut self,
+        function: &SemanticFunctionDeclV1,
+        callables: &[SemanticCallableDeclV1],
+        intrinsic: &IntrinsicProjectionV1,
+        checks: &[ProjectedBoundsCheckV1],
+        facts: &mut impl ProjectedAssertionFactsV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        facts.charge_private_array_work(8)?;
+        let [access] = intrinsic.guarded_accesses.as_slice() else {
+            return Ok(());
+        };
+        let [(index, extent)] = access.comparisons.as_slice() else {
+            return Ok(());
+        };
+        if !checks.is_empty()
+            || access.indices.as_slice() != [*index]
+            || access.checked_success.is_some()
+            || access.memory_space != MemorySpaceAttr::Global
+            || access.access != AccessKindAttr::Write
+        {
+            return Ok(());
+        }
+        let mut getter = None;
+        for source in function.blocks() {
+            facts.charge_private_array_work(4)?;
+            let SemanticTerminatorKindV1::Call(call) = source.terminator().kind() else {
+                continue;
+            };
+            if matches!(
+                callables.get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+                    ..
+                })
+            ) && getter.replace(call).is_some()
+            {
+                return Ok(());
+            }
+        }
+        let Some(call) = getter else {
+            return Ok(());
+        };
+        facts.charge_private_array_work(
+            call.arguments()
+                .len()
+                .checked_add(8)
+                .ok_or_else(|| resource(Resource::Arithmetic))?,
+        )?;
+        let [receiver, witness] = call.arguments() else {
+            return Ok(());
+        };
+        let Some(receiver) =
+            raw_operand_place(receiver).filter(|place| place.projections().is_empty())
+        else {
+            return Ok(());
+        };
+        let Some(witness) = raw_operand_place(witness).filter(|place| place.projections().is_empty())
+        else {
+            return Ok(());
+        };
+        let Some(projected) = intrinsic
+            .index_values
+            .get(witness.local().index() as usize)
+            .copied()
+            .flatten()
+        else {
+            return Ok(());
+        };
+        if projected.mapping != SemanticDisjointIndexSpaceV1::Index1d
+            || projected.precondition.is_some()
+            || projected.availability.is_some()
+            || projected.value != *index
+            || !matches!(call.unwind(), SemanticUnwindActionV1::Unreachable)
+        {
+            return Ok(());
+        }
+        let mut slice = None;
+        for source in function.blocks() {
+            facts.charge_private_array_work(5)?;
+            for statement in source.statements() {
+                facts.charge_private_array_work(14)?;
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if assignment.destination().local() != receiver.local() {
+                    continue;
+                }
+                let SemanticRvalueKindV1::Borrow {
+                    kind: fe2o3_mir_model::semantic_mir_v1::SemanticBorrowKindV1::Mutable,
+                    place,
+                } = assignment.value().kind()
+                else {
+                    return Ok(());
+                };
+                if !assignment.destination().projections().is_empty()
+                    || !place.projections().is_empty()
+                    || !matches!(
+                        function
+                            .locals()
+                            .get(place.local().index() as usize)
+                            .map(|local| local.role()),
+                        Some(SemanticLocalRoleV1::Argument(_))
+                    )
+                    || slice.replace(place.local()).is_some()
+                {
+                    return Ok(());
+                }
+            }
+        }
+        let Some(slice) = slice else {
+            return Ok(());
+        };
+        for (ranked_value, source_local, component) in [
+            (
+                *index,
+                witness.local(),
+                ProductionProjectionArgumentComponentV1::Scalar,
+            ),
+            (
+                *extent,
+                slice,
+                ProductionProjectionArgumentComponentV1::SliceLength,
+            ),
+        ] {
+            self.identity_argument_v1(ranked_value, source_local, component, facts)?;
+        }
+        Ok(())
+    }
+
+    fn identity_argument_v1(
+        &mut self,
+        ranked_value: ProductionRankedValueV1,
+        source_local: SemanticLocalIdV1,
+        component: ProductionProjectionArgumentComponentV1,
+        facts: &mut impl ProjectedAssertionFactsV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        facts.charge_private_array_work(self.candidate.arguments.len().checked_add(3).ok_or_else(|| {
+            resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+        })?)?;
+        if let Some(row) = self
+            .candidate
+            .arguments
+            .iter()
+            .find(|row| row.ranked_value == ranked_value)
+        {
+            if row.source_local != source_local || row.component != component {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "canonical identity anchor conflicts with another claim",
+                ));
+            }
+        } else {
+            push(
+                &mut self.candidate.arguments,
+                ProductionProjectionArgumentCandidateV1 {
+                    ranked_value,
+                    source_local,
+                    component,
+                },
+                facts,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn identity_slice(
         &mut self,
         function: &SemanticFunctionDeclV1,
@@ -285,31 +453,7 @@ impl CanonicalMemoryControlRecorderV1 {
                 ProductionProjectionArgumentComponentV1::SliceLength,
             ),
         ] {
-            facts.charge_private_array_work(self.candidate.arguments.len().checked_add(3).ok_or_else(|| {
-                resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
-            })?)?;
-            if let Some(row) = self
-                .candidate
-                .arguments
-                .iter()
-                .find(|row| row.ranked_value == ranked_value)
-            {
-                if row.source_local != source_local || row.component != component {
-                    return Err(invalid(
-                        "canonical identity anchor conflicts with another claim",
-                    ));
-                }
-            } else {
-                push(
-                    &mut self.candidate.arguments,
-                    ProductionProjectionArgumentCandidateV1 {
-                        ranked_value,
-                        source_local,
-                        component,
-                    },
-                    facts,
-                )?;
-            }
+            self.identity_argument_v1(ranked_value, source_local, component, facts)?;
         }
         Ok(CanonicalIdentitySliceV1 {
             producer,

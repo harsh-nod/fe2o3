@@ -3551,6 +3551,18 @@ fn prepare_projected_ranked_geometry_with_source_custody_v1(
         &intrinsic.option_predicates,
         &intrinsic.direct_switch_predicates,
     )?;
+    if !intrinsic.guarded_accesses.is_empty()
+        && matches!(write_values, ProjectedGlobalWriteValuesV1::Expression)
+        && let Some(recorder) = recorder.as_deref_mut()
+    {
+        recorder.identity_address_arguments_v1(
+            function,
+            semantic.callables(),
+            &intrinsic,
+            &bounds_checks.checks,
+            assertion_facts,
+        )?;
+    }
     let identity_slice = if !intrinsic.guarded_accesses.is_empty()
         && matches!(
             write_values,
@@ -20013,23 +20025,13 @@ fn build_ranked_cfg_with_control(
         let entry = function.entry().index() as usize;
         let reachable = reachable_projected_blocks(entry, &terminators)?;
         if assertion_facts.checked_control_enabled_v1() {
-            for (index, reached) in reachable.iter().copied().enumerate() {
-                assertion_facts.charge_private_array_work(2)?;
-                let coverage = assertion_facts.checked_block_coverage_v1(index)?;
-                if reached
-                    != matches!(
-                        coverage.disposition(),
-                        fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized {
-                            executable: true,
-                            ..
-                        }
-                    )
-                {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "checked all-live source CFG and sealed block disposition disagree",
-                    ));
-                }
-            }
+            bounds_cfg_v1::verify_all_live_coverage(
+                function,
+                &projected_blocks,
+                &terminators,
+                &reachable,
+                assertion_facts,
+            )?;
         }
         (terminators, reachable)
     };

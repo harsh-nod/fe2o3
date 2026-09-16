@@ -330,6 +330,213 @@ pub(super) fn reconcile_capacity<T>(
     Ok(())
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct EmptyDefaultIncomingV1 {
+    eligible: bool,
+    other: bool,
+}
+
+impl EmptyDefaultIncomingV1 {
+    pub(super) fn eligible_only(self) -> bool {
+        self.eligible && !self.other
+    }
+}
+
+fn predicate_empty_default(
+    function: &SemanticFunctionDeclV1,
+    source: usize,
+    terminator: &ProjectedCfgTerminatorV1,
+    reached: bool,
+) -> Option<usize> {
+    if !reached {
+        return None;
+    }
+    let ProjectedCfgTerminatorV1::Predicate {
+        true_block,
+        false_block,
+        ..
+    } = terminator
+    else {
+        return None;
+    };
+    let SemanticTerminatorKindV1::SwitchInt { targets, .. } =
+        function.blocks().get(source)?.terminator().kind()
+    else {
+        return None;
+    };
+    if targets.values().len() != 2 {
+        return None;
+    }
+    let zero = targets.values().iter().find(|target| target.value() == 0)?;
+    let one = targets.values().iter().find(|target| target.value() == 1)?;
+    let otherwise = targets.otherwise().target().index() as usize;
+    (zero.edge().target().index() as usize == *false_block
+        && one.edge().target().index() as usize == *true_block
+        && targets.otherwise().role() == SemanticEdgeRoleV1::SwitchOtherwise
+        && switch_fallback_is_empty_unreachable_v1(function, otherwise))
+    .then_some(otherwise)
+}
+
+// Numeric projection bookkeeping only. The caller keeps the returned allocation
+// inside its checked-control storage scope; these rows are not source authority.
+pub(super) fn empty_default_incoming(
+    function: &SemanticFunctionDeclV1,
+    terminators: &[ProjectedCfgTerminatorV1],
+    reachable: &[bool],
+    facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<Vec<EmptyDefaultIncomingV1>, ProductionRankedProjectionErrorV1> {
+    facts.charge_private_array_work(12)?;
+    let count = function.blocks().len();
+    if terminators.len() != count || reachable.len() != count {
+        return Err(invalid("empty-default source CFG row count differs"));
+    }
+    let bytes = count
+        .checked_mul(std::mem::size_of::<EmptyDefaultIncomingV1>())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Vec<EmptyDefaultIncomingV1>>()))
+        .ok_or_else(|| {
+            resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+        })?;
+    facts.reserve_checked_control_storage_v1(bytes)?;
+    let mut incoming = Vec::new();
+    incoming.try_reserve_exact(count).map_err(|_| {
+        resource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation)
+    })?;
+    reconcile_capacity(&incoming, count, facts)?;
+    facts.charge_private_array_work(count)?;
+    incoming.resize(count, EmptyDefaultIncomingV1::default());
+    for (source, block) in function.blocks().iter().enumerate() {
+        facts.charge_private_array_work(12)?;
+        let default =
+            predicate_empty_default(function, source, &terminators[source], reachable[source]);
+        block.terminator().kind().try_for_each_edge(|edge| {
+            facts.charge_private_array_work(4)?;
+            let target = edge.target().index() as usize;
+            let row = incoming
+                .get_mut(target)
+                .ok_or_else(|| invalid("empty-default source edge target is absent"))?;
+            if default == Some(target) && edge.role() == SemanticEdgeRoleV1::SwitchOtherwise {
+                row.eligible = true;
+            } else {
+                row.other = true;
+            }
+            Ok::<(), ProductionRankedProjectionErrorV1>(())
+        })?;
+    }
+    Ok(incoming)
+}
+
+fn empty_default_coverage_candidate(
+    function: &SemanticFunctionDeclV1,
+    projected: &[ProjectedSemanticBlockV1],
+    reachable: &[bool],
+    index: usize,
+    coverage: fe2o3_lower_mir_kernel::ProductionSourceOutputBlockCoverageV1,
+) -> bool {
+    reachable.get(index) == Some(&false)
+        && matches!(
+            coverage.disposition(),
+            fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized {
+                executable: true,
+                ..
+            }
+        )
+        && index != function.entry().index() as usize
+        && switch_fallback_is_empty_unreachable_v1(function, index)
+        && projected
+            .get(index)
+            .is_some_and(|block| block.items.is_empty())
+        && coverage.source_statements() == 0
+        && coverage.original_operations() == Some(0)
+}
+
+// The ordinary all-matching path retains the original query/charge order and
+// does not enter a storage scope or inspect any new structural candidates.
+pub(super) fn verify_all_live_coverage(
+    function: &SemanticFunctionDeclV1,
+    projected: &[ProjectedSemanticBlockV1],
+    terminators: &[ProjectedCfgTerminatorV1],
+    reachable: &[bool],
+    facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    for (index, reached) in reachable.iter().copied().enumerate() {
+        facts.charge_private_array_work(2)?;
+        let coverage = facts.checked_block_coverage_v1(index)?;
+        if reached
+            != matches!(
+                coverage.disposition(),
+                fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized {
+                    executable: true,
+                    ..
+                }
+            )
+        {
+            verify_all_live_empty_default_suffix(
+                function,
+                projected,
+                terminators,
+                reachable,
+                index,
+                coverage,
+                facts,
+            )?;
+            break;
+        }
+    }
+    Ok(())
+}
+
+// Enter only after the old loop's first mismatch and successful live coverage
+// query. Consume its suffix once, without revisiting earlier rows or queries.
+fn verify_all_live_empty_default_suffix(
+    function: &SemanticFunctionDeclV1,
+    projected: &[ProjectedSemanticBlockV1],
+    terminators: &[ProjectedCfgTerminatorV1],
+    reachable: &[bool],
+    first: usize,
+    first_coverage: fe2o3_lower_mir_kernel::ProductionSourceOutputBlockCoverageV1,
+    facts: &mut impl ProjectedAssertionFactsV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    const MISMATCH: &str = "checked all-live source CFG and sealed block disposition disagree";
+    facts.charge_private_array_work(6)?;
+    if !empty_default_coverage_candidate(function, projected, reachable, first, first_coverage) {
+        return Err(invalid(MISMATCH));
+    }
+    facts.with_checked_control_scope_v1(|facts| {
+        let incoming = empty_default_incoming(function, terminators, reachable, facts)?;
+        if projected.len() != incoming.len() {
+            return Err(invalid("empty-default projected block count differs"));
+        }
+        for index in first..incoming.len() {
+            let coverage = if index == first {
+                first_coverage
+            } else {
+                facts.charge_private_array_work(2)?;
+                facts.checked_block_coverage_v1(index)?
+            };
+            facts.charge_private_array_work(6)?;
+            let live = matches!(
+                coverage.disposition(),
+                fe2o3_lower_mir_kernel::ProductionSourceOutputBlockV1::Materialized {
+                    executable: true,
+                    ..
+                }
+            );
+            if reachable[index] == live {
+                continue;
+            }
+            if !incoming[index].eligible_only()
+                || !empty_default_coverage_candidate(
+                    function, projected, reachable, index, coverage,
+                )
+            {
+                return Err(invalid(MISMATCH));
+            }
+        }
+        drop(incoming);
+        Ok(())
+    })
+}
+
 pub(super) fn retain_all_live_source_guards(
     terminators: &mut [ProjectedCfgTerminatorV1],
     checks: &[ProjectedBoundsCheckV1],
